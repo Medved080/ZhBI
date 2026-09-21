@@ -13,12 +13,22 @@ from app.access import is_system_admin, require_service_feature, role_keys
 from app.auth import (
     SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, create_session,
     forget_session, format_display_name, get_current_user, hash_password, list_sessions,
-    session_public_id, user_out, validate_password_strength, UserOut,
+    session_public_id, user_out, user_version, validate_password_strength, UserOut,
 )
-from app.db import get_connection
+from app.db import begin_write, get_connection
 from app.models import validate_color
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _clean_required(v: str, what: str) -> str:
+    """Обязательное текстовое поле: без пробелов по краям, непустое, не длиннее 200 символов (2026-09-21, серверная валидация для V2)."""
+    v = (v or "").strip()
+    if not v:
+        raise ValueError(f"{what} не может быть пустым")
+    if len(v) > 200:
+        raise ValueError(f"{what}: не длиннее 200 символов")
+    return v
 
 
 class UserCreateIn(BaseModel):
@@ -35,6 +45,16 @@ class UserCreateIn(BaseModel):
     # является личным (2026-08-03).
     must_change_password: bool = True
 
+    @field_validator("last_name")
+    @classmethod
+    def _last_name_ok(cls, v: str) -> str:
+        return _clean_required(v, "Фамилия")
+
+    @field_validator("domain_login")
+    @classmethod
+    def _login_ok(cls, v: str) -> str:
+        return _clean_required(v, "Логин")
+
 
 class UserUpdateIn(BaseModel):
     last_name: str
@@ -48,6 +68,18 @@ class UserUpdateIn(BaseModel):
     # В ПРАВКЕ по умолчанию выключено: снимать требование, забыв поставить
     # галочку, опаснее, чем не поставить её на существующем пользователе.
     must_change_password: bool = False
+    # V2: отпечаток записи, который форма видела при открытии (UserOut.version). Не передан — проверки нет (V1).
+    expected_version: Optional[str] = None
+
+    @field_validator("last_name")
+    @classmethod
+    def _last_name_ok(cls, v: str) -> str:
+        return _clean_required(v, "Фамилия")
+
+    @field_validator("domain_login")
+    @classmethod
+    def _login_ok(cls, v: str) -> str:
+        return _clean_required(v, "Логин")
 
 
 class SetPasswordIn(BaseModel):
@@ -151,9 +183,16 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
     _validate_role(body.role)
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения: проверка «запись устарела» и сама запись — под одной блокировкой
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
+        if body.expected_version is not None and body.expected_version != user_version(row):
+            raise HTTPException(
+                status_code=409,
+                detail="Карточку пользователя уже изменил кто-то другой, пока она была открыта. "
+                       "Ничего не сохранено — обновите карточку и повторите правку.",
+            )
         было = auth_method_of(row)
         # СНЯТЬ С СЕБЯ РОЛЬ АДМИНИСТРАТОРА СЕРВИСА НЕЛЬЗЯ (2026-08-14).
         # Администратор сервиса — единственный, кто проходит проверки в
@@ -184,7 +223,7 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
                 must_change_password=:must_change_password, updated_at=datetime('now')
             WHERE id=:id
             """,
-            {**body.model_dump(), "id": user_id,
+            {**body.model_dump(exclude={"expected_version"}), "id": user_id,
              "must_change_password": int(body.must_change_password
                                          and body.auth_method == "local")},
         )
@@ -244,6 +283,10 @@ def set_password(
         # Разрешаем только админу и только над чужим аккаунтом.
         if current["role"] != "admin":
             raise HTTPException(status_code=403, detail="Нельзя снять собственный пароль")
+        if current["id"] == user_id:
+            # Администратор, снявший пароль с самого себя, запирает себя снаружи: вернуть его будет некому (2026-09-21).
+            raise HTTPException(status_code=409, detail="Нельзя заблокировать вход по паролю в собственной учётной записи: "
+                                                        "войти потом будет нечем. Это может сделать другой администратор")
     else:
         try:
             validate_password_strength(body.password)
@@ -713,6 +756,8 @@ class AccessGrantIn(BaseModel):
 
 class AccessGrantsIn(BaseModel):
     grants: list[AccessGrantIn] = []
+    # V2: набор грантов, который форма видела при открытии. Не передан — проверки нет (V1). Не совпал с нынешним — 409 без записи.
+    expected_grants: Optional[list[AccessGrantIn]] = None
 
 
 @router.get("/{user_id}/access")
@@ -792,8 +837,18 @@ def replace_access(user_id: int, body: AccessGrantsIn,
 
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения: сверка с ожидаемым набором и замена — под одной блокировкой
         if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
+        if body.expected_grants is not None:
+            now = {(r["project_id"], r["object_id"], r["role"]) for r in conn.execute(
+                "SELECT project_id, object_id, role FROM user_access WHERE user_id = ?", (user_id,))}
+            if now != {(g.project_id, g.object_id, g.role) for g in body.expected_grants}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Доступ этого пользователя уже изменил кто-то другой, пока форма была открыта. "
+                           "Ничего не сохранено — обновите данные и повторите правку.",
+                )
         for грант in body.grants:
             if грант.project_id is not None and conn.execute(
                     "SELECT 1 FROM projects WHERE id = ?", (грант.project_id,)).fetchone() is None:

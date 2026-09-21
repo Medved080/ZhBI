@@ -47,7 +47,29 @@ export const tests = [
         ["DELETE", "/settings/report-notes/2026-09-01?object_id=1", undefined], ["POST", "/allowed-subtypes", {}], ["POST", "/dictionaries/subtype/A%20B/delete", {}],
         ["POST", "/mark-type-prefixes", {}], ["POST", "/dictionaries/mark_prefix/QA/delete", {}], ["PUT", "/settings/info-plate?object_id=2", { late_threshold_days: 2 }],
         ["PUT", "/zone-colors?object_id=2", []], ["PUT", "/status-colors", {}], ["PUT", "/element-shapes", []], ["PUT", "/revit-plan/colors?object_id=4", {}],
-        ["PATCH", "/objects/4/block-works/9", { plan_start: null, plan_end: null }], ["POST", "/login", {}],
+        ["PATCH", "/objects/4/block-works/9", { plan_start: null, plan_end: null, expected_rev: "abc123" }], ["POST", "/login", {}],
+        ["PATCH", "/objects/4/block-works/9", { forecast_start: "2026-10-01", forecast_end: null, expected_rev: "abc123" }], ["PATCH", "/objects/4/block-works/9", { note: "x", expected_rev: "abc123" }],
+        ["PUT", "/objects/4/block-works/bulk", { block_work_ids: [1, 2], op: "shift", field: "plan", days: 3, expected: { 1: "a", 2: "b" } }],
+        ["PUT", "/objects/4/blocks/5/work-types-settings", { work_type_ids: [3], expected: "abc" }], ["PUT", "/objects/4/blocks/work-types-settings", { block_ids: [5, 6], work_type_ids: [3], expected: { 5: "a", 6: "b" } }],
+        ["POST", "/objects/4/blocks/5/fact-reports", { report_date: "2026-09-21", items: { 3: 50 } }], ["PUT", "/objects/4/blocks/5/fact-reports/9", { report_date: "2026-09-21", items: { 3: 50 }, expected_rev: "0123456789ab" }],
+        ["DELETE", "/objects/4/blocks/5/fact-reports/9?expected_rev=0123456789ab", undefined],
+        ["POST", "/objects/4/blocks/chess-flat-batch", { report_date: "2026-09-21", track_code: "3", idempotency_key: "12345678-key", items: [{ block_id: 5, work_type_id: 3, percent: 50, expected_percent: 0 }] }],
+        ["POST", "/objects/4/block-works/bulk-edit/analyze", undefined], ["POST", "/objects/4/block-works/bulk-edit/apply-strict", { changes: [{ bw_id: 1, field: "plan_end", was: null, now: "2026-10-01" }] }],
+        // область «администрирование» (2026-09-21): включено после проверки на настоящем backend и входе
+        ["POST", "/users", { last_name: "x", first_name: "", domain_login: "x", role: "user" }], ["PATCH", "/users/5", { last_name: "x", expected_version: "v" }],
+        ["POST", "/users/5/set-password", { password: "x", must_change_password: true }], ["PUT", "/users/5/access", { grants: [], expected_grants: [] }],
+        ["POST", "/users/access-bulk", { changes: [{}], dry_run: true }], ["POST", "/users/5/impersonate", {}], ["POST", "/ldap-search", { login: "a", password: "b", query: "cc" }],
+        ["POST", "/roles", { name: "x" }], ["PATCH", "/roles/x", { name: "y", expected_name: "x" }], ["PUT", "/roles/order", { keys: [] }],
+        ["PUT", "/roles/features", { items: [{ role_key: "a", feature_key: "b", level: "read", was: "none" }] }], ["DELETE", "/roles/x?expected_granted=1", undefined],
+        ["POST", "/me/change-password", { current_password: "a", new_password: "b" }], ["DELETE", "/me/sessions/abc", undefined], ["POST", "/me/sessions/close-others", {}],
+        ["DELETE", "/sessions/abc", undefined], ["POST", "/sessions/close-others", {}], ["DELETE", "/users/5/sessions", undefined], ["POST", "/logout", {}],
+        ["POST", "/individuals", { name: "x" }], ["PATCH", "/individuals/2", { name: "x" }], ["POST", "/dictionaries/individual/2/delete", {}],
+        ["POST", "/projects", { name: "x" }], ["PATCH", "/projects/2", { name: "x", expected_version: "v" }], ["POST", "/objects", { name: "x", project_id: 1 }],
+        ["PATCH", "/objects/1", { name: "x", expected_version: "v" }], ["PUT", "/objects/1/avatar", { attachment_id: 1 }], ["POST", "/attachments", undefined], ["DELETE", "/attachments/3", undefined],
+        ["POST", "/dictionaries/object/1/delete", {}], ["POST", "/dictionaries/project/1/delete", {}],
+        ["POST", "/admin/backups", { comment: "x" }], ["POST", "/admin/backups/a.db/restore", {}], ["DELETE", "/admin/backups/a.db", undefined],
+        ["PUT", "/ldap-settings", { enabled: false }], ["POST", "/ldap-settings/test", { login: "a", password: "b", config: {} }], ["PUT", "/map/online-tiles", { enabled: true }], ["POST", "/map/tiles/upload", undefined],
+        ["POST", "/activity/cleanup?before=2026-01-01", {}], ["POST", "/release-tasks/x/run", {}], ["POST", "/admin/reset-status-history", {}],
         // область «комплектовщик»: разрешено только с ВЕРНОЙ формой тела (picker-gate.js)
         ["POST", "/counterparties", { full_name: "ООО «А»", short_name: "А", capacity: [] }], ["PATCH", "/counterparties/1", { full_name: "ООО «А»", short_name: "А", expected_version: "0123456789abcdef" }],
         ["POST", "/agreements", { counterparty_id: 1, number: "Д-1", agreement_date: "2026-09-01", object_id: 1 }], ["PATCH", "/agreements/2", { counterparty_id: 1, number: "Д-1", object_id: 1, expected_version: "ab" }],
@@ -61,10 +83,9 @@ export const tests = [
         ["DELETE", "/supplier-changes/3", undefined], ["POST", "/supplier-changes/3/post", { expected_version: "ab" }], ["POST", "/supplier-changes/3/unpost", {}],
       ]) t.ok(ok(m, p, b), `разрешено: ${m} ${p}`);
       for (const [m, p, b] of [
-        ["POST", "/users", {}], ["PATCH", "/users/5", {}], ["POST", "/users/5/set-password", {}], ["PUT", "/users/5/access", {}],
-        ["PUT", "/roles/features", {}], ["POST", "/roles", {}], ["PUT", "/roles/order", {}], ["DELETE", "/roles/x", undefined],
-        ["POST", "/me/change-password", {}], ["DELETE", "/me/sessions/abc", undefined], ["POST", "/me/sessions/close-others", {}],
-        ["POST", "/individuals", {}], ["PATCH", "/individuals/2", {}], ["POST", "/dictionaries/individual/2/delete", {}],
+        // формы тела не той, что проверена: без версии записи / без прежнего уровня / лишние поля — отказ даже у разрешённых путей
+        ["PATCH", "/users/5", {}], ["PUT", "/users/5/access", { grants: [] }], ["PUT", "/roles/features", { items: [{ role_key: "a" }] }], ["POST", "/users", { last_name: "x", secret: 1 }],
+        ["PATCH", "/projects/2", { name: "x" }], ["PATCH", "/objects/1", { name: "x" }], ["POST", "/users/access-bulk", { changes: [] }], ["POST", "/users/5/set-password", {}],
         // область «комплектовщик»: неверная форма тела (пустое тело, режим «свёртка», лишние поля, повтор позиции) и то, что остаётся отключённым
         ["POST", "/counterparties", {}], ["PATCH", "/counterparties/1", {}], ["POST", "/agreements", {}], ["POST", "/specifications", {}], ["POST", "/contracts", {}],
         ["PATCH", "/contracts/1", {}], ["POST", "/dictionaries/contract/1/delete", {}], ["POST", "/dictionaries/counterparty/1/delete", { replacements: {}, mode: "merge" }], ["PATCH", "/elements/1/planned-delivery-date", {}],
@@ -72,40 +93,25 @@ export const tests = [
         ["PATCH", "/elements/1/planned-delivery-date", { planned_delivery_date: "2026-12-01", comment: "x" }], ["PATCH", "/elements/1/planned-delivery-date", { planned_delivery_date: "2026-02-30" }],
         ["PATCH", "/elements/1/contract", { contract_id: 1 }], ["PATCH", "/elements/bulk-planned-delivery-date", { items: [] }], ["PUT", "/contracts/default-map?object_id=1", {}],
         ["POST", "/supplier-changes", {}], ["POST", "/supplier-changes/3/post", { force: true }],
-        ["POST", "/projects", {}], ["PATCH", "/objects/1", {}], ["PUT", "/objects/1/avatar", {}], ["POST", "/attachments", {}], ["DELETE", "/attachments/3", undefined],
-        ["POST", "/dictionaries/object/1/delete", {}], ["POST", "/something-new", {}], ["PUT", "/imports/anything", {}], ["DELETE", "/smu/3", undefined],
-        ["PATCH", "/objects/4/block-works/9", { note: "x" }], ["PATCH", "/objects/4/block-works/9", { forecast_start: "2026-01-01", forecast_end: null }], ["PATCH", "/objects/4/block-works/9", { plan_start: null, note: "x" }],
+        ["POST", "/something-new", {}], ["PUT", "/imports/anything", {}], ["DELETE", "/smu/3", undefined], ["DELETE", "/projects/3", undefined],
+        ["PATCH", "/objects/4/block-works/9", { note: "x" }], ["PATCH", "/objects/4/block-works/9", { forecast_start: "2026-01-01", forecast_end: null }], ["PATCH", "/objects/4/block-works/9", { plan_start: null, note: "x", expected_rev: "abc123" }],
+        ["PATCH", "/objects/4/block-works/9", { plan_start: null, plan_end: null }], ["PATCH", "/objects/4/block-works/9", { plan_start: "2026-13-40", plan_end: null, expected_rev: "abc123" }],
+        ["PUT", "/objects/4/block-works/bulk", { block_work_ids: [1, 2], op: "shift", field: "plan", days: 3 }], ["PUT", "/objects/4/blocks/work-types-settings", { block_ids: [5], work_type_ids: [3] }],
+        ["DELETE", "/objects/4/blocks/5/fact-reports/9", undefined], ["POST", "/objects/4/blocks/5/fact-reports", { report_date: "2026-09-21", items: { 3: 150 } }],
+        ["POST", "/objects/4/block-works/bulk-edit/apply", { changes: [{ bw_id: 1, field: "plan_end", now: "2026-10-01" }] }],
         ["PUT", "/settings/info-plate?object_id=2", { late_threshold_days: 2, other: 1 }],
       ]) t.ok(!ok(m, p, b), `отключено: ${m} ${p}${b && Object.keys(b).length ? " " + JSON.stringify(b) : ""}`);
-      t.has(g.checkWrite("POST", "/users", {}).message, "отключена в экспериментальном интерфейсе", "текст отказа");
-      t.has(g.checkWrite("POST", "/users", {}).message, "текущем интерфейсе", "текст отказа ведёт в V1");
+      t.has(g.checkWrite("POST", "/counterparties", {}).message, "отключена в экспериментальном интерфейсе", "текст отказа");
+      t.has(g.checkWrite("POST", "/counterparties", {}).message, "текущем интерфейсе", "текст отказа ведёт в V1");
     },
   },
   {
-    id: "GT-03", title: "Отключённые записи не отправляют запросов: создание пользователя (кнопка и Enter), контрагента, проекта; причина видна, ввод цел",
+    id: "GT-03", title: "Отключённые записи не отправляют запросов: создание контрагента (кнопка); причина видна, ввод цел",
     async run(t) {
       await guard(t, async () => {
         const a = await openApp({ home: true });
-        await waitFor(() => a.$(`${NAV}[data-section="users-access"]`), { what: "навигация" });
-        a.click(a.$(`${NAV}[data-section="users-access"]`));
-        await waitFor(() => a.byText("button", "Добавить пользователя"), { what: "кнопка" });
-        a.click(a.byText("button", "Добавить пользователя"));
-        await waitFor(() => a.$("#nu-last"), { what: "форма" });
-        await a.type(a.$("#nu-last"), "GT-Пользователь");
-        await a.type(a.$("#nu-login"), "gt_user");
-        a.click(a.$("#nu-submit"));
-        await waitFor(() => /отключена в экспериментальном интерфейсе/.test(a.doc.body.innerText), { what: "причина отказа" });
-        t.eq(writes(a).length, 0, "кнопкой: ни одного изменяющего запроса");
-        t.eq(a.$("#nu-last").value, "GT-Пользователь", "ввод не потерян");
-        const form = a.$("#nu-last").closest("form");
-        if (form) { form.requestSubmit(); await a.settle(150); }
-        t.eq(writes(a).length, 0, "Enter/отправка формы: запросов нет");
-        t.ok(!a.ctl.data.users.some((u) => u.domain_login === "gt_user"), "пользователь не создан");
-        t.ok(a.$("#v2-gate-note") && !a.$("#v2-gate-note").hidden, "пояснение над содержимым показано");
-
+        await waitFor(() => a.$(`${NAV}[data-section="counterparties"]`), { what: "навигация" });
         a.click(a.$(`${NAV}[data-section="counterparties"]`));
-        await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
-        await a.answerDialog("Не сохранять");
         await waitFor(() => a.$("#cp-add"), { what: "контрагенты" });
         a.click(a.$("#cp-add"));
         await waitFor(() => a.$("#cpf-short"), { what: "форма контрагента" });
@@ -117,19 +123,7 @@ export const tests = [
         await waitFor(() => /отключена в экспериментальном интерфейсе/.test(a.doc.body.innerText), { what: "причина отказа" });
         t.eq(writes(a).length, 0, "контрагент: изменяющих запросов нет");
         t.ok(a.$("#cp-save"), "форма осталась открытой, ввод цел");
-
-        a.click(a.$(`${NAV}[data-section="projects-objects"]`));
-        await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
-        await a.answerDialog("Не сохранять");
-        await waitFor(() => a.$("#po-add-project"), { what: "проекты" });
-        a.click(a.$("#po-add-project"));
-        await waitFor(() => a.$("#pf-name"), { what: "форма проекта" });
-        await a.type(a.$("#pf-name"), "GT-проект");
-        await waitFor(() => a.$("#po-save"), { what: "подвал" });
-        a.click(a.$("#po-save"));
-        await waitFor(() => /отключена в экспериментальном интерфейсе/.test(a.doc.body.innerText), { what: "причина отказа" });
-        t.eq(writes(a).length, 0, "проект: изменяющих запросов нет");
-        t.ok(!a.ctl.data.projects.some((p) => p.name === "GT-проект"), "проект не создан");
+        t.ok(a.$("#v2-gate-note") && !a.$("#v2-gate-note").hidden, "пояснение над содержимым показано");
       });
     },
   },
@@ -138,51 +132,49 @@ export const tests = [
     async run(t) {
       await guard(t, async () => {
         const a = await openApp({ home: true });
-        await waitFor(() => a.$(`${NAV}[data-section="users-access"]`), { what: "навигация" });
-        a.click(a.$(`${NAV}[data-section="users-access"]`));
-        await waitFor(() => a.byText("button", "Добавить пользователя"), { what: "кнопка" });
-        a.click(a.byText("button", "Добавить пользователя"));
-        await waitFor(() => a.$("#nu-last"), { what: "форма" });
-        await a.type(a.$("#nu-last"), "GT-Уход");
-        await a.type(a.$("#nu-login"), "gt_leave");
+        await waitFor(() => a.$(`${NAV}[data-section="counterparties"]`), { what: "навигация" });
+        a.click(a.$(`${NAV}[data-section="counterparties"]`));
+        await waitFor(() => a.$("#cp-add"), { what: "контрагенты" });
+        a.click(a.$("#cp-add"));
+        await waitFor(() => a.$("#cpf-short"), { what: "форма" });
+        await a.type(a.$("#cpf-short"), "GT-Уход");
+        await a.type(a.$("#cpf-full"), "GT Уход полное");
+        await a.type(a.$("#cpf-inn"), "7700000010");
         a.click(a.$(`${NAV}[data-section="home"]`));
         await waitFor(() => a.dialog(), { what: "диалог несохранённого" });
         await a.answerDialog("Сохранить и продолжить");
         await a.settle(300);
         t.eq(writes(a).length, 0, "«Сохранить и продолжить»: изменяющих запросов нет");
-        t.ok(a.$("#nu-last"), "остались на форме — данные не потеряны молча");
-        t.eq(a.$("#nu-last").value, "GT-Уход", "ввод цел");
+        t.ok(a.$("#cpf-short"), "остались на форме — данные не потеряны молча");
+        t.eq(a.$("#cpf-short").value, "GT-Уход", "ввод цел");
       });
     },
   },
   {
-    id: "GT-05", title: "Экраны с частичной политикой: физлица и сеансы — только просмотр; ЗР — прогноз и примечание отключены, базовый срок работает",
+    id: "GT-05", title: "Экраны с частичной политикой: физлица и сеансы правятся (включены 2026-09-21); ЗР — базовый срок, прогноз и примечание работают (с отпечатком работы)",
     async run(t) {
       await guard(t, async () => {
         const a = await openApp({ home: true });
         await waitFor(() => a.$(`${NAV}[data-section="dict-individuals"]`), { what: "навигация" });
         a.click(a.$(`${NAV}[data-section="dict-individuals"]`));
         await waitFor(() => a.$("#de-body tbody"), { what: "физлица" });
-        t.ok(!a.$("#de-add"), "формы добавления нет");
-        t.has(a.$("#v2-content").textContent, "отключено", "объяснение на экране");
-        t.ok(a.$("#v2-gate-note") && !a.$("#v2-gate-note").hidden, "пояснение над содержимым");
+        t.ok(a.$("#de-add"), "форма добавления есть (физлица правятся)");
+        t.ok(!/Операция отключена/.test(a.$("#v2-content").textContent), "отказов шлюза нет");
         a.click(a.$(`${NAV}[data-section="sessions"]`));
         await waitFor(() => a.$("#ss-body table"), { what: "сеансы" });
-        t.eq(a.$$("[data-end]").length, 0, "кнопок «Завершить» нет");
-        t.ok(!a.$("#ss-close-others"), "«Завершить все» нет");
+        t.ok(a.$("#ss-close-others"), "«Завершить все, кроме текущего» есть (свои сеансы завершаются)");
         const mfr = a.ctl.data.objects.find((o) => o.kind === "mfr");
         a.setValue(a.$("#v2-object"), String(mfr.id));
         await waitFor(() => a.$(`${NAV}[data-section="blocks"]`), { what: "учёт по блокам" });
         a.click(a.$(`${NAV}[data-section="blocks"]`));
-        await waitFor(() => a.$$(".v2-read-tab").length === 3, { what: "вкладки" });
-        a.click(a.$$(".v2-read-tab")[1]);
-        await waitFor(() => a.$("[data-row-edit]"), { what: "таблица работ" });
-        a.click(a.$('[data-row-edit="1"]'));
-        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status"), { what: "карточка работы" });
+        await waitFor(() => a.$$(".mfr-blk").length >= 3, { what: "блоки" });
+        a.click(a.$('.mfr-blk[data-b="11"]'));
+        await waitFor(() => a.$("tr[data-bw]"), { what: "таблица работ" });
+        a.click(a.$('tr[data-bw="1"]'));
+        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status") && a.$("[data-save=note]"), { what: "карточка работы" });
         t.ok(!a.$("[data-f=plan_start]").disabled, "базовый срок доступен");
-        t.ok(a.$("[data-f=forecast_start]").disabled && a.$("[data-f=note]").disabled, "прогноз и примечание отключены");
-        t.ok(!(a.$("[data-save=forecast]") || a.$("[data-save=note]")), "кнопок сохранения прогноза и примечания нет");
-        t.has(a.$("#v2-content").textContent, "отключены", "объяснение на экране");
+        t.ok(!a.$("[data-f=forecast_start]").disabled && !a.$("[data-f=note]").disabled, "прогноз и примечание доступны");
+        t.ok(a.$("[data-save=forecast]") && a.$("[data-save=note]"), "кнопки сохранения прогноза и примечания есть");
       });
     },
   },
@@ -204,11 +196,11 @@ export const tests = [
         a.setValue(a.$("#v2-object"), String(mfr.id));
         await waitFor(() => a.$(`${NAV}[data-section="blocks"]`), { what: "учёт по блокам" });
         a.click(a.$(`${NAV}[data-section="blocks"]`));
-        await waitFor(() => a.$$(".v2-read-tab").length === 3, { what: "вкладки" });
-        a.click(a.$$(".v2-read-tab")[1]);
-        await waitFor(() => a.$("[data-row-edit]"), { what: "таблица" });
-        a.click(a.$('[data-row-edit="1"]'));
-        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status"), { what: "карточка" });
+        await waitFor(() => a.$$(".mfr-blk").length >= 3, { what: "блоки" });
+        a.click(a.$('.mfr-blk[data-b="11"]'));
+        await waitFor(() => a.$("tr[data-bw]"), { what: "таблица" });
+        a.click(a.$('tr[data-bw="1"]'));
+        await waitFor(() => a.$("[data-f=plan_start]") && a.$("#bw-status") && a.$("[data-f=plan_start]").closest(".v2-card") && !a.$("[data-f=plan_start]").closest(".v2-card").textContent.includes("Загрузка работы"), { what: "карточка" });
         a.setValue(a.$("[data-f=plan_start]"), "2026-11-01");
         a.setValue(a.$("[data-f=plan_end]"), "2026-11-05");
         await waitFor(() => !a.$("[data-save=plan]").disabled, { what: "правка" });
@@ -217,7 +209,7 @@ export const tests = [
         catch (e) { throw new Error(`${e.message}; статус: «${a.$("#bw-status")?.textContent}»; диалог: ${a.dialog() ? "да" : "нет"}; журнал: ${JSON.stringify(a.ctl.log.filter((x) => x.method !== "GET").map((x) => x.method + " " + x.path))}`); }
         const p = writes(a)[1];
         t.eq(p.method, "PATCH", "PATCH");
-        t.eq(Object.keys(p.body).sort(), ["plan_end", "plan_start"], "в теле только поля базового срока");
+        t.eq(Object.keys(p.body).sort(), ["expected_rev", "plan_end", "plan_start"], "в теле только поля базового срока и отпечаток работы");
       });
     },
   },
@@ -227,13 +219,13 @@ export const tests = [
       await guard(t, async () => {
         const { api, ApiError } = await import("/static/v2/api.js");
         let err = null;
-        try { await api.post("/users", { last_name: "x" }); } catch (e) { err = e; }
+        try { await api.post("/counterparties", { short_name: "x" }); } catch (e) { err = e; }
         t.ok(err instanceof ApiError, "ApiError");
         t.eq(err.status, 403, "статус 4xx (как отказ сервера) — модули оставляют ввод и не повторяют");
         t.ok(err.blockedByPolicy, "помечен как отказ политики");
         t.eq(api.hasPendingWrites(), false, "«идущей записи» нет");
         let err2 = null;
-        try { await api.upload("/attachments", new FormData()); } catch (e) { err2 = e; }
+        try { await api.upload("/imports/x", new FormData()); } catch (e) { err2 = e; }
         t.ok(err2?.blockedByPolicy, "загрузка файла тоже отключена");
         let notBlocked = true;
         try { await api.readPost("/reports/no-such-report", {}); } catch (e) { notBlocked = !(e && e.blockedByPolicy); }
@@ -242,15 +234,14 @@ export const tests = [
     },
   },
   {
-    id: "GT-08", title: "Обязательная смена пароля и вход: вместо формы смены — объяснение и переход в V1; на входе — предупреждение",
+    id: "GT-08", title: "Обязательная смена пароля и вход: настоящая форма смены (текущий, новый, повтор), политика пароля; на входе — предупреждение",
     async run(t) {
       await guard(t, async () => {
         const a = await openApp({ query: "loginAs=8" });
-        await waitFor(() => a.doc.body.innerText.includes("Смена пароля"), { what: "экран смены пароля" });
-        t.ok(!a.$("#v2-pwd-form"), "формы ввода паролей нет");
-        t.ok(a.$('a[href="/?ui=v1"]'), "есть переход в текущий интерфейс");
-        t.has(a.doc.body.innerText, "отключена", "объяснение");
-        t.eq(writes(a).length, 0, "запросов записи нет");
+        await waitFor(() => a.$("#pw-form"), { what: "форма смены пароля" });
+        t.ok(a.$("#pw-cur") && a.$("#pw-new") && a.$("#pw-rep"), "поля: текущий, новый, повтор");
+        t.ok(a.$("#pw-logout"), "есть «Выйти»");
+        t.eq(writes(a).length, 0, "запросов записи до отправки формы нет");
         const b = await openApp({ session: false });
         await waitFor(() => b.$("#v2-login-form"), { what: "вход" });
         t.has(b.doc.body.innerText, NOTICE, "на экране входа — предупреждение");

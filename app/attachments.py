@@ -24,6 +24,7 @@
 
 import re
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -78,6 +79,11 @@ def _guard(conn, user, entity_type: str, entity_id: int, key: str, kind: str) ->
     if object_id is None:
         # Владельца нет или он без объекта: в обоих случаях это данные без
         # известного хозяина — только администратору сервиса.
+        # НО несуществующему владельцу вложение не кладётся никому (2026-09-21): форма, открытая до того, как объект удалили, иначе
+        # тихо создавала бы «сироту» — запись и файл на диске без хозяина. Объект без объекта бывает только у элемента.
+        owner_table = {"object": "objects", "element": "elements"}[entity_type]
+        if conn.execute(f"SELECT 1 FROM {owner_table} WHERE id = ?", (entity_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail=f"{ENTITY_LABELS[entity_type].capitalize()} не найден")
         if not is_system_admin(user):
             raise HTTPException(
                 status_code=404,
@@ -153,16 +159,32 @@ def counts_for(conn, entity_type: str, entity_ids) -> dict:
     }
 
 
+# Файлы удаляемых вложений (2026-09-21): физически стираются ТОЛЬКО после commit, иначе откат удаления владельца оставил бы записи вложений без
+# файлов (410 при скачивании). Вызывающий после commit зовёт flush_pending_unlinks(), при откате — discard_pending_unlinks(); если забыл — файл
+# остаётся на диске (безвредная утечка), а не пропадает.
+_pending = threading.local()
+
+
+def flush_pending_unlinks() -> None:
+    names, _pending.names = getattr(_pending, "names", []), []
+    for name in names:
+        _unlink(name)
+
+
+def discard_pending_unlinks() -> None:
+    _pending.names = []
+
+
 def delete_for_entity(conn, entity_type: str, entity_id: int) -> int:
     """Снести вложения вместе с владельцем. Внешнего ключа на три разные
     таблицы не выразить, поэтому каскад — руками, из тех мест, где владелец
-    удаляется."""
+    удаляется. Записи удаляются в транзакции вызывающего; файлы — после его commit
+    (`flush_pending_unlinks`)."""
     rows = conn.execute(
         "SELECT stored_name FROM attachments WHERE entity_type = ? AND entity_id = ?",
         (entity_type, entity_id),
     ).fetchall()
-    for r in rows:
-        _unlink(r["stored_name"])
+    _pending.names = getattr(_pending, "names", []) + [r["stored_name"] for r in rows]
     conn.execute("DELETE FROM attachments WHERE entity_type = ? AND entity_id = ?",
                  (entity_type, entity_id))
     return len(rows)

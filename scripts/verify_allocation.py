@@ -249,6 +249,31 @@ def main_run():
     st, js = api("GET", "/elements/" + str(ids[0]), user=None)
     check("GET без сеанса → 401", st == 401, f"{st}")
 
+    print("A12 сверка всей пачки: GET /allocation-state (только чтение)")
+    pos, ids = position(); cid = pos["contract_id"]
+    st, js = api("GET", "/allocation-state?ids=" + ",".join(map(str, ids[:4])))
+    check("состояние пачки: 200, по каждому изделию статус и контракт", st == 200 and [r["id"] for r in js["items"]] == ids[:4] and all("current_status" in r and "contract_id" in r for r in js["items"]), f"{st}")
+    st, js = api("GET", f"/allocation-state?ids={ids[0]},99999999")
+    check("несуществующее изделие — в missing, остальные возвращены", st == 200 and js["missing"] == [99999999] and [r["id"] for r in js["items"]] == [ids[0]], f"{st} {js}")
+    snap = H.checksum()
+    st, js = api("GET", "/allocation-state?ids=" + ",".join(str(i) for i in range(1, 502)))
+    check("больше 500 изделий → 400", st == 400, f"{st}")
+    st, js = api("GET", "/allocation-state?ids=a,b")
+    check("нечисловые идентификаторы → 400", st == 400, f"{st}")
+    st, js = api("GET", "/allocation-state?ids=")
+    check("пустой список → 400", st == 400, f"{st}")
+    st, js = api("GET", "/allocation-state?ids=" + str(ids[0]), user=None)
+    check("без сеанса → 401", st == 401, f"{st}")
+    check("чтение не изменило ни одной таблицы", H.checksum() == snap)
+    c = db()
+    nobody = c.execute("SELECT id FROM users WHERE role != 'admin' ORDER BY id LIMIT 1").fetchone()["id"]
+    c.execute("DELETE FROM user_access WHERE user_id = ?", (nobody,)); c.commit(); c.close()
+    st, js = api("GET", "/allocation-state?ids=" + ",".join(map(str, ids[:2])), user=nobody)
+    check("пользователь без доступа к объекту: 403 (состояние чужих изделий не отдаётся)", st == 403, f"{st}")
+    st1, _ = api("POST", f"/contracts/{cid}/allocations", body(pos, ids[:3]))
+    st, js = api("GET", "/allocation-state?ids=" + ",".join(map(str, ids[:3])))
+    check("после распределения состояние пачки отражает контракт и статусы", st1 == 200 and all(r["contract_id"] == cid for r in js["items"]), f"{st1} {st}")
+
     print(f"\nнарушений: {len(FAILS)}")
     SERVER.should_exit = True
     sys.exit(1 if FAILS else 0)

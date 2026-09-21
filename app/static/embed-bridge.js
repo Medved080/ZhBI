@@ -11,6 +11,8 @@
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
 //   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
+//   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
 (() => {
   "use strict";
@@ -112,7 +114,8 @@
       // состав выделения рамкой (для проверки перед распределением): только скаляры, не больше 3000 элементов
       multiItems: state.multiSelectedIds.size <= 3000 ? Array.from(state.multiSelectedIds).map((id) => {
         const e = state.byId.get(id);
-        return e ? { id, mark: e.mark ?? null, element_type: e.element_type, current_status: e.current_status, contract_id: e.contract_id ?? null } : null;
+        return e ? { id, mark: e.mark ?? null, element_type: e.element_type, current_status: e.current_status, contract_id: e.contract_id ?? null,
+          planned_delivery_date: e.planned_delivery_date ?? null } : null;
       }).filter(Boolean) : null,
       excluded: excludedCount(),
     };
@@ -162,6 +165,11 @@
       selected: sel, selectedBlocks: Array.from(st.selectedBlocks || []),
       filtersActive: (st.levels?.size || 0) + (st.sections?.size || 0) + (st.categories?.size || 0),
       mode: (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d",
+      // шахматка (раскраска блоков по доске) и динамика факта за период: состояние ведёт движок, мост его отдаёт (панель МФР в V2)
+      chess: { tracks: (typeof mfrChessTracks !== "undefined" ? mfrChessTracks : []).map((t) => ({ code: t["код"], name: t["название"] })),
+        track: typeof mfrChessTrackCode !== "undefined" ? mfrChessTrackCode : null, mode: typeof mfrChessMode !== "undefined" ? mfrChessMode : "progress",
+        deadlineColors: typeof MFR_CHESS_DEADLINE_HEX !== "undefined" ? { ...MFR_CHESS_DEADLINE_HEX } : {} },
+      dynamics: typeof mfrDynamics !== "undefined" ? { active: !!mfrDynamics.active, from: mfrDynamics.from || null, to: mfrDynamics.to || null, blocks: typeof mfrDynamicsBlocks !== "undefined" ? mfrDynamicsBlocks.size : 0 } : { active: false, from: null, to: null, blocks: 0 },
     };
   }
 
@@ -592,6 +600,71 @@
     async reload() { await loadPlan(true); },
   };
 
+  // Команды операций над изделиями (модель ЖБИ, АРМ прораба; те же безопасны и для комплектовщика): кадр по-прежнему только читает,
+  // изменения выполняет оболочка через шлюз записи, а здесь лишь применяется то, что подтвердил сервер.
+  const COMMANDS_EL = {
+    // Контракты выбранного объекта (то, что движок получил вместе со схемой): только скаляры, для выбора контракта в оболочке
+    getContracts() {
+      const items = (state.contracts || []).filter((c) => c && isInt(c.id)).slice(0, 2000).map((c) => {
+        const o = {};
+        for (const k of ["id", "name", "theme", "specification_id", "specification_number", "specification_date", "agreement_id", "agreement_number",
+          "agreement_date", "counterparty_id", "counterparty_short_name", "counterparty_code"]) {
+          const v = c[k]; if (v === null || typeof v === "string" || typeof v === "number") o[k] = v;
+        }
+        o.is_archived = !!c.is_archived;
+        return o;
+      });
+      post({ evt: "contracts", objectId: state.objectId, items });
+    },
+    // Применить к схеме то, что подтвердил сервер (ответ операции): известные скалярные поля статуса/контракта/дат и комментарий
+    applyElements(a) {
+      if (!Array.isArray(a.items) || a.items.length > 3000) throw new Error("items");
+      let changed = 0;
+      for (const it of a.items) {
+        if (!it || !isInt(it.id)) throw new Error("item");
+        const fresh = { id: it.id };
+        for (const f of DELTA_FIELDS) {
+          if (!(f in it)) continue;
+          const v = it[f];
+          if (!(v === null || typeof v === "string" || (typeof v === "number" && Number.isFinite(v)))) throw new Error("поле " + f);
+          fresh[f] = v;
+        }
+        if (applyElementDelta(fresh)) changed++;
+      }
+      if (changed) { clearContractPositionsCache(); renderLegend(); applyPlacementFilters(); }
+      scheduleState(); sendFilters();
+      post({ evt: "refreshed", changed });
+    },
+    // Комментарий изделия после подтверждённой сервером записи (в наборе полей дельты его нет)
+    patchComment(a) {
+      if (!isInt(a.id) || !(a.comment === null || (typeof a.comment === "string" && a.comment.length <= 2000))) throw new Error("параметры");
+      const e = state.byId.get(a.id);
+      if (!e) throw new Error("элемента нет на схеме");
+      e.comment = a.comment;
+      scheduleState();
+    },
+  };
+  if (!MFR) Object.assign(COMMANDS, COMMANDS_EL);
+
+  // Ctrl/⌘ + щелчок по изделию на плане (2D): добавляет его к выделению или убирает из него (V1 умел только убирать, и только из рамки).
+  // Перехват на этапе захвата: обработчик V1 на том же узле после этого не вызывается. Рабочее место комплектовщика не затрагивается.
+  if (!MFR && !PICKER) {
+    const root = document.getElementById("svg-root");
+    if (root) root.addEventListener("click", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || (typeof dragMoved !== "undefined" && dragMoved)) return;
+      const shape = e.target.closest && e.target.closest(".element-shape");
+      if (!shape) return;
+      const el = state.byId.get(Number(shape.getAttribute("data-id")));
+      if (!el) return;
+      e.stopImmediatePropagation();
+      const ids = new Set(state.multiSelectedIds);
+      if (ids.size === 0 && state.selectedId !== null && state.selectedId !== el.id) ids.add(state.selectedId);   // уже выбранное одиночно — часть группы
+      if (ids.has(el.id)) ids.delete(el.id); else ids.add(el.id);
+      setMultiSelection(ids);
+      scheduleState();
+    }, true);
+  }
+
   // Команды МФР. Обращения к элементам — только по фиксированным идентификаторам и проверенным значениям.
   const isIds = (x) => typeof x === "string" && /^\d+(,\d+)*$/.test(x);
   if (MFR) Object.assign(COMMANDS, {
@@ -639,6 +712,24 @@
       scheduleState();
     },
     mfrReset() { byId("mfr-reset-all-filters").click(); },
+    // Шахматка: раскраска плана по доске (группе видов работ одного трека) — {track: код доски | null, mode: "progress" | "deadline"}
+    async mfrChess(a) {
+      if (!(a.track === null || (typeof a.track === "string" && a.track.length <= 40)) || !["progress", "deadline"].includes(a.mode)) throw new Error("параметры");
+      if (a.track !== null && !mfrChessTracks.some((t) => t["код"] === a.track)) throw new Error("доски нет в списке");
+      const radio = document.querySelector(`input[name="mfr-chess-mode"][value="${a.mode}"]`);
+      if (radio && !radio.checked) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
+      if (a.track !== mfrChessTrackCode || a.refresh === true) await selectMfrChessTrack(a.track);
+      else if (a.track) { renderMfrChessLegend(); }
+      scheduleState();
+    },
+    // Динамика факта за период: подсветка блоков, где факт менялся в периоде — {on, from, to} (пустые даты — «за весь период»)
+    async mfrDynamics(a) {
+      const okDate = (d) => d === null || d === "" || (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d));
+      if (typeof a.on !== "boolean" || !okDate(a.from ?? null) || !okDate(a.to ?? null)) throw new Error("параметры");
+      mfrDynamics.active = a.on; mfrDynamics.from = a.from || null; mfrDynamics.to = a.to || null;
+      await reloadMfrDynamics();
+      scheduleState();
+    },
     mfrSelect(a) {
       if (!["element", "block"].includes(a.kind) || !isInt(a.id)) throw new Error("параметры");
       return a.kind === "element" ? showRevitCard(a.id) : showBlockCard(a.id, a.additive === true);

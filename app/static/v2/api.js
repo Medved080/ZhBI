@@ -84,7 +84,8 @@ async function request(method, path, body, { read = false } = {}) {
     // Ограниченный выпуск: изменяющий запрос, не разрешённый политикой `write-gate.js`, НЕ уходит на сервер вообще
     // (ни fetch, ни счётчик записей). Отказ — обычный ApiError 4xx: модули показывают его текст и оставляют ввод на месте,
     // а не «повторяют» и не проверяют чтением, как при неизвестном исходе.
-    const verdict = checkWrite(method, path, isForm ? undefined : body);
+    // Форма загрузки (FormData) тоже проверяется шлюзом: строка политики видит поля и файл (`check(body, путь)`).
+    const verdict = checkWrite(method, path, body);
     if (!verdict.allowed) {
       announceBlocked(verdict, method, path);
       const err = new ApiError(403, verdict.message);
@@ -133,7 +134,9 @@ export const api = {
   // Выгрузка в файл (blob). Это чтение: допустимы только `/reports/<имя>.xlsx|pdf` (POST), `/export.xlsx` (POST) и
   // `/export.pdf?…` (GET); в счётчик записей не входит.
   async download(path, body, { method = "POST" } = {}) {
-    const okPath = /^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path) || path === "/export.xlsx" || /^\/export\.pdf(\?|$)/.test(path);
+    const okPath = /^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path) || path === "/export.xlsx" || /^\/export\.pdf(\?|$)/.test(path)
+      || /^\/objects\/\d+\/block-works\/bulk-edit\/export$/.test(path)                       // выгрузка ЗР в Excel для правки (учёт по блокам)
+      || /^\/objects\/\d+\/blocks\/chess-flat-export\.(xlsx|pdf)$/.test(path);              // бланк обхода плоской шахматки
     if (!okPath || (method !== "POST" && method !== "GET")) throw new Error(`download: «${path}» — не выгрузка`);
     let res;
     try {
@@ -147,9 +150,34 @@ export const api = {
     }
     return res.blob();
   },
+  // Выгрузка файла обмена данными (образец формата, файл массовой правки, экспорт настроек): только перечисленные пути. Возвращает
+  // {blob, filename}. Это ЧТЕНИЕ (шлюз записи не участвует), но допустимы лишь заранее известные адреса — произвольный путь отказ.
+  async fetchFile(path, { method = "GET", body } = {}) {
+    const p = String(path).split("?")[0];
+    const ok = (method === "GET" && (/^\/import-templates\/[a-z_]+\/sample$/.test(p) || p === "/settings/export"))
+      || (method === "POST" && (p === "/elements/bulk-edit/export"));
+    if (!ok) throw new Error(`fetchFile: «${path}» — не выгрузка файла`);
+    let res;
+    try {
+      res = await fetch(path, method === "GET" ? { method, credentials: "same-origin" }
+        : { method, credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    } catch (netErr) { throw new ApiError(0, null); }
+    if (!res.ok) {
+      let detail = null;
+      try { const j = await res.json(); detail = j && typeof j === "object" && "detail" in j ? j.detail : j; } catch (e) { /* не JSON */ }
+      throw new ApiError(res.status, detail || res.statusText);
+    }
+    const cd = res.headers.get("Content-Disposition") || "";
+    let filename = null;
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    if (star) { try { filename = decodeURIComponent(star[1]); } catch (e) { filename = star[1]; } }
+    else { const plain = /filename="([^"]+)"/i.exec(cd); if (plain) filename = plain[1]; }
+    return { blob: await res.blob(), filename };
+  },
   // Чтение POST-запросом. Допустимы только отчёты (`/reports/…`) — остальное это запись и должно идти через post().
   readPost: (path, body) => {
-    if (!/^\/reports\/[a-z0-9-]+$/.test(path)) throw new Error(`readPost: «${path}» не отчёт — это запись, используйте post()`);
+    // отчёты и предпросмотры учёта по блокам (`…/bulk-preview`, `…/work-types-settings/preview` — считают последствия и ничего не пишут)
+    if (!/^\/reports\/[a-z0-9-]+$/.test(path) && !/^\/objects\/\d+\/(block-works\/bulk-preview|blocks\/work-types-settings\/preview)$/.test(path)) throw new Error(`readPost: «${path}» не отчёт и не предпросмотр — это запись, используйте post()`);
     return request("POST", path, body ?? {}, { read: true });
   },
   hasPendingWrites: () => pendingWrites > 0,

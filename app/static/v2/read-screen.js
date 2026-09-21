@@ -298,8 +298,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const controls = (sec.controls || []).map((c) => {
       const cur = s.params[c.param] ?? "";
       if (c.type === "select") {
-        const opts = pick(s.data, c.optionsFrom) || [];
-        const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? "";
+        const opts = c.options || pick(s.data, c.optionsFrom) || [];   // options — фиксированный набор из реестра экранов (шаг, масштаб)
+        const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? c.default ?? "";
         return `<label class="v2-wire-field"><span>${esc(c.label)}</span><select data-param="${esc(c.param)}">${opts.map((o) => `<option value="${esc(o[c.valueKey])}" ${String(o[c.valueKey]) === String(val) ? "selected" : ""}>${esc(o[c.labelKey])}</option>`).join("")}</select></label>`;
       }
       const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? "";

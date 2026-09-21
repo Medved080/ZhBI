@@ -359,7 +359,11 @@ def _read_sheet(file_bytes: bytes) -> list:
     пользователь имеет полное право вставить свою колонку с пометками или
     скрыть ненужные, и файл от этого не должен становиться нечитаемым.
     """
-    wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
+    try:
+        wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception:
+        # Пустой, не xlsx или битый файл — ошибка ФАЙЛА (400 с понятным текстом), а не сбой сервера (500)
+        raise ValueError("Файл повреждён или не является корректным .xlsx")
     if SHEET_DATA not in wb.sheetnames:
         raise ValueError(f"В файле нет листа «{SHEET_DATA}». "
                          f"Загружайте тот файл, который выгрузила система.")

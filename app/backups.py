@@ -307,7 +307,10 @@ def _db_stats(path: Path) -> dict:
     оси, сессии и журнал действий. Выборочного экспорта здесь нет и быть не
     может — нечему потеряться."""
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # immutable=1: копия снята с базы в режиме WAL и несёт его признак в заголовке; «mode=ro» без готовых файлов -wal/-shm открыть такую копию не
+        # может («unable to open database file»), из-за чего пустела статистика копий, а восстановление отвечало 500 (найдено 2026-09-21).
+        # Файл копии после создания не меняется, поэтому неизменяемый режим безопасен.
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         try:
             tables = [r["name"] for r in conn.execute(
@@ -497,7 +500,7 @@ def rotate_service_backups(keep_days: int = KEEP_SERVICE_DAYS,
     for имя in list(убрано):
         try:
             delete_backup(имя)
-        except OSError as exc:
+        except (OSError, BackupError) as exc:   # BackupError(404): файл уже убрала параллельная ротация соседнего запроса
             убрано.remove(имя)
             print(f"[backups] не удалось убрать старую копию {имя}: {exc}")
     if убрано:
@@ -514,7 +517,7 @@ def rotate_service_backups(keep_days: int = KEEP_SERVICE_DAYS,
         try:
             delete_backup(имя)
             убрано.append(имя)
-        except OSError as exc:
+        except (OSError, BackupError) as exc:   # два одновременных импорта ротируют одни и те же копии: уже удалённую пропускаем, а не роняем импорт 404
             print(f"[backups] не удалось убрать старую копию {имя}: {exc}")
     if убрано:
         print(f"[backups] копий «загрузки» оставлено {keep_import}, убрано лишних: "
@@ -578,7 +581,7 @@ def restore_backup(name: str, user_name: Optional[str] = None, user_id: Optional
         comment=f"автоматически перед восстановлением из «{name}»",
     )
 
-    source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    source = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)   # см. _db_stats: копия WAL-базы иначе не открывается
     try:
         target = sqlite3.connect(_db.DB_PATH)
         try:

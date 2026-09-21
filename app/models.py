@@ -407,10 +407,15 @@ class ProjectPatchIn(AddressFields):
     name: Optional[str] = None
     status: Optional[str] = None
     description: Optional[str] = None
+    # V2: отпечаток редактируемых полей, который форма видела при открытии (ProjectOut.version). Не передан — проверки нет (V1).
+    expected_version: Optional[str] = None
 
 
 class ProjectOut(ProjectIn):
     id: int
+    # Отпечаток редактируемых полей записи (2026-09-21, V2): форма шлёт его назад как expected_version, и сервер откажет 409,
+    # если запись за это время изменил кто-то другой.
+    version: Optional[str] = None
     objects_count: int = 0
     elements_count: int = 0
     # Сроки проекта НЕ хранятся, а сводятся из сроков подчинённых объектов
@@ -423,6 +428,8 @@ class ProjectOut(ProjectIn):
 class ObjectOut(AddressFields):
     id: int
     name: str
+    # Отпечаток редактируемых полей записи (см. ProjectOut.version).
+    version: Optional[str] = None
     # Тип объекта: 'zhbi' (поштучный учёт сборных изделий) или 'mfr' (учёт
     # работ по блокам из модели Revit). От него зависит СОСТАВ разделов —
     # см. app/features.py.
@@ -480,6 +487,8 @@ class ObjectPatchIn(AddressFields):
     responsible_id: Optional[int] = None
     media_url: Optional[str] = None
     smr_start_reported: Optional[str] = None
+    # V2: отпечаток, который форма видела при открытии (ObjectOut.version). Не передан — проверки нет (V1).
+    expected_version: Optional[str] = None
 
 
 class AllowedSubtypeIn(BaseModel):

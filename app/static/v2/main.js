@@ -20,12 +20,15 @@ import { mountColorEdit } from "./color-edit.js";
 import { mountPrefixEdit } from "./prefix-edit.js";
 import { mountProjectCardEdit, mountReportNotesEdit } from "./card-edit.js";
 import { mountExportForm } from "./export-form.js";
+import { mountExchange, hasExchangeOp } from "./exchange.js";
 import { mountSessionsEdit } from "./sessions-edit.js";
 import { mountSubtypesEdit } from "./subtypes-edit.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
 import { mountLabelColorEdit } from "./label-color-edit.js";
 import { mountRevitColorsEdit } from "./revit-colors-edit.js";
 import { mountAccessView } from "./access-view.js";
+import { hasAdminScreen, mountAdminScreen } from "./admin-screens.js";
+import { startStatusLog } from "./statuslog.js";
 import { mountShapeEdit } from "./shape-edit.js";
 import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen, hasAllowedWrites } from "./write-gate.js";
 
@@ -103,7 +106,7 @@ async function afterLogin(user) {
   applyThemeFamily(user.ui_theme);
   if (user.must_change_password) {
     root.classList.remove("v2-loading");
-    await renderChangePassword(root, { api, onSuccess: (u) => afterLogin(u) });
+    await renderChangePassword(root, { api, user, onSuccess: (u) => afterLogin(u) });
     return;
   }
   let permissions;
@@ -127,6 +130,15 @@ function renderFatal(err) {
 
 // Модульные экраны (перенесены целиком) → их монтирование. Остальные экраны реестра показывают каркас
 // с переходом в V1 (screen-view.js).
+// Экраны области «МФР / учёт по блокам» (рабочие модули с записью через шлюз): impl экрана → монтирование
+// (модули грузятся при первом открытии экрана, а не при старте: холодный запуск V2 не тяжелеет)
+const MFR_SCREENS = {
+  "blocks-edit": () => import("./blocks-screen.js").then((m) => m.mountBlocksScreen),
+  "fact-journal-edit": () => import("./fact-journal-screen.js").then((m) => m.mountFactJournalScreen),
+  "chess-flat-edit": () => import("./chess-flat-screen.js").then((m) => m.mountChessFlatScreen),
+  "block-bulk-edit": () => import("./block-bulk-screen.js").then((m) => m.mountBlockBulkScreen),
+};
+
 const MODULES = {
   "users-access": (el, ctx) => mountUsersAccess(el, ctx),
   "projects-objects": (el, ctx) => mountProjectsObjects(el, ctx),
@@ -239,6 +251,7 @@ async function renderShell(user, permissions) {
         </label>
         <span class="v2-nav-note" id="v2-nav-note" role="status" aria-live="polite"></span>
         <span class="v2-user-name">${escapeHtml(user.display_name)}</span>
+        <button type="button" class="v2-back" id="v2-logout-btn" title="Завершить свой сеанс и вернуться на экран входа">Выйти</button>
         <button type="button" class="v2-back" id="v2-back-btn" title="">← Текущий интерфейс</button>
       </div>
     </header>
@@ -262,6 +275,20 @@ async function renderShell(user, permissions) {
   }).catch(() => { /* индикатор вторичен */ });
   const backBtn = document.getElementById("v2-back-btn");
   backBtn.addEventListener("click", onBackClick);
+  // «Выйти»: как в V1 — POST /logout (сервер гасит сеанс и cookie), затем экран входа. Несохранённое защищает тот же сторож, что и переход.
+  const logoutBtn = document.getElementById("v2-logout-btn");
+  logoutBtn.addEventListener("click", async () => {
+    if (navBusy || api.hasPendingWrites()) return;
+    navBusy = true;
+    try {
+      if (activeModule && !(await activeModule.guardLeave())) return;
+      logoutBtn.disabled = true;
+      try { await api.post("/logout", {}); } catch (err) { /* сеанс мог уже истечь — выход всё равно выполняется */ }
+      activeModule = null;
+      location.hash = "";
+      location.reload();
+    } finally { navBusy = false; }
+  });
   document.getElementById("v2-banner-back").addEventListener("click", (e) => { e.preventDefault(); onBackClick(); });
   const gateNote = document.getElementById("v2-gate-note");
   const objectSelect = document.getElementById("v2-object");
@@ -287,7 +314,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) || s.impl === "supplier-docs" || s.impl === "contracts-list" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) || s.impl.startsWith("admin:") || s.impl === "supplier-docs" || s.impl === "contracts-list" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl === "exchange" ? ` <span class="v2-nav-tag" title="Загрузка и выгрузка файлов выполняются в новом интерфейсе">обмен</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.adminExtra ? ` <span class="v2-nav-tag" title="Просмотр и служебные операции в новом интерфейсе">прав.</span>` : s.impl === "read" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -367,6 +394,12 @@ async function renderShell(user, permissions) {
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, moduleCtx);
+      } else if (hasAdminScreen(target.adminExtra || target.impl)) {
+        // Экраны области «администрирование» (admin-screens.js): смена своего пароля, «Мой доступ», служебные разделы.
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountAdminScreen(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, user, rights, perms, groupTitle: groupTitle(target.group),
+        }, target.adminExtra || target.impl);
       } else if (target.impl === "appearance-edit") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountAppearanceEdit(content, {
@@ -380,7 +413,7 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "access-view") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountAccessView(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "shape-edit" && target.shape) {
         document.title = `${target.title} — ЖБИ`;
@@ -400,7 +433,13 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "sessions-edit") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSessionsEdit(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, user, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "exchange" && hasExchangeOp(target.exchange)) {
+        // Импорт/экспорт файлов и связанные операции обмена данными (exchange*.js)
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountExchange(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, user, rights, objects: activeObjects, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "export-form" && target.export) {
         document.title = `${target.title} — ЖБИ`;
@@ -452,6 +491,12 @@ async function renderShell(user, permissions) {
         // Документы контрактации (замена поставщика, обмен привязками): права и данные — по выбранному объекту
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSupplierDocs(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
+      } else if (MFR_SCREENS[target.impl]) {
+        document.title = `${target.title} — ЖБИ`;
+        const mountMfr = await MFR_SCREENS[target.impl]();
+        activeModule = mountMfr(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
       } else if (target.impl === "read" && target.read) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountReadScreen(content, {
@@ -522,6 +567,7 @@ async function renderShell(user, permissions) {
     else if (currentKey === "home") openSection("home", { force: true, guarded: true });
   });
 
+  startStatusLog();   // лента «Сообщения за сеанс» (раздел «Обучение и справка»)
   renderNav();
   openSection(routeFromHash());
 }

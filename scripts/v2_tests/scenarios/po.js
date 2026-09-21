@@ -273,13 +273,17 @@ export const tests = [
       // чистый: отмена
       await selectObject(a, 20);
       a.click(a.$("#po-delete"));
-      await waitFor(() => a.dialog(), { what: "подтверждение" });
+      await waitFor(() => a.$("#po-typed"), { what: "подтверждение вводом названия" });
       t.ok(a.$(".v2-dialog .v2-danger"), "«Удалить» — danger-кнопка");
+      t.ok(a.$(".v2-dialog [data-choice=confirm]").disabled, "«Удалить» выключена, пока название не введено");
       await a.answerDialog("Отмена");
       t.ok(a.ctl.data.objects.some((o) => o.id === 20), "отмена не удаляет");
-      // чистый: успех
+      // чистый: успех (подтверждение — вводом названия)
       a.click(a.$("#po-delete"));
-      await waitFor(() => a.dialog(), { what: "подтверждение" });
+      await waitFor(() => a.$("#po-typed"), { what: "подтверждение" });
+      a.setValue(a.$("#po-typed"), "не то название");
+      t.ok(a.$(".v2-dialog [data-choice=confirm]").disabled, "неверное название — «Удалить» выключена");
+      a.setValue(a.$("#po-typed"), a.ctl.data.objects.find((o) => o.id === 20).name);
       await a.answerDialog("Удалить");
       await waitFor(() => !a.ctl.data.objects.some((o) => o.id === 20), { what: "удаление" });
       await a.settle(150);
@@ -296,10 +300,11 @@ export const tests = [
       await selectProject(a, 9);
       const del = a.$("#po-delete");
       a.click(del); a.click(del);
-      await waitFor(() => a.dialog(), { what: "диалог" });
+      await waitFor(() => a.$("#po-typed"), { what: "диалог" });
       await a.settle(60);
       t.eq(a.$$(".v2-dialog").length, 1, "один диалог");
       a.ctl.failNext("/dictionaries/project/9/delete", { status: 500, detail: "Сбой удаления" });
+      a.setValue(a.$("#po-typed"), a.ctl.data.projects.find((p) => p.id === 9).name);
       await a.answerDialog("Удалить");
       await waitFor(() => a.ctl.count("POST", "/dictionaries/project/9/delete") >= 1, { what: "запрос" });
       await a.settle(150);

@@ -58,6 +58,18 @@ from app.work_progress import (
 _DYNAMICS_MIN_DATE = "0001-01-01"
 
 
+def is_iso_date(value) -> bool:
+    """Календарная дата вида ГГГГ-ММ-ДД (серверная проверка: поле даты формы V1/V2 её гарантирует, прямой вызов API — нет)."""
+    from datetime import date
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        date.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
+
+
 class FactError(Exception):
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
@@ -135,7 +147,7 @@ def _block_work_has_history(conn, bw_id: int) -> bool:
 
 
 def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list,
-                        user_id: int, *, log: bool = True) -> None:
+                        user_id: int, *, log: bool = True, commit: bool = True) -> None:
     """Состав работ блока = создаёт/удаляет строки `block_works` (не
     удаляет-и-пересоздаёт весь набор разом, как раньше block_work_types):
     у ЗР теперь есть сроки и факт, и снос-с-нуля стёр бы их у операций,
@@ -193,7 +205,8 @@ def save_block_settings(conn, object_id: int, block_id: int, work_type_ids: list
         else:
             conn.execute("DELETE FROM block_works WHERE id = ?", (bw_id,))
             hard_removed.append(bw_id)
-    conn.commit()
+    if commit:
+        conn.commit()
     to_add = to_insert | to_reactivate
     if log:
         if to_add:
@@ -242,7 +255,8 @@ def save_blocks_settings(conn, object_id: int, block_ids: list, work_type_ids: l
     if not block_ids:
         raise FactError(422, "Не выбран ни один блок.")
     for block_id in block_ids:
-        save_block_settings(conn, object_id, block_id, work_type_ids, user_id, log=False)
+        save_block_settings(conn, object_id, block_id, work_type_ids, user_id, log=False, commit=False)
+    conn.commit()   # одна фиксация на всю группу: отказ на любом блоке (до этой строки) откатывает ВСЕ
     return len(block_ids)
 
 
@@ -680,7 +694,21 @@ def get_report(conn, object_id: int, block_id: int, report_id: int) -> dict:
             "SELECT work_type_id, percent FROM work_fact_items WHERE report_id = ?",
             (report_id,))
     }
-    return {"id": row["id"], "report_date": row["report_date"], "items": items}
+    return {"id": row["id"], "report_date": row["report_date"], "items": items,
+            "rev": report_rev(conn, report_id)}
+
+
+def report_rev(conn, report_id: int) -> str:
+    """Отпечаток документа факта для проверки конкуренции (интерфейс V2): метка изменения, дата и состав строк.
+    `updated_at` — с точностью до секунды, поэтому в отпечаток входят и сами значения."""
+    import hashlib
+    head = conn.execute("SELECT updated_at, report_date FROM work_fact_reports WHERE id = ?", (report_id,)).fetchone()
+    if head is None:
+        return ""
+    items = conn.execute("SELECT work_type_id, percent FROM work_fact_items WHERE report_id = ? ORDER BY work_type_id",
+                         (report_id,)).fetchall()
+    text = "%s|%s|%s" % (head["updated_at"], head["report_date"], ",".join("%s=%s" % (i["work_type_id"], i["percent"]) for i in items))
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
 
 
 def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, report_date: str,
@@ -693,6 +721,8 @@ def save_report(conn, object_id: int, user_id: int, block_id: int, report_id, re
     ничего») и коммитит сам, одним разом, после последнего блока."""
     if not report_date:
         raise FactError(422, "Не указана дата отчёта.")
+    if not is_iso_date(report_date):
+        raise FactError(422, "Неверная дата отчёта — нужна существующая дата вида ГГГГ-ММ-ДД.")
     settings = block_settings(conn, object_id, block_id)
     selected_ids = set(settings["selected"])
     bad = set(items) - selected_ids

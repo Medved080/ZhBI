@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import threading
 import os
 import shutil
 import sqlite3
@@ -78,7 +79,7 @@ from app.db import (
     visible_elements_clause,
 )
 from app.dxf_import import (
-    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, forget_pending,
+    DxfProcessingError, UPLOADS_DIR, analyze_drawing, apply_drawing, claim_pending, forget_pending, release_pending,
     get_pending, import_dxf_file, parse_drawing, process_upload, remember_pending,
     save_uploaded_file,
 )
@@ -404,8 +405,15 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
-from app.allocation import router as allocation_router  # noqa: E402
+from app.allocation import router as allocation_router, state_router as allocation_state_router  # noqa: E402
 app.include_router(allocation_router)
+app.include_router(allocation_state_router)
+from app.element_ops import router as element_ops_router  # noqa: E402
+app.include_router(element_ops_router)
+from app.block_ops import router as block_ops_router  # noqa: E402  (предпросмотры и строгая Excel-правка ЗР, интерфейс V2)
+app.include_router(block_ops_router)
+from app.admin_ops import router as admin_ops_router  # noqa: E402  (администрирование V2: политика пароля, сводка доступа, групповая выдача)
+app.include_router(admin_ops_router)
 # ДО users_router: у того пути вида /users/{user_id}/…, и «access-matrix»
 # не должен иметь ни единого шанса уехать в {user_id}.
 app.include_router(rights_matrix_router)
@@ -2437,6 +2445,9 @@ def admin_input_files(user: sqlite3.Row = Depends(require_service_feature("impor
     return list_input_files()
 
 
+_INPUT_IMPORT_LOCK = threading.Lock()
+
+
 class ImportInputIn(BaseModel):
     # В какой объект грузится ВСЯ пачка (2026-08-21, запрос пользователя).
     # Необязателен ради старого клиента и первой в жизни установки, где
@@ -2483,9 +2494,15 @@ def admin_import_input(body: Optional[ImportInputIn] = None,
             assert_object_feature(conn, user, object_id, "drawings", "write")
         finally:
             conn.close()
-    backup_before_import("папка Input", audit_display_name(user), user["id"])
-    report = import_input_dxf(object_id)
-    report += import_input_xlsx(object_id)
+    # Одна загрузка из папки за раз: вторая (двойная отправка, вторая вкладка) получает отказ, а не параллельную обработку тех же файлов
+    if not _INPUT_IMPORT_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Загрузка из папки Input уже выполняется — дождитесь завершения")
+    try:
+        backup_before_import("папка Input", audit_display_name(user), user["id"])
+        report = import_input_dxf(object_id)
+        report += import_input_xlsx(object_id)
+    finally:
+        _INPUT_IMPORT_LOCK.release()
     # В журнал: до 2026-07-30 массовая загрузка из Input/ нигде не
     # фиксировалась, кроме stdout сервера, — а она перезаписывает геометрию
     # всех элементов и создаёт контракты (живой репорт пользователя о
@@ -2867,7 +2884,8 @@ def get_changes(
 
 
 @app.post("/admin/reset-status-history")
-def reset_status_history(user: sqlite3.Row = Depends(require_service_feature("reset_history", "write"))):
+def reset_status_history(expected_history: Optional[int] = Query(None),
+                         user: sqlite3.Row = Depends(require_service_feature("reset_history", "write"))):
     """Массовый сброс истории статусов ВСЕХ элементов — только для
     тестирования (живой запрос пользователя, см. Docs/backlog.md), НЕ
     ограничен одним чертежом/файлом. Каждый элемент возвращается в
@@ -2883,7 +2901,14 @@ def reset_status_history(user: sqlite3.Row = Depends(require_service_feature("re
     статусов (партии убраны, см. "Контрактация 2.0")."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО подсчёта: число из предпросмотра и сама операция — под одной блокировкой; ошибка откатывает всё
         n = conn.execute("SELECT COUNT(*) AS n FROM elements").fetchone()["n"]
+        if expected_history is not None:
+            # V2 показал предпросмотр («записей истории: N») и просит сбросить именно это; данных стало иначе — не сбрасываем вслепую.
+            actual = conn.execute("SELECT COUNT(*) AS n FROM status_history").fetchone()["n"]
+            if actual != expected_history:
+                raise HTTPException(status_code=409, detail=f"История статусов изменилась с момента предпросмотра (было записей {expected_history}, "
+                                                            f"стало {actual}). Ничего не сброшено — откройте предпросмотр заново.")
         conn.execute("DELETE FROM status_history")
         conn.execute(
             "UPDATE elements SET current_status='planned', contract_id=NULL, "
@@ -3982,6 +4007,9 @@ class BulkEditExportIn(BaseModel):
     # фронтенде, и второй их реализации на сервере быть не должно. Список на
     # тысячи значений не помещается в query string, поэтому выгрузка — POST.
     element_ids: Optional[list[int]] = None
+    # Выгрузить элементы ОДНОГО объекта (новый интерфейс: там нет фильтра схемы, а «всё всех объектов» не всегда нужно). Сервер сам берёт те же
+    # видимые элементы, что и фильтр схемы; вместе с element_ids не принимается; для контрактации (строка — позиция контракта) не применяется.
+    object_id: Optional[int] = None
 
 
 @app.post("/elements/bulk-edit/export")
@@ -4001,11 +4029,21 @@ def bulk_edit_export(body: BulkEditExportIn, admin: sqlite3.Row = Depends(requir
     """
     _check_bulk_mode(body.mode)
     ids = set(body.element_ids) if body.element_ids is not None else None
+    if body.object_id is not None and (body.element_ids is not None or body.mode == "contracting"):
+        raise HTTPException(status_code=400,
+                            detail="Отбор по объекту не сочетается с отбором по фильтру схемы и не применяется к контрактации")
     if ids is not None and not ids:
         raise HTTPException(status_code=400,
                             detail="Фильтр схемы не пропускает ни одного элемента — выгружать нечего")
     conn = get_connection()
     try:
+        if body.object_id is not None:
+            if conn.execute("SELECT 1 FROM objects WHERE id = ?", (body.object_id,)).fetchone() is None:
+                raise HTTPException(status_code=404, detail="Объект не найден")
+            ids = {r["id"] for r in conn.execute(
+                f"SELECT id FROM elements WHERE object_id = ? AND {visible_elements_clause()}", (body.object_id,))}
+            if not ids:
+                raise HTTPException(status_code=400, detail="У выбранного объекта нет элементов — выгружать нечего")
         if body.mode == "contracting":
             # Отбора по фильтру схемы у контрактации нет: строка файла — не
             # элемент, а позиция контракта (форма в этом режиме галочку и не
@@ -4077,43 +4115,50 @@ def bulk_edit_apply(body: BulkEditApplyIn, admin: sqlite3.Row = Depends(require_
     backup_before_import(f"массовая правка через Excel ({body.mode})",
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
+    # События журнала копятся и уходят в очередь только после commit: применение может откатиться целиком (страж остатка контракта
+    # внутри apply_status_change), а поэлементные события пишутся по ходу дела (app/activity.py, defer_*).
+    события = activity.defer_begin()
     try:
         begin_write(conn)   # блокировка записи ДО чтения и проверок (app/db.py): не читать устаревшее состояние перед записью
         if body.mode == "contracting":
             try:
-                return contracting_bulk_edit.apply_changes(
+                итог = contracting_bulk_edit.apply_changes(
                     conn, body.changes, audit_display_name(admin), admin["id"]
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
-        if body.mode == "statuses":
+        elif body.mode == "statuses":
             try:
-                return status_bulk_edit.apply_changes(
+                итог = status_bulk_edit.apply_changes(
                     conn, body.changes, audit_display_name(admin), admin["id"]
                 )
             except ValueError as exc:
                 # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
                 # а не сбой сервера (тот же белый список, что у реквизитов).
                 raise HTTPException(status_code=400, detail=str(exc))
-        stamp = None
-        if body.contracting_date:
+        else:
+            stamp = None
+            if body.contracting_date:
+                try:
+                    datetime.strptime(body.contracting_date, "%Y-%m-%d")
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Дата статуса — в виде ГГГГ-ММ-ДД")
+                # Полдень, а не полночь: запись «Запланирован» от импорта чертежа
+                # несёт реальное время суток, и событие в 00:00 того же дня
+                # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
+                stamp = f"{body.contracting_date} 12:00:00"
             try:
-                datetime.strptime(body.contracting_date, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Дата статуса — в виде ГГГГ-ММ-ДД")
-            # Полдень, а не полночь: запись «Запланирован» от импорта чертежа
-            # несёт реальное время суток, и событие в 00:00 того же дня
-            # оказалось бы РАНЬШЕ неё, то есть не подействовало бы.
-            stamp = f"{body.contracting_date} 12:00:00"
-        try:
-            return apply_bulk_edit(
-                conn, body.changes, audit_display_name(admin), admin["id"], stamp
-            )
-        except ValueError as exc:
-            # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
-            # а не сбой сервера: см. белый список в app/element_bulk_edit.py.
-            raise HTTPException(status_code=400, detail=str(exc))
+                итог = apply_bulk_edit(
+                    conn, body.changes, audit_display_name(admin), admin["id"], stamp
+                )
+            except ValueError as exc:
+                # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400),
+                # а не сбой сервера: см. белый список в app/element_bulk_edit.py.
+                raise HTTPException(status_code=400, detail=str(exc))
+        activity.defer_flush(события)   # commit внутри apply_changes выполнен — события в журнал
+        return итог
     finally:
+        activity.defer_end(события)
         conn.close()
 
 
@@ -4512,6 +4557,20 @@ def _адрес_из_строки(row) -> dict:
     return out
 
 
+# Отпечаток редактируемых полей записи справочника (2026-09-21, V2): форма шлёт его назад как `expected_version`, сервер откажет
+# 409, если запись за это время изменил кто-то другой. Аватар и служебные метки времени в него не входят: их меняет сама форма.
+_PROJECT_VERSION_COLS = ("name", "status", "description") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
+_OBJECT_VERSION_COLS = ("name", "status", "project_id", "kind", "description", "smu_id", "smu_director_id", "responsible_id",
+                        "media_url", "smr_start_reported") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
+
+
+def _row_version(row, columns) -> str:
+    import hashlib
+    ключи = row.keys()
+    части = ["" if (c not in ключи or row[c] is None) else str(row[c]) for c in columns]
+    return hashlib.sha1("\x1f".join(части).encode("utf-8")).hexdigest()[:16]
+
+
 def _проверить_архивацию_проекта(conn, project_id: int, статус: str) -> None:
     """Проект уходит в архив, только когда в нём не осталось активных
     объектов. Иначе стройка исчезла бы из переключателя вместе с проектом,
@@ -4569,6 +4628,7 @@ def list_projects(user: sqlite3.Row = Depends(get_current_user)):
                 elements_count=a["elements_count"] if a else 0,
                 smr_start=a["smr_start"] if a else None,
                 smr_end=a["smr_end"] if a else None,
+                version=_row_version(row, _PROJECT_VERSION_COLS),
                 **_адрес_из_строки(row),
             ))
         return out
@@ -4611,9 +4671,13 @@ def update_project(project_id: int, body: ProjectPatchIn, admin: sqlite3.Row = D
     записать = []          # (колонка, значение)
     события = []           # (код действия, было, стало)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения: проверка «запись устарела» и запись — под одной блокировкой
         row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Проект не найден")
+        if body.expected_version is not None and body.expected_version != _row_version(row, _PROJECT_VERSION_COLS):
+            raise HTTPException(status_code=409, detail="Проект уже изменил кто-то другой, пока форма была открыта. "
+                                                        "Ничего не сохранено — обновите данные и повторите правку.")
 
         if "name" in body.model_fields_set:
             name = (body.name or "").strip()
@@ -4686,7 +4750,11 @@ def delete_project(project_id: int, admin: sqlite3.Row = Depends(require_service
         delete_attachments_for(conn, "project", project_id)
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
+        from app.attachments import flush_pending_unlinks
+        flush_pending_unlinks()   # файлы вложений стираются только после commit
     finally:
+        from app.attachments import discard_pending_unlinks
+        discard_pending_unlinks()   # при откате — ничего не стирать (после успешного flush пусто)
         conn.close()
     activity.log("project_delete", user=admin, entity_type="project", entity_id=project_id)
     return {"deleted": project_id}
@@ -4869,6 +4937,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
                 avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
+                version=_row_version(row, _OBJECT_VERSION_COLS),
                 **_адрес_из_строки(row),
             ))
         return result
@@ -4960,9 +5029,13 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
     записать = []
     события = []
     try:
+        begin_write(conn)   # блокировка записи ДО чтения: проверка «запись устарела» и запись — под одной блокировкой
         row = conn.execute("SELECT * FROM objects WHERE id = ?", (object_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
+        if body.expected_version is not None and body.expected_version != _row_version(row, _OBJECT_VERSION_COLS):
+            raise HTTPException(status_code=409, detail="Объект уже изменил кто-то другой, пока форма была открыта. "
+                                                        "Ничего не сохранено — обновите данные и повторите правку.")
 
         if "name" in body.model_fields_set:
             name = (body.name or "").strip()
@@ -5699,6 +5772,20 @@ def analyze_dxf(
         # ещё нет: справочник тогда пуст, и все подтипы файла новые.
         parsed = parse_drawing(saved_path, name, object_id)
         analysis = analyze_drawing(parsed, object_id)
+        # Имя чертежа уникально на весь сервис вместе с handle элемента (UNIQUE(source_file, dxf_handle)): файл с именем, под которым изделия
+        # уже загружены в ДРУГОЙ объект, применить нельзя — раньше это выяснялось только на применении и заканчивалось ошибкой сервера.
+        conn = get_connection()
+        try:
+            чужой = conn.execute(
+                "SELECT o.name FROM elements e JOIN objects o ON o.id = e.object_id "
+                "WHERE e.source_file = ? AND e.object_id <> ? LIMIT 1", (name, analysis["object_id"])).fetchone()
+        finally:
+            conn.close()
+        if чужой:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Чертёж с именем «{name}» уже загружен в объект «{чужой['name']}». Имя чертежа не должно совпадать "
+                       f"с чертежом другого объекта — переименуйте файл и загрузите его снова.")
         token = remember_pending(parsed, analysis)
     except DxfProcessingError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
@@ -5724,6 +5811,16 @@ def analyze_dxf(
 @app.post("/import-dxf/apply", response_model=DxfImportResult)
 def apply_dxf(body: DxfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную пользователю сводку."""
+    # Один токен применяется один раз и не параллельно: второй запрос с тем же токеном (двойная отправка) получает отказ, не запуская вторую загрузку
+    if not claim_pending(body.token):
+        raise HTTPException(status_code=409, detail="Этот разбор чертежа уже применяется — дождитесь завершения")
+    try:
+        return _apply_dxf_claimed(body, user)
+    finally:
+        release_pending(body.token)
+
+
+def _apply_dxf_claimed(body: DxfApplyIn, user: sqlite3.Row):
     try:
         parsed, analysis = get_pending(body.token)
         # Объект уже выбран на фазе анализа и лежит в токене — проверяем ЕГО,
@@ -5913,6 +6010,16 @@ def analyze_revit(
 @app.post("/import-revit/apply", response_model=RevitImportResult)
 def apply_revit(body: RevitApplyIn, user: sqlite3.Row = Depends(get_current_user)):
     """Фаза 2: применяет уже показанную сводку."""
+    # Один токен применяется один раз и не параллельно (двойная отправка получает 409); токены DXF и Revit — разные uuid, набор общий
+    if not claim_pending(body.token):
+        raise HTTPException(status_code=409, detail="Этот разбор уже применяется — дождитесь завершения")
+    try:
+        return _apply_revit_claimed(body, user)
+    finally:
+        release_pending(body.token)
+
+
+def _apply_revit_claimed(body: RevitApplyIn, user: sqlite3.Row):
     try:
         packages, analysis = revit_import.get_pending(body.token)
     except revit_import.RevitProcessingError as e:
@@ -6709,14 +6816,24 @@ def get_block_work_types_settings(object_id: int, block_id: int,
 
 class BlockWorkTypesSettingsIn(BaseModel):
     work_type_ids: list[int]
+    # Отпечаток состава работ блока, который видел человек (POST .../work-types-settings/preview): не совпал — 409, ничего не менялось.
+    # Необязателен: прежние вызовы V1 его не шлют.
+    expected: Optional[str] = None
 
 
 @app.put("/objects/{object_id}/blocks/{block_id}/work-types-settings")
 def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWorkTypesSettingsIn,
                                   user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected is not None:
+            stale = block_ops.stale_block_selections(conn, {block_id: body.expected})
+            if stale:
+                raise block_ops.conflict("Состав работ блока изменили после того, как вы его открыли — ничего не сохранено.", stale)
         try:
             # Журнал — изнутри save_block_settings (block_work_add/
             # block_work_remove, по множеству, живой запрос задания
@@ -6725,7 +6842,9 @@ def set_block_work_types_settings(object_id: int, block_id: int, body: BlockWork
             work_fact.save_block_settings(conn, object_id, block_id, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.defer_flush(events)
     finally:
+        activity.defer_end(events)
         conn.close()
     return {"ok": True}
 
@@ -6756,25 +6875,36 @@ def get_blocks_work_types_settings(object_id: int, block_ids: str,
 class BlocksWorkTypesSettingsIn(BaseModel):
     block_ids: list[int]
     work_type_ids: list[int]
+    # Отпечатки составов работ блоков, которые видел человек (POST .../work-types-settings/preview); необязательны (V1 их не шлёт)
+    expected: Optional[dict[str, str]] = None
 
 
 @app.put("/objects/{object_id}/blocks/work-types-settings")
 def set_blocks_work_types_settings(object_id: int, body: BlocksWorkTypesSettingsIn,
                                    user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py); все блоки группы — ОДНА транзакция
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected is not None:
+            stale = block_ops.stale_block_selections(conn, {b: body.expected.get(str(b), "") for b in body.block_ids})
+            if stale:
+                raise block_ops.conflict("Состав работ блоков изменили после предпросмотра — ничего не сохранено.", stale)
         try:
             work_fact.save_blocks_settings(conn, object_id, body.block_ids, body.work_type_ids, user["id"])
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        # Тот же код журнала, что у одиночного блока: действие одно и то же, просто
+        # применённое к нескольким блокам — новый код завёл бы в отчётах вторую
+        # строку про то же самое (см. app/activity_actions.py).
+        activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
+                    details={"block_ids": body.block_ids, "count": len(body.work_type_ids)})
+        activity.defer_flush(events)
     finally:
+        activity.defer_end(events)
         conn.close()
-    # Тот же код журнала, что у одиночного блока: действие одно и то же, просто
-    # применённое к нескольким блокам — новый код завёл бы в отчётах вторую
-    # строку про то же самое (см. app/activity_actions.py).
-    activity.log("block_work_types_settings", user=user, entity_type="object", entity_id=object_id,
-                details={"block_ids": body.block_ids, "count": len(body.work_type_ids)})
     return {"ok": True, "blocks": len(body.block_ids)}
 
 
@@ -6797,6 +6927,7 @@ def set_block_percent_cell(object_id: int, block_id: int, body: BlockPercentCell
     задвоением, не новой информацией)."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
             result = work_fact.set_cell_percent(conn, user["id"], object_id, block_id,
@@ -6899,20 +7030,39 @@ class BlockWorkPatchIn(BaseModel):
     note: Optional[str] = None
     forecast_start: Optional[str] = None
     forecast_end: Optional[str] = None
+    # Отпечаток ЗР, который видел человек (поле `rev` из GET): не совпал с текущим под блокировкой записи — 409, ничего не менялось.
+    # Необязателен: прежние вызовы V1 его не шлют. Не поле ЗР — до `update_block_work` не доходит.
+    expected_rev: Optional[str] = None
 
 
 @app.patch("/objects/{object_id}/block-works/{bw_id}")
 def patch_block_work_endpoint(object_id: int, bw_id: int, body: BlockWorkPatchIn,
                               user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал (план/прогноз) — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         поля = body.dict(exclude_unset=True)
+        expected_rev = поля.pop("expected_rev", None)
+        if expected_rev is not None:
+            stale = block_ops.stale_block_works(conn, object_id, {bw_id: expected_rev})
+            if stale:
+                raise block_ops.conflict("Работу изменили после того, как вы её открыли — ничего не сохранено.", stale)
+        row = conn.execute("SELECT * FROM block_works WHERE id = ? AND object_id = ?", (bw_id, object_id)).fetchone()
+        if row is not None and row["retired_at"]:
+            raise HTTPException(status_code=409, detail="Работа снята с плана блока — правка сроков и примечания недоступна.")
+        if row is not None:
+            block_ops.validate_block_work_patch(row, поля)
         try:
-            return block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
+            result = block_works.update_block_work(conn, object_id, bw_id, user["id"], **поля)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.defer_flush(events)
+        return result
     finally:
+        activity.defer_end(events)
         conn.close()
 
 
@@ -6921,20 +7071,36 @@ class BlockWorksBulkIn(BaseModel):
     op: str  # "shift" | "forecast_equals_plan"
     field: Optional[str] = None   # "plan" | "forecast" — для op="shift"
     days: Optional[int] = None    # для op="shift"
+    # Отпечатки ЗР из предпросмотра (POST .../block-works/bulk-preview, поле `expected`): любое расхождение под блокировкой
+    # записи — 409 с перечнем, ничего не менялось. Необязательно: прежние вызовы V1 его не шлют.
+    expected: Optional[dict[str, str]] = None
 
 
 @app.put("/objects/{object_id}/block-works/bulk")
 def bulk_block_works_endpoint(object_id: int, body: BlockWorksBulkIn,
                               user: sqlite3.Row = Depends(get_current_user)):
+    from app import block_ops
     conn = get_connection()
+    events = activity.defer_begin()   # журнал (план/прогноз/сводное событие) — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состояния (app/db.py); вся пачка — одна транзакция
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected is not None:
+            missing = [i for i in body.block_work_ids if str(i) not in body.expected]
+            if missing:
+                raise HTTPException(status_code=422, detail="Нет отпечатка состояния для работ: %s" % missing[:10])
+            stale = block_ops.stale_block_works(conn, object_id, {i: body.expected[str(i)] for i in body.block_work_ids})
+            if stale:
+                raise block_ops.conflict("Работы изменили после предпросмотра — ничего не изменено. Обновите список и повторите.", stale)
         try:
-            return block_works.bulk_edit(conn, object_id, user["id"], body.block_work_ids,
-                                         body.op, field=body.field, days=body.days)
+            result = block_works.bulk_edit(conn, object_id, user["id"], body.block_work_ids,
+                                           body.op, field=body.field, days=body.days)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.defer_flush(events)
+        return result
     finally:
+        activity.defer_end(events)
         conn.close()
 
 
@@ -7100,6 +7266,7 @@ def post_chess_flat_batch(object_id: int, body: ChessFlatBatchIn,
                           user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО сверки «ожидалось/есть» и записи пакета (app/db.py): два пакета не пройдут одновременно
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
             return chess_flat.commit_batch(
@@ -7257,6 +7424,9 @@ def get_block_fact_report(object_id: int, block_id: int, report_id: int,
 class FactReportIn(BaseModel):
     report_date: str
     items: dict[int, int]   # work_type_id -> процент
+    # Отпечаток документа, который видел человек (`rev` из GET): при правке (PUT) не совпал под блокировкой записи — 409, ничего
+    # не менялось. Необязателен: прежние вызовы V1 его не шлют.
+    expected_rev: Optional[str] = None
 
 
 @app.post("/objects/{object_id}/blocks/{block_id}/fact-reports")
@@ -7264,6 +7434,7 @@ def create_block_fact_report(object_id: int, block_id: int, body: FactReportIn,
                              user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения состава работ блока (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
         try:
             report_id = work_fact.save_report(conn, object_id, user["id"], block_id, None,
@@ -7280,7 +7451,13 @@ def update_block_fact_report(object_id: int, block_id: int, report_id: int, body
                              user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи ДО чтения документа и проверки отпечатка (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if body.expected_rev is not None:
+            from app import block_ops
+            if work_fact.report_rev(conn, report_id) != body.expected_rev:
+                raise block_ops.conflict("Документ факта изменили после того, как вы его открыли — ничего не сохранено.",
+                                         [{"id": report_id, "reason": "changed"}])
         try:
             work_fact.save_report(conn, object_id, user["id"], block_id, report_id,
                                   body.report_date, body.items)
@@ -7292,7 +7469,7 @@ def update_block_fact_report(object_id: int, block_id: int, report_id: int, body
 
 
 @app.delete("/objects/{object_id}/blocks/{block_id}/fact-reports/{report_id}")
-def delete_block_fact_report(object_id: int, block_id: int, report_id: int,
+def delete_block_fact_report(object_id: int, block_id: int, report_id: int, expected_rev: Optional[str] = None,
                              user: sqlite3.Row = Depends(get_current_user)):
     """Удаление документа «Факт» целиком (этап 4, В6, решение пользователя
     2026-09-10) — порог тот же, что у сохранения («Изменение» раздела), не
@@ -7301,16 +7478,25 @@ def delete_block_fact_report(object_id: int, block_id: int, report_id: int,
     2026-09-02, см. app/work_fact.py — здесь решение другое: безвозвратная
     потеря отчёта заслуживает следа в журнале)."""
     conn = get_connection()
+    events = activity.defer_begin()   # событие журнала — только после commit (app/activity.py)
     try:
+        begin_write(conn)   # блокировка записи ДО проверки отпечатка и удаления (app/db.py)
         assert_object_feature(conn, user, object_id, "work_progress", "write")
+        if expected_rev is not None:
+            from app import block_ops
+            if work_fact.report_rev(conn, report_id) != expected_rev:
+                raise block_ops.conflict("Документ факта изменили после того, как вы его открыли — ничего не удалено.",
+                                         [{"id": report_id, "reason": "changed"}])
         try:
             work_fact.delete_report(conn, object_id, block_id, report_id)
         except work_fact.FactError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        activity.log("block_fact_report_delete", user=user, entity_type="object", entity_id=object_id,
+                    details={"block_id": block_id, "report_id": report_id})
+        activity.defer_flush(events)
     finally:
+        activity.defer_end(events)
         conn.close()
-    activity.log("block_fact_report_delete", user=user, entity_type="object", entity_id=object_id,
-                details={"block_id": block_id, "report_id": report_id})
     return {"ok": True}
 
 
@@ -7322,9 +7508,11 @@ def import_history_xlsx(
     admin: sqlite3.Row = Depends(get_current_user),
 ):
     content = read_upload_limited(file.file)
-    backup_before_import(f"история статусов из {file.filename or 'файла'}",
-                         audit_display_name(admin), admin["id"])
     conn = get_connection()
+    # События журнала (сводное и поэлементные) копятся и уходят в очередь ТОЛЬКО после подтверждённого commit:
+    # импорт истории может откатиться целиком (страж покрытия контрактов, 409) уже после того, как поэлементные события
+    # были «залогированы», и журнал утверждал бы то, чего не случилось (app/activity.py, defer_*).
+    события = activity.defer_begin()
     # Соединение живёт до конца запроса и закрывается ОДИН раз, в finally
     # ниже. До 2026-08-12 здесь стоял отдельный `finally: conn.close()`
     # вокруг проверки доступа — и весь импорт истории падал 500
@@ -7333,7 +7521,13 @@ def import_history_xlsx(
     # живой проверкой формы.
     try:
         _guard_source_file(conn, admin, source_file, "import_history", "write")
+        # Файл разбирается ДО копии базы и до блокировки записи (от БД не зависит): нечитаемый файл отвечает 4xx, не оставляя ни копии, ни блокировки
+        if mode not in ("replace", "merge", "sync"):
+            raise HTTPException(status_code=422, detail="mode должен быть 'replace', 'merge' или 'sync'")
         parsed = parse_history_xlsx(content)
+        backup_before_import(f"история статусов из {file.filename or 'файла'}",
+                             audit_display_name(admin), admin["id"])
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py): два импорта истории не идут одновременно
         # Общая метка операции: сводное событие ниже и поэлементные события
         # внутри import_history связываются через неё (activity.new_request_id).
         операция = activity.new_request_id()
@@ -7358,10 +7552,12 @@ def import_history_xlsx(
         # нормальная ситуация вроде «элемента нет в этом чертеже».
         summary["invalid_dates"] = parsed["invalid_dates"]
         summary["invalid_date_examples"] = parsed["invalid_date_examples"]
+        activity.defer_flush(события)   # импорт зафиксирован (commit внутри import_history) — теперь события в журнал
         return summary
     except HistoryImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
+        activity.defer_end(события)     # откат/исключение: несброшенные события отбрасываются
         conn.close()
 
 
@@ -7378,12 +7574,13 @@ def import_contracting_xlsx(file: UploadFile = File(...), object_id: int = Query
     не берётся из текущего вида схемы: файл контрактации приходит от
     снабжения и вполне может относиться к соседнему зданию."""
     content = read_upload_limited(file.file)
-    backup_before_import(f"контрактация из {file.filename or 'файла'}",
-                         audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
-        # Файл разбирается ДО блокировки (это долго и от БД не зависит); блокировка записи — до чтения БД и до записи (app/db.py)
+        # Файл разбирается ДО копии базы и ДО блокировки (это долго и от БД не зависит): нечитаемый файл отвечает 4xx, не оставляя
+        # ни копии, ни блокировки. Блокировка записи — до чтения БД и до записи (app/db.py)
         parsed = parse_contracting_xlsx(content)
+        backup_before_import(f"контрактация из {file.filename or 'файла'}",
+                             audit_display_name(admin), admin["id"])
         begin_write(conn)
         if conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
@@ -7433,13 +7630,18 @@ def objects_import_apply(body: ObjectsImportApplyIn,
     backup_before_import("загрузка справочника объектов из Excel",
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
+    события = activity.defer_begin()   # журнал подтверждает только зафиксированное (app/activity.py, defer_*)
     try:
-        return objects_import.apply_changes(conn, body.changes, admin)
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py): два применения не идут одновременно
+        итог = objects_import.apply_changes(conn, body.changes, admin)
+        activity.defer_flush(события)   # commit внутри apply_changes выполнен
+        return итог
     except ValueError as exc:
         # Недопустимое имя поля в теле запроса — ошибка ЗАПРОСА (400), а не
         # сбой сервера (тот же белый список, что у element_bulk_edit).
         raise HTTPException(status_code=400, detail=str(exc))
     finally:
+        activity.defer_end(события)
         conn.close()
 
 
@@ -7458,11 +7660,20 @@ def import_schedule_xlsx(file: UploadFile = File(...),
     даты, проставляются в изделия) или «актуализированный» (прогноз, живёт
     отдельной версией и полей изделия не трогает)."""
     content = read_upload_limited(file.file)
-    backup_before_import(f"график MS Project из {file.filename or 'файла'}",
-                         audit_display_name(admin), admin["id"])
     conn = get_connection()
+    # Поэлементные события графика пишутся внутри import_schedule ДО commit; журнал должен подтверждать только зафиксированное —
+    # события копятся и уходят в очередь после commit (app/activity.py, defer_*).
+    события = activity.defer_begin()
     try:
+        if kind not in ("baseline", "current"):
+            raise HTTPException(status_code=422, detail="Неизвестный вид графика")
+        if object_id is not None and conn.execute("SELECT 1 FROM objects WHERE id = ?", (object_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        # Файл разбирается ДО копии базы и до блокировки: нечитаемый файл отвечает 4xx, не оставляя ни копии, ни блокировки
         parsed = parse_schedule_xlsx(content)
+        backup_before_import(f"график MS Project из {file.filename or 'файла'}",
+                             audit_display_name(admin), admin["id"])
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py)
         операция = activity.new_request_id()
         итог = import_schedule(conn, parsed, admin, операция, object_id=object_id,
                                kind=kind, source_file=file.filename)
@@ -7472,10 +7683,12 @@ def import_schedule_xlsx(file: UploadFile = File(...),
                      new_value=f"{file.filename or 'файл'} ({вид}): строк {итог['rows_processed']}, "
                                f"изделий в версии {итог['elements_in_version']}, "
                                f"обновлено {итог['elements_updated']}")
+        activity.defer_flush(события)
         return итог
     except ScheduleImportError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     finally:
+        activity.defer_end(события)
         conn.close()
 
 

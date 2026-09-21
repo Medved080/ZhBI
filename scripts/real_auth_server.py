@@ -28,6 +28,13 @@ if not dst.exists():
 os.environ["ZHBI_DB_PATH"] = str(dst)                 # ДО импорта приложения: путь читается при импорте app.db
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import app.backups as _backups  # noqa: E402
+
+# Штатные копии «перед стартом» кладём в каталог временной копии, а не в data/backups репозитория: каждый запуск снимает копию базы,
+# и десятки запусков проверок заполняли диск (по 30–70 МБ каждая).
+_backups.BACKUP_DIR = work / "backups"
+_backups.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
 from app.auth import hash_password  # noqa: E402
 
 c = sqlite3.connect(str(dst))

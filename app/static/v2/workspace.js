@@ -15,6 +15,9 @@ import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
 import { createPickerPanels } from "./picker-panels.js";
+import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
+import { createElementOps } from "./element-ops.js";
+import { anyModalDirty, guardModals } from "./mfr-common.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -58,15 +61,22 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let panelHidden = false;
   let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
   const detail = { id: null, data: null, error: "", seq: 0 };
-  // Смена статуса одного элемента (единственная запись рабочего места ЖБИ). Состояние формы хранится по id элемента:
-  // переключение выбора не теряет ввод и не переносит его на другой элемент.
-  const wrs = new Map();
-  const wrOf = (id) => { if (!wrs.has(id)) wrs.set(id, { status: "", at: "", comment: "", busy: false, error: "", unknown: false, done: "", warn: "" }); return wrs.get(id); };
-  let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте
+  // Операции над изделиями (смена статуса одного и пачки, плановая дата, контракт, комментарий, история, реквизиты) — модуль element-ops.js.
+  // Здесь только связка: снимок сцены, права, перерисовка панели, команды кадру.
+  const ops = createElementOps({
+    api, send: (c, a) => send(c, a), getScene: () => sc, getObjectId: () => curObject, statusLabel: (k) => stLabel(k), statusColor: (k) => sw(k),
+    repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null), groupOps: !picker,
+  });
+  let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте (распределение комплектовщика)
   const openGroups = new Set(["status", "pk:elementType"]);
   const openItems = new Set();
   const groupSearch = new Map();
   let frameKey = 0;
+  // МФР: панель работ блока (ЗР, факт, сроки, отбор, шахматка, динамика) — отдельный модуль mfr-block-panel.js
+  // (модуль подгружается при открытии рабочего места МФР, а не при старте V2)
+  let mbp = null;
+  if (mfr) import("./mfr-block-panel.js").then((m) => { if (dead) return; mbp = m.createMfrBlockPanel({ api, send, repaint: () => paintPanel(), getObjectId: () => curObject }); if (sc) mbp.onScene(sc); paintAll(); }).catch(() => { notice = "Панель работ блока не загрузилась"; paintStatus(); });
+  const panelHtml = (name, ...args) => (mbp ? mbp[name](...args) : `<p class="v2-muted ws-pad">Загрузка панели работ…</p>`);
 
   el.innerHTML = `
     <div class="ws-top">
@@ -123,7 +133,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
-      pk = m.model; paintPanel();
+      pk = m.model;
+      if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // сцена догрузилась и состав контрактов объекта изменился — перечитать, а не показывать «нет контрактов»
+      paintPanel();
+    } else if (m.evt === "contracts" && Array.isArray(m.items)) {
+      ops.setContracts(m.objectId, m.items);
     } else if (m.evt === "candidates" && Array.isArray(m.items)) {
       al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; al.candAsked = true; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
@@ -194,6 +208,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function onScene(s) {
     const prevSel = selKey(sc);
     sc = s;
+    mbp?.onScene(s);
     mfrStartView(s);
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
@@ -293,47 +308,30 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     const body = $("#ws-panel-body");
     const keepScroll = body.scrollTop;
+    const restoreFocus = ops.captureFocus(body);     // фокус и курсор переживают перерисовку (снимки сцены приходят часто)
     if (!tabs.some(([k]) => k === tab)) tab = "props";
     body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml())
       : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
+    restoreFocus();
     const left = $("#ws-left-body");
     if (left) { const ks = left.scrollTop; left.innerHTML = filtersHtml(); left.scrollTop = ks; bindPanel(left); }
   }
 
   function row(k, v) { return v === null || v === undefined || v === "" ? "" : `<div class="ws-kv"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`; }
 
-  function propsHtml() {
+  function propsHtml() { return ops.bannerHtml() + propsInner(); }
+  function propsInner() {
     if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Схема загружается…</p>`;
-    if (sc.multi && sc.multi.count > 1) {
-      const m = sc.multi;
-      return `<div class="ws-pad"><h3 class="ws-h">Выбрано элементов: ${m.count}</h3>
-        <p class="v2-muted">Показаны сведения по всей выборке. Групповые изменения статуса выполняются в текущем интерфейсе.</p>
-        <h4>По типам</h4><ul class="ws-list">${m.byType.sort((a, b) => b[1] - a[1]).map(([t, n]) => `<li><span>${esc(t)}</span><b>${n}</b></li>`).join("")}</ul>
-        <h4>По статусам</h4><ul class="ws-list">${m.byStatus.sort((a, b) => b[1] - a[1]).map(([s, n]) => `<li><span><i class="ws-sw" style="background:${esc(sw(s))}"></i>${esc(stLabel(s))}</span><b>${n}</b></li>`).join("")}</ul>
-        <button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>`;
-    }
+    if (sc.multi && sc.multi.count > 1) return ops.groupHtml();   // групповое выделение: сводка и групповые операции
     const e = sc.selected;
     if (!e) {
       return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
         <p class="v2-muted">Нажмите на элемент схемы, чтобы увидеть его свойства. Shift + перетаскивание — выбор рамкой.</p>
         <dl class="ws-dl">${row("Показано на схеме", `${sc.shown} из ${sc.total}`)}${row("Активных фильтров", sc.excluded ? String(sc.excluded) : "нет")}</dl></div>`;
     }
-    const d = detail.id === e.id ? detail.data : null;
-    const z = e.zones || {};
-    const hist = d?.history || [];
-    return `<div class="ws-pad"><div class="ws-card-head">
-        <div class="ws-mark">${esc(e.mark || "—")}</div>
-        <div class="ws-type">${esc(e.element_type)}${e.subtype ? ` <span class="v2-muted">· ${esc(e.subtype)}</span>` : ""}</div>
-        <div class="ws-chip"><i class="ws-sw" style="background:${esc(sw(e.current_status))}"></i>${esc(stLabel(e.current_status))}</div></div>
-      <div class="ws-actions"><button type="button" class="v2-btn" data-act="locate">Показать на схеме</button><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>
-      <h4>Размещение</h4><dl class="ws-dl">${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
-      <h4>Контрактация</h4><dl class="ws-dl">${e.contract_id ? `${row("Контрагент", e.supplier)}${row("Контракт", e.contractName)}` : row("Контракт", "не назначен")}</dl>
-      <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР", fmtDate(e.project_smr_start_date))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР", fmtDate(e.project_delivery_date))}</dl>
-      ${e.comment ? `<h4>Комментарий</h4><p class="ws-comment">${esc(e.comment)}</p>` : ""}
-      <h4>История статусов</h4>${detail.error ? `<p class="v2-muted">${esc(detail.error)}</p>` : !d ? `<p class="v2-muted">Загрузка…</p>` : hist.length ? `<ul class="ws-hist">${hist.map((h) => `<li><i class="ws-sw" style="background:${esc(sw(h.status))}"></i><span>${esc(stLabel(h.status))}</span><small>${esc(fmtDateTime(h.changed_at))}${h.changed_by ? " · " + esc(h.changed_by) : ""}</small></li>`).join("")}</ul>` : `<p class="v2-muted">Изменений статуса нет.</p>`}
-      ${statusFormHtml(e)}</div>`;
+    return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "" });
   }
 
   function statusHtml() {
@@ -379,78 +377,6 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
 
 
-  // ---- смена статуса ОДНОГО элемента: форма, отправка, разбор исхода
-  function statusFormHtml(e) {
-    if (canStatus === null) return "";
-    if (!canStatus) return `<p class="v2-muted ws-ro">Смена статуса недоступна: нет права изменять статусы на этом объекте.</p>`;
-    const w = wrOf(e.id);
-    // «Запланирован» не предлагается: возврат на него СНИМАЕТ контракт изделия (правило backend), это делается в текущем интерфейсе
-    const opts = (sc?.statusOrder || []).filter((k) => k !== e.current_status && k !== "planned");
-    return `<h4>Изменить статус</h4>
-      <form class="ws-form" id="ws-sform" autocomplete="off" novalidate>
-        <label class="ws-fld">Новый статус
-          <select name="status" ${w.busy ? "disabled" : ""}><option value="">— выберите —</option>${opts.map((k) => `<option value="${esc(k)}" ${w.status === k ? "selected" : ""}>${esc(stLabel(k))}</option>`).join("")}</select></label>
-        <label class="ws-fld">Дата и время изменения <small>(пусто — сейчас)</small>
-          <input type="datetime-local" name="at" value="${esc(w.at)}" ${w.busy ? "disabled" : ""}></label>
-        <label class="ws-fld">Комментарий
-          <textarea name="comment" rows="2" maxlength="500" ${w.busy ? "disabled" : ""}>${esc(w.comment)}</textarea></label>
-        <p class="v2-muted ws-fnote">Контракт изделия сохраняется прежним (форма его не передаёт). Возврат в «Запланирован» снимает контракт — он выполняется в текущем интерфейсе. Изменение попадёт в историю статусов и не отменяется здесь.</p>
-        <div class="ws-actions"><button type="submit" class="v2-btn v2-primary" ${w.busy || !w.status ? "disabled" : ""}>${w.busy ? "Сохранение…" : "Сохранить статус"}</button></div>
-        ${w.error ? `<p class="ws-err" role="alert">${esc(w.error)}</p>` : ""}
-        ${w.warn ? `<p class="ws-warnbox" role="status">${esc(w.warn)}</p>` : ""}
-        ${w.done ? `<p class="ws-ok" role="status">${esc(w.done)}</p>` : ""}
-      </form>`;
-  }
-  function bindStatusForm(body) {
-    const f = body.querySelector("#ws-sform");
-    if (!f || !sc?.selected) return;
-    const id = sc.selected.id; const w = wrOf(id);
-    f.querySelector('[name="status"]').addEventListener("change", (ev) => { w.status = ev.target.value; w.error = ""; w.done = ""; paintPanel(); });
-    f.querySelector('[name="at"]').addEventListener("input", (ev) => { w.at = ev.target.value; });
-    f.querySelector('[name="comment"]').addEventListener("input", (ev) => { w.comment = ev.target.value; });
-    f.addEventListener("submit", (ev) => { ev.preventDefault(); submitStatus(id); });
-  }
-  async function submitStatus(id) {
-    const w = wrOf(id);
-    if (w.busy || !w.status || !canStatus) return;            // повторная отправка, пока идёт запрос, невозможна
-    const el0 = sc?.selected;
-    if (!el0 || el0.id !== id) return;                        // форма всегда про ВЫБРАННЫЙ элемент
-    const wanted = w.status;
-    const body = { status: wanted };
-    if (w.at) body.changed_at = w.at.replace("T", " ") + ":00";
-    if (w.comment.trim()) body.comment = w.comment.trim();
-    w.busy = true; w.error = ""; w.done = ""; w.warn = ""; w.unknown = false; paintPanel();
-    try {
-      const res = await api.patch(`/elements/${id}/status`, body);
-      w.done = `Статус изменён: ${stLabel(res?.current_status || wanted)}.`;
-      if (res?.contract_warning) {
-        const c = res.contract_warning;
-        w.warn = `Внимание по контракту «${c.contract_name}»: по спецификации ${c.quantity}, фактически ${c.fact}${c.damaged ? `, брак ${c.damaged}` : ""}.`;
-      }
-      w.status = ""; w.at = ""; w.comment = "";
-      send("refreshElement", { id });                          // схема обновляется тем, что подтвердил сервер
-      if (sc?.selected?.id === id) loadDetail(id);            // история — заново с сервера
-    } catch (err) {
-      if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
-        // исход неизвестен: запрос мог дойти. Повторно НЕ отправляем — читаем элемент и говорим, что видит сервер
-        w.unknown = true;
-        try {
-          const d = await api.get(`/elements/${id}`);
-          if (d.current_status === wanted) { w.done = `Сервер подтвердил: статус «${stLabel(d.current_status)}» уже установлен.`; w.status = ""; w.at = ""; w.comment = ""; send("refreshElement", { id }); loadDetail(id); }
-          else w.error = `Ответ не получен, изменение не подтверждено: сервер показывает статус «${stLabel(d.current_status)}». Введённое сохранено — проверьте связь и отправьте снова.`;
-        } catch (e2) {
-          w.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и посмотрите историю статусов элемента.";
-        }
-      } else {
-        w.error = err instanceof ApiError ? err.detail : "Не удалось сохранить статус";   // ввод остаётся в форме
-      }
-    } finally {
-      w.busy = false;
-      if (!dead) paintPanel();
-    }
-  }
-
-
   // ---- комплектовщик: распределение изделий одной позиции на контракт (поставщик → контракт → марка → изделия → подтверждение)
   // Числа контракта — с сервера (`GET /contracts`: план, факт, повреждено, остаток по позициям). Запись — ОДНА серверная операция на всю пачку:
   // `POST /contracts/{id}/allocations` (под блокировкой записи сервер проверяет права, остаток и то, что изделия всё ещё без контракта и в том же статусе;
@@ -461,6 +387,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const allocProbe = () => checkWrite("POST", "/contracts/1/allocations", { object_id: 1, element_type: "x", mark: null, items: [{ element_id: 1, expected_status: "planned" }] });
   function allocEnabled() { return !!canStatus && allocProbe().allowed; }
   function objectContractIds() { return new Set((pk?.contracts || []).flatMap((g) => g.rows.map((r) => r.id))); }
+  const contractIdsKey = () => Array.from(objectContractIds()).sort((a, b) => a - b).join(",");
   async function loadAlloc() {
     if (al.loading) return;
     al.loading = true; al.loadError = ""; paintPanel();
@@ -470,11 +397,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       if (dead || obj !== curObject) return;
       const ids = objectContractIds();
       al.contracts = list.filter((c) => ids.has(c.id) && !c.is_archived);
+      al.idsKey = contractIdsKey();
       al.loaded = true;
     } catch (e) {
       if (dead || obj !== curObject) return;
       al.loadError = e instanceof ApiError ? e.detail : "Не удалось загрузить контракты";
-    } finally { al.loading = false; if (!dead) paintPanel(); }
+    } finally {
+      al.loading = false;
+      if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // состав контрактов сцены изменился, пока шла загрузка
+      if (!dead) paintPanel();
+    }
   }
   const suppliers = () => Array.from(new Set(al.contracts.map((c) => c.counterparty_short_name))).sort((a, b) => a.localeCompare(b, "ru", { numeric: true }));
   const cLabel = (c) => [c.agreement_number, c.specification_number, c.theme].filter(Boolean).join(" · ") || c.name;
@@ -565,16 +497,6 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const elemDelta = (u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
     planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null,
     project_smr_start_date: u.project_smr_start_date ?? null });
-  // Сверка с сервером после неопределённого исхода: пачка атомарна, поэтому первого и последнего изделия достаточно
-  async function verifyAllocation(ids, cid) {
-    const probe = ids.length > 1 ? [ids[0], ids[ids.length - 1]] : [ids[0]];
-    const got = [];
-    for (const id of probe) got.push((await api.get(`/elements/${id}`)).contract_id);
-    if (got.every((v) => v === cid)) return "applied";
-    if (got.every((v) => v == null)) return "not_applied";
-    return "unclear";
-  }
-
   async function allocSubmit() {
     const plan = allocPlan(), c = curContract();
     if (al.busy || !c || !plan.line || !plan.ok.length || plan.badN || plan.over || !allocEnabled()) return;
@@ -606,13 +528,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       after([...applied, ...already]);
     } catch (err) {
       if (err instanceof ApiError && !err.blockedByPolicy && (err.status === 0 || err.status >= 500)) {
-        // исход неизвестен: повторно НЕ отправляем, сначала сверяемся с сервером (пачка применяется целиком или не применяется)
+        // исход неизвестен: повторно НЕ отправляем; сверяем КАЖДОЕ изделие пачки одним чтением (alloc-verify.js) и не выдаём
+        // текущее состояние за подтверждённый результат запроса
         try {
-          const v = await verifyAllocation(ids, c.id);
-          if (v === "applied") { al.done = "Ответ не получен, но сервер подтвердил: распределение применено. Схема и остатки перечитаны с сервера."; send("reload"); after([]); }
-          else if (v === "not_applied") al.error = "Ответ не получен, изменение не подтверждено: изделия на сервере без контракта. Выбор сохранён — проверьте связь и подтвердите снова.";
-          else al.error = "Ответ не получен, состояние изделий на сервере неоднозначно. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта.";
-        } catch (e2) { al.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта."; }
+          const v = await verifyAllocationBatch(api, body.items, c.id);
+          const r = verdictText(v, c.name);
+          if (v.kind === "state_matches") { al.warn = r.text; send("reload"); after([]); }
+          else if (v.kind === "not_applied") al.error = r.text;                    // выбор и ввод сохранены: решение о повторе — за человеком
+          else { al.error = r.text; send("reload"); send("clearSelection"); al.cand = null; al.candAsked = false; al.loaded = false; loadAlloc(); }
+        } catch (e2) { al.error = "Ответ не получен, и проверить состояние пачки не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте остатки контракта."; }
       } else if (err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object") {
         al.error = conflictText(err);                   // расхождения: ничего не применено; схема перечитывается, чтобы показать актуальное
         send("reload"); send("clearSelection"); al.cand = null; al.candAsked = false; al.loaded = false; loadAlloc();
@@ -631,7 +555,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (!sel) {
       return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
         <p class="v2-muted">Нажмите на элемент или блок на плане. Ctrl (⌘) + щелчок добавляет блок к выбору.</p>
-        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl></div>`;
+        <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl>${mbp ? mbp.blocksListHtml(m) : ""}</div>`;
     }
     const key = `${sel.kind}:${sel.id}`;
     const d = detail.id === key ? detail.data : null;
@@ -646,7 +570,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc([d["секция"], d["этаж"]].filter(Boolean).join(" · ") || "Блок")}</div><div class="ws-type">Блок модели</div></div>${many}${actions}
         <h4>Состав</h4><dl class="ws-dl">${row("Элементов модели", d["элементов"])}${row("Помещений", d["помещений"])}${row("Габарит", dim)}</dl>
         <h4>Виды работ</h4>${st["всего"] ? `<dl class="ws-dl">${row("План", st["план"])}${row("В работе", st["в_работе"])}${row("Выполнено", st["выполнено"])}${row("Всего", st["всего"])}</dl>` : `<p class="v2-muted">Видов работ, адресуемых на блок, не заведено.</p>`}
-        <p class="v2-muted ws-ro">Факт, настройки и сроки работ блока — в текущем интерфейсе.</p></div>`;
+        ${panelHtml("blockHtml", Number(sel.id), (m.selectedBlocks || []).map(Number))}</div>`;
     }
     const params = Object.entries(d["параметры"] || {});
     const shares = d["доли по секциям"] || [];
@@ -669,7 +593,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       + sec("sections", "Секция", m.sections.length ? pills(m.sections, "section") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все секции.")
       + sec("categories", "Категории элементов", m.categories.length
         ? m.categories.map((c) => `<label class="ws-check"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""}> <span>${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
-        : `<p class="v2-muted">Нет данных</p>`);
+        : `<p class="v2-muted">Нет данных</p>`)
+      + (mbp ? mbp.filtersHtml() : "");
   }
   const closedGroups = new Set();
 
@@ -698,6 +623,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return `<div class="ws-pad"><h3 class="ws-h">Режим схемы</h3>
       <div class="ws-seg ws-seg-wide" role="group" aria-label="Режим схемы">${views.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="${sc?.view === k}">${t}</button>`).join("")}</div>
       <p class="v2-muted">${mfr ? "2D — план по этажам; 3D — модель здания." : "2D — плоская схема; 3D — модель; 3D лёгкий — упрощённая модель для слабых компьютеров."}</p>
+      ${mbp ? mbp.viewHtml() : ""}
       ${mfr && sc?.mfr?.layers?.length ? `<h4>Слои</h4>${sc.mfr.layers.map((l) => `<label class="ws-check"><input type="checkbox" data-mlayer="${esc(l.key)}" ${l.on ? "checked" : ""} ${l.disabled ? "disabled" : ""}> <span>${esc(l.label)}</span></label>`).join("")}` : ""}
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
@@ -722,7 +648,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-pkhl]").forEach((b) => b.addEventListener("click", () => send("pickerHighlight", { on: b.getAttribute("aria-pressed") !== "true" })));
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
     panels.bind(body);
-    bindStatusForm(body);
+    ops.bind(body);
+    mbp?.bind(body, { selectedBlocks: () => (sc?.mfr?.selectedBlocks || []).map(Number) });
     body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
       const a = b.dataset.al;
       if (a === "supplier") { al.supplier = b.value; al.contractId = null; al.lineKey = null; al.cand = null; al.candAsked = false; al.error = ""; al.done = ""; paintPanel(); }
@@ -791,7 +718,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function capabilities() {
     const c = [];
     if (!mfr && canStatus) c.push("смена статуса");
+    if (!mfr && ops.rights.plannedDate) c.push("плановая дата");
+    if (!mfr && ops.rights.comment) c.push("комментарии");
     if (picker && allocEnabled()) c.push("распределение по контрактам");
+    if (mfr && mbp?.canWrite()) c.push("факт, состав работ, сроки блока");
     return c;
   }
   function capsChip() {
@@ -801,6 +731,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       : `<span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>`;
   }
 
+  // МФР: шахматка, динамика и отбор работ блока — в строке состояния (их ведёт mfr-block-panel.js)
+  function mfrStatusExtra() {
+    const x = mbp?.summary(); if (!x) return "";
+    return (x.chess ? `<span>Шахматка: ${esc(x.chess)}, ${x.mode === "deadline" ? "по срокам" : "по выполнению"}</span>` : "")
+      + (x.dyn ? `<span>Динамика факта: ${esc(x.dyn.from || "с начала")} — ${esc(x.dyn.to || "по сегодня")}</span>` : "") + (x.filter ? `<span>Отбор работ задан</span>` : "");
+  }
   function paintStatus() {
     const s = $("#ws-status");
     if (!sc || !sc.loaded) { s.textContent = sc?.error ? "Схема не загружена" : "Загрузка схемы…"; return; }
@@ -809,7 +745,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const m = sc.mfr;
       const n = m.selectedBlocks?.length || 0;
       const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
-      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${mfrStatusExtra()}${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
       return;
     }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";
@@ -887,12 +823,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   // Права на смену статусов считаются по объекту (как в V1): не получилось узнать — формы нет, а не открываем лишнее
   async function loadStatusRights() {
     if (mfr) { canStatus = false; return; }
+    ops.reset();
     const obj = curObject;
     try {
       const r = await api.get(`/me/permissions?object_id=${obj}`);
       if (dead || obj !== curObject) return;
       canStatus = !!r.system_admin || (r.features?.status === "write" && !(r.not_applicable || []).includes("status"));
-    } catch (e) { if (dead || obj !== curObject) return; canStatus = false; }
+      ops.setRights(r);
+    } catch (e) { if (dead || obj !== curObject) return; canStatus = false; ops.rightsFailed(); }
     paintPanel(); paintStatus();
   }
   loadStatusRights();
@@ -901,28 +839,22 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   return {
     // Введённое в форме смены статуса, но не отправленное — несохранённое; идущий запрос уйти не даёт (шлюз оболочки блокирует переходы)
-    hasUnsavedChanges: () => Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at)),
+    hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved(),
     guardLeave: async () => {
-      if (!Array.from(wrs.values()).some((w) => !w.busy && (w.status || w.comment.trim() || w.at))) return true;
-      const choice = await showUnsavedDialog("В форме смены статуса есть введённое, но не отправленное. Что сделать?");
-      if (choice === "cancel") return false;
-      if (choice === "discard") { wrs.clear(); return true; }
-      // «Сохранить и продолжить»: отправляем форму выбранного элемента и уходим только при успехе
-      const id = sc?.selected?.id;
-      if (id) await submitStatus(id);
-      return !Array.from(wrs.values()).some((w) => w.status || w.comment.trim() || w.at);
+      if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
+      return ops.guardLeave();
     },
     // Смена объекта в шапке V2: тот же кадр получает команду (кадр сам сбрасывает несовместимую выборку и фильтры,
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; wrs.clear(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; ops.reset(); mbp?.reset(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },
     destroy() {
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
-      clearTimeout(qTimer); clearTimeout(stripRetry); stopFrame(); queue.length = 0;
+      clearTimeout(qTimer); clearTimeout(stripRetry); stopFrame(); queue.length = 0; mbp?.destroy();
       const side = shellSide(); if (side) side.hidden = navWasHidden;
     },
   };
