@@ -1,0 +1,183 @@
+{
+ "suites": [
+  "vis"
+ ],
+ "only": [
+  "VIS-po",
+  "VIS-dialog-confirm-danger"
+ ],
+ "results": [
+  {
+   "id": "VIS-po-tree-1920x1080",
+   "title": "PO: дерево без выбора — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1920x900",
+   "title": "PO: дерево без выбора — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-tree-1366x768",
+   "title": "PO: дерево без выбора — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1920x1080",
+   "title": "PO: карточка объекта с вложениями — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1920x900",
+   "title": "PO: карточка объекта с вложениями — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-1366x768",
+   "title": "PO: карточка объекта с вложениями — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1920x1080",
+   "title": "PO: объект с очень длинными названием и адресом — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1920x900",
+   "title": "PO: объект с очень длинными названием и адресом — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-object-long-1366x768",
+   "title": "PO: объект с очень длинными названием и адресом — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1920x1080",
+   "title": "PO: проект с очень длинным названием — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1920x900",
+   "title": "PO: проект с очень длинным названием — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-project-long-1366x768",
+   "title": "PO: проект с очень длинным названием — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1920x1080",
+   "title": "PO: новый проект — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1920x900",
+   "title": "PO: новый проект — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-new-1366x768",
+   "title": "PO: новый проект — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1920x1080",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1920x900",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-po-dirty-error-1366x768",
+   "title": "PO: ошибка сохранения при уходе (видна сразу) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1920x1080",
+   "title": "Диалог: подтверждение удаления (danger) — 1920×1080",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1920x900",
+   "title": "Диалог: подтверждение удаления (danger) — 1920×900",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  },
+  {
+   "id": "VIS-dialog-confirm-danger-1366x768",
+   "title": "Диалог: подтверждение удаления (danger) — 1366×768",
+   "status": "pass",
+   "failed": [],
+   "error": null,
+   "checks": 9
+  }
+ ],
+ "rev": "6ea79a1",
+ "tree_dirty": false,
+ "app_static_tree": "e84cfd6e8c3701faff9bea49815d056c25e61565",
+ "ran_at": "2026-09-21 11:26:33"
+}

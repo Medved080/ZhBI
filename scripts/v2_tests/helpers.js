@@ -51,6 +51,9 @@ export async function openApp({ perm, session, w = 1366, h = 768, query = "", ho
       return origClick.call(this);
     };
   } catch (e) { /* iframe чужого источника не бывает; но сценарий не должен падать из-за подмены */ }
+  // Отказы шлюза записи ограниченного выпуска (`v2:write-blocked`) — по сценарию: в режиме выпуска упавший сценарий,
+  // у которого есть отказы шлюза, объясняется отключённой операцией, а не поломкой.
+  try { iframe.contentWindow.__blocked = []; iframe.contentWindow.addEventListener("v2:write-blocked", (e) => iframe.contentWindow.__blocked.push(e.detail)); } catch (e) { /* не критично */ }
   const app = makeApp(iframe.contentWindow, iframe.contentDocument, iframe.contentWindow.__fake, iframe);
   // Любая необработанная ошибка страницы во время сценария — провал сценария.
   app.errors = iframe.contentWindow.__errors; // собирает boot.js с начала загрузки
@@ -177,6 +180,7 @@ export async function runTests(tests, { onResult } = {}) {
     for (const a of createdApps) for (const e of (a.ctl?.log || [])) {
       if (e.method !== "GET" && !/^\/reports\//.test(e.path)) (window.__writeSeen ||= new Map()).set(`${e.method} ${e.path.split("?")[0]}`, JSON.stringify(e.body ?? null));
     }
+    r.blocked = createdApps.reduce((n, a) => n + (a.win?.__blocked?.length || 0), 0);
     if (t.checks.some((c) => !c.ok)) r.status = "fail";
     if (!t.checks.length && !r.error) { r.status = "fail"; r.error = "сценарий не сделал ни одной проверки"; }
     results.push(r);
