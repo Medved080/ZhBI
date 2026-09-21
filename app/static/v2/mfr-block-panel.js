@@ -15,7 +15,7 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
     objectId: null, rights: null, blocks: null, blocksErr: "", counts: null,
     progress: new Map(),            // blockId -> {loading, error, data, key}
     filter: newFilter(), chess: { tracks: [], track: null, mode: "progress", deadlineColors: {} }, dyn: { on: false, from: "", to: "" }, dynSnap: { blocks: 0 },
-    open: new Set(["works"]),
+    open: new Set(["works", "status", "deadline", "period", "dynamics"]),   // как в V1: все группы развёрнуты, сворачиваются человеком
   };
   const canWrite = () => canAccounting(st.rights, "write");
   const labelOf = (b) => `${b.section_code} · ${b.level_name || b.floor + " этаж"}`;
