@@ -284,7 +284,7 @@ export const tests = [
       a.click(a.$("#ws-sform button[type=submit]"));
       await waitFor(() => /не подтверждено/.test(a.$("#ws-sform .ws-err")?.textContent || ""), { what: "неизвестный исход" });
       t.eq(ops().length, 2, "после сетевого сбоя запрос не повторён автоматически");
-      t.ok(a.ctl.log.some((e) => e.method === "GET" && /\/elements\/105$/.test(e.path)), "исход проверен чтением изделия");
+      t.ok(a.ctl.log.some((e) => e.method === "GET" && e.path.startsWith("/element-ops/state")), "исход проверен чтением текущего состояния изделия");
       t.eq(a.$("#ws-sform select").value, "delivered", "ввод сохранён после сбоя");
       // успех + двойной клик: один предпросмотр и одна запись
       const hold = a.ctl.hold("POST /element-ops");

@@ -21,13 +21,14 @@
     изменений; повтор того же запроса (потерянный ответ) — 200 `already_applied`, история не задваивается.
   * `POST /element-ops/planned-date-batch` — плановая дата поставки пачки: одна дата (или снятие) на все изделия, сверка ожидаемой прежней даты.
   * `POST /element-ops/contract` — назначить/сменить/снять контракт ОДНОГО изделия без смены статуса, со сверкой ожидаемого состояния.
+  * `GET /element-ops/state?ids=` — текущее состояние пачки одним запросом (сверка после потерянного ответа; операции не подтверждает).
 """
 
 import re
 from datetime import date
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app import activity, contract_guard
@@ -390,4 +391,37 @@ def contract_set(body: ContractSetIn, user=Depends(get_current_user)):
         return {"already_applied": False, "element": out, "position": position}
     finally:
         activity.defer_end(events)
+        conn.close()
+
+
+# ------------------------------------------------------------------ текущее состояние пачки (сверка после потерянного ответа)
+
+@router.get("/state")
+def element_state(ids: str = Query(..., description="Идентификаторы изделий через запятую (не больше MAX_ITEMS)"), user=Depends(get_current_user)):
+    """Текущее состояние ВСЕЙ пачки изделий ОДНИМ запросом — для сверки после неопределённого исхода записи (потерян ответ, обрыв связи).
+
+    Только чтение. Отвечает на вопрос «каково состояние изделий сейчас», а не «выполнил ли это МОЙ запрос»: идентификатора операции сервер не хранит,
+    поэтому совпадение состояния клиент может назвать лишь текущим состоянием, но не подтверждённым результатом конкретной операции.
+    Права — как у чтения карточки изделия (`plan: read` по объектам изделий); несуществующие идентификаторы возвращаются в `missing`."""
+    try:
+        wanted = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ids: ожидаются целые числа через запятую")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Не указаны изделия")
+    if len(wanted) > MAX_ITEMS:
+        raise HTTPException(status_code=400, detail=f"Не больше {MAX_ITEMS} изделий за запрос")
+    wanted = list(dict.fromkeys(wanted))
+    conn = get_connection()
+    try:
+        from app.main import _guard_elements
+        _guard_elements(conn, user, wanted, "plan", "read")
+        q = ",".join("?" * len(wanted))
+        rows = {r["id"]: r for r in conn.execute(
+            f"SELECT id, object_id, current_status, contract_id, planned_delivery_date, actual_delivery_date, comment FROM elements WHERE id IN ({q})", wanted)}
+        return {"items": [{"id": i, "object_id": rows[i]["object_id"], "current_status": rows[i]["current_status"], "contract_id": rows[i]["contract_id"],
+                           "planned_delivery_date": rows[i]["planned_delivery_date"], "actual_delivery_date": rows[i]["actual_delivery_date"], "comment": rows[i]["comment"]}
+                          for i in wanted if i in rows],
+                "missing": [i for i in wanted if i not in rows]}
+    finally:
         conn.close()

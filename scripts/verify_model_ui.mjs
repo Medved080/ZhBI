@@ -288,10 +288,10 @@ if (want("single")) {
   await loseResponse(b, "/element-ops/status-batch", '"mode":"apply"');
   r0 = b.requests.length;
   await clickBtn(b, "#ws-sform", "Сохранить статус");
-  await b.waitFor(`/Сервер подтвердил|не подтверждено|неоднозначно|исход неизвестен/.test(document.querySelector('#ws-sform')?.innerText||'')`, 20000);
+  await b.waitFor(`/соответствует запросу|не подтверждено|НЕОДНОЗНАЧНО|исход неизвестен/.test(document.querySelector('#ws-sform')?.innerText||'')`, 20000);
   const t6b = await b.eval(`document.querySelector('#ws-sform').innerText`);
   await b.sleep(800);
-  ok("ответ потерян после записи: интерфейс сверился с сервером и сообщил результат", /Сервер подтвердил: статус «Отгружен»/.test(t6b), t6b.slice(-300));
+  ok("ответ потерян после записи: сверено ТЕКУЩЕЕ состояние изделия; интерфейс не выдаёт его за подтверждение запроса", /Текущее состояние изделия на сервере соответствует запросу \(статус «Отгружен»\)/.test(t6b) && /подтвердить, что его выполнил именно этот запрос, нельзя/.test(t6b) && !/Сервер подтвердил/.test(t6b), t6b.slice(-320));
   ok("повторной записи не было; в БД ровно +1 запись", apiPosts(b, r0, "apply").length === 1 && hn(x.id) === h6 + 1 && el(x.id).st === "shipped");
   await restoreFetch(b);
   ok("нет необработанных исключений", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
@@ -423,9 +423,9 @@ if (want("group")) {
   await clickBtn(b, "#eo-gform", "Применить к");
   await b.waitFor(`!!document.querySelector('.v2-dialog')`, 10000);
   await clickBtn(b, ".v2-dialog", "Применить");
-  await b.waitFor(`/сервер подтвердил|не подтверждено|неоднозначно|исход неизвестен/i.test(document.querySelector('.eo-banner')?.innerText||'')`, 25000);
+  await b.waitFor(`/Сверка всей пачки|не подтверждено|НЕОДНОЗНАЧНО|исход неизвестен/i.test(document.querySelector('.eo-banner')?.innerText||'')`, 25000);
   const t5 = await b.eval(`document.querySelector('.eo-banner').innerText`);
-  ok("ответ потерян после записи: сверка с сервером — «сервер подтвердил»", /сервер подтвердил/i.test(t5), t5.slice(-260));
+  ok("ответ потерян после записи: сверка ВСЕЙ пачки по каждому изделию; текущее состояние не выдаётся за подтверждение запроса", /Сверка всей пачки: все 4 изд\./.test(t5) && /подтвердить, что его создал именно этот запрос, нельзя/.test(t5) && !/сервер подтвердил/i.test(t5), t5.slice(-300));
   await b.sleep(1500);
   ok("повторной отправки нет, история +1", apiPosts(b, r0, "apply").length === 1 && ids.every((id, i) => hn(id) === hb5[i] + 1));
   await restoreFetch(b);
@@ -497,8 +497,8 @@ if (want("plan")) {
   await loseResponse(b, "/element-ops/planned-date-batch");
   r0 = b.requests.length;
   await clickBtn(b, "#eo-pd-form", "Сохранить");
-  await b.waitFor(`/Сервер подтвердил|не подтверждено|исход неизвестен/.test(document.querySelector('#ws-panel-body')?.innerText||'')`, 15000);
-  ok("потеря ответа: сверка с сервером, повторной отправки нет", /Сервер подтвердил/.test(await panel(b)) && posts(b, r0).filter((p) => /planned-date/.test(p.url)).length === 1 && el(x.id).pd === "2026-10-22");
+  await b.waitFor(`/соответствует запросу|не подтверждено|НЕОДНОЗНАЧНО|исход неизвестен/.test(document.querySelector('#ws-panel-body')?.innerText||'')`, 15000);
+  ok("потеря ответа: сверка текущего состояния, повторной отправки нет", /соответствует запросу/.test(await panel(b)) && !/Сервер подтвердил/.test(await panel(b)) && posts(b, r0).filter((p) => /planned-date/.test(p.url)).length === 1 && el(x.id).pd === "2026-10-22");
   await restoreFetch(b);
   // двойная отправка
   x = H[403]; await pickOne(b, x);
@@ -625,8 +625,8 @@ if (want("cont")) {
   r0 = b.requests.length;
   const cn3 = await b.rect('.eo-dialog .eo-crow[data-c="none"]');
   await b.click(cn3.cx, cn3.cy);
-  await b.waitFor(`/Сервер подтвердил|не подтверждено|исход неизвестен/.test(document.querySelector('#ws-panel-body')?.innerText||'')`, 15000);
-  ok("потеря ответа: сверка с сервером; повторной отправки нет", /Сервер подтвердил/.test(await panel(b)) && el(x.id).c === null && posts(b, r0).filter((p) => /element-ops\/contract/.test(p.url)).length === 1);
+  await b.waitFor(`/соответствует запросу|не подтверждено|НЕОДНОЗНАЧНО|исход неизвестен/.test(document.querySelector('#ws-panel-body')?.innerText||'')`, 15000);
+  ok("потеря ответа: сверка текущего состояния; повторной отправки нет", /соответствует запросу/.test(await panel(b)) && !/Сервер подтвердил/.test(await panel(b)) && el(x.id).c === null && posts(b, r0).filter((p) => /element-ops\/contract/.test(p.url)).length === 1);
   await restoreFetch(b);
 
   sec("C. Комментарий");
@@ -651,8 +651,8 @@ if (want("cont")) {
   await loseResponse(b, "/comment");
   r0 = b.requests.length;
   await clickBtn(b, "#eo-cm-form", "Сохранить");
-  await b.waitFor(`/Сервер подтвердил|не подтверждено|исход неизвестен/.test(document.querySelector('#ws-panel-body')?.innerText||'')`, 15000);
-  ok("потеря ответа (комментарий): сверка, без автоповтора", /Сервер подтвердил/.test(await panel(b)) && posts(b, r0).filter((p) => /comment/.test(p.url)).length === 1 && el(x.id).cm === "потеряем ответ");
+  await b.waitFor(`/соответствует запросу|не подтверждено|НЕОДНОЗНАЧНО|исход неизвестен/.test(document.querySelector('#ws-panel-body')?.innerText||'')`, 15000);
+  ok("потеря ответа (комментарий): сверка текущего состояния, без автоповтора", /соответствует запросу/.test(await panel(b)) && !/Сервер подтвердил/.test(await panel(b)) && posts(b, r0).filter((p) => /comment/.test(p.url)).length === 1 && el(x.id).cm === "потеряем ответ");
   await restoreFetch(b);
   x = H[512]; await pickOne(b, x);
   await clickBtn(b, "#ws-panel-body", "Добавить комментарий");

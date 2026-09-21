@@ -415,6 +415,20 @@ def main_run():
     st, js = api("POST", "/element-ops/status-batch", sb(ids, "delivered"))
     check("после освобождения — 200", st == 200, f"{st}")
 
+    print("S14 текущее состояние пачки (сверка после потерянного ответа)")
+    ids = contracted("contracting", 3)
+    snap = H.checksum()
+    st, js = api("GET", "/element-ops/state?ids=" + ",".join(map(str, ids)) + ",99999999")
+    check("200: состояние каждого изделия и список отсутствующих", st == 200 and [r["id"] for r in js["items"]] == ids and js["missing"] == [99999999]
+          and all(r["current_status"] == "contracting" and r["contract_id"] is not None for r in js["items"]), f"{st} {js}")
+    check("чтение ничего не меняет", H.checksum() == snap)
+    check("нет идентификаторов / не числа — 400", api("GET", "/element-ops/state?ids=")[0] in (400, 422) and api("GET", "/element-ops/state?ids=a,b")[0] == 400)
+    check("больше лимита — 400", api("GET", "/element-ops/state?ids=" + ",".join(str(i) for i in range(1, 2002)))[0] == 400)
+    check("без входа — 401", http(PORT, "GET", "/element-ops/state?ids=" + str(ids[0]))[0] == 401)
+    check("роль с правом чтения (view) читает", api("GET", "/element-ops/state?ids=" + str(ids[0]), user=USER4)[0] == 200)
+    foreign = pick("current_status = 'planned'", 1, obj=2)[0]
+    check("изделие чужого объекта у пользователя без доступа — 403", api("GET", f"/element-ops/state?ids={ids[0]},{foreign}", user=USER2)[0] == 403)
+
     print("S13 совместимость прежних операций V1 (ничего не сломано)")
     ids = contracted("contracting", 2)
     st, js = api("PATCH", f"/elements/{ids[0]}/comment", {"comment": "проверка"})

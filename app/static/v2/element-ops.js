@@ -13,7 +13,7 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showConfirmDialog, showInfoDialog, showUnsavedDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
-import { MAX_BATCH, consequenceLines, consequenceItems, needsConfirm, conflictText } from "./element-ops-rules.js";
+import { MAX_BATCH, consequenceLines, consequenceItems, needsConfirm, conflictText, classifyState, verdictText } from "./element-ops-rules.js";
 
 // стили модуля — отдельным файлом (не трогаем общий styles.css)
 (() => {
@@ -180,12 +180,10 @@ export function createElementOps(ctx) {
     return b;
   };
   const toItems = (arr) => arr.map((i) => ({ element_id: i.id, expected_status: i.current_status, expected_contract_id: i.contract_id ?? null }));
-  // Сверка после неопределённого исхода: пачка атомарна — достаточно первого и последнего изделия
-  async function readBack(ids) {
-    const probe = ids.length > 1 ? [ids[0], ids[ids.length - 1]] : [ids[0]];
-    const out = [];
-    for (const id of probe) out.push(await api.get(`/elements/${id}`));
-    return out;
+  // Сверка после неопределённого исхода: ТЕКУЩЕЕ состояние ВСЕЙ пачки одним чтением (GET /element-ops/state); это не подтверждение запроса (см. verdictText)
+  async function verify(checks) {
+    const state = await api.get(`/element-ops/state?ids=${checks.map((c) => c.id).join(",")}`);
+    return classifyState(checks, state);
   }
   const consText = (cons, target) => consequenceLines(cons, statusLabel(target));
 
@@ -247,9 +245,10 @@ export function createElementOps(ctx) {
     } catch (err) {
       if (unknownOutcome(err)) {
         try {
-          const d = await api.get(`/elements/${id}`);
-          if ((d.planned_delivery_date || null) === target) { p.done = "Сервер подтвердил: плановая дата установлена."; p.open = false; applyToScene([d]); }
-          else p.error = "Ответ не получен, изменение не подтверждено: на сервере прежняя дата. Введённое сохранено — проверьте связь и отправьте снова.";
+          const prev = e.planned_delivery_date ?? null;
+          const v = await verify([{ id, matches: (x) => (x.planned_delivery_date ?? null) === target, untouched: (x) => (x.planned_delivery_date ?? null) === prev }]);
+          const t = verdictText(v, target ? `плановая дата ${fmtDate(target)}` : "плановая дата снята", true);
+          if (v.kind === "state_matches") { p.done = t.text; p.open = false; p.date = ""; send("refreshElement", { id }); } else p.error = t.text;
         } catch (e2) { p.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте дату."; }
       } else {
         p.error = errText(err, "Не удалось сохранить плановую дату");
@@ -283,9 +282,10 @@ export function createElementOps(ctx) {
     } catch (err) {
       if (unknownOutcome(err)) {
         try {
-          const d = await api.get(`/elements/${id}`);
-          if ((d.comment || null) === text) { c.done = "Сервер подтвердил: комментарий сохранён."; c.open = false; send("patchComment", { id, comment: d.comment ?? null }); }
-          else c.error = "Ответ не получен, изменение не подтверждено. Введённое сохранено — проверьте связь и отправьте снова.";
+          const prev = e.comment || null;
+          const v = await verify([{ id, matches: (x) => (x.comment || null) === text, untouched: (x) => (x.comment || null) === prev }]);
+          const t = verdictText(v, "комментарий", true);
+          if (v.kind === "state_matches") { c.done = t.text; c.open = false; send("patchComment", { id, comment: text }); } else c.error = t.text;
         } catch (e2) { c.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу."; }
       } else c.error = errText(err, "Не удалось сохранить комментарий");
     } finally { c.busy = false; if (!isDead()) repaint(); }
@@ -309,9 +309,10 @@ export function createElementOps(ctx) {
     } catch (err) {
       if (unknownOutcome(err)) {
         try {
-          const d = await api.get(`/elements/${id}`);
-          if ((d.contract_id ?? null) === target) { t.done = "Сервер подтвердил: контракт установлен."; applyToScene([d]); }
-          else t.error = "Ответ не получен, изменение не подтверждено: на сервере прежний контракт. Проверьте связь и повторите выбор.";
+          const prev = e.contract_id ?? null, st0 = e.current_status;
+          const v = await verify([{ id, matches: (x) => (x.contract_id ?? null) === target && x.current_status === st0, untouched: (x) => (x.contract_id ?? null) === prev && x.current_status === st0 }]);
+          const tx = verdictText(v, target ? "контракт назначен" : "контракт снят", true);
+          if (v.kind === "state_matches") { t.done = tx.text; send("refreshElement", { id }); } else t.error = tx.text;
         } catch (e2) { t.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте контракт."; }
       } else {
         t.error = errText(err, "Не удалось изменить контракт");
@@ -381,7 +382,7 @@ export function createElementOps(ctx) {
           const d = await api.get(`/elements/${id}`);
           const gone = !(d.history || []).some((x) => x.id === hid);
           applyToScene([d]);
-          if (gone) h.done = "Сервер подтвердил: запись удалена."; else h.error = "Ответ не получен, удаление не подтверждено: запись на месте. Проверьте связь и повторите.";
+          if (gone) h.done = "Ответ не получен. Сейчас записи на сервере нет, но подтвердить, что её удалил именно этот запрос, нельзя. Повторно ничего не отправлялось."; else h.error = "Ответ не получен, удаление не подтверждено: запись на месте. Проверьте связь и повторите.";
         } catch (e2) { h.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте историю."; }
       } else h.error = errText(err, "Не удалось удалить запись");
     } finally { h.busy = false; reloadDetail(id); if (!isDead()) repaint(); }
@@ -450,11 +451,21 @@ export function createElementOps(ctx) {
 
   // Смена типа/марки/адреса меняет подписи и отбор на схеме — она перечитывается целиком; выбор после этого возвращаем на то же изделие
   async function reloadKeepSelection(id) {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     send("reload");
     const t0 = Date.now();
-    await new Promise((r) => setTimeout(r, 300));
-    while (Date.now() - t0 < 90000 && !isDead()) { const s = sc(); if (s && s.loaded && !s.loading && s.total > 0) break; await new Promise((r) => setTimeout(r, 300)); }
-    if (!isDead()) send("select", { id });
+    let sawLoading = false;
+    while (Date.now() - t0 < 90000 && !isDead()) {
+      const s = sc();
+      if (s && s.loading) sawLoading = true;
+      if (sawLoading && s && s.loaded && !s.loading && s.total > 0) break;                                      // цикл «загрузка → загружено» наблюдался
+      if (!sawLoading && Date.now() - t0 > 4000 && s && s.loaded && !s.loading && s.total > 0) break;             // загрузка успела пройти быстрее опроса
+      await wait(150);
+    }
+    if (isDead()) return;
+    send("select", { id });
+    await wait(900);
+    if (!isDead() && sc()?.selectedId !== id) send("select", { id });                                            // выбор мог быть сброшен запоздавшим завершением перечитывания
   }
 
   // ---- смена статуса одного изделия
@@ -516,11 +527,12 @@ export function createElementOps(ctx) {
       refreshDetailIfSelected(id);
     } catch (err) {
       if (unknownOutcome(err)) {
-        // исход неизвестен: запрос мог дойти. Повторно НЕ отправляем — читаем изделие и говорим, что видит сервер
+        // исход неизвестен: запрос мог дойти. Повторно НЕ отправляем — сверяем ТЕКУЩЕЕ состояние изделия и называем его так, а не подтверждением запроса
         try {
-          const d = await api.get(`/elements/${id}`);
-          if (d.current_status === wanted) { w.done = `Сервер подтвердил: статус «${statusLabel(d.current_status)}» уже установлен.`; w.status = ""; w.at = ""; w.comment = ""; applyToScene([d]); refreshDetailIfSelected(id); }
-          else w.error = `Ответ не получен, изменение не подтверждено: сервер показывает статус «${statusLabel(d.current_status)}». Введённое сохранено — проверьте связь и отправьте снова.`;
+          const after = wanted === "planned" ? null : (e.contract_id != null ? e.contract_id : assign);
+          const v = await verify([{ id, matches: (x) => x.current_status === wanted && (x.contract_id ?? null) === (after ?? null), untouched: (x) => x.current_status === e.current_status && (x.contract_id ?? null) === (e.contract_id ?? null) }]);
+          const tx = verdictText(v, `статус «${statusLabel(wanted)}»`, true);
+          if (v.kind === "state_matches") { w.warn = tx.text; w.status = ""; w.at = ""; w.comment = ""; send("refreshElement", { id }); refreshDetailIfSelected(id); } else w.error = tx.text;
         } catch (e2) { w.error = "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и посмотрите историю статусов изделия."; }
       } else {
         w.error = errText(err, "Не удалось сохранить статус");   // ввод остаётся в форме
@@ -626,10 +638,12 @@ export function createElementOps(ctx) {
       g.prev = null;
       if (unknownOutcome(err)) {
         try {
-          const back = await readBack(pv.ids);
-          if (back.every((d) => d.current_status === status)) { setBanner("ok", "Ответ не получен, но сервер подтвердил: статус установлен. Схема перечитана с сервера."); reset(); }
-          else if (back.every((d, k) => d.current_status === pv.body.items[k === 0 ? 0 : pv.body.items.length - 1].expected_status)) setBanner("err", "Ответ не получен, изменение не подтверждено: изделия на сервере в прежнем статусе. Проверьте связь и повторите проверку последствий.");
-          else setBanner("err", "Ответ не получен, состояние изделий на сервере неоднозначно. Ничего не отправлено повторно — схема перечитана, проверьте статусы.");
+          const v = await verify(pv.body.items.map((it) => ({ id: it.element_id,
+            matches: (x) => x.current_status === status && (x.contract_id ?? null) === (status === "planned" ? null : (it.expected_contract_id ?? null)),
+            untouched: (x) => x.current_status === it.expected_status && (x.contract_id ?? null) === (it.expected_contract_id ?? null) })));
+          const tx = verdictText(v, `статус «${statusLabel(status)}»`);
+          setBanner(tx.level, tx.text);
+          if (v.kind === "state_matches") reset();
           send("reload");
         } catch (e2) { setBanner("err", "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — восстановите связь, обновите страницу и проверьте статусы."); }
       } else if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
@@ -682,9 +696,10 @@ export function createElementOps(ctx) {
     } catch (err) {
       if (unknownOutcome(err)) {
         try {
-          const back = await readBack(items.map((i) => i.id));
-          if (back.every((d) => (d.planned_delivery_date || null) === target)) { setBanner("ok", "Ответ не получен, но сервер подтвердил: дата установлена. Схема перечитана."); p.date = ""; }
-          else setBanner("err", "Ответ не получен, изменение не подтверждено. Ничего не отправлено повторно — схема перечитана, проверьте даты и повторите.");
+          const v = await verify(items.map((i) => ({ id: i.id, matches: (x) => (x.planned_delivery_date ?? null) === target, untouched: (x) => (x.planned_delivery_date ?? null) === (i.planned_delivery_date ?? null) })));
+          const tx = verdictText(v, target ? `плановая дата ${fmtDate(target)}` : "плановая дата снята");
+          setBanner(tx.level, tx.text);
+          if (v.kind === "state_matches") p.date = "";
           send("reload");
         } catch (e2) { setBanner("err", "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — восстановите связь, обновите страницу и проверьте даты."); }
       } else if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {

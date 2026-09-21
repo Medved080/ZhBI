@@ -138,3 +138,33 @@ export function conflictText(detail) {
   for (const c of list) by.set(c.reason, (by.get(c.reason) || 0) + 1);
   return `${detail.message} Изделий: ${Array.from(by, ([r, k]) => `${n(k)} ${REASONS[r] || r}`).join("; ")}.`;
 }
+
+// ---- сверка после неопределённого исхода (ответ потерян: обрыв связи, 5xx) ----
+// Различаем: (1) подтверждённый результат ЗАПРОСА — только успешный ответ сервера, его здесь нет; (2) ТЕКУЩЕЕ состояние изделий (`GET /element-ops/state`, один снимок на
+// всю пачку) — сервер не хранит идентификатор операции, поэтому даже полное совпадение состояния не доказывает, что его создал именно наш запрос (мог другой пользователь);
+// (3) неизвестный результат. Автоповтора записи нет никогда. Проверяется КАЖДОЕ изделие пачки, а не только крайние.
+/** checks: [{id, matches(now)→bool, untouched(now)→bool}]; state — ответ `GET /element-ops/state`. */
+export function classifyState(checks, state) {
+  const byId = new Map((state?.items || []).map((r) => [r.id, r]));
+  let asRequested = 0, untouched = 0, other = 0, missing = 0;
+  for (const c of checks) {
+    const now = byId.get(c.id);
+    if (!now) { missing++; continue; }
+    if (c.matches(now)) asRequested++; else if (c.untouched(now)) untouched++; else other++;
+  }
+  const total = checks.length;
+  const kind = asRequested === total ? "state_matches" : untouched === total ? "not_applied" : "mixed";
+  return { kind, total, asRequested, untouched, other, missing };
+}
+/** Текст для человека: `what` — что делала операция («статус «Доставлен»»); `single` — одно изделие. level: warn — состояние совпало (НЕ подтверждение запроса), err — нет/неоднозначно. */
+export function verdictText(v, what, single = false) {
+  if (v.kind === "state_matches") {
+    return { level: "warn", text: single
+      ? `Ответ не получен. Текущее состояние изделия на сервере соответствует запросу (${what}), но подтвердить, что его выполнил именно этот запрос, нельзя — сервер не хранит идентификатор операции. Повторно ничего не отправлялось; схема перечитана.`
+      : `Ответ не получен. Сверка всей пачки: все ${n(v.total)} изд. на сервере сейчас в состоянии, которое даёт эта операция (${what}). Это текущее состояние на момент проверки: подтвердить, что его создал именно этот запрос, нельзя — сервер не хранит идентификатор операции. Повторно ничего не отправлялось; схема перечитана.` };
+  }
+  if (v.kind === "not_applied") {
+    return { level: "err", text: `Ответ не получен, изменение не подтверждено: ${single ? "изделие на сервере без изменений" : `все ${n(v.total)} изд. на сервере без изменений (проверено по каждому)`}. Введённое сохранено — проверьте связь и отправьте снова.` };
+  }
+  return { level: "err", text: `Ответ не получен, состояние ${single ? "изделия" : "пачки"} НЕОДНОЗНАЧНО: из ${n(v.total)} изд. соответствуют результату ${n(v.asRequested)}, без изменений ${n(v.untouched)}, иначе изменены или не найдены ${n(v.other + v.missing)}. Операция целиком не подтверждена. Ничего не отправлено повторно — схема перечитана: проверьте изделия.` };
+}

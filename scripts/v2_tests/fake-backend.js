@@ -2287,8 +2287,8 @@ function createServer(opts) {
     if (n + damaged + 1 > line.quantity) return problem(409, `По позиции ${label} закуплено ${line.quantity}, уже привязано ${n} — свободного количества в контракте нет.`);
     return null;
   };
-  const guardStatus = (user, e, key) => {
-    if (e.object_id != null) assertObjectFeature(user, e.object_id, key, "write");
+  const guardStatus = (user, e, key, kind = "write") => {
+    if (e.object_id != null) assertObjectFeature(user, e.object_id, key, kind);
     else if (!isAdmin(user)) fail(403, "Элемент не привязан к объекту — операция доступна администратору сервиса");
   };
   const okOut = (e) => { const o = elementOut(e); return { id: o.id, current_status: o.current_status, contract_id: o.contract_id, counterparty_code: o.counterparty_code, planned_delivery_date: o.planned_delivery_date,
@@ -2386,6 +2386,14 @@ function createServer(opts) {
     if (cid !== null) { const pr = linkProblem(e, cid, 0); if (pr) throw pr; }
     e.contract_id = cid; e.updated_at = nowStr(nowFn);
     return { already_applied: false, element: okOut(e), position: null };
+  });
+  route("GET", "/element-ops/state", (ctx) => {
+    const ids = String(ctx.query.get("ids") || "").split(",").filter(Boolean).map(Number);
+    if (!ids.length) throw problem(400, "Не указаны изделия");
+    const els = ids.map((i) => data.elements.find((e) => e.id === i));
+    for (const e of els) if (e) guardStatus(ctx.user, e, "plan", "read");
+    return { items: els.filter(Boolean).map((e) => ({ id: e.id, object_id: e.object_id ?? null, current_status: e.current_status, contract_id: e.contract_id ?? null,
+      planned_delivery_date: e.planned_delivery_date ?? null, actual_delivery_date: e.actual_delivery_date ?? null, comment: e.comment ?? null })), missing: ids.filter((i, k) => !els[k]) };
   });
   route("PATCH", "/elements/:element_id/comment", (ctx) => {
     const e = data.elements.find((x) => x.id === pathInt(ctx, "element_id"));
