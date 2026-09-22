@@ -6,7 +6,7 @@
 // неизвестный исход (сеть/5xx) не повторяется, а проверяется чтением; сторож несохранённого.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showUnsavedDialog } from "./dialogs.js";
 
 const SHAPES = [["circle", "круг"], ["square", "квадрат"], ["triangle", "треугольник"], ["diamond", "ромб"], ["hexagon", "шестиугольник"], ["outline", "как в оригинале (контур)"]];
@@ -26,7 +26,7 @@ export function mountShapeEdit(el, { screen, structure, objectId, api, rights, g
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Форма правится в новом интерфейсе." : "Просмотр форм маркеров."}</strong>
         Настройка общая для всех объектов: пара «слой / тип элемента» рисуется одной и той же фигурой на любом чертеже.

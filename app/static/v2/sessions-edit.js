@@ -4,7 +4,7 @@
 // или число сеансов; результат подтверждается повторным чтением; неизвестный исход не повторяется автоматически.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
 import { formatCell } from "./read-screen.js";
@@ -26,7 +26,7 @@ export function mountSessionsEdit(el, { screen, structure, objectId, api, groupT
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>Ваши сеансы.</strong> Можно завершить чужой вход (например, на другом компьютере). Текущий сеанс завершается кнопкой «Выйти».${canSeeAll ? " Ниже — сеансы всех пользователей." : " Сеансы других пользователей видит и завершает администратор."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>

@@ -5,7 +5,7 @@
 // варианты списков) в разметке не видно и НЕ выдумывается. Все элементы каркаса неактивны, а над ним прямым
 // текстом сказано: функция работает только в текущем интерфейсе, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
-import { STATUS_LABEL, v1Href } from "./registry.js";
+import { STATUS_LABEL, v1Href, statusChip } from "./registry.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -85,7 +85,7 @@ export function mountScreenView(el, { screen, structure, objectId, rights, group
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head">
         <h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-${screen.status >= 4 ? "ok" : "warn"}" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span>
+        ${statusChip(screen)}
       </div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note">

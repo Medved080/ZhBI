@@ -11,7 +11,7 @@
 // границы значений (4–40 px; подъём камеры 1–89°, поворот замыкается по кругу) проверяет сервер, здесь — только числовой ввод.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 
 const MIN_LABEL_PX_MIN = 4, MIN_LABEL_PX_MAX = 40;
 const SHADOWS_KEY = "zhbi_shadows_3d", SUN_KEY = "zhbi_sun_3d_mode";   // те же ключи, что у V1 (app.js: SHADOWS_3D_KEY, SUN_3D_MODE_KEY)
@@ -38,7 +38,7 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>Личные настройки.</strong> Гамма, порог подписей и ракурс 3D сохраняются за вами и переезжают на другой компьютер; тени и солнце в 3D — настройка этого компьютера (браузера). На данные и на других пользователей не влияют. Порядок и избранное разделов настраиваются в самой левой навигации (вместо меню «Действия» текущего интерфейса); показ внешних 3D-моделей — на вкладке «Вид» рабочего места.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>

@@ -5,7 +5,7 @@
 // ответа сервера и повторного чтения, неизвестный исход не повторяется автоматически.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showUnsavedDialog } from "./dialogs.js";
 
 export function mountSettingEdit(el, { screen, structure, objectId, api, groupTitle, rights }) {
@@ -20,7 +20,7 @@ export function mountSettingEdit(el, { screen, structure, objectId, api, groupTi
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Настройка правится в новом интерфейсе." : "Просмотр настройки."}</strong>
         ${canWrite ? "Значение относится к выбранному в шапке объекту." : "У вас нет права изменять эту настройку."}

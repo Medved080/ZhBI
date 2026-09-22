@@ -7,7 +7,7 @@
 // (они копятся и не отменяются) и о документах факта; двойной клик — один запрос; неизвестный исход — без автоповтора, сверка повторной
 // сверкой того же файла (после применения расхождений быть не должно).
 import { esc, errText, fmtDate, canAccounting, todayIso, settle, conflictItems, isConflict, OUTCOME_TEXT } from "./mfr-common.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showConfirmDialog } from "./dialogs.js";
 
 const FIELD_ORDER = ["percent", "plan_start", "plan_end", "forecast_start", "forecast_end"];
@@ -22,7 +22,7 @@ export function mountBlockBulkScreen(el, { screen, structure, objectId, api, rig
   el.innerHTML = `
     <div class="mfr-head">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
-      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2><span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span>
+      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>${statusChip(screen)}
         <span class="mfr-cap ${canWrite ? "on" : ""}">${canWrite ? "можно: сверка и применение" : "нет права на изменение"}</span></div>
       <ol class="mfr-steps v2-muted"><li>Выгрузите ЗР в Excel.</li><li>Поправьте в файле сроки (план, прогноз) и прогресс с датой фиксации; колонки с UID и справочные не меняйте.</li><li>Загрузите файл — экран покажет расхождения с базой, ничего не записывая.</li><li>Отметьте флажками, что применить.</li></ol>
       <div class="v2-bar">

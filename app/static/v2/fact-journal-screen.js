@@ -2,7 +2,7 @@
 // открытие и исправление документа (форма «Факт»), создание нового, удаление (необратимо, по подтверждению с последствиями).
 // Те же API и права, что у V1 (`/objects/{id}/fact-journal`, раздел `work_progress`); запись — только через шлюз `write-gate.js`.
 import { anyModalDirty, guardModals, closeAllModals, esc, errText, fmtDate, fmtMoment, canAccounting, todayIso, isRealDate, settle, conflictText, OUTCOME_TEXT } from "./mfr-common.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showConfirmDialog } from "./dialogs.js";
 import { mountWorkTypeTree } from "./mfr-tree.js";
 import { openFactDialog } from "./mfr-dialogs.js";
@@ -23,7 +23,7 @@ export function mountFactJournalScreen(el, { screen, structure, objectId, api, r
   el.innerHTML = `
     <div class="mfr-head">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
-      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2><span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span>
+      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>${statusChip(screen)}
         <span class="mfr-cap ${canWrite ? "on" : ""}">${canWrite ? "можно: создать, исправить, удалить документ" : "только просмотр"}</span>
         <a class="v2-link mfr-tab-link" href="#/blocks">← Учёт по блокам</a></div>
     </div>

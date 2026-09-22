@@ -8,7 +8,7 @@
 // а проверяется чтением; шаблон заменяет черновик целиком только по явному нажатию и показывает это в статусе.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -40,7 +40,7 @@ export function mountRevitColorsEdit(el, { screen, structure, objectId, api, gro
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Схема правится в новом интерфейсе." : "Просмотр схемы."}</strong>
         Цвета относятся к выбранному в шапке объекту и видны всем, кто смотрит его модель. Шаблон задаёт всю схему разом; любой цвет можно поправить отдельно — тогда схема считается своей.

@@ -4,7 +4,7 @@
 // сервера и повторного чтения `/me`, неизвестный исход (сеть/5xx) не повторяется, а проверяется чтением, сторож несохранённого.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showUnsavedDialog } from "./dialogs.js";
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -32,7 +32,7 @@ export function mountLabelColorEdit(el, { screen, structure, objectId, api, user
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Личная настройка." : "Просмотр."}</strong> Цвет подписей марок на схеме (2D и 3D) виден только вам и на других пользователей не влияет.
         ${canWrite ? "" : "У вас нет права менять эту настройку."}

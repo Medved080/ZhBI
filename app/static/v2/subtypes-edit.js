@@ -13,7 +13,7 @@
 // за раз, ввод не теряется при ошибке, успех — после повторного чтения, неизвестный исход не повторяется.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showConfirmDialog, showInfoDialog, showUnsavedDialog } from "./dialogs.js";
 import { runDeleteFlow } from "./delete-plan.js";
 
@@ -35,7 +35,7 @@ export function mountSubtypesEdit(el, { screen, structure, objectId, api, groupT
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite || canWriteMarks ? "Правка в новом интерфейсе." : "Просмотр."}</strong>
         Подтипы и марки — свои у каждого объекта, наполняются сами при загрузке чертежа. Запись с изделиями здесь не удаляется без замены — план последствий откроет выбор записи-замены.

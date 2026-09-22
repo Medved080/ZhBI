@@ -14,7 +14,7 @@
 //    удаление в одной транзакции, при отказе ничего не меняется); тихого каскада и обнуления ссылок нет.
 import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showConfirmDialog, showInfoDialog, showUnsavedDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
 
@@ -33,7 +33,7 @@ export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle
     <div class="v2-container v2-screen">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
-        <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
+        ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в новом интерфейсе." : "Просмотр справочника."}</strong>
         ${canWrite ? esc(`Можно добавить, переименовать и удалить запись. Если на запись ссылаются объекты, при удалении нужно выбрать другую запись — ссылки будут переведены на неё.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в текущем интерфейсе.")}

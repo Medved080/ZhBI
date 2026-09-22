@@ -16,7 +16,7 @@
 // (`break-inside: avoid`, повтор заголовка таблицы), а не измерением пикселей, как в V1: проще и не расходится с содержимым PDF/XLSX,
 // которые считает сервер по тем же данным без постраничной разбивки листа.
 import { esc, errText, fmtDate, canAccounting, todayIso, isRealDate, openModal, settle, isConflict, conflictItems, OUTCOME_TEXT } from "./mfr-common.js";
-import { STATUS_LABEL } from "./registry.js";
+import { statusChip } from "./registry.js";
 import { showUnsavedDialog } from "./dialogs.js";
 import { printHtml } from "./print.js";
 
@@ -55,7 +55,7 @@ export function mountChessFlatScreen(el, { screen, structure, objectId, api, rig
   el.innerHTML = `
     <div class="mfr-head">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
-      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2><span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span>
+      <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>${statusChip(screen)}
         <span class="mfr-cap ${canWrite ? "on" : ""}">${canWrite ? "можно: пакетный ввод факта" : "только просмотр"}</span>
         <button type="button" class="v2-btn mfr-tab-link" id="cf-blank-open" title="Бланк обхода: печать А4/А3, выгрузка в PDF/XLSX">Бланк обхода (печать/выгрузка)</button></div>
       <div class="v2-bar mfr-cf-bar">
