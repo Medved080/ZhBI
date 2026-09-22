@@ -5,12 +5,13 @@
 //   кадр → родитель:  { proto, evt: "ready" }                       — мост установлен (родитель может слать команды);
 //                     { proto, evt: "state", state: {...} }         — снимок: объект, режим 2D/3D, загрузка, ошибка, счётчики, выбор;
 //                     { proto, evt: "filters", model: {...} }       — модель фильтров (группы → значения → включено/доступно/число);
+//                     { proto, evt: "filtered-ids", ids, objectId } — id элементов, прошедших текущий фильтр схемы (charts: снимок для отчётов V2);
 //                     { proto, evt: "search-result", text, total, items } — результат поиска по марке/адресу;
 //                     { proto, evt: "notice", message }             — сообщение движка (то, что V1 показал бы в строке состояния);
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -585,6 +586,16 @@
       post({ evt: "search-result", text: a.text, total, items });
     },
     getFilters() { sendFilters(); scheduleState(); },
+    // Список id элементов, прошедших ТЕКУЩИЙ фильтр схемы (charts, 2026-09-22) — снимок для отчётов V2
+    // («Учитывать текущий фильтр схемы», как в V1: state.elements.filter(passesPlacementFilters).map(e => e.id)).
+    // Оболочка запрашивает это ТОЛЬКО когда меняется сама модель фильтра (после evt:"filters"), не на каждый тик
+    // состояния — список из тысяч чисел не стоит гонять чаще, чем меняется отбор. Предел 20000 — заведомо больше
+    // числа элементов на любом объекте этого сервиса, только защита от неожиданно огромного ответа.
+    getFilteredIds() {
+      const ids = [];
+      for (const e of state.elements) { if (passesPlacementFilters(e)) { ids.push(e.id); if (ids.length >= 20000) break; } }
+      post({ evt: "filtered-ids", ids, objectId: state.objectId });
+    },
     // После записи, выполненной оболочкой V2: заново читает ОДИН элемент с сервера (GET) и применяет его штатным
     // точечным обновлением V1 (заливка 2D/3D, счётчики, фильтры). Показывается то, что подтвердил сервер, а не то, что ввёл человек.
     async refreshElement(a) {

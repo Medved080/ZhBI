@@ -1,13 +1,229 @@
 // Отображение отчётов V2 (только чтение). Данные — те же ответы `POST /reports/*`, что и у V1: никаких расчётов
-// здесь нет, только вёрстка присланного. Печать, выгрузка в XLSX/PDF и графики V1 в V2 пока не перенесены.
+// здесь нет, только вёрстка присланного. Выгрузка в XLSX/PDF и печать — в read-screen.js; графики (SVG, свой код,
+// без сторонней библиотеки — перенос из V1: app.js buildDynamicsChartSvg/anChartHtml) — здесь же, у «Динамики» и
+// «Аналитической справки», единственных двух отчётов V1 с графиком.
 import { esc } from "./screen-view.js";
 import { EXCHANGE_REPORT_RENDERERS, bindExchangeReport } from "./reports-exchange.js";
+import { registerChartHover, ensureChartHoverListener } from "./chart-hover.js";
+
+ensureChartHoverListener();
 
 const num = (v) => (v == null ? "" : typeof v === "number" ? v.toLocaleString("ru-RU") : String(v));
 const dateRu = (v) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? ""));
   return m ? `${m[3]}.${m[2]}.${m[1]}` : String(v ?? "");
 };
+const plural = (n, one, few, many) => { const a = Math.abs(n) % 100, b = a % 10; return a > 10 && a < 20 ? many : b === 1 ? one : b > 1 && b < 5 ? few : many; };
+
+// ==================== графики (перенос из V1, app.js) ====================
+//
+// Пары «план — факт» одного цвета, различаются штрихом (план — пунктир): на графике из четырёх кривых видно,
+// что синие — про монтаж, а оранжевые — про поставку. Те же цвета и штрихи в PDF (app/reports.py, DYN_SERIES_COLORS).
+const DYN_COLORS = { plan_smr: "#4A86C8", fact_montage: "#8C99A6", forecast_montage: "#8C99A6", plan_delivery: "#C2571A", fact_delivery: "#E8703A", forecast_delivery: "#E8703A" };
+const DYN_DASHED = new Set(["plan_smr", "plan_delivery"]);
+const DYN_DASHDOT = new Set(["forecast_montage", "forecast_delivery"]);
+const dynSeriesFor = (data) => data.series_order || ["plan_smr", "fact_montage", "forecast_montage", "plan_delivery", "fact_delivery", "forecast_delivery"];
+
+function niceMax(value) {
+  if (value <= 0) return 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(value)));
+  return Math.ceil(value / (pow / 2)) * (pow / 2);
+}
+const CHART_MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+function shortDate(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  return `${String(d.getDate()).padStart(2, "0")} ${CHART_MONTHS[d.getMonth()]}`;
+}
+// Понедельник недели даты — сетка графика построена по неделям (см. _week_start на сервере).
+function mondayOf(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Ширина подписи — НАСТОЯЩИМ измерителем (canvas), а не числом знаков: оценка по числу знаков занижает
+// ширину кириллицы, и подписи налезают друг на друга (живая проверка V1, 2026-08-14).
+let measureCtx = null;
+function measureText(text, font = "10.5px system-ui, sans-serif") {
+  if (measureCtx === null) { try { measureCtx = document.createElement("canvas").getContext("2d"); } catch (e) { measureCtx = false; } }
+  if (!measureCtx) return text.length * 6.2;
+  measureCtx.font = font;
+  return measureCtx.measureText(text).width;
+}
+
+// Вехи графика (отчётная дата, контрольные даты объекта, отсечки прогноза) и их раскладка по «полкам»: каждая
+// получает первую свободную полку — ту, где справа от занятого места хватает ширины (перенос layoutChartMarks).
+function layoutChartMarks(data, weeks, x, width) {
+  const weekIndex = (iso) => { const target = iso.slice(0, 10); let best = 0; weeks.forEach((w, i) => { if (w <= target) best = i; }); return best; };
+  const inWindow = (iso) => { const w = mondayOf(iso); return w >= weeks[0] && w <= weeks[weeks.length - 1]; };
+  const ряды = dynSeriesFor(data);
+  const отсечки = [];
+  for (const [ключ, подпись] of [["montage", "монтажа"], ["delivery", "поставки"]]) {
+    const f = (data.finish || {})[ключ];
+    if (!f || !f.forecast || !ряды.includes(`forecast_${ключ}`)) continue;
+    const общий = ряды.includes("forecast_montage") && ряды.includes("forecast_delivery");
+    отсечки.push({ label: общий ? `Прогноз завершения ${подпись}` : "Прогноз завершения", date: f.forecast });
+  }
+  const marks = [{ label: "Отчётная дата", date: data.report_date }]
+    .concat((data.card?.milestones || []).filter((m) => m && m.date))
+    .concat(отсечки)
+    .filter((m) => inWindow(m.date));
+  const GAP = 8;
+  const shelves = [];
+  const placed = marks.map((m) => {
+    const i = weekIndex(m.date);
+    const px = x(i);
+    const text = m.date === data.report_date && !m.label.includes("Захват") ? m.label : `${m.label} ${dateRu(m.date)}`;
+    const w = measureText(text);
+    const anchor = px > width * 0.75 ? "end" : (px < width * 0.2 ? "start" : "middle");
+    const left = anchor === "end" ? px - w : anchor === "start" ? px : px - w / 2;
+    let shelf = shelves.findIndex((edge) => left > edge + GAP);
+    if (shelf === -1) shelf = shelves.length;
+    shelves[shelf] = left + w;
+    return { m, i, px, text, anchor, shelf };
+  });
+  return { placed, shelves: shelves.length };
+}
+
+// График «Динамики»: план/факт/прогноз по неделям, легенда, вехи (отчётная дата, контрольные даты, завершение
+// по прогнозу), подсказка по точке — registerChartHover (chart-hover.js), тот же механизм, что у «Аналитической
+// справки». Перенос buildDynamicsChartSvg (app.js) почти без изменений — только источники esc/dateRu свои.
+function buildDynamicsChartSvg(data, width = 1000, height = 330) {
+  const weeks = data.weeks || [];
+  if (!weeks.length) return `<p class="v2-muted">Нет данных для графика.</p>`;
+  const L = 52, R = 18, B = 64;
+  // null в ряду — «за отчётной датой факта нет»: такие точки не рисуются, кривая факта обрывается на отчётной дате.
+  const seriesPoints = (key) => (data.series?.[key] || []).map((v, i) => ({ v, i })).filter((p) => p.v !== null && p.v !== undefined);
+  const ряды = dynSeriesFor(data).filter((k) => seriesPoints(k).some((p) => p.v > 0));
+  const maxY = niceMax(Math.max(1, ...ряды.flatMap((k) => seriesPoints(k).map((p) => p.v))));
+  const x = (i) => L + (weeks.length === 1 ? 0 : (i * (width - L - R)) / (weeks.length - 1));
+
+  const layout = layoutChartMarks(data, weeks, x, width);
+  const T = 46 + Math.max(0, layout.shelves - 2) * 15;
+  const y = (v) => height - B - (v / maxY) * (height - T - B);
+
+  const parts = [`<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">`];
+
+  for (let i = 0; i <= 5; i++) {
+    const v = (maxY * i) / 5, yy = y(v);
+    parts.push(`<line x1="${L}" y1="${yy}" x2="${width - R}" y2="${yy}" stroke="#E5E8EC" stroke-width="1"/>`);
+    parts.push(`<text x="${L - 8}" y="${yy + 3}" font-size="11" fill="#8A94A0" text-anchor="end">${Math.round(v)}</text>`);
+  }
+  const step = weeks.length > 18 ? 2 : 1;
+  const labelY = height - B + 16;
+  weeks.forEach((w, i) => {
+    if (i % step) return;
+    parts.push(`<text x="${x(i)}" y="${labelY}" font-size="10" fill="#8A94A0" text-anchor="end" transform="rotate(-45 ${x(i)} ${labelY})">${esc(shortDate(w))}</text>`);
+  });
+
+  for (const key of ряды) {
+    const points = seriesPoints(key);
+    if (!points.some((p) => p.v > 0)) continue;
+    const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
+    const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${dash}/>`);
+  }
+
+  layout.placed.forEach(({ m, i, px, text, anchor, shelf }) => {
+    const plan = (data.series?.plan_smr || [])[i] || 0;
+    const py = y(plan);
+    const topY = 16 + shelf * 15;
+    if (topY + 6 < py - 6) {
+      parts.push(`<line x1="${px}" y1="${topY + 6}" x2="${px}" y2="${py - 6}" stroke="#C0392B" stroke-width="1.4"/>`);
+      parts.push(`<path d="M ${px - 4} ${py - 10} L ${px} ${py - 2} L ${px + 4} ${py - 10} Z" fill="#C0392B"/>`);
+    }
+    parts.push(`<text x="${px}" y="${topY}" font-size="10.5" fill="#C0392B" text-anchor="${anchor}">${esc(text)}</text>`);
+  });
+
+  let lx = L;
+  for (const key of ряды) {
+    const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    const label = data.series_labels?.[key] || key;
+    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${dash}/>`);
+    parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${esc(label)}</text>`);
+    lx += 34 + label.length * 6.2;
+  }
+  parts.push("</svg>");
+  return registerChartHover(parts.join(""), {
+    L, R, T, B, width, height, maxY, weeks,
+    xLabel: (w) => `Неделя с ${dateRu(w)}`,
+    unit: "изд.",
+    series: ряды.map((key) => ({ key, label: data.series_labels?.[key] || key, color: DYN_COLORS[key], values: data.series?.[key] || [] })),
+  });
+}
+
+// Прогноз охватывает не все изделия — кривая, не дорастающая до полного объёма, читается как остановка работ,
+// а означает другое: в прогнозе кончились изделия (нет привязки к крану/стоянке/этажу, уже смонтировано).
+function forecastCoverageHtml(data) {
+  const c = data.forecast_coverage;
+  if (!data.forecast_version_id || !c || !c.total || c.elements >= c.total) return "";
+  const причины = [];
+  if (c.installed) причины.push(`${c.installed} уже смонтировано`);
+  if (c.unbound) причины.push(`${c.unbound} без привязки к крану, стоянке или этажу`);
+  if (c.other) причины.push(`${c.other} не попало в расчёт по другим причинам`);
+  return `<div class="v2-callout" role="note">Прогноз охватывает ${c.elements} изделий из ${c.total}${причины.length ? ` (${esc(причины.join(", "))})` : ""}: на этом числе кривая прогноза обрывается.</div>`;
+}
+
+// Когда закончим по прогнозу и насколько это расходится с плановым сроком — словами, под графиком (перенос
+// finishVerdictHtml). Пишется только когда есть прогноз: без загруженной/посчитанной актуализации графика
+// говорить «идём с опережением» не из чего.
+function finishVerdictHtml(data) {
+  const f = data.finish || {};
+  const ряды = dynSeriesFor(data);
+  const rows = [];
+  for (const [ключ, что] of [["montage", "Монтаж"], ["delivery", "Поставка"]]) {
+    const b = f[ключ];
+    if (!b || !b.forecast || !ряды.includes(`forecast_${ключ}`)) continue;
+    const срок = b.plan ? `плановый срок ${dateRu(b.plan)}` : "плановый срок не задан";
+    let оценка = "";
+    if (b.deviation_days !== null && b.deviation_days !== undefined) {
+      const d = b.deviation_days;
+      const слово = plural(Math.abs(d), "день", "дня", "дней");
+      оценка = d > 0 ? ` — опоздание на ${d} ${слово}` : d < 0 ? ` — опережение на ${Math.abs(d)} ${слово}` : " — день в день";
+    }
+    rows.push(`<div><b>${esc(что)}:</b> завершение по прогнозу ${esc(dateRu(b.forecast))}, ${esc(срок)}${esc(оценка)}${b.plan ? ` <span class="v2-muted">(${esc(b.plan_source)})</span>` : ""}</div>`);
+  }
+  return rows.length ? `<div class="v2-callout" role="note">${rows.join("")}</div>` : "";
+}
+
+// График «Аналитической справки»: четыре накопительные кривые (потребность/законтрактовано/поставлено/смонтировано);
+// свой график, а не общий с «Динамикой» — другой набор рядов и шкала. Перенос anChartHtml (app.js).
+function anChartHtml(dyn) {
+  if (!dyn || !dyn.weeks?.length) return `<p class="v2-muted">Нет данных для графика.</p>`;
+  const W = 900, H = 200, L = 46, R = 20, T = 14, B = 26;
+  const ряды = [
+    { key: "need", label: "Потребность", color: "#9aa0a6", dash: "5 4" },
+    { key: "contracted", label: "Законтрактовано", color: "#3b82f6" },
+    { key: "delivered", label: "Поставлено", color: "#8b5cf6" },
+    { key: "installed", label: "Смонтировано", color: "#1e7e34" },
+  ];
+  const максимум = Math.max(1, ...ряды.flatMap((р) => dyn.series[р.key] || []));
+  const X = (i) => L + ((W - L - R) * (dyn.weeks.length > 1 ? i / (dyn.weeks.length - 1) : 0));
+  const Y = (v) => H - B - (H - T - B) * (v / максимум);
+  const линии = ряды.map((р) => {
+    const точки = (dyn.series[р.key] || []).map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+    return `<polyline fill="none" stroke="${р.color}" stroke-width="2"${р.dash ? ` stroke-dasharray="${р.dash}"` : ""} points="${точки}"/>`;
+  }).join("");
+  const сегодня = dyn.today_index === null || dyn.today_index === undefined ? "" : `<line x1="${X(dyn.today_index).toFixed(1)}" y1="${T}" x2="${X(dyn.today_index).toFixed(1)}" y2="${H - B}" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
+     <text x="${(X(dyn.today_index) + 4).toFixed(1)}" y="${T + 10}" font-size="11" fill="#c0392b">дата справки</text>`;
+  const шаг = Math.max(1, Math.ceil(dyn.weeks.length / 8));
+  const подписи = dyn.weeks.map((w, i) => (i % шаг ? "" : `<text x="${X(i).toFixed(1)}" y="${H - 8}" font-size="10" fill="#6b7280" text-anchor="middle">${esc(dateRu(w).slice(0, 5))}</text>`)).join("");
+  const легенда = ряды.map((р) => `<span style="color:${р.color}"><b>—</b> ${esc(р.label)}</span>`).join(" · ");
+  const svg = registerChartHover(`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">`, {
+    L, R, T, B, width: W, height: H, maxY: максимум, weeks: dyn.weeks,
+    xLabel: (w) => `Неделя с ${dateRu(w)}`,
+    unit: "изд.",
+    series: ряды.map((р) => ({ key: р.key, label: р.label, color: р.color, values: dyn.series[р.key] || [] })),
+  });
+  return `<div class="v2-chart-wrap">${svg}
+      <line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" stroke="#e6e9ee"/>
+      <line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" stroke="#e6e9ee"/>
+      <text x="4" y="${T + 8}" font-size="10" fill="#6b7280">${максимум}</text>
+      <text x="4" y="${H - B}" font-size="10" fill="#6b7280">0</text>
+      ${линии}${сегодня}${подписи}
+    </svg><p class="v2-muted">${легенда}. Накопительным итогом по неделям.</p></div>`;
+}
 
 // Тип колонки для общих правил ширины/переноса (`.v2-read-tbl [data-col-type]` в styles.css) — ОБЩИЙ механизм
 // для ЛЮБОЙ таблицы общего компонента (отчёты здесь и списки read-screen.js), не завязан на позицию колонки
@@ -101,10 +317,13 @@ function analyticsReport(data) {
     <div class="v2-tiles">${tiles}</div>
     <h3 class="v2-report-h">Выводы</h3>${concl ? `<ul class="v2-conclusions">${concl}</ul>` : `<p class="v2-muted">Выводов нет.</p>`}
     ${tables}
+    <h3 class="v2-report-h">2.3. Динамика обеспечения</h3>
+    ${anChartHtml(data.dynamics)}
     ${gaps.length ? `<h3 class="v2-report-h">Не задана производительность завода</h3>${tableHtml([{ key: "counterparty", label: "Завод" }, { key: "element_type", label: "Тип изделия" }, { key: "elements", label: "Изделий", kind: "num" }], gaps)}` : ""}`;
 }
 
-// ---- «Динамика поставки и монтажа»: сводные числа и недельная таблица (график V1 в V2 не перенесён)
+// ---- «Динамика поставки и монтажа»: график (план/факт/прогноз по неделям, вехи, подсказка по точке — как в V1),
+// сводные числа, вывод словами о сроке завершения и недельная таблица ДОПОЛНИТЕЛЬНО (не вместо графика).
 function dynamicsReport(data) {
   const labels = data.series_labels || {};
   const order = data.series_order || Object.keys(data.series || {});
@@ -116,11 +335,19 @@ function dynamicsReport(data) {
     ${s.percent != null ? `<div>Выполнено: ${esc(num(s.percent))} %</div>` : ""}</div>` : "";
   const cols = [{ key: "week", label: "Неделя с" }, ...order.map((k) => ({ key: k, label: labels[k] || k, kind: "num" }))];
   const rows = weeks.map((w, i) => Object.fromEntries([["week", dateRu(w)], ...order.map((k) => [k, (data.series?.[k] || [])[i]])]));
-  const fin = data.finish;
+  // Предупреждение о неполноте плана — план по части изделий внешне неотличим от полного и молча вводит в заблуждение.
+  const cov = data.plan_coverage;
+  const warns = [];
+  if (cov && cov.smr < cov.total) warns.push(`план СМР задан у ${cov.smr} изделий из ${cov.total}`);
+  if (cov && cov.delivery < cov.total) warns.push(`план поставки — у ${cov.delivery} из ${cov.total}`);
   return `<p class="v2-muted">${esc(data.subtitle || "")} на ${esc(dateRu(data.report_date))}</p>
     <div class="v2-tiles">${summary("Монтаж", data.montage)}${summary("Поставка", data.delivery)}</div>
-    ${fin?.montage ? `<p>Окончание монтажа: план ${esc(dateRu(fin.montage.plan))}${fin.montage.forecast ? `, прогноз ${esc(dateRu(fin.montage.forecast))} (${esc(num(fin.montage.deviation_days))} дн.)` : ""}.</p>` : ""}
-    <h3 class="v2-report-h">Динамика по неделям</h3><p class="v2-muted">Значения по неделям таблицей; график V1 в новом интерфейсе пока не перенесён.</p>
+    ${warns.length ? `<div class="v2-callout v2-callout-bad" role="alert">Внимание: ${esc(warns.join("; "))}. Кривая плана неполная.</div>` : ""}
+    ${forecastCoverageHtml(data)}
+    ${data.forecast_version_id ? "" : `<p class="v2-muted">Кривой прогноза нет: по объекту не загружен ни один актуализированный график. Загрузить — «Обмен данными → Импорт графика MS Project», вид «Актуализированный»; посчитать самой системой — «Документы → График СМР → Расчёт».</p>`}
+    <div class="v2-chart-wrap">${buildDynamicsChartSvg(data)}</div>
+    ${finishVerdictHtml(data)}
+    <h3 class="v2-report-h">Значения по неделям</h3>
     ${rows.length ? tableHtml(cols, rows, { cap: 200 }) : `<p class="v2-muted">Данных по неделям нет.</p>`}`;
 }
 

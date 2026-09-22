@@ -24,6 +24,12 @@ const sign = (v) => (v === null || v === undefined ? "—" : v > 0 ? `+${v}` : S
 const TABS = [["gantt", "Визуализация"], ["versions", "Версии"], ["inputs", "Исходные данные расчёта"], ["calc", "Расчёт"]];
 const GANTT_LEVELS = [[1, "Краны"], [2, "Стоянки"], [3, "Этажи"], [4, "Тип + подтип"]];
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+const NAME_W_MIN = 140, NAME_W_MAX = 640, NAME_W_DEFAULT = 300;
+// Ширина колонки названий — своя настройка человека, переживает перезагрузку (тот же приём, что у ширины
+// панелей рабочего места, workspace.js: sessionStorage, а не localStorage — на компьютере общий вход, не увозить
+// привычку одного человека в чужой профиль браузера).
+const readNameW = () => { try { const v = Number(sessionStorage.getItem("v2.sc.gantt.nameW")); return Number.isFinite(v) && v >= NAME_W_MIN && v <= NAME_W_MAX ? v : NAME_W_DEFAULT; } catch (e) { return NAME_W_DEFAULT; } };
+const writeNameW = (v) => { try { sessionStorage.setItem("v2.sc.gantt.nameW", String(v)); } catch (e) { /* хранилище недоступно — не критично */ } };
 
 export function mountSchedule(container, { screen, objectId, api, rights, groupTitle }) {
   let dead = false;
@@ -36,7 +42,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     deviation: { open: false, loading: false, error: "", data: null },
     inputs: { loaded: false, error: "", workKinds: [], flow: [], version: null, status: "" },
     calc: { startDate: today(), skipInstalled: true, busy: false, preview: null, status: "", error: "" },
-    gantt: { loaded: false, error: "", data: null, versionId: null, collapsed: new Set(), depth: 4, pxPerDay: null, status: "" },
+    gantt: { loaded: false, error: "", data: null, versionId: null, collapsed: new Set(), depth: 4, pxPerDay: null, status: "", nameW: readNameW(), fullscreen: false },
     parseStatus: "",
   };
 
@@ -314,7 +320,8 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
           <div class="v2-seg" role="group" aria-label="Уровень группировки">${GANTT_LEVELS.map(([depth, label]) => `<button type="button" data-gantt-level="${depth}" aria-pressed="${depth === g.depth}">${esc(label)}</button>`).join("")}</div>
         </div>
         <div class="v2-inline"><button type="button" class="v2-btn" data-a="gantt-out">крупнее</button><button type="button" class="v2-btn" data-a="gantt-in">мельче</button>
-          <button type="button" class="v2-btn" data-a="gantt-xlsx">Выгрузить в XLSX</button><button type="button" class="v2-btn" data-a="gantt-pdf">Выгрузить в PDF</button></div>
+          <button type="button" class="v2-btn" data-a="gantt-xlsx">Выгрузить в XLSX</button><button type="button" class="v2-btn" data-a="gantt-pdf">Выгрузить в PDF</button>
+          <button type="button" class="v2-btn" data-a="gantt-fs" aria-pressed="${g.fullscreen}">${g.fullscreen ? "Свернуть" : "Во весь экран"}</button></div>
       </div>`;
     if (!d.nodes.length) return head + `<p class="v2-note">Рисовать нечего: ни у одного изделия объекта нет ни директивных дат СМР, ни прогноза.</p>`;
 
@@ -322,7 +329,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     const from = Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1) / 86400000;
     const to = Date.UTC(last.getUTCFullYear(), last.getUTCMonth() + 1, 1) / 86400000;
     const totalDays = Math.max(1, to - from);
-    const NAME_W = 300;
+    const NAME_W = g.nameW;
     const trackAvail = Math.max(360, 900);
     const px = g.pxPerDay || (trackAvail / totalDays);
     const trackW = Math.max(360, Math.round(totalDays * px));
@@ -354,17 +361,26 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     const status = (d.version_id ? `Прогноз: «${d.version_title || "без названия"}», загружен ${ruMoment(d.loaded_at)}. ` : "Версий графика нет — показаны только директивные сроки. ")
       + `На диаграмме ${d.elements} ${plural(d.elements, "изделие", "изделия", "изделий")}, сроки с ${ruDate(d.min_date)} по ${ruDate(d.max_date)}.` + undated + noForecast;
 
-    return head + `<div class="v2-gantt-wrap" style="--gname:${NAME_W}px">
+    const wrap = `<div class="v2-gantt-wrap" style="--gname:${NAME_W}px">
+        <div class="v2-gantt-rzhost"><div class="v2-gantt-resize" role="separator" aria-orientation="vertical" aria-label="Ширина колонки названий" tabindex="0" aria-valuenow="${NAME_W}" aria-valuemin="${NAME_W_MIN}" aria-valuemax="${NAME_W_MAX}"></div></div>
         <div class="v2-gantt-scale" style="width:${trackW}px">${months.map((m) => `<div class="v2-gantt-mon" style="left:${m.x}px">${esc(m.label)}</div>`).join("")}${xToday >= 0 && xToday <= trackW ? `<div class="v2-gantt-today" style="left:${xToday}px"></div>` : ""}</div>
         <div class="v2-gantt-body">${rowsHtml}</div>
       </div>
       <p class="v2-muted" style="margin-top:8px">${esc(status)}</p>
       ${g.status ? `<p class="v2-muted">${esc(g.status)}</p>` : ""}`;
+    return head + wrap;
   }
 
   // ------------------------------------------------------------ рендер и события
   function paint() {
     if (dead) return;
+    // Полноэкранный режим диаграммы — свой оверлей БЕЗ вкладок и заголовка формы (условие «во весь экран» не
+    // просто увеличивает высоту, а прячет всё лишнее вокруг, как в V1 у развёрнутого модального окна отчёта).
+    if (S.tab === "gantt" && S.gantt.fullscreen) {
+      inner.innerHTML = `<div class="v2-gantt-fs">${ganttHtml()}</div>`;
+      bind();
+      return;
+    }
     const body = S.tab === "versions" ? versionsHtml() : S.tab === "inputs" ? inputsHtml() : S.tab === "calc" ? calcHtml() : ganttHtml();
     inner.innerHTML = `<div class="v2-read-tabs" role="tablist">${TABS.map(([k, t]) => `<button type="button" role="tab" class="v2-read-tab" data-sc-tab="${k}" aria-selected="${k === S.tab}">${esc(t)}</button>`).join("")}</div>
       <div>${body}</div>`;
@@ -401,6 +417,51 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     inner.querySelector('[data-a="gantt-in"]')?.addEventListener("click", () => { const fit = 900 / totalDaysOf(S.gantt.data); const nv = (S.gantt.pxPerDay || fit) / 1.6; S.gantt.pxPerDay = nv <= fit ? null : nv; paint(); });
     inner.querySelector('[data-a="gantt-xlsx"]')?.addEventListener("click", () => downloadGantt("xlsx"));
     inner.querySelector('[data-a="gantt-pdf"]')?.addEventListener("click", () => downloadGantt("pdf"));
+    inner.querySelector('[data-a="gantt-fs"]')?.addEventListener("click", () => { S.gantt.fullscreen = !S.gantt.fullscreen; paint(); });
+    bindGanttResize();
+  }
+  // Ширина колонки названий — перетаскивание мышью (pointer capture, тот же приём, что у разделителя левой
+  // навигации: живое обновление CSS-переменной без перерисовки, сохранение — по отпусканию) и клавиатурой
+  // (стрелки ←/→ на самой ручке, раз она получает фокус как разделитель).
+  function bindGanttResize() {
+    const rz = inner.querySelector(".v2-gantt-resize");
+    if (!rz) return;
+    const wrap = inner.querySelector(".v2-gantt-wrap");
+    const apply = (px) => {
+      const w = Math.max(NAME_W_MIN, Math.min(NAME_W_MAX, Math.round(px)));
+      wrap.style.setProperty("--gname", `${w}px`);
+      rz.setAttribute("aria-valuenow", String(w));
+      return w;
+    };
+    rz.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      rz.focus();
+      rz.setPointerCapture(e.pointerId);
+      rz.classList.add("dragging");
+      document.body.classList.add("v2-noselect");
+      const railLeft = () => wrap.getBoundingClientRect().left;
+      const move = (ev) => apply(ev.clientX - railLeft());
+      const up = () => {
+        rz.removeEventListener("pointermove", move);
+        rz.removeEventListener("pointerup", up);
+        rz.removeEventListener("pointercancel", up);
+        rz.classList.remove("dragging");
+        document.body.classList.remove("v2-noselect");
+        S.gantt.nameW = Number(rz.getAttribute("aria-valuenow")) || NAME_W_DEFAULT;
+        writeNameW(S.gantt.nameW);
+      };
+      rz.addEventListener("pointermove", move);
+      rz.addEventListener("pointerup", up);
+      rz.addEventListener("pointercancel", up);
+    });
+    rz.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+      e.preventDefault();
+      const next = e.key === "Home" ? NAME_W_MIN : e.key === "End" ? NAME_W_MAX : S.gantt.nameW + (e.key === "ArrowRight" ? 20 : -20);
+      S.gantt.nameW = apply(next);
+      writeNameW(S.gantt.nameW);
+    });
+    rz.addEventListener("dblclick", () => { S.gantt.nameW = apply(NAME_W_DEFAULT); writeNameW(S.gantt.nameW); });
   }
   function totalDaysOf(d) {
     if (!d || !d.min_date) return 180;
@@ -416,6 +477,13 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     if (k === "gantt" && !S.gantt.loaded) { if (!S.versions.loaded) await loadVersions(); await loadGantt(); paint(); }
   }
 
+  // Esc закрывает полноэкранный режим диаграммы — слушатель на документе один на весь монтаж экрана (не на
+  // каждую перерисовку), снимается при уходе с экрана вместе с остальным.
+  function onKeyDown(e) {
+    if (e.key === "Escape" && S.gantt.fullscreen) { S.gantt.fullscreen = false; paint(); }
+  }
+  document.addEventListener("keydown", onKeyDown);
+
   (async () => {
     inner.innerHTML = `<p class="v2-muted">Загрузка…</p>`;
     await loadVersions();
@@ -427,6 +495,6 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
   return {
     hasUnsavedChanges: () => false,
     guardLeave: async () => true,
-    destroy() { dead = true; },
+    destroy() { dead = true; document.removeEventListener("keydown", onKeyDown); },
   };
 }
