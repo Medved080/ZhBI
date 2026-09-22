@@ -20888,7 +20888,7 @@ function renderContractingReport(data) {
 
   const итог = csSeries(data.totals, периодов);
   const телоИтога = `<tr class="cs-total">
-      <td class="cs-sticky cs-c1" colspan="2">Итого по объекту</td>
+      <td class="cs-sticky cs-c1" colspan="2">${data.element_filter ? "Итого по отбору" : "Итого по объекту"}</td>
       <td class="cs-sticky cs-c3 num">${data.totals.need}</td>
       <td class="cs-sticky cs-c4 num">${data.totals.contracted}</td>
       <td class="cs-sticky cs-c5 num ${data.totals.deficit > 0 ? "cs-deficit" : ""}">${data.totals.deficit}</td>
