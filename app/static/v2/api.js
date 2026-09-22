@@ -136,7 +136,8 @@ export const api = {
   async download(path, body, { method = "POST" } = {}) {
     const okPath = /^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path) || path === "/export.xlsx" || /^\/export\.pdf(\?|$)/.test(path)
       || /^\/objects\/\d+\/block-works\/bulk-edit\/export$/.test(path)                       // выгрузка ЗР в Excel для правки (учёт по блокам)
-      || /^\/objects\/\d+\/blocks\/chess-flat-export\.(xlsx|pdf)$/.test(path);              // бланк обхода плоской шахматки
+      || /^\/objects\/\d+\/blocks\/chess-flat-export\.(xlsx|pdf)$/.test(path)                // бланк обхода плоской шахматки
+      || /^\/schedule-versions\/gantt\.(xlsx|pdf)(\?|$)/.test(path);                        // диаграмма Ганта графика СМР
     if (!okPath || (method !== "POST" && method !== "GET")) throw new Error(`download: «${path}» — не выгрузка`);
     let res;
     try {

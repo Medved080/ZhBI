@@ -14,6 +14,7 @@ import { mountReadScreen } from "./read-screen.js";
 import { mountWorkspace } from "./workspace.js";
 import { mountSupplierDocs } from "./supplier-docs.js";
 import { mountContractsList } from "./contracts-list.js";
+import { mountSchedule } from "./schedule.js";
 import { mountDictEdit } from "./dict-edit.js";
 import { mountSettingEdit } from "./setting-edit.js";
 import { mountColorEdit } from "./color-edit.js";
@@ -491,6 +492,10 @@ async function renderShell(user, permissions) {
         // Документы контрактации (замена поставщика, обмен привязками): права и данные — по выбранному объекту
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSupplierDocs(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
+      } else if (target.impl === "schedule") {
+        // График СМР: версии, исходные данные расчёта, расчёт с предпросмотром, диаграмма Ганта
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountSchedule(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
       } else if (MFR_SCREENS[target.impl]) {
         document.title = `${target.title} — ЖБИ`;
         const mountMfr = await MFR_SCREENS[target.impl]();
