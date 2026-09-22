@@ -1297,6 +1297,17 @@ def eval_gate(src):
     with tempfile.TemporaryDirectory() as d:
         gp = Path(d) / "write-gate.mjs"
         gp.write_text(text, encoding="utf-8")
+        # Модули, которые шлюз импортирует (правила форм тела областей): переносим их из той же ревизии, рекурсивно
+        todo, seen = [text], set()
+        while todo:
+            for name in re.findall(r'from\s+"\./([A-Za-z0-9_.-]+\.js)"', todo.pop()):
+                if name in seen:
+                    continue
+                seen.add(name)
+                dep = src.read("app/static/v2/" + name)
+                if dep is not None:
+                    (Path(d) / name).write_text(dep, encoding="utf-8")
+                    todo.append(dep)
         rp = Path(d) / "run.mjs"
         rp.write_text(GATE_JS, encoding="utf-8")
         try:
