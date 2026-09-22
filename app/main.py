@@ -1857,8 +1857,10 @@ def report_contracting_schedule(body: ReportRequestIn,
                 status_code=400,
                 detail="Отчёт строится по объекту — выберите объект в тулбаре")
         # Доступ проверен _guard_report по source_file; объект берётся из
-        # него же, поэтому чужой сюда не пройдёт.
-        return build_contracting_schedule(conn, object_id, body.scale or "month")
+        # него же, поэтому чужой сюда не пройдёт. element_ids (фильтр схемы)
+        # _guard_report проверил тоже — по объектам самих элементов.
+        return build_contracting_schedule(conn, object_id, body.scale or "month",
+                                          body.element_ids)
     finally:
         conn.close()
 

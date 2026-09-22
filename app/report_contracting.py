@@ -169,11 +169,35 @@ def _add(куда: dict, индекс: Optional[int], сколько: int) -> No
 
 
 def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
-                               scale: str = "month") -> dict:
+                               scale: str = "month",
+                               element_ids: Optional[list] = None) -> dict:
     """Данные отчёта. Считает СЕРВЕР — как и у остальных отчётов: экран и
-    выгрузки берут результат одной функции и разойтись не могут."""
+    выгрузки берут результат одной функции и разойтись не могут.
+
+    `element_ids` (2026-09-22) — сужение текущим фильтром схемы, тот же
+    приём, что у остальных отчётов: критерии фильтра живут на клиенте,
+    сервер получает готовый список id. До этой правки галочка «Учитывать
+    текущий фильтр схемы» у отчёта в V1 показывалась, но параметр молча
+    отбрасывался. `None` — без сужения, ответ побайтово прежний (ни одного
+    нового ключа); пустой список — под отбор не попало ничего.
+
+    Что сужается: изделия (потребность, план, факт, «назначено») — только
+    отобранные; строки — только марки отобранных изделий; позиции контрактов —
+    только этих марок. «Законтрактовано» по марке НЕ делится по отбору:
+    позиция контракта — количество на марку по объекту, к конкретным
+    изделиям она не привязана. Это сказано в `warning` готовым текстом.
+    """
     if scale not in SCALES:
         scale = "month"
+
+    отбор = ""
+    параметры = [object_id]
+    if element_ids is not None:
+        if not element_ids:
+            отбор = " AND 1=0"
+        else:
+            отбор = f" AND e.id IN ({','.join('?' * len(element_ids))})"
+            параметры.extend(element_ids)
 
     изделия = conn.execute(
         f"""
@@ -182,9 +206,9 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
                e.planned_delivery_date, e.actual_delivery_date
         FROM elements e{FORECAST_JOIN}
         WHERE e.object_id = ? AND e.is_current = 1
-          AND e.mark IS NOT NULL AND trim(e.mark) <> ''
+          AND e.mark IS NOT NULL AND trim(e.mark) <> ''{отбор}
         """,
-        (object_id,),
+        параметры,
     ).fetchall()
 
     # Позиции контрактов ЭТОГО объекта: объект контракта выводится по
@@ -207,6 +231,12 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
         """,
         (object_id,),
     ).fetchall()
+    if element_ids is not None:
+        # При отборе — только позиции марок, которые есть среди отобранных
+        # изделий: марка вне отбора к отобранной части стройки не относится,
+        # и её контракты раздули бы отчёт сотнями чужих строк.
+        марки_отбора = {(e["element_type"] or "", e["mark"]) for e in изделия}
+        позиции = [p for p in позиции if (p["element_type"] or "", p["mark"]) in марки_отбора]
 
     все_даты = []
     for e in изделия:
@@ -334,7 +364,26 @@ def build_contracting_schedule(conn: sqlite3.Connection, object_id: int,
         "need_coverage": {"with_date": с_датой, "total": len(изделия)},
     }
     отчёт["warning"] = need_coverage_warning(отчёт)
+    if element_ids is not None:
+        # Ключ появляется ТОЛЬКО при отборе — без него ответ обязан остаться
+        # прежним байт в байт (сверяется scripts/reports2_verify/contracting_regress.py).
+        отчёт["element_filter"] = {"elements": len(изделия), "marks": len(строки)}
+        # Пометка — в том же `warning`, что уже показывают экраны V1 и V2:
+        # так галочка V1 заработала честно без правки его вёрстки.
+        отчёт["warning"] = " ".join(x for x in (отчёт["warning"], element_filter_note(отчёт)) if x)
     return отчёт
+
+
+def element_filter_note(отчёт: dict) -> str:
+    """Строка «отчёт сужен фильтром схемы» — что именно сужено, а что нет."""
+    f = отчёт["element_filter"]
+    return (f"Учтён фильтр схемы: {f['elements']} изделий с маркой, марок {f['marks']}. "
+            f"Потребность, план и факт поставки — только по отобранным изделиям. "
+            f"«Законтрактовано» — по всем позициям контрактов объекта на эти марки: "
+            f"позиция контракта к конкретным изделиям не привязана и по отбору не "
+            f"делится, поэтому «Дефицит» сравнивает потребность отобранной части со "
+            f"всеми контрактами на марку и может быть меньше реального, если та же "
+            f"марка нужна и вне отбора.")
 
 
 def need_coverage_warning(отчёт: dict) -> str:
