@@ -25,6 +25,36 @@ const KIND_TITLE = { supplier_change: "Замена поставщика", link_
 const KIND_FEATURE = { supplier_change: "doc_supplier_change", link_swap: "doc_link_swap" };
 const isStale = (err) => err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object" && err.rawDetail.conflict === "stale_version";
 
+// ---------------------------------------------------------------- подбор изделий на мини-схеме (перенос из V1 scd-picker-svg)
+// Самостоятельный упрощённый SVG-рендер (НЕ общая сцена Three.js/2D рабочего места — тот же принцип, что у V1): координаты и контур
+// приходит ГОТОВЫМИ с сервера (`/supplier-changes/swap-elements`), здесь только показ, клик и рамка. Список рядом — второй способ
+// того же выбора: оба читают и пишут ОДИН Set `pk.sel`, поэтому синхронизированы «бесплатно», без отдельного моста состояния.
+const PICK_MIN_PX = 7;   // экранный минимум маркера, мм в мировых единицах пересчитывается по масштабу — во что можно попасть курсором/рамкой
+function pickCentroid(e) {
+  // Точка попадания контурного изделия — среднее вершин (не площадной центроид, как в V1 footprintCentroid: для клика и проверки
+  // «внутри рамки» разница на практике не видна, а без него потребовалась бы отдельная площадная формула).
+  if (e.outline && e.outline.length >= 3) {
+    let sx = 0, sy = 0; for (const [px, py] of e.outline) { sx += px; sy += py; }
+    return [sx / e.outline.length, sy / e.outline.length];
+  }
+  return [e.x, e.y];
+}
+function pickBBox(elements, context) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const take = (px, py) => { if (px < minX) minX = px; if (px > maxX) maxX = px; if (py < minY) minY = py; if (py > maxY) maxY = py; };
+  for (const e of context) take(e.x, e.y);
+  for (const e of elements) { if (e.outline && e.outline.length >= 3) for (const [px, py] of e.outline) take(px, py); else take(e.x, e.y); }
+  if (!Number.isFinite(minX)) return null;
+  const pad = Math.max(maxX - minX, maxY - minY) * 0.05 || 1000;
+  return { x: minX - pad, y: minY - pad, w: (maxX - minX) + pad * 2, h: (maxY - minY) + pad * 2 };
+}
+// Показанные — марка/контракт минус уже попавшие в документ, отфильтрованные по этажу; ОДИН и тот же список даёт и список-чекбоксы,
+// и маркеры схемы — расхождения между ними исключены самой формой кода, а не отдельной сверкой.
+function pickerShown(x, pk) {
+  const taken = new Set([...x.sideA, ...x.sideB].map((e) => e.id));
+  return pk.all.filter((e) => !taken.has(e.id) && (pk.floor === "" || String(e.floor ?? "") === pk.floor));
+}
+
 export function mountSupplierDocs(container, { screen, objectId, api, rights, groupTitle }) {
   let dead = false;
   const can = (kind) => !!rights?.system_admin || (rights?.features || {})[KIND_FEATURE[kind]] === "write";
@@ -34,6 +64,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     view: "list",                       // "list" | "doc"
     list: { loaded: false, error: "", items: [] },
     refs: { loaded: false, error: "", contracts: [] },
+    colors: {},                         // status -> цвет маркера мини-схемы (GET /status-colors, то же читает «Состояние БД»); не критично — без него нейтральный серый
     f: null,                            // форма открытого документа
     busy: false,                        // идёт запись — все действия документа заблокированы (ставится ДО первого await)
     message: "",                        // итог последней операции (строка статуса)
@@ -58,6 +89,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     try { S.refs.contracts = (await api.get(`/supplier-changes/refs?object_id=${objectId}`)).contracts; S.refs.loaded = true; }
     catch (err) { S.refs.error = err?.detail || "Не удалось загрузить контракты объекта"; }
   }
+  async function loadColors() { try { S.colors = await api.get("/status-colors"); } catch (err) { /* мини-схема тогда рисует нейтральным цветом — не критично для подбора */ } }
   const contractById = (id) => S.refs.contracts.find((c) => String(c.id) === String(id)) || null;
   const selectable = () => S.refs.contracts.filter((c) => !c.is_archived);
   const contractLabel = (c) => `${c.agreement_number}${c.agreement_date ? " от " + ruDate(c.agreement_date) : ""} / ${c.specification_number}${c.specification_date ? " от " + ruDate(c.specification_date) : ""}`;
@@ -284,12 +316,117 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const x = f(); if (!x || S.busy) return;
     const contract = side === "a" ? x.from : x.to;
     if (!contract || !x.mark) return;
-    x.picker = { side, all: [], floor: "", sel: new Set(), error: "", loading: true }; paint();
+    // view/base — охват мини-схемы (мировые координаты); context — фон (остальные изделия того же типа, точкой) — оба заполняются
+    // из ТОГО ЖЕ ответа, что и список, вторым проходом не грузятся.
+    x.picker = { side, all: [], floor: "", sel: new Set(), error: "", loading: true, floors: [], context: [], view: null, base: null }; paint();
     try {
       const r = await api.get(`/supplier-changes/swap-elements?object_id=${objectId}&contract_id=${contract}&mark=${encodeURIComponent(x.mark)}`);
-      if (f() === x && x.picker) { x.picker.all = r.elements.map((e) => ({ id: e.id, type: e.element_type, mark: e.mark, address: e.address, floor: e.floor, status: e.current_status, planned: e.planned_delivery_date })); x.picker.floors = r.floors; x.picker.loading = false; }
+      if (f() === x && x.picker) {
+        x.picker.all = r.elements.map((e) => ({ id: e.id, type: e.element_type, mark: e.mark, address: e.address, floor: e.floor, status: e.current_status, planned: e.planned_delivery_date, x: e.x, y: e.y, outline: e.outline }));
+        x.picker.floors = r.floors; x.picker.context = r.context || []; x.picker.loading = false;
+      }
     } catch (err) { if (f() === x && x.picker) { x.picker.loading = false; x.picker.error = err?.detail || "Не удалось загрузить изделия"; } }
     if (f() === x) paint();
+  }
+  // Рендер SVG-подложки мини-схемы (строка — как geoSvg в mfr-structure.js): охват считается из ПОКАЗАННЫХ изделий и фона на
+  // текущем этаже; вид (`pk.view`) переживает перерисовку — панорамирование и масштаб меняют его напрямую, минуя paint().
+  function pickerSvgHtml(x, pk) {
+    const shown = pickerShown(x, pk);
+    const context = (pk.context || []).filter((e) => pk.floor === "" || String(e.floor ?? "") === pk.floor);
+    const box = pickBBox(shown, context);
+    if (!box) return `<p class="v2-muted">На этом этаже изделий выбранной марки нет.</p>`;
+    pk.base = box;
+    if (!pk.view) pk.view = { ...box };
+    const view = pk.view;
+    // Точный мировой-на-пиксель масштаб доступен только у уже вставленного в DOM узла (getScreenCTM); здесь — оценка по ширине
+    // панели (мини-схема занимает примерно половину формы), достаточная для того, чтобы маркер не превращался в невидимую точку.
+    const wpp = view.w / 640;
+    const minR = PICK_MIN_PX * wpp, dotR = 1.5 * wpp;
+    const ctxDots = context.map((e) => `<circle cx="${e.x}" cy="${-e.y}" r="${dotR}" fill="var(--muted)" opacity="0.5"/>`).join("");
+    const shapes = shown.map((e) => {
+      const chosen = pk.sel.has(e.id);
+      const color = S.colors[e.status] || "#999";
+      const title = `<title>${esc(elLabel(e))}</title>`;
+      if (e.outline && e.outline.length >= 3) {
+        const xs = e.outline.map((p) => p[0]);
+        if (Math.max(...xs) - Math.min(...xs) >= minR * 2) {
+          const pts = e.outline.map(([px, py]) => `${px},${-py}`).join(" ");
+          return `<polygon points="${pts}" class="sd-pick-shape${chosen ? " chosen" : ""}" data-el="${e.id}" fill="${esc(color)}" fill-opacity="${chosen ? 0.9 : 0.55}" stroke="${chosen ? "var(--accent)" : "#333"}" stroke-width="${chosen ? 2 : 1}" vector-effect="non-scaling-stroke">${title}</polygon>`;
+        }
+      }
+      const [cx, cy] = pickCentroid(e);
+      return `<circle cx="${cx}" cy="${-cy}" r="${Math.max(minR, view.w / 220)}" class="sd-pick-shape${chosen ? " chosen" : ""}" data-el="${e.id}" fill="${esc(color)}" fill-opacity="${chosen ? 0.9 : 0.55}" stroke="${chosen ? "var(--accent)" : "#333"}" stroke-width="${chosen ? 2 : 1}" vector-effect="non-scaling-stroke">${title}</circle>`;
+    }).join("");
+    const vb = `${view.x} ${-(view.y + view.h)} ${view.w} ${view.h}`;
+    return `<div id="sd-pick-stage" style="position:relative">
+      <svg id="sd-pick-svg" viewBox="${vb}" style="width:100%;height:280px;background:var(--surface);border:1px solid var(--line);border-radius:8px;touch-action:none;cursor:crosshair;display:block" preserveAspectRatio="xMidYMid meet">${ctxDots}${shapes}</svg>
+      <div id="sd-pick-band" style="position:absolute;display:none;border:1px dashed var(--accent);background:color-mix(in srgb, var(--accent) 18%, transparent);pointer-events:none"></div>
+    </div>
+    <p class="v2-muted" style="margin:4px 0">Клик — отметить/снять ближайшее; протяжка рамкой — добавить всё внутри; Shift+перетаскивание — панорама; колесо — масштаб.</p>`;
+  }
+  // Панорама/масштаб — прямая правка `pk.view` и атрибута viewBox БЕЗ полной перерисовки формы (тот же приём, что у перетаскивания
+  // геометрии блока в mfr-structure.js): полный paint() на каждый pointermove/wheel тормозил бы форму целиком ради одной схемы.
+  // Клик и рамка исход РЕДКИЙ (конец жеста) — там полный paint() ожидаем, он же синхронизирует список изделий.
+  function bindPickerSvg(x, pk) {
+    const svg = inner.querySelector("#sd-pick-svg"), stage = inner.querySelector("#sd-pick-stage"), band = inner.querySelector("#sd-pick-band");
+    if (!svg || !stage) return;
+    const toWorld = (clientX, clientY) => {
+      const ctm = svg.getScreenCTM(); if (!ctm) return null;
+      const p = svg.createSVGPoint(); p.x = clientX; p.y = clientY;
+      const sp = p.matrixTransform(ctm.inverse());
+      return { x: sp.x, y: -sp.y };
+    };
+    const worldPerPx = () => { const ctm = svg.getScreenCTM(); return ctm && ctm.a ? 1 / Math.abs(ctm.a) : (pk.view ? pk.view.w / 640 : 1); };
+    let panOn = false, bandOn = false, panX = 0, panY = 0, bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    svg.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      if (e.shiftKey) { panOn = true; panX = e.clientX; panY = e.clientY; } else { bandOn = true; bx0 = bx1 = e.clientX; by0 = by1 = e.clientY; }
+      svg.setPointerCapture(e.pointerId);
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (panOn && pk.view) {
+        const wpp = worldPerPx();
+        pk.view.x -= (e.clientX - panX) * wpp; pk.view.y += (e.clientY - panY) * wpp;
+        panX = e.clientX; panY = e.clientY;
+        svg.setAttribute("viewBox", `${pk.view.x} ${-(pk.view.y + pk.view.h)} ${pk.view.w} ${pk.view.h}`);
+        return;
+      }
+      if (!bandOn) return;
+      bx1 = e.clientX; by1 = e.clientY;
+      const r = stage.getBoundingClientRect();
+      band.style.display = "block";
+      band.style.left = (Math.min(bx0, bx1) - r.left) + "px"; band.style.top = (Math.min(by0, by1) - r.top) + "px";
+      band.style.width = Math.abs(bx1 - bx0) + "px"; band.style.height = Math.abs(by1 - by0) + "px";
+    });
+    svg.addEventListener("pointerup", (e) => {
+      if (panOn) { panOn = false; return; }
+      if (!bandOn) return;
+      bandOn = false; band.style.display = "none";
+      const dist = Math.hypot(bx1 - bx0, by1 - by0);
+      if (dist < 4) {
+        const w = toWorld(bx0, by0); if (!w) return;
+        const thresh = 14 * worldPerPx();
+        let best = null, bestD = Infinity;
+        for (const el of pickerShown(x, pk)) { const [px, py] = pickCentroid(el); const d = Math.hypot(px - w.x, py - w.y); if (d < bestD) { bestD = d; best = el; } }
+        if (best && bestD <= thresh) { if (pk.sel.has(best.id)) pk.sel.delete(best.id); else pk.sel.add(best.id); paint(); }
+        return;
+      }
+      const a = toWorld(bx0, by0), b = toWorld(bx1, by1); if (!a || !b) return;
+      const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x), minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+      // Рамка ДОБАВЛЯЕТ к уже отмеченному (перенос из V1) — собрать выборку из нескольких участков иначе было бы нечем; снять всё — крестиком у строки списка.
+      for (const el of pickerShown(x, pk)) { const [px, py] = pickCentroid(el); if (px >= minX && px <= maxX && py >= minY && py <= maxY) pk.sel.add(el.id); }
+      paint();
+    });
+    svg.addEventListener("wheel", (e) => {
+      if (!pk.view || !pk.base) return;
+      e.preventDefault();
+      const w = toWorld(e.clientX, e.clientY); if (!w) return;
+      const step = e.deltaY < 0 ? 1 / 1.2 : 1.2;
+      const newW = Math.min(pk.base.w, Math.max(pk.base.w / 60, pk.view.w * step));
+      const k = newW / pk.view.w;
+      pk.view = { x: w.x - (w.x - pk.view.x) * k, y: w.y - (w.y - pk.view.y) * k, w: newW, h: pk.view.h * k };
+      svg.setAttribute("viewBox", `${pk.view.x} ${-(pk.view.y + pk.view.h)} ${pk.view.w} ${pk.view.h}`);
+    }, { passive: false });
   }
 
   // ------------------------------------------------------------ отрисовка
@@ -335,14 +472,18 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const sideBox = (sideKey, title, list, other) => `<div><h4>${title}: ${list.length} шт.</h4>${list.length ? list.map((e, i) => `<div class="v2-inline" style="margin:2px 0"><span class="v2-tag">${i + 1}</span><span title="${esc(elLabel(e))}">${esc(elLabel(e))}</span>${i >= other.length ? ' <small class="v2-auth-error">без пары</small>' : ""}${ro ? "" : `<button type="button" class="v2-btn" data-a="mv" data-side="${sideKey}" data-i="${i}" data-d="-1" ${S.busy ? "disabled" : ""} aria-label="Выше">↑</button><button type="button" class="v2-btn" data-a="mv" data-side="${sideKey}" data-i="${i}" data-d="1" ${S.busy ? "disabled" : ""} aria-label="Ниже">↓</button><button type="button" class="v2-btn" data-a="rm" data-side="${sideKey}" data-i="${i}" ${S.busy ? "disabled" : ""} aria-label="Убрать">✕</button>`}</div>`).join("") : `<p class="v2-muted">пусто${ro ? "" : " — нажмите «Подбор…»"}</p>`}
       ${ro ? "" : `<button type="button" class="v2-btn" data-a="pick" data-side="${sideKey}" ${S.busy || !x.mark || !(sideKey === "a" ? x.from : x.to) ? "disabled" : ""}>Подбор…</button>`}</div>`;
     const pk = x.picker;
+    // Мини-схема слева, список — рядом справа (перенос из V1 scd-picker: клик/рамка по фигурам и список — два способа ОДНОГО
+    // выбора, синхронизированные тем, что оба читают и пишут `pk.sel`). Список остаётся ДОПОЛНИТЕЛЬНЫМ способом — не убран.
     const pickerHtml = !pk ? "" : `<div class="v2-callout" role="group" aria-label="Подбор изделий">
       <strong>Подбор изделий стороны ${pk.side === "a" ? "1" : "2"}</strong>
       ${pk.loading ? `<p class="v2-muted">Загрузка…</p>` : pk.error ? `<p class="v2-auth-error" role="alert">${esc(pk.error)}</p>` : (() => {
-        const taken = new Set([...x.sideA, ...x.sideB].map((e) => e.id));
-        const shown = pk.all.filter((e) => !taken.has(e.id) && (pk.floor === "" || String(e.floor ?? "") === pk.floor));
+        const shown = pickerShown(x, pk);
         return `<div class="v2-inline"><label>Этаж <select data-pk-floor aria-label="Этаж"><option value="">все</option>${(pk.floors || []).map((fl) => `<option value="${esc(fl)}" ${pk.floor === String(fl) ? "selected" : ""}>${esc(fl)}</option>`).join("")}</select></label>
           <button type="button" class="v2-btn" data-a="pk-all">Отметить все показанные</button><span class="v2-muted">Показано: ${shown.length}, отмечено: ${pk.sel.size}</span></div>
-          <div style="max-height:260px;overflow:auto">${shown.map((e) => `<label class="v2-role-check" style="padding:3px 0"><input type="checkbox" data-pk-el="${e.id}" ${pk.sel.has(e.id) ? "checked" : ""}><span>${esc(elLabel(e))}${e.planned ? ` · план ${ruDate(e.planned)}` : ""}</span></label>`).join("") || '<p class="v2-muted">Нет подходящих изделий (уже выбраны или не на этом контракте).</p>'}</div>`;
+          <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;align-items:start;margin-top:6px">
+            <div>${pickerSvgHtml(x, pk)}</div>
+            <div style="max-height:320px;overflow:auto">${shown.map((e) => `<label class="v2-role-check" style="padding:3px 0"><input type="checkbox" data-pk-el="${e.id}" ${pk.sel.has(e.id) ? "checked" : ""}><span>${esc(elLabel(e))}${e.planned ? ` · план ${ruDate(e.planned)}` : ""}</span></label>`).join("") || '<p class="v2-muted">Нет подходящих изделий (уже выбраны или не на этом контракте).</p>'}</div>
+          </div>`;
       })()}
       <div class="v2-inline" style="margin-top:8px"><button type="button" class="v2-btn v2-primary" data-a="pk-apply" ${pk.sel.size ? "" : "disabled"}>Добавить в документ</button><button type="button" class="v2-btn" data-a="pk-cancel">Отмена</button></div></div>`;
     const pairs = Math.min(x.sideA.length, x.sideB.length), equal = x.sideA.length === x.sideB.length && x.sideA.length > 0;
@@ -432,8 +573,10 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     });
     const pk = x.picker;
     if (pk) {
-      inner.querySelector("[data-pk-floor]")?.addEventListener("change", (e) => { pk.floor = e.target.value; paint(); });
+      // Смена этажа — новый охват мини-схемы, вид сбрасывается на весь этаж (как в V1: scdRenderPicker(false) не сохраняет масштаб).
+      inner.querySelector("[data-pk-floor]")?.addEventListener("change", (e) => { pk.floor = e.target.value; pk.view = null; paint(); });
       for (const el of inner.querySelectorAll("[data-pk-el]")) el.addEventListener("change", () => { const id = Number(el.dataset.pkEl); if (el.checked) pk.sel.add(id); else pk.sel.delete(id); paint(); });
+      bindPickerSvg(x, pk);
     }
   }
   function paintFoot() { foot.innerHTML = footHtml(); bindFoot(); statusEl.textContent = isDirty() ? "Есть несохранённые изменения" : ""; }
@@ -453,7 +596,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     else if (a === "toggle-pos") { x.openPos = x.openPos || new Set(); const i = Number(d.pi); if (x.openPos.has(i)) x.openPos.delete(i); else x.openPos.add(i); paint(); }
     else if (a === "pick") openPicker(d.side);
     else if (a === "pk-cancel") { x.picker = null; paint(); }
-    else if (a === "pk-all" && x.picker) { const taken = new Set([...x.sideA, ...x.sideB].map((e) => e.id)); for (const e of x.picker.all) if (!taken.has(e.id) && (x.picker.floor === "" || String(e.floor ?? "") === x.picker.floor)) x.picker.sel.add(e.id); paint(); }
+    else if (a === "pk-all" && x.picker) { for (const e of pickerShown(x, x.picker)) x.picker.sel.add(e.id); paint(); }
     else if (a === "pk-apply" && x.picker) {
       const list = x.picker.side === "a" ? x.sideA : x.sideB;
       for (const e of x.picker.all) if (x.picker.sel.has(e.id)) list.push(e);
@@ -477,7 +620,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   }
   (async () => {
     S.busy = true; paint();
-    await Promise.all([loadList(), loadRefs()]);
+    await Promise.all([loadList(), loadRefs(), loadColors()]);
     S.busy = false; paint();
   })();
 
