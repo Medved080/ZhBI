@@ -101,6 +101,12 @@ function markBodyProblem(b) {
   if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 200) return "название марки пусто или слишком длинно";
   return null;
 }
+function boolMapProblem(b) {
+  if (!isObj(b)) return "тело не объект";
+  if (!Object.keys(b).length) return "нет изменённых строк";
+  if (!Object.values(b).every((v) => typeof v === "boolean")) return "значение не да/нет";
+  return null;
+}
 function zoneBodyProblem(b) {
   if (!isObj(b) || Object.keys(b).some((k) => !["number", "name", "parent_zone_id", "levels"].includes(k))) return "лишние поля";
   if (!(b.number === null || b.number === undefined || Number.isInteger(b.number))) return "номер не целое число";
@@ -127,6 +133,10 @@ export const POLICY = [
   { id: "auth.login", screen: "(вход)", action: "Вход в V2 тем же логином и паролем, что в V1", method: "POST", path: re("/login"), risk: "аутентификация, данные не меняет", allowed: true, proof: "тот же эндпоинт, что у V1 (пароль вводит человек)" },
   { id: "appearance.theme", screen: "appearance", action: "Смена личной цветовой гаммы", method: "PATCH", path: re(`/users/\\d+/ui-theme`), risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "живая проверка: запись → SQL → возврат" },
   { id: "label-color.set", screen: "label-color", action: "Личный цвет подписей марок (сброс — null)", method: "PATCH", path: re(`/users/\\d+/label-color`), risk: "личная (V1 и V2)", allowed: true, proof: "живая проверка: запись → SQL → сброс" },
+  { id: "min-label-px.set", screen: "appearance", action: "Личный минимальный размер подписей на схеме", method: "PATCH", path: re(`/users/\\d+/min-label-px`), onlyKeys: ["min_label_px"], risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, отказ вне диапазона 400, 403 на чужого пользователя" },
+  { id: "view3d.set", screen: "appearance", action: "Личный начальный ракурс 3D (подъём и поворот камеры)", method: "PATCH", path: re(`/users/\\d+/view3d`), onlyKeys: ["view3d_pitch_deg", "view3d_yaw_deg"], risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, отказ вне диапазона 400, поворот приводится к ±180°, 403 на чужого пользователя" },
+  { id: "label-visibility.set", screen: "label-visibility", action: "Видимость подписей марок по типу — настройка объекта по умолчанию (только изменённые строки)", method: "PUT", path: re("/label-visibility"), check: boolMapProblem, risk: "общая для объекта (видна и в V1)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, 403 без права" },
+  { id: "label-dates-visibility.set", screen: "label-visibility", action: "Видимость дат в допстроке подписи по типу — настройка объекта по умолчанию (только изменённые строки)", method: "PUT", path: re("/label-dates-visibility"), check: boolMapProblem, risk: "общая для объекта (видна и в V1)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, 403 без права" },
   { id: "changelog.ack", screen: "changelog", action: "Отметка «Ознакомился» в «Что нового»", method: "POST", path: re("/changelog/ack"), risk: "личная", allowed: true, proof: "живая проверка: запись → SQL" },
   { id: "smu.create", screen: "dict-smu", action: "СМУ: добавить запись", method: "POST", path: re("/smu"), risk: "общая (справочник)", allowed: true, proof: "живая проверка на синтетической записи" },
   { id: "smu.rename", screen: "dict-smu", action: "СМУ: переименовать", method: "PATCH", path: re(`/smu/\\d+`), risk: "общая (справочник)", allowed: true, proof: "живая проверка на синтетической записи" },

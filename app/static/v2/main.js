@@ -24,6 +24,7 @@ import { mountExchange, hasExchangeOp } from "./exchange.js";
 import { mountSessionsEdit } from "./sessions-edit.js";
 import { mountSubtypesEdit } from "./subtypes-edit.js";
 import { mountZonesEdit } from "./zones-edit.js";
+import { mountVisibilityEdit } from "./visibility-edit.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
 import { mountLabelColorEdit } from "./label-color-edit.js";
 import { mountRevitColorsEdit } from "./revit-colors-edit.js";
@@ -434,6 +435,11 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "zones-edit") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountZonesEdit(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "visibility-edit") {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountVisibilityEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "sessions-edit") {

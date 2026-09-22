@@ -228,9 +228,74 @@ def group_zones():
     check("SQL: синтетическая зона удалена", not gone)
 
 
+# ==================================================================== A — личные настройки (внешний вид)
+def group_appearance():
+    print("\n== A — личные настройки: min-label-px, view3d ==")
+    uid2 = q1("SELECT id FROM users WHERE domain_login=?", ("user2",))["id"]
+    st, d = user2.patch(f"/users/{uid2}/min-label-px", {"min_label_px": 22})
+    check("PATCH min-label-px своё → 200", st == 200, f"{st} {d}")
+    row = q1("SELECT min_label_px FROM users WHERE id=?", (uid2,))
+    check("SQL: min_label_px сохранён", row and float(row["min_label_px"]) == 22)
+
+    st, d = user2.patch(f"/users/{uid2}/min-label-px", {"min_label_px": 999})
+    check("PATCH min-label-px вне диапазона → 400", st == 400, f"{st} {d}")
+
+    uid_admin = q1("SELECT id FROM users WHERE domain_login=?", ("admin",))["id"]
+    st, d = user2.patch(f"/users/{uid_admin}/min-label-px", {"min_label_px": 10})
+    check("PATCH min-label-px чужому → 403", st == 403, f"{st} {d}")
+
+    st, d = user2.patch(f"/users/{uid2}/view3d", {"view3d_pitch_deg": 45, "view3d_yaw_deg": 400})
+    check("PATCH view3d своё → 200", st == 200, f"{st} {d}")
+    row = q1("SELECT view3d_pitch_deg, view3d_yaw_deg FROM users WHERE id=?", (uid2,))
+    check("SQL: pitch сохранён", row and float(row["view3d_pitch_deg"]) == 45)
+    check("SQL: yaw приведён к диапазону (400→40)", row and float(row["view3d_yaw_deg"]) == 40)
+
+    st, d = user2.patch(f"/users/{uid2}/view3d", {"view3d_pitch_deg": 150, "view3d_yaw_deg": 0})
+    check("PATCH view3d подъём вне диапазона → 400", st == 400, f"{st} {d}")
+
+    st, d = user2.patch(f"/users/{uid_admin}/view3d", {"view3d_pitch_deg": 45, "view3d_yaw_deg": 0})
+    check("PATCH view3d чужому → 403", st == 403, f"{st} {d}")
+
+
+# ==================================================================== L — видимость подписей и дат
+def group_label_visibility():
+    print("\n== L — видимость подписей и дат (объект) ==")
+    OBJ = 1
+    st, d = admin.get(f"/label-visibility?object_id={OBJ}")
+    check("GET /label-visibility → 200", st == 200, f"{st} {d}")
+    types = list(d.keys()) if st == 200 else []
+    check("есть хотя бы один тип", bool(types))
+    if not types:
+        return
+    t = types[0]
+    before = q1("SELECT visible FROM label_visibility WHERE object_id=? AND element_type=?", (OBJ, t))
+    st, d = admin.put(f"/label-visibility?object_id={OBJ}", {t: not bool(before["visible"])})
+    check("PUT /label-visibility (одна строка) → 200", st == 200, f"{st} {d}")
+    row = q1("SELECT visible FROM label_visibility WHERE object_id=? AND element_type=?", (OBJ, t))
+    check("SQL: значение изменилось", bool(row["visible"]) != bool(before["visible"]))
+    st, d = admin.put(f"/label-visibility?object_id={OBJ}", {t: bool(before["visible"])})
+    check("PUT /label-visibility возврат → 200", st == 200, f"{st} {d}")
+    row = q1("SELECT visible FROM label_visibility WHERE object_id=? AND element_type=?", (OBJ, t))
+    check("SQL: значение восстановлено", bool(row["visible"]) == bool(before["visible"]))
+
+    st, d = user4.put(f"/label-visibility?object_id={OBJ}", {t: True})
+    check("PUT /label-visibility user4(view) → 403", st == 403, f"{st} {d}")
+
+    st, d = admin.get(f"/label-dates-visibility?object_id={OBJ}")
+    check("GET /label-dates-visibility → 200", st == 200, f"{st} {d}")
+    before_d = q1("SELECT dates_visible FROM label_visibility WHERE object_id=? AND element_type=?", (OBJ, t))
+    st, d = admin.put(f"/label-dates-visibility?object_id={OBJ}", {t: not bool(before_d["dates_visible"])})
+    check("PUT /label-dates-visibility → 200", st == 200, f"{st} {d}")
+    row = q1("SELECT dates_visible FROM label_visibility WHERE object_id=? AND element_type=?", (OBJ, t))
+    check("SQL: dates_visible изменилось", bool(row["dates_visible"]) != bool(before_d["dates_visible"]))
+    admin.put(f"/label-dates-visibility?object_id={OBJ}", {t: bool(before_d["dates_visible"])})
+
+
 if __name__ == "__main__":
     group_marks()
     group_zones()
+    group_appearance()
+    group_label_visibility()
     print(f"\nИТОГО: {PASSED[0]} из {PASSED[0] + len(FAILS)}"
           + (f"; провалы: {', '.join(FAILS)}" if FAILS else ""))
     sys.exit(1 if FAILS else 0)
