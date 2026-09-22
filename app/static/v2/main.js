@@ -45,6 +45,15 @@ import { openObjectPicker } from "./shell-object-picker.js";
 
 const root = document.getElementById("v2-root");
 
+// Стиль предупреждения о нехватке места (см. warnAboutDiskSpace ниже) — отдельным файлом: styles.css общий,
+// правит параллельно другой исполнитель («tables»), тем же приёмом, что element-ops.css/shell-nav.css у своих модулей.
+(() => {
+  if (document.querySelector("link[data-disk-note-css]")) return;
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = "/static/v2/disk-note.css"; l.setAttribute("data-disk-note-css", "1");
+  document.head.appendChild(l);
+})();
+
 // Тёмные гаммы V1 (index.html, :root[data-skin="..."]) — geometрия и
 // типографика у всех тем общие, различаются только токены; полный перенос
 // каждой темы в V2 не сделан (см. отчёт), но светлая/тёмная СЕМЬЯ выбранной
@@ -276,6 +285,10 @@ async function renderShell(user, permissions) {
       <a href="/?ui=v1" id="v2-banner-back">Вернуться в текущий интерфейс</a>
     </div>
     <div class="v2-gate-note" id="v2-gate-note" role="status" aria-live="polite" hidden></div>
+    <div class="v2-disk-note" id="v2-disk-note" role="status" aria-live="polite" hidden>
+      <span id="v2-disk-note-text"></span>
+      <button type="button" id="v2-disk-note-x" aria-label="Скрыть предупреждение">✕</button>
+    </div>
     <div class="v2-body">
       <div id="v2-side"></div>
       <main class="v2-page" id="v2-content"></main>
@@ -307,6 +320,23 @@ async function renderShell(user, permissions) {
   });
   document.getElementById("v2-banner-back").addEventListener("click", (e) => { e.preventDefault(); onBackClick(); });
   const gateNote = document.getElementById("v2-gate-note");
+  // Предупреждение о нехватке места (перенос п.6 задания, V1: warnAboutDiskSpace) — фоновый запрос ОДИН раз за
+  // загрузку оболочки (renderShell вызывается ровно один раз на вход/восстановление сеанса — см. afterLogin),
+  // молча гаснет при отказе (не должен мешать входу), спрашивается только у тех, кому виден раздел копий.
+  // Дальше держится, пока не закрыли крестиком (или не перезагрузили страницу) — повторного показа на переход
+  // между экранами НЕТ (та же причина, что у V1: одна строка состояния, не вытеснять её на каждый клик).
+  const diskNote = document.getElementById("v2-disk-note");
+  document.getElementById("v2-disk-note-x").addEventListener("click", () => { diskNote.hidden = true; });
+  function warnAboutDiskSpace() {
+    if (!isSystemAdmin && !["read", "write"].includes(permissions.features?.backups)) return;
+    api.get("/admin/disk-space").then((disk) => {
+      if (!disk || !disk.message) return;
+      document.getElementById("v2-disk-note-text").textContent = disk.message;
+      diskNote.classList.toggle("v2-disk-note-critical", disk.level === "critical");
+      diskNote.hidden = false;
+    }).catch(() => { /* фоновое уведомление — тихий отказ, не должен мешать работе */ });
+  }
+  warnAboutDiskSpace();
   const objectBtn = document.getElementById("v2-object-btn");
   const headSection = document.getElementById("v2-head-section");
   const content = document.getElementById("v2-content");
