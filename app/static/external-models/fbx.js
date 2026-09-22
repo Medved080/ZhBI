@@ -39,20 +39,28 @@ function parseWithTrackedBlobUrls(loader, arrayBuffer) {
   }
 }
 
+// onLoad менеджер вызывает, только когда закончилась хотя бы одна начатая загрузка: у FBX без текстур загрузок нет вовсе,
+// и без settleIfIdle() ожидание всегда уходило в полный тайм-аут (20 с на каждую модель без текстур — найдено 2026-09-23).
 function waitForTextures(manager, timeoutMs) {
-  return new Promise((resolve) => {
+  let started = false;
+  let finish = () => {};
+  manager.onStart = () => { started = true; };
+  const done = new Promise((resolve) => {
     let settled = false;
     const errors = [];
-    const finish = () => {
+    let timer = null;
+    finish = () => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       resolve({ errors });
     };
-    manager.onLoad = finish;
     manager.onError = (url) => { errors.push(url); };
-    const timer = setTimeout(finish, timeoutMs);
-    manager.onLoad = () => { clearTimeout(timer); finish(); };
+    manager.onLoad = finish;
+    timer = setTimeout(finish, timeoutMs);
   });
+  // Зовётся после синхронного parse(): загрузки текстур начинаются внутри него (manager.itemStart → onStart).
+  return { done, settleIfIdle: () => { if (!started) finish(); } };
 }
 
 const AXIS_REMAP_ELEMENTS = [
@@ -104,10 +112,11 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind
     blockedExternal.push(url);
     return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="; // 1x1 прозрачный PNG вместо сети
   });
-  const texturesDone = waitForTextures(manager, lim.textureTimeoutMs);
+  const textures = waitForTextures(manager, lim.textureTimeoutMs);
 
   const loader = new FBXLoader(manager);
   const { group: rawGroup, blobUrls } = await runSerialized(() => parseWithTrackedBlobUrls(loader, arrayBuffer));
+  textures.settleIfIdle();
 
   removeLightsAndCameras(rawGroup);
   rawGroup.updateMatrixWorld(true);
@@ -209,7 +218,7 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind
 
   disposeThreeGroup(rawGroup, { keepMaterials: true }); // геометрии старой иерархии больше не нужны, материалы переехали в outGroup
 
-  const { errors: textureErrors } = await texturesDone;
+  const { errors: textureErrors } = await textures.done;
   for (const url of textureErrors) warnings.push(`Не удалось загрузить текстуру: ${url}`);
   for (const url of blockedExternal) warnings.push(`Внешний путь к текстуре проигнорирован (нет доступа к сети из FBX): ${url}`);
 
