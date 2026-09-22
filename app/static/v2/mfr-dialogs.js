@@ -175,6 +175,19 @@ export function openSettingsDialog({ api, objectId, blocks, canWrite, onSaved, o
 export function openBulkDatesDialog({ api, objectId, items, canWrite, onDone, onClosed }) {
   const ids = items.map((i) => i.id);
   let busy = false, dead = false;
+  // Таблица работ «по строкам» (V1: block-works-dates-table, правка дат каждой строки): текущие сроки и признак каждой ЗР; правка строки —
+  // карточкой ЗР (openZrDialog: план и новая версия прогноза с отпечатком работы, как в панели блока), после неё список перечитывается.
+  let list = items.slice();
+  const blockIds = [...new Set(items.map((i) => i.block_id).filter(Boolean))];
+  async function reloadList() {
+    try { list = (await api.get(`/objects/${objectId}/block-works?block_ids=${blockIds.join(",")}`)).items || []; } catch (e) { /* остаётся прежний список */ }
+    if (!dead && !st.preview) paint();
+  }
+  const rowsHtml = () => !list.length ? `<p class="v2-muted">У отобранных блоков нет ни одной ЗР.</p>`
+    : `<h4 class="mfr-rows-h">Сроки по строкам</h4><div class="v2-read-table mfr-bulk-tbl"><table class="v2-read-tbl"><thead><tr><th>Секция · этаж</th><th>Операция</th><th>План</th><th>Прогноз</th><th>Признак</th><th></th></tr></thead><tbody>${list.map((w) => `<tr>
+      <td>${esc(w.section_code ?? "")} · ${esc(w.level_floor ?? "")}</td><td>${esc(w["название"] || w["путь"] || "")}</td>
+      <td class="mfr-nowrap">${esc(shortDate(w.plan_start))}–${esc(shortDate(w.plan_end))}</td><td class="mfr-nowrap">${esc(shortDate(w.forecast_start))}–${esc(shortDate(w.forecast_end))}</td>
+      <td>${esc(w.deadline_label || "")}</td><td><button type="button" class="v2-btn" data-bd-row="${w.id}" ${busy ? "disabled" : ""}>${canWrite ? "Изменить…" : "Открыть…"}</button></td></tr>`).join("")}</tbody></table></div>`;
   const st = { op: "shift", field: "plan", days: "", preview: null, status: "", kind: "" };
   const m = openModal({ title: `Групповая правка сроков · работ: ${ids.length}`, wide: true, onRequestClose: async () => !busy });
   const setStatus = (t, kind = "") => { st.status = t; st.kind = kind; const n = m.body.querySelector("#bd-status"); if (n) { n.textContent = t; n.className = `mfr-status ${kind}`; } };
@@ -190,15 +203,19 @@ export function openBulkDatesDialog({ api, objectId, items, canWrite, onDone, on
         ${st.op === "shift" ? `<label class="v2-wire-field"><span>Что сдвигать</span><select id="bd-field" ${busy || p ? "disabled" : ""}><option value="plan" ${st.field === "plan" ? "selected" : ""}>Базовый срок (план)</option><option value="forecast" ${st.field === "forecast" ? "selected" : ""}>Прогноз (новая версия)</option></select></label>
         <label class="v2-wire-field"><span>Дней (− назад, + вперёд)</span><input type="number" id="bd-days" step="1" value="${esc(st.days)}" ${busy || p ? "disabled" : ""}></label>` : ""}
         ${!p ? `<button type="button" class="v2-btn v2-primary" id="bd-preview" ${busy || !validInput() ? "disabled" : ""}>Предпросмотр</button>` : ""}</div>
-      <div id="bd-pv">${p ? previewHtml(p) : `<p class="v2-muted">Выбрано работ: ${ids.length}. Сначала — предпросмотр: изменения записываются только после него.</p>`}</div>
+      <div id="bd-pv">${p ? previewHtml(p) : `<p class="v2-muted">Выбрано работ: ${ids.length}. Групповая правка — сначала предпросмотр: изменения записываются только после него. Правка отдельной работы — кнопкой в её строке ниже.</p>`}</div>
       <p id="bd-status" class="mfr-status ${esc(st.kind)}" role="status" aria-live="polite">${esc(st.status)}</p>
-      ${p ? `<div class="v2-bar mfr-actions"><button type="button" class="v2-btn v2-primary" id="bd-apply" ${busy || !p.will_change || !canWrite || p.items.some((i) => i.blocked) ? "disabled" : ""}>Применить: ${p.will_change} из ${p.requested}</button><button type="button" class="v2-btn" id="bd-back" ${busy ? "disabled" : ""}>Назад</button></div>` : ""}</div>`;
+      ${p ? `<div class="v2-bar mfr-actions"><button type="button" class="v2-btn v2-primary" id="bd-apply" ${busy || !p.will_change || !canWrite || p.items.some((i) => i.blocked) ? "disabled" : ""}>Применить: ${p.will_change} из ${p.requested}</button><button type="button" class="v2-btn" id="bd-back" ${busy ? "disabled" : ""}>Назад</button></div>` : ""}${p ? "" : rowsHtml()}</div>`;
     m.body.querySelector("#bd-op")?.addEventListener("change", (e) => { st.op = e.target.value; paint(); });
     m.body.querySelector("#bd-field")?.addEventListener("change", (e) => { st.field = e.target.value; });
     m.body.querySelector("#bd-days")?.addEventListener("input", (e) => { st.days = e.target.value; const b = m.body.querySelector("#bd-preview"); if (b) b.disabled = !validInput(); });
     m.body.querySelector("#bd-preview")?.addEventListener("click", doPreview);
     m.body.querySelector("#bd-back")?.addEventListener("click", () => { st.preview = null; st.status = ""; paint(); });
     m.body.querySelector("#bd-apply")?.addEventListener("click", doApply);
+    m.body.querySelectorAll("[data-bd-row]").forEach((btn) => btn.addEventListener("click", () => {
+      if (busy) return;
+      openZrDialog({ api, objectId, id: Number(btn.dataset.bdRow), canWrite, onSaved: () => { reloadList(); onDone?.(); } });
+    }));
   }
   function previewHtml(p) {
     const rows = p.items.slice(0, 300).map((i) => {
@@ -244,6 +261,7 @@ export function openBulkDatesDialog({ api, objectId, items, canWrite, onDone, on
       st.preview = null; paint();
       setStatus(res.outcome === "confirmed" ? OUTCOME_TEXT.confirmed : `Применено: изменено ${res.data?.changed ?? "?"} из ${res.data?.requested ?? ids.length} (ответ сервера).`, "ok");
       onDone?.();
+      reloadList();
       return;
     }
     if (res.outcome === "conflict") { st.preview = null; paint(); setStatus(`${conflictText(res.error, "список")} Ничего не изменено — сделайте предпросмотр заново.`, "bad"); onDone?.(); return; }

@@ -204,3 +204,6 @@
   .mfr-fact { grid-template-columns: 170px minmax(0, 1fr); }
   .mfr-fact-row { grid-template-columns: minmax(0, 1fr) 120px 64px auto; }
 }
+/* «Сроки»: таблица работ по строкам под групповой правкой (перенос V1 block-works-dates-table) */
+.mfr-rows-h { margin: 14px 0 6px; font-size: 13px; }
+.mfr-nowrap { white-space: nowrap; }

@@ -33,11 +33,13 @@ try {
   await sleep(400);
   // V2 форматирует числа общим правилом toLocaleString("ru-RU") (везде в отчётах V2, не только здесь) — разделитель
   // тысяч NBSP; сверяем ЗНАЧЕНИЕ, а не буквальную подстроку с пробелом.
-  const v2DynText = await b.eval(`(document.querySelector('#rd-report')?.textContent || "").replace(/\\u00a0/g, "")`);
+  // С 2026-09-22 (аудит «рабочие места и отчёты») «Динамика» V2 показывает те же две таблицы «Статус монтажа/поставки ЖБИ»,
+  // что V1 (dynBlockTable): ячейки строки — всего, накопительно план/факт/отклонение, за день план/факт/отклонение, %.
+  const v2Cells = await b.eval(`[...document.querySelectorAll('#rd-report .rw-dyn-tbl')].map(t=>[...t.querySelectorAll('tbody td')].map(td=>Number(td.textContent.replace(/[^\\d+-]/g,''))))`);
   const v2Weeks = await b.eval(`document.querySelector('#rd-report svg')?.dataset ? document.querySelectorAll('#rd-report svg text').length : 0`);
-  check("«Динамика»: факт монтажа нарастающим итогом совпадает V1/V2", v2DynText.includes(`факт ${v1Dyn.montageFact}`), `V1=${v1Dyn.montageFact}; в тексте V2 есть «факт ${v1Dyn.montageFact}»? ${v2DynText.includes(`факт ${v1Dyn.montageFact}`)}`);
-  check("«Динамика»: план монтажа нарастающим итогом совпадает V1/V2", v2DynText.includes(`план ${v1Dyn.montagePlan}`), `V1=${v1Dyn.montagePlan}`);
-  check("«Динамика»: факт поставки нарастающим итогом совпадает V1/V2", v2DynText.includes(`факт ${v1Dyn.deliveryFact}`), `V1=${v1Dyn.deliveryFact}`);
+  check("«Динамика»: факт монтажа нарастающим итогом совпадает V1/V2", v2Cells[0]?.[2] === v1Dyn.montageFact, `V1=${v1Dyn.montageFact}; V2=${v2Cells[0]?.[2]}`);
+  check("«Динамика»: план монтажа нарастающим итогом совпадает V1/V2", v2Cells[0]?.[1] === v1Dyn.montagePlan, `V1=${v1Dyn.montagePlan}; V2=${v2Cells[0]?.[1]}`);
+  check("«Динамика»: факт поставки нарастающим итогом совпадает V1/V2", v2Cells[1]?.[2] === v1Dyn.deliveryFact, `V1=${v1Dyn.deliveryFact}; V2=${v2Cells[1]?.[2]}`);
   check("«Динамика»: график V2 построен (есть подписи недель)", v2Weeks > 0, `недель на графике: ${v2Weeks}`);
 
   // ---- V1: «Аналитическая справка» ----

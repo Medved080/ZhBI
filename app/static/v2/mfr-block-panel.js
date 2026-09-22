@@ -231,6 +231,15 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
     },
     summary() { return { chess: st.chess.tracks.find((t) => t.code === st.chess.track)?.name || null, mode: st.chess.mode, dyn: st.dyn.on ? { ...st.dyn } : null, filter: filterActive(st.filter) }; },
     reset() { st.objectId = null; st.blocks = null; st.rights = null; st.progress.clear(); ensureBase(); },
+    // «Сбросить все» (V1: mfr-reset-all-filters) — вместе с этажами/секциями/категориями сбрасывает отбор работ и выключает динамику факта
+    resetAll() {
+      st.filter = newFilter();
+      if (st.dyn.on) { st.dyn = { on: false, from: "", to: "" }; send("mfrDynamics", { on: false, from: null, to: null }); for (const id of st.progress.keys()) loadProgress(id, true); }
+      repaint();
+    },
+    anyActive() { return filterActive(st.filter) || st.dyn.on; },
+    // подписи блоков «секция · этаж» (для перечня выделенных блоков — как полоса группы V1 updateBlockGroupUi)
+    labels() { return labelsMap(); },
     destroy() { dead = true; closeAllModals(); },
   };
 }

@@ -19,6 +19,7 @@ import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
 import { createElementOps } from "./element-ops.js";
 import { anyModalDirty, guardModals } from "./mfr-common.js";
 import { writeFilterSnapshot } from "./scheme-filter-snapshot.js";
+import { takeLocate } from "./locate-handoff.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -29,7 +30,8 @@ const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
 const VIEWS_MFR = [["2d", "2D"], ["3d", "3D"]];
 const TABS_MFR = [["props", "Свойства"], ["filters", "Фильтры"], ["view", "Вид"]];
 // Комплектовщик: срезы отбора, показатели, контракты (свой отбор, независимый от фильтров «Модели»), свойства выбранного элемента, вид
-const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["alloc", "Распределение"], ["props", "Свойства"], ["view", "Вид"]];
+// «Статус» — сводка статусов по изделиям среза (V1: вкладка «Статус» правой панели есть и у АРМ комплектовщика)
+const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["alloc", "Распределение"], ["props", "Свойства"], ["status", "Статус"], ["view", "Вид"]];
 const FRAME_TIMEOUT_MS = 45000;
 
 const fmtDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
@@ -66,7 +68,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   // Здесь только связка: снимок сцены, права, перерисовка панели, команды кадру.
   const ops = createElementOps({
     api, send: (c, a) => send(c, a), getScene: () => sc, getObjectId: () => curObject, statusLabel: (k) => stLabel(k), statusColor: (k) => sw(k),
-    repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null), groupOps: !picker,
+    repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null),
+    // групповые операции есть и у комплектовщика (как панель группового выделения V1); Ctrl + щелчок там только убирает из рамки (мост его не расширяет)
+    groupOps: true, ctrlAdds: !picker,
   });
   let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте (распределение комплектовщика)
   const openGroups = new Set(["status", "pk:elementType"]);
@@ -224,6 +228,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     mbp?.onScene(s);
     mfrStartView(s);
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
+    // «Показать на схеме» из отчёта «Моя работа» (locate-handoff.js): выделить изделие и навести кадр, когда схема загружена
+    if (!mfr && s.loaded) { const want = takeLocate(curObject); if (want) { send("select", { id: want }); send("locate", { id: want }); } }
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
     paintAll();
   }
@@ -572,14 +578,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }
     const key = `${sel.kind}:${sel.id}`;
     const d = detail.id === key ? detail.data : null;
-    const many = m.selectedBlocks.length > 1 ? `<p class="v2-muted">Выбрано блоков: ${m.selectedBlocks.length}. Ниже — сведения о последнем выбранном.</p>` : "";
+    const names = m.selectedBlocks.length > 1 ? (() => { const L = mbp?.labels?.() || {}; return m.selectedBlocks.map((id) => L[id] || `блок ${id}`).join(", "); })() : "";
+    const many = m.selectedBlocks.length > 1 ? `<p class="v2-muted">Выбрано блоков: ${m.selectedBlocks.length} — ${esc(names)}. «Состав работ» и «Сроки» применятся ко всем выбранным; ниже — сведения о последнем выбранном.</p>` : "";
     const actions = `<div class="ws-actions"><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>`;
     if (detail.id === key && detail.error) return `<div class="ws-pad"><h3 class="ws-h">${sel.kind === "block" ? "Блок" : "Элемент"}</h3><p class="v2-muted">${esc(detail.error)}</p>${actions}</div>`;
     if (!d) return `<div class="ws-pad"><h3 class="ws-h">${sel.kind === "block" ? "Блок" : "Элемент"}</h3><p class="v2-muted">Загрузка…</p>${actions}</div>`;
     if (sel.kind === "block") {
       const g = d["геометрия"] || {}, st = d["статусы_работ"] || {};
       const boxes = g.boxes || [];
-      const dim = g.ok && boxes.length ? `${Math.round(Math.max(...boxes.map((b) => b.x1)) - Math.min(...boxes.map((b) => b.x0)))}×${Math.round(Math.max(...boxes.map((b) => b.y1)) - Math.min(...boxes.map((b) => b.y0)))}×${Math.round(g.z1 - g.z0)} мм` : `недоступна: ${g.reason || "не определена"}`;
+      const dim = g.ok && boxes.length ? `${Math.round(Math.max(...boxes.map((b) => b.x1)) - Math.min(...boxes.map((b) => b.x0)))}×${Math.round(Math.max(...boxes.map((b) => b.y1)) - Math.min(...boxes.map((b) => b.y0)))}×${Math.round(g.z1 - g.z0)} мм${boxes.length > 1 ? ` (${boxes.length} прямоугольника, общий охват)` : ""}${g.approx_height ? " (высота приблизительно — соседний этаж не даёт точной)" : ""}` : `недоступна: ${g.reason || "не определена"}`;
       return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc([d["секция"], d["этаж"]].filter(Boolean).join(" · ") || "Блок")}</div><div class="ws-type">Блок модели</div></div>${many}${actions}
         <h4>Состав</h4><dl class="ws-dl">${row("Элементов модели", d["элементов"])}${row("Помещений", d["помещений"])}${row("Габарит", dim)}</dl>
         <h4>Виды работ</h4>${st["всего"] ? `<dl class="ws-dl">${row("План", st["план"])}${row("В работе", st["в_работе"])}${row("Выполнено", st["выполнено"])}${row("Всего", st["всего"])}</dl>` : `<p class="v2-muted">Видов работ, адресуемых на блок, не заведено.</p>`}
@@ -599,13 +606,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function mfrFiltersHtml() {
     if (!sc || !sc.loaded || !sc.mfr) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
     const m = sc.mfr;
-    const head = `<div class="ws-fhead"><span>Элементов: ${m.elements}</span><button type="button" class="v2-btn" data-act="reset-filters" ${m.filtersActive ? "" : "disabled"}>Сбросить все</button></div>`;
+    const head = `<div class="ws-fhead"><span>Элементов: ${m.elements}</span><button type="button" class="v2-btn" data-act="reset-filters" ${m.filtersActive || mbp?.anyActive?.() ? "" : "disabled"}>Сбросить все</button></div>`;
     const sec = (id, title, body, note) => `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${id}" aria-expanded="${!closedGroups.has(id)}"><span>${closedGroups.has(id) ? "▸" : "▾"} ${esc(title)}</span></button>${closedGroups.has(id) ? "" : `<div class="ws-fbody">${note ? `<p class="v2-muted ws-fnote">${esc(note)}</p>` : ""}${body}</div>`}</section>`;
     return head
       + sec("levels", "Этаж", m.levels.length ? pills(m.levels, "level") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все этажи.")
       + sec("sections", "Секция", m.sections.length ? pills(m.sections, "section") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все секции.")
       + sec("categories", "Категории элементов", m.categories.length
-        ? m.categories.map((c) => `<label class="ws-check"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""}> <span>${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
+        // цвет категории на плане — легенда V1 (revit-plan-legend); при выключенном слое «Элементы» категории недоступны (как V1)
+        ? (m.categories.some((c) => c.disabled) ? `<p class="v2-muted ws-fnote">Слой «Элементы» выключен (вкладка «Вид») — отбор категорий не действует.</p>` : "")
+          + m.categories.map((c) => `<label class="ws-check${c.disabled ? " ws-dim" : ""}"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""} ${c.disabled ? "disabled" : ""}> <span>${c.color ? `<i class="ws-sw" style="background:${esc(c.color)}"></i>` : ""}${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
+          + `<p class="v2-muted ws-fnote">Пунктиром на плане — габаритный контур.</p>`
         : `<p class="v2-muted">Нет данных</p>`)
       + (mbp ? mbp.filtersHtml() : "");
   }
@@ -626,7 +636,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
         const val = m.value === null ? "—" : nf(m.value);
         const sub = m.key === "contracted" && m.value !== null ? `модель: ${nf(m.base)} · ${m.value >= m.base ? "покрыто" : "дефицит " + nf(m.base - m.value)}` : m.share !== null && m.share !== undefined ? `${m.share}% среза` : "";
         const tag = m.clickable ? "button" : "div";
-        return `<${tag} ${m.clickable ? `type="button" data-pkm="${esc(m.key)}" aria-pressed="${m.on}"` : ""} class="ws-tile${m.on ? " on" : ""}" title="${esc(m.reason || m.hint || "")}" ${color ? `style="border-left-color:${esc(color)}"` : ""}><span class="ws-tile-t">${esc(m.title)}</span><b class="ws-tile-v">${esc(val)}</b><span class="ws-tile-s">${esc(m.value === null ? (m.reason || "") : sub)}</span></${tag}>`;
+        const tip = `${m.reason || m.hint || ""}${m.skippedNoMark ? `. Не учтено позиций без марки: ${m.skippedNoMark}` : ""}`;   // как подсказка плитки V1
+        return `<${tag} ${m.clickable ? `type="button" data-pkm="${esc(m.key)}" aria-pressed="${m.on}"` : ""} class="ws-tile${m.on ? " on" : ""}" title="${esc(tip)}" ${color ? `style="border-left-color:${esc(color)}"` : ""}><span class="ws-tile-t">${esc(m.title)}</span><b class="ws-tile-v">${esc(val)}</b><span class="ws-tile-s">${esc(m.value === null ? (m.reason || "") : sub)}</span></${tag}>`;
       }).join("")}</div></div>`;
   }
   function contractsHtml() { return panels.contractsHtml(); }
@@ -648,7 +659,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const a = b.dataset.act;
       if (a === "clear-all") send("clearSelection");
       else if (a === "locate" && sc?.selected) send("locate", { id: sc.selected.id });
-      else if (a === "reset-filters") send("resetFilters");
+      else if (a === "reset-filters") { if (mfr) mbp?.resetAll?.(); send("resetFilters"); }
     }));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
     body.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => send("setView", { mode: b.dataset.view })));
@@ -760,7 +771,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const m = sc.mfr;
       const n = m.selectedBlocks?.length || 0;
       const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
-      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${mfrStatusExtra()}${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${m.status && !/^Показано \d+ элементов$/.test(m.status) ? `<span class="ws-notice" title="${esc(m.status)}">${esc(m.status)}</span>` : ""}${mfrStatusExtra()}${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
       return;
     }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";

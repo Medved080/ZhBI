@@ -153,7 +153,9 @@
     const hasData = !!st.data && st.objectId === state.objectId;
     const cats = Array.from(document.querySelectorAll("#mfr-elements-categories input[data-mfr-category]")).map((cb) => {
       const sp = cb.parentElement.querySelector("span");
-      return { category: cb.dataset.mfrCategory, label: cb.dataset.mfrCategory || "(без категории)", count: sp ? num(sp.textContent) : 0, on: cb.checked };
+      // disabled — «Элементы» выключены (V1 syncMfrElementCategoriesDisabled); color — цвет категории на плане (легенда V1 revit-plan-legend)
+      const color = typeof revitFill === "function" ? revitFill(cb.dataset.mfrCategory) : null;
+      return { category: cb.dataset.mfrCategory, label: cb.dataset.mfrCategory || "(без категории)", count: sp ? num(sp.textContent) : 0, on: cb.checked, disabled: cb.disabled, color: /^#[0-9a-fA-F]{3,8}$|^rgb|^hsl/.test(String(color || "")) ? String(color) : null };
     });
     const layers = Object.entries(MFR_LAYERS).map(([key, id]) => {
       const cb = byId(id);
@@ -543,7 +545,10 @@
       if (!isInt(a.id)) throw new Error("id");
       const el = state.byId.get(a.id);
       if (!el) throw new Error("элемента нет на схеме");
+      // как locateElementOnPlan в V1: жёлтая обводка поверх выделения и предупреждение, если изделие скрыто фильтром
+      if (typeof markLocated === "function") markLocated(el.id);
       if (state.view3d.active) focus3DOnElement(el); else focus2DOnElement(el);
+      if (typeof passesPlacementFilters === "function" && !passesPlacementFilters(el)) showToast("Изделие скрыто текущим фильтром рабочей области", "warning");
     },
     clearSelection() { clearSelection(); clearMultiSelection(); scheduleState(); },
     setFilter(a) {

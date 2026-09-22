@@ -193,6 +193,13 @@ export function mountProjectCardEdit(el, { screen, structure, objectId, api, gro
 // ======================= События, задачи, вопросы (редакции) =======================
 const NOTE_FIELDS = [["key_events", "Ключевые события (по одному в строке)"], ["key_tasks", "Ключевые задачи (по одной в строке)"], ["open_questions", "Открытые вопросы (по одному в строке)"]];
 
+// Подстановка отчётной даты из «Динамики» (одноразовая, только для своего объекта)
+function takeNotesPrefill(objectId) {
+  let r = null;
+  try { r = JSON.parse(sessionStorage.getItem("v2.notesPrefill") || "null"); sessionStorage.removeItem("v2.notesPrefill"); } catch (e) { r = null; }
+  return r && r.objectId === objectId && /^\d{4}-\d{2}-\d{2}$/.test(r.date || "") ? r.date : null;
+}
+
 export function mountReportNotesEdit(el, { screen, structure, objectId, api, groupTitle, rights }) {
   const spec = screen.notes;
   const canWrite = !!rights?.system_admin || rights?.features?.[spec.feature] === "write";
@@ -203,12 +210,11 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
   let dead = false;
   // revisions — последнее подтверждённое чтение; sel — дата открытой редакции (null — новая); draft — форма.
   // Как в V1: новая редакция — на сегодняшнюю дату; при открытии экрана выбрана самая свежая редакция (с ней работают чаще всего);
-  // дата, переданная отчётом «Динамика» (одноразовый ключ sessionStorage «v2.reportNotes.date»), открывает её редакцию или
-  // новую на эту дату (V1: кнопка правки заметок в отчёте, openReportNotes(дата отчёта)).
+  // дата, переданная кнопкой «✎ Изменить» отчёта «Динамика» (reports-work.js, одноразовый ключ sessionStorage «v2.notesPrefill»,
+  // только для своего объекта — takeNotesPrefill), открывает её редакцию или новую на эту дату (V1: openReportNotes(дата отчёта)).
   const todayIso = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
   const emptyDraft = (date) => ({ date, events: "", tasks: "", questions: "" });
-  let prefill = null;
-  try { prefill = sessionStorage.getItem("v2.reportNotes.date"); sessionStorage.removeItem("v2.reportNotes.date"); } catch (e) { /* хранилище недоступно */ }
+  let prefill = takeNotesPrefill(objectId);
   if (!isRealDate(prefill)) prefill = null;
   const st = { revisions: null, sel: null, newDate: prefill || todayIso(), draft: emptyDraft(prefill || todayIso()), busy: false, error: "", seq: 0, first: true };
   const rev = (date) => st.revisions?.find((r) => r.effective_date === date);

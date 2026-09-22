@@ -7,7 +7,7 @@
 import { ApiError } from "./api.js";
 import { STATUS_LABEL } from "./registry.js";
 import { esc, linkList } from "./screen-view.js";
-import { REPORT_RENDERERS, bindReport, colDataType } from "./reports.js";
+import { REPORT_RENDERERS, REPORT_INIT, bindReport, colDataType } from "./reports.js";
 import { mountBlockWorkForm } from "./block-work-form.js";
 import { printHtml } from "./print.js";
 import { showInfoDialog } from "./dialogs.js";
@@ -132,7 +132,7 @@ function errorText(err) {
   return String(err?.message || err);
 }
 
-export function mountReadScreen(el, { screen, structure, objectId, api, groupTitle, rights }) {
+export function mountReadScreen(el, { screen, structure, objectId, api, groupTitle, rights, go, switchObject, hasObject }) {
   el.className = "v2-page";
   const sections = screen.read.sections;
   let dead = false;
@@ -173,6 +173,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       st[i].params[c.param] = st[i].groups[c.param].filter((g) => g.on).map((g) => g.key);
     }
   }));
+  // Параметры, которые отчёт выбирает ДО первого запроса (сохранённая группировка «Графика работ по блокам» — reports-work.js)
+  sections.forEach((sec, i) => { if (sec.kind === "report") REPORT_INIT[sec.report]?.(st[i].params); });
 
   // Табличные экраны (отчёты, справочники, реестры, журналы) занимают всю доступную ширину рабочей области —
   // карточка записи («record») и инструкция («guide») читаются лучше при ограниченной ширине формы, как обычные
@@ -496,7 +498,10 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
 
   function paintReport(sec, s, bodyEl) {
     const render = REPORT_RENDERERS[sec.report];
-    const ctx = { api, objectId, canWrite: canWriteReport(sec), data: s.data };
+    // ctx отчёта: правка ячейки, перезапрос с новыми параметрами (setParams), переходы к другим экранам и смена объекта (аудит рабочих мест)
+    const ctx = { api, objectId, canWrite: canWriteReport(sec), data: s.data, rights, go, switchObject, hasObject,
+      canNotes: !!rights?.system_admin || rights?.features?.report_notes === "write",
+      setParams: (p) => { Object.assign(s.params, p); load(active); } };
     // Печать доступна у отчёта по умолчанию (перенос кнопки «Печать» V1) — секция может явно отключить (`printable: false`),
     // если для нужд её вёрстки печать ещё не проверена (mfr2, exchange2, 2026-09-22).
     const printBtn = sec.printable === false ? "" : `<button type="button" class="v2-btn" id="rd-print">Печать</button>`;
