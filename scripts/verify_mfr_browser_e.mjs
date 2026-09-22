@@ -16,9 +16,16 @@ for (const user of ["user2", "user4"]) {
   console.log(`\n== ${user} ==`);
   const b = await session({ base: BASE, user, objectId: 4, shots: SHOTS });
   try {
-    const nav = await b.eval(`[...document.querySelectorAll('.v2-nav [data-section]')].map(x=>x.dataset.section)`);
-    c.ok(nav.includes("blocks") && nav.includes("fact-journal") && nav.includes("ws-mfr"), `${user}: учёт по блокам, журнал факта и рабочее место МФР доступны для просмотра`);
+    // Оболочка V2 (shell, 2026-09-22): пункты СВЁРНУТОЙ группы не рендерятся в DOM вовсе (не просто скрыты CSS) —
+    // сначала открываем временную панель и разворачиваем ВСЕ группы кликом по заголовку, только потом читаем список.
+    await tap(b, "#v2-shellnav-search-btn");
+    await sleep(200);
+    await b.eval(`[...document.querySelectorAll('.v2-shellnav-group-head[aria-expanded="false"]')].forEach(btn => btn.click())`);
+    await sleep(200);
+    const nav = await b.eval(`[...document.querySelectorAll('.v2-shellnav-item[data-section]')].map(x=>x.dataset.section)`);
+    c.ok(nav.includes("blocks") && nav.includes("fact-journal") && nav.includes("ws-mfr"), `${user}: учёт по блокам, журнал факта и рабочее место МФР доступны для просмотра (все группы развёрнуты) — ${JSON.stringify(nav)}`);
     c.ok(!nav.includes("chess-flat"), `${user}: «Плоская шахматка» (ввод факта) в навигации скрыта — как в V1 (нужно право на изменение)`);
+    await b.key("Escape"); await sleep(150);
     await openScreen(b, "blocks", `document.querySelectorAll('.mfr-blk').length>5`);
     c.ok((await txt(b, "#bs-cap")).includes("только просмотр"), `${user}: подпись «только просмотр»`);
     const blk = one("SELECT b.id FROM blocks b WHERE b.object_id=4 AND (SELECT COUNT(*) FROM block_works w WHERE w.block_id=b.id AND w.retired_at IS NULL)>=1 ORDER BY b.id LIMIT 1");
