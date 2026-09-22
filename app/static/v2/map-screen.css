@@ -1,0 +1,63 @@
+/* Экран «Карта проектов» (V2, 2026-09-22) — своя разметка ВОКРУГ готового модуля V1 (app/static/map.js),
+   свои классы, чужой styles.css не трогаем (в нём параллельно работает задание «charts» над таблицами).
+   Раскладка (ws-top/ws-main/ws-stage/ws-panel/ws-resize/ws-status) — общие классы рабочих мест из styles.css,
+   ничего нового не добавляют; здесь — только то, чего там ещё нет: сама карта и всплывашка map.js. */
+
+/* MapLibre создаёт СВОЙ div внутри переданного контейнера (.maplibregl-map) и по умолчанию не тянется на
+   всю высоту — тот же приём, что у V1 (.map-canvas .maplibregl-map), только контейнер здесь — общий .ws-stage. */
+.ws-stage > .maplibregl-map { position: absolute; inset: 0; }
+
+/* ---- боковой список: группы по проекту, строка объекта с двумя кружками (стадия + доля), как в V1 ---- */
+.mp-side-empty { padding: 14px; color: var(--muted); font-size: 13px; }
+.mp-proj { padding: 10px 12px 2px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--muted); }
+.mp-side-item {
+  display: flex; align-items: flex-start; gap: 6px; width: 100%; text-align: left;
+  border: 0; border-radius: 7px; background: none; padding: 6px 10px; font-size: 13px;
+}
+.mp-side-item:hover { background: var(--surface); }
+.mp-side-item[aria-current="true"] { background: var(--sel); }
+.mp-side-item .v2-status-dot { margin-top: 4px; }
+.mp-side-pct-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+.mp-side-name { flex: 1 1 auto; white-space: normal; word-break: break-word; }
+.mp-side-addr { display: block; color: var(--muted); font-size: 11px; }
+.mp-side-pct { flex: 0 0 auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* ---- «без координат»: отдельный подраздел под основным списком, а не молчаливый пропуск ---- */
+.mp-nocoords { border-top: 1px solid var(--line); margin-top: 4px; }
+.mp-nocoords summary { padding: 8px 12px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.mp-nocoords ul { list-style: none; margin: 0; padding: 0 12px 10px; }
+.mp-nocoords li { padding: 3px 0; font-size: 12px; }
+.mp-nocoords li span { color: var(--muted); }
+
+/* ---- легенда: плавающая плашка над картой, тем же языком, что ws-tools (styles.css) ---- */
+.mp-legend {
+  position: absolute; right: 10px; bottom: 10px; z-index: 3; max-width: 230px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font-size: 11px; color: var(--muted);
+  box-shadow: 0 1px 4px rgb(0 0 0 / .12);
+}
+.mp-legend-title { font-weight: 600; color: var(--ink); margin: 4px 0 2px; }
+.mp-legend-title:first-child { margin-top: 0; }
+.mp-legend-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.mp-legend-swatch { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgb(0 0 0 / .2); }
+
+/* ---- содержимое всплывашки, которую строит сам map.js (классы .map-popup* заданы там, разметка чужая,
+   но стилей под неё в V2 не было вовсе — без этого карточка объекта была бы куском неформатированного текста) ---- */
+.maplibregl-popup-content { font: 13px/1.4 inherit; color: var(--ink); background: var(--bg); }
+.map-popup { min-width: 200px; }
+.map-popup-avatar { display: block; width: 100%; max-height: 150px; object-fit: cover; border-radius: 6px; margin-bottom: 6px; }
+.map-popup-project { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+.map-popup-name { font-weight: 700; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.map-popup-name .status-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.map-popup-status { font-size: 11px; font-weight: 400; color: var(--muted); }
+.map-popup-desc { font-size: 12px; margin-bottom: 6px; white-space: pre-wrap; }
+.map-popup-facts { font-size: 12px; margin-bottom: 8px; }
+.map-popup .btn { padding: 6px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); font-size: 13px; cursor: pointer; }
+.map-popup .btn:hover { background: var(--surface); }
+.map-popup .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.map-popup .hint-text { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+@media (max-width: 760px) {
+  .mp-legend { max-width: 170px; font-size: 10px; }
+}

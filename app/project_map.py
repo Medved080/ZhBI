@@ -275,7 +275,7 @@ def map_objects(user: sqlite3.Row = Depends(require_service_feature("map", "read
             params,
         ).fetchall()
 
-        объекты, без_координат = [], 0
+        объекты, без_координат, без_координат_список = [], 0, []
         for r in строки:
             lat, lon = r["lat"], r["lon"]
             # Объект без своих координат наследует их у проекта: у площадки из
@@ -287,6 +287,15 @@ def map_objects(user: sqlite3.Row = Depends(require_service_feature("map", "read
                 унаследованы = lat is not None and lon is not None
             if lat is None or lon is None:
                 без_координат += 1
+                # Имена, а не только счётчик (задание V2 «map», 2026-09-22):
+                # список выводится рядом с картой отдельной подсказкой — без
+                # него понять, КАКОЙ объект пропущен, можно было только
+                # перебором всего справочника. Поле добавлено к ответу, а не
+                # заменяет старое: V1 (app/static/app.js) читает только число
+                # и менять его ради этого незачем.
+                без_координат_список.append({
+                    "id": r["id"], "name": r["name"], "project_name": r["project_name"],
+                })
                 continue
             элементов = r["elements"] or 0
             смонтировано = r["mounted"] or 0
@@ -308,6 +317,7 @@ def map_objects(user: sqlite3.Row = Depends(require_service_feature("map", "read
                 "percent": round(смонтировано * 100.0 / элементов) if элементов else None,
                 "smr_start": r["smr_start"], "smr_end": r["smr_end"],
             })
-        return {"objects": объекты, "without_coords": без_координат}
+        return {"objects": объекты, "without_coords": без_координат,
+                "without_coords_list": без_координат_список}
     finally:
         conn.close()

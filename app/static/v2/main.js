@@ -38,6 +38,7 @@ import { mountAccessView } from "./access-view.js";
 import { hasAdminScreen, mountAdminScreen } from "./admin-screens.js";
 import { startStatusLog } from "./statuslog.js";
 import { mountShapeEdit } from "./shape-edit.js";
+import { mountMapScreen } from "./map-screen.js";
 import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen } from "./write-gate.js";
 import { createShellPrefsStore } from "./shell-prefs.js";
 import { mountShellNav } from "./shell-nav.js";
@@ -482,7 +483,10 @@ async function renderShell(user, permissions) {
       // Оформление раздела не должно зависеть от порядка посещения: классы,
       // которые раздел мог повесить на общий контейнер, сбрасываются здесь.
       content.className = "v2-page";
-      root.classList.toggle("v2-ws-mode", !!target && target.impl === "workspace");
+      // Карта — тоже полноэкранная площадка со своей верхней строкой (ws-top), той же компактной шапке
+      // сервиса, что и у рабочих мест: иначе на 1366×768 верхняя строка карты и шапка сервиса вместе не
+      // оставляли бы карте достаточно высоты без прокрутки всей страницы.
+      root.classList.toggle("v2-ws-mode", !!target && (target.impl === "workspace" || target.impl === "map-screen"));
       currentKey = key;
       switchCtx.ws = target?.ws && target.impl === "workspace" ? target.ws : null;
       const wanted = key === "home" ? "#/" : `#/${key}`;
@@ -636,6 +640,14 @@ async function renderShell(user, permissions) {
         // График СМР: версии, исходные данные расчёта, расчёт с предпросмотром, диаграмма Ганта
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSchedule(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
+      } else if (target.impl === "map-screen") {
+        // Карта проектов: настоящая интерактивная карта (map-screen.js — своя раскладка вокруг общего
+        // с V1 модуля app/static/map.js). Переход по клику на объект — той же функцией changeObject, что
+        // и у кнопки выбора объекта в шапке; после неё go() переводит на рабочее место этого объекта.
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountMapScreen(content, {
+          screen: target, objectId, api, go: (k) => openSection(k), switchObject: changeObject,
+        });
       } else if (MFR_SCREENS[target.impl]) {
         document.title = `${target.title} — ЖБИ`;
         const mountMfr = await MFR_SCREENS[target.impl]();
