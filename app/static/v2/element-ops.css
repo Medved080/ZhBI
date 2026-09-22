@@ -36,6 +36,8 @@
 .eo-sumrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; }
 .eo-sumrow > .v2-muted { flex: none; min-width: 66px; }
 .eo-sumchip { padding: 0 8px; font-size: 12px; }
+.eo-attach { margin-bottom: 4px; }
+.eo-rowc { padding: 2px 8px; font-size: 12px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eo-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin: 10px 14px 0; padding: 7px 9px; border-left: 3px solid var(--accent); background: var(--surface); font-size: 13px; }
 .eo-banner span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .eo-banner-ok { border-left-color: var(--good); color: var(--good); }

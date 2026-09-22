@@ -1,11 +1,14 @@
 // Операции над изделиями на схеме (модель ЖБИ, АРМ прораба): карточка выбранного изделия и панель группового выделения.
 //
 // Что здесь: смена статуса (одного и пачки, с предпросмотром последствий), плановая дата (одного и пачки), контракт изделия, комментарий,
-// правка и удаление записей истории статусов, форма реквизитов. Кадр со схемой по-прежнему только читает; ВСЕ записи идут отсюда через
-// `api.js` и шлюз записи (`write-gate.js`). Правила и тексты последствий — `element-ops-rules.js`; серверные маршруты — `app/element_ops.py`.
+// правка и удаление записей истории статусов, форма реквизитов, вложения изделия. Построчные групповые режимы (своя дата и свой контракт
+// у каждой строки пачки, перенос из V1) — ниже, в разделе «ГРУППОВОЕ ВЫДЕЛЕНИЕ: построчные режимы». Кадр со схемой по-прежнему только
+// читает; ВСЕ записи идут отсюда через `api.js` и шлюз записи (`write-gate.js`). Правила и тексты последствий — `element-ops-rules.js`;
+// серверные маршруты — `app/element_ops.py` (одно значение на все выбранные) и `app/element_rows.py` (своё значение на строку).
 //
 // Принципы. (1) Клиент не присылает «контракты для записи»: в запросе только ожидаемое состояние изделия (статус, контракт) — расхождение
-// с сервером даёт 409 без изменений, а не молчаливую перезапись. (2) Последствия, которые решают бизнес-правила (возврат на «Запланирован»
+// с сервером даёт 409 без изменений, а не молчаливую перезапись; в построчных режимах контракт СТРОКИ указывается явно (число или «без
+// контракта»), но тоже сверяется с прежним состоянием. (2) Последствия, которые решают бизнес-правила (возврат на «Запланирован»
 // снимает контракт и фактическую дату поставки), сервер отдаёт ДО записи (режим предпросмотра), интерфейс показывает их и просит подтверждение.
 // (3) Повторная отправка при запросе в полёте невозможна; при обрыве связи исход неизвестен: автоповтора нет, состояние сверяется чтением.
 // (4) После записи схема, карточка и показатели обновляются по ответу сервера (`applyElements`) и перечитыванием.
@@ -13,7 +16,8 @@ import { esc } from "./screen-view.js";
 import { ApiError } from "./api.js";
 import { showConfirmDialog, showInfoDialog, showUnsavedDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
-import { MAX_BATCH, consequenceLines, consequenceItems, needsConfirm, conflictText, classifyState, verdictText } from "./element-ops-rules.js";
+import { MAX_BATCH, consequenceLines, consequenceItems, needsConfirm, conflictText, classifyState, verdictText, rowsConsequenceItems, datesConsequenceLines } from "./element-ops-rules.js";
+import { attachState, attachmentsHtml, loadAttachments, bindAttachments } from "./element-attachments.js";
 
 // стили модуля — отдельным файлом (не трогаем общий styles.css)
 (() => {
@@ -78,19 +82,20 @@ export function createElementOps(ctx) {
   const sw = (k) => statusColor(k);
 
   // ------------------------------------------------------------ права (по объекту, как в V1: раздел + порог «запись»)
-  const R = { loaded: false, status: false, plannedDate: false, comment: false, history: false, fields: false };
+  const R = { loaded: false, status: false, plannedDate: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false };
   function setRights(r) {
     const can = (k) => !!r && (!!r.system_admin || (r.features?.[k] === "write" && !(r.not_applicable || []).includes(k)));
-    Object.assign(R, { loaded: true, status: can("status"), plannedDate: can("planned_date"), comment: can("comment"), history: can("history"), fields: can("element_fields") });
+    Object.assign(R, { loaded: true, status: can("status"), plannedDate: can("planned_date"), comment: can("comment"), history: can("history"), fields: can("element_fields"),
+      attachments: can("attachments"), attachmentsDelete: can("attachments_delete") });
     repaint();
   }
-  function rightsFailed() { Object.assign(R, { loaded: true, status: false, plannedDate: false, comment: false, history: false, fields: false }); repaint(); }
+  function rightsFailed() { Object.assign(R, { loaded: true, status: false, plannedDate: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false }); repaint(); }
 
   // ------------------------------------------------------------ состояние форм (по изделию: переключение выбора не теряет ввод)
   const forms = new Map();
   const F = (id) => { if (!forms.has(id)) forms.set(id, { st: { status: "", at: "", comment: "", contractId: null, contractLabel: "", busy: false, error: "", done: "", warn: "" },
     pd: { open: false, date: "", busy: false, error: "", done: "" }, cm: { open: false, text: "", busy: false, error: "", done: "" }, ct: { busy: false, error: "", done: "" },
-    hs: { busy: false, error: "", done: "" }, ef: { done: "" } }); return forms.get(id); };
+    hs: { busy: false, error: "", done: "" }, ef: { done: "" }, at: attachState() }); return forms.get(id); };
   // Итог групповой операции показывается вверху панели и переживает перечитывание схемы (оно снимает выделение вместе с формой)
   const banner = { kind: "", text: "" };
   const setBanner = (kind, text) => { banner.kind = kind; banner.text = text; };
@@ -211,6 +216,7 @@ export function createElementOps(ctx) {
       <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР", fmtDate(e.project_smr_start_date))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР", fmtDate(e.project_delivery_date))}</dl>
       ${plannedHtml(e, f)}
       <h4>Комментарий</h4>${commentHtml(e, f)}
+      <h4>Вложения</h4>${attachmentsHtml(f.at, { canUpload: R.attachments, canDelete: R.attachmentsDelete })}
       <h4>История статусов</h4>${detailError ? `<p class="v2-muted">${esc(detailError)}</p>` : !detail ? `<p class="v2-muted">Загрузка…</p>` : hist.length ? `<ul class="ws-hist eo-hist">${histRows}</ul>` : `<p class="v2-muted">Изменений статуса нет.</p>`}
       ${f.hs.error ? `<p class="ws-err" role="alert">${esc(f.hs.error)}</p>` : ""}${f.hs.done ? `<p class="ws-ok" role="status">${esc(f.hs.done)}</p>` : ""}
       ${statusFormHtml(e, f)}</div>`;
@@ -558,7 +564,10 @@ export function createElementOps(ctx) {
     if (!R.status && !R.plannedDate) return `<div class="ws-pad">${head}<p class="v2-muted ws-ro">Групповые изменения недоступны: нет права изменять статусы и плановые даты на этом объекте.</p></div>`;
     if (!items) return `<div class="ws-pad">${head}<p class="ws-err" role="alert">Выбрано больше 3000 изделий — групповые операции недоступны. Уменьшите выбор.</p></div>`;
     if (items.length > MAX_BATCH) return `<div class="ws-pad">${head}<p class="ws-err" role="alert">Групповая операция принимает не больше ${nf(MAX_BATCH)} изделий за раз (выбрано ${nf(items.length)}). Уменьшите выбор.</p></div>`;
-    return `<div class="ws-pad">${head}${R.status ? groupStatusHtml(items) : ""}${R.plannedDate ? groupPlannedHtml(items) : ""}</div>`;
+    return `<div class="ws-pad">${head}${R.status ? groupStatusHtml(items) : ""}
+      ${R.status ? `<p class="ws-actions"><button type="button" class="v2-btn" data-eo="rows-status">По строкам: статус со своим контрактом у каждого изделия…</button></p>` : ""}
+      ${R.plannedDate ? groupPlannedHtml(items) : ""}
+      ${R.plannedDate ? `<p class="ws-actions"><button type="button" class="v2-btn" data-eo="rows-planned">По строкам: своя дата у каждого изделия…</button></p>` : ""}</div>`;
   }
   const sigOf = (items, extra) => items.map((i) => `${i.id}:${i.current_status}:${i.contract_id ?? ""}`).join(",") + "|" + extra;
 
@@ -714,11 +723,199 @@ export function createElementOps(ctx) {
     } finally { p.busy = false; if (!isDead()) repaint(); }
   }
 
+  // ================================================================ ГРУППОВОЕ ВЫДЕЛЕНИЕ: построчные режимы (перенос V1: таблица «изделие → значение»)
+  // Своя плановая дата и свой контракт у КАЖДОЙ строки — в отличие от групповых режимов выше (одно значение на всю пачку). Модальные окна со
+  // своим локальным состоянием (не переживают закрытие — так же, как формы bulk-status-backdrop/bulk-planned-date-backdrop в V1); серверные
+  // маршруты — `POST /element-ops/planned-date-rows` и `POST /element-ops/status-rows` (`app/element_rows.py`): та же схема безопасности
+  // (ожидаемое состояние строки, предпросмотр последствий, подтверждение, откат целиком, повтор идемпотентен), что и у пачки с одним значением.
+  async function openPlannedRowsModal() {
+    const s = sc();
+    if (!R.plannedDate || !s?.multiItems) return;
+    const objectId = s.objectId ?? getObjectId();
+    const rows = s.multiItems.map((i) => ({ id: i.id, mark: i.mark, type: i.element_type, expected: i.planned_delivery_date ?? null, value: i.planned_delivery_date || "" }));
+    const st = { busy: false, error: "", prev: null, fillDate: "" };
+    const changedRows = () => rows.filter((r) => (r.value || null) !== r.expected);
+    const payload = () => changedRows().map((r) => ({ element_id: r.id, expected_planned_date: r.expected, planned_date: r.value || null }));
+    const res = await openModal({ title: `Плановая дата поставки по строкам (${rows.length})`, width: 640, mount(body, m) {
+      function draw() {
+        const changed = changedRows();
+        body.innerHTML = `<p class="v2-muted eo-hint">У каждой строки своя дата (пусто — снять). Прежняя дата сверяется с сервером: если её успел изменить кто-то другой, пачка не применится.</p>
+          <div class="v2-inline" style="margin-bottom:8px"><input type="date" id="eor-fill" value="${esc(st.fillDate)}" ${st.busy ? "disabled" : ""}>
+            <button type="button" class="v2-btn" data-eor="fill" ${st.busy ? "disabled" : ""}>Заполнить пустые</button></div>
+          <div class="v2-read-table eo-clist" style="max-height:44vh"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Тип</th><th>Дата</th></tr></thead><tbody>
+            ${rows.map((r) => `<tr><td>${esc(r.mark || "—")}</td><td>${esc(r.type)}</td><td><input type="date" class="eor-date" data-id="${r.id}" value="${esc(r.value)}" ${st.busy ? "disabled" : ""}></td></tr>`).join("")}
+          </tbody></table></div>
+          <p class="v2-muted">Будет изменено: ${nf(changed.length)} из ${nf(rows.length)}.</p>
+          ${st.prevHtml || ""}
+          ${st.error ? `<p class="ws-err" role="alert">${esc(st.error)}</p>` : ""}
+          <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-cancel>Отмена</button>
+            <button type="button" class="v2-btn v2-primary" data-eor="preview" ${st.busy || !changed.length ? "disabled" : ""}>${st.busy ? "…" : st.prev ? "Обновить предпросмотр" : "Проверить последствия"}</button>
+            ${st.prev ? `<button type="button" class="v2-btn v2-primary" data-eor="apply" ${st.busy ? "disabled" : ""}>Применить</button>` : ""}</div>`;
+        body.querySelectorAll(".eor-date").forEach((inp) => inp.addEventListener("input", (ev) => { const r = rows.find((x) => x.id === Number(ev.target.dataset.id)); r.value = ev.target.value; st.prev = null; draw(); }));
+        body.querySelector("#eor-fill")?.addEventListener("input", (ev) => { st.fillDate = ev.target.value; });
+        body.querySelector('[data-eor="fill"]')?.addEventListener("click", () => { if (!st.fillDate) return; for (const r of rows) if (!r.value) r.value = st.fillDate; st.prev = null; draw(); });
+        body.querySelector("[data-cancel]").addEventListener("click", () => { if (!st.busy) m.close(undefined); });
+        body.querySelector('[data-eor="preview"]')?.addEventListener("click", () => doPreview());
+        body.querySelector('[data-eor="apply"]')?.addEventListener("click", () => doApply());
+      }
+      async function doPreview() {
+        st.busy = true; st.error = ""; draw();
+        try {
+          const resp = await api.post("/element-ops/planned-date-rows", { mode: "preview", object_id: objectId, items: payload() });
+          if (resp.already_applied) { m.close({ banner: { level: "ok", text: `Уже выполнено: у ${nf(resp.already.length)} изд. эти даты уже стоят — повторная запись не нужна.` }, applied: resp.already }); return; }
+          st.prev = resp;
+          const lines = datesConsequenceLines(resp.consequences);
+          st.prevHtml = `<div class="eo-preview" role="status"><b>Предпросмотр (ничего не записано)</b>${lines.length ? `<ul class="eo-cons">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : `<p class="v2-muted">Даты будут изменены как показано.</p>`}</div>`;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) { m.close({ banner: { level: "err", text: `${errText(err, "Состояние изменилось")} Ничего не изменено. Схема обновлена — выберите изделия заново.` }, needReload: true }); return; }
+          st.error = errText(err, "Не удалось получить последствия");
+        } finally { st.busy = false; draw(); }
+      }
+      async function doApply() {
+        if (!st.prev) return;
+        const c = st.prev.consequences, lines = datesConsequenceLines(c);
+        const msg = [`Изменить плановую дату у ${nf(changedRows().length)} изд.?`, "", ...(lines.length ? lines.map((l) => "• " + l) : ["• Даты будут изменены как показано."]), "",
+          "Пачка применяется целиком либо не применяется."].join("\n");
+        const ok = await showConfirmDialog(msg, { confirmLabel: "Применить", multiline: true });
+        if (!ok) return;
+        st.busy = true; st.error = ""; draw();
+        const items = payload();
+        try {
+          const resp = await api.post("/element-ops/planned-date-rows", { mode: "apply", object_id: objectId, items, expect: c });
+          m.close({ banner: { level: "ok", text: resp.already_applied ? `Уже выполнено: ${nf(resp.already.length)} изд.` : `Плановая дата изменена у ${nf(resp.applied.length)} изд. (по ответу сервера).` },
+            applied: [...(resp.applied || []), ...(resp.already || [])] });
+        } catch (err) {
+          if (unknownOutcome(err)) {
+            try {
+              const v = await verify(items.map((it) => ({ id: it.element_id, matches: (x) => (x.planned_delivery_date ?? null) === (it.planned_date ?? null), untouched: (x) => (x.planned_delivery_date ?? null) === (it.expected_planned_date ?? null) })));
+              m.close({ banner: verdictText(v, "плановые даты по строкам"), needReload: true });
+            } catch (e2) { m.close({ banner: { level: "err", text: "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте даты." } }); }
+            return;
+          }
+          if (err instanceof ApiError && (err.status === 409 || err.status === 404)) { m.close({ banner: { level: "err", text: `${errText(err, "Последствия изменились")} Ничего не изменено. Схема обновлена — выберите изделия заново.` }, needReload: true }); return; }
+          st.error = errText(err, "Не удалось сохранить"); st.busy = false; draw();
+        }
+      }
+      draw();
+    } });
+    if (!res || isDead()) return;
+    if (res.applied) applyToScene(res.applied);
+    if (res.banner) setBanner(res.banner.level, res.banner.text);
+    if (res.needReload) send("reload");
+    repaint();
+  }
+
+  async function openStatusRowsModal() {
+    const s = sc();
+    if (!R.status || !s?.multiItems) return;
+    const all = s.multiItems;
+    const objectId = s.objectId ?? getObjectId();
+    const allOrder = sc()?.statusOrder || [];
+    const st = { status: "", rows: null, busy: false, error: "", prev: null, prevHtml: "" };
+    const res = await openModal({ title: `Смена статуса по строкам (${all.length})`, width: 760, mount(body, m) {
+      function itemsPayload() {
+        const toPlanned = st.status === "planned";
+        return st.rows.map((r) => ({ element_id: r.id, expected_status: r.curStatus, expected_contract_id: r.expectedContract, contract_id: toPlanned ? null : r.contractValue }));
+      }
+      function draw() {
+        const toPlanned = st.status === "planned";
+        const rows = st.rows || [];
+        const same = st.status ? all.length - rows.length : 0;
+        const unresolved = st.status && !toPlanned && rows.some((r) => !r.chosen);
+        body.innerHTML = `<label class="ws-fld">Новый статус <select id="eor-status" ${st.busy ? "disabled" : ""}>
+            <option value="">— выберите —</option>${allOrder.map((k) => `<option value="${esc(k)}" ${st.status === k ? "selected" : ""}>${esc(statusLabel(k))}</option>`).join("")}</select></label>
+          ${st.status ? `<p class="v2-muted">Изменится: ${nf(rows.length)} из ${nf(all.length)}${same ? `; уже «${esc(statusLabel(st.status))}»: ${nf(same)} (не изменятся)` : ""}.</p>` : ""}
+          ${toPlanned ? `<p class="v2-muted ws-fnote">Возврат в «Запланирован» СНИМАЕТ контракт у всех строк — выбор контракта недоступен.</p>` : ""}
+          ${st.status ? `<div class="v2-read-table eo-clist" style="max-height:40vh"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Тип</th><th>Было</th>${toPlanned ? "" : "<th>Контракт после</th>"}</tr></thead><tbody>
+            ${rows.map((r) => `<tr><td>${esc(r.mark || "—")}</td><td>${esc(r.type)}</td><td>${esc(statusLabel(r.curStatus))}</td>
+              ${toPlanned ? "" : `<td><button type="button" class="v2-btn eo-rowc" data-eor-c="${r.id}" ${st.busy ? "disabled" : ""}>${r.chosen ? esc(r.contractValue ? contractLabelById(r.contractValue) : "без контракта") : "— выбрать —"}</button></td>`}</tr>`).join("")}
+          </tbody></table></div>` : ""}
+          ${unresolved ? `<p class="v2-muted ws-fnote">У части строк не выбран контракт (обязательно для ухода с «Запланирован») — выберите «без контракта» или контракт явно.</p>` : ""}
+          ${st.prevHtml || ""}
+          ${st.error ? `<p class="ws-err" role="alert">${esc(st.error)}</p>` : ""}
+          <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-cancel>Отмена</button>
+            <button type="button" class="v2-btn v2-primary" data-eor="preview" ${st.busy || !st.status || !rows.length || unresolved ? "disabled" : ""}>${st.busy ? "…" : st.prev ? "Обновить предпросмотр" : "Проверить последствия"}</button>
+            ${st.prev ? `<button type="button" class="v2-btn v2-primary" data-eor="apply" ${st.busy ? "disabled" : ""}>Применить</button>` : ""}</div>`;
+        body.querySelector("#eor-status")?.addEventListener("change", (ev) => {
+          st.status = ev.target.value; st.prev = null; st.prevHtml = ""; st.error = "";
+          st.rows = st.status ? all.filter((i) => i.current_status !== st.status).map((i) => ({ id: i.id, mark: i.mark, type: i.element_type, curStatus: i.current_status,
+            expectedContract: i.contract_id ?? null, contractValue: i.contract_id ?? null, chosen: i.contract_id != null })) : null;
+          draw();
+        });
+        body.querySelectorAll("[data-eor-c]").forEach((b) => b.addEventListener("click", async () => {
+          const rid = Number(b.dataset.eorC); const r = st.rows.find((x) => x.id === rid);
+          const v = await pickContract({ element: { mark: r.mark, element_type: r.type }, currentId: r.contractValue, leading: [{ value: "none", label: "— без контракта —" }] });
+          if (v === undefined || isDead()) return;
+          r.contractValue = v === "none" ? null : v; r.chosen = true; st.prev = null; st.prevHtml = ""; draw();
+        }));
+        body.querySelector("[data-cancel]").addEventListener("click", () => { if (!st.busy) m.close(undefined); });
+        body.querySelector('[data-eor="preview"]')?.addEventListener("click", () => doPreview());
+        body.querySelector('[data-eor="apply"]')?.addEventListener("click", () => doApply());
+      }
+      async function doPreview() {
+        st.busy = true; st.error = ""; draw();
+        try {
+          const resp = await api.post("/element-ops/status-rows", { mode: "preview", object_id: objectId, status: st.status, items: itemsPayload() });
+          if (resp.already_applied) { m.close({ banner: { level: "ok", text: `Уже выполнено: ${nf(resp.already.length)} изд. — повторная запись не нужна.` }, applied: resp.already }); return; }
+          if (resp.problems?.length) { st.error = `Контракт не позволяет записать: ${resp.problems.map((p) => p.message).join(" ")}`; st.busy = false; draw(); return; }
+          st.prev = resp;
+          const lines = rowsConsequenceItems(resp.consequences, statusLabel(st.status));
+          st.prevHtml = `<div class="eo-preview" role="status"><b>Предпросмотр (ничего не записано)</b>${lines.length ? `<ul class="eo-cons">${lines.map((l) => `<li>${esc(l.text)}${l.sub?.length ? `<ul class="eo-cons-sub">${l.sub.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul>` : `<p class="v2-muted">Последствий сверх смены статуса нет.</p>`}</div>`;
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) { m.close({ banner: { level: "err", text: `${errText(err, "Состояние изменилось")} Ничего не изменено. Схема обновлена — выберите изделия заново.` }, needReload: true }); return; }
+          st.error = errText(err, "Не удалось получить последствия");
+        } finally { st.busy = false; draw(); }
+      }
+      async function doApply() {
+        if (!st.prev) return;
+        const c = st.prev.consequences, lines = rowsConsequenceItems(c, statusLabel(st.status));
+        const msg = [`Изменить статус у ${nf(st.rows.length)} изд. на «${statusLabel(st.status)}»?`, "", ...(lines.length ? lines.map((l) => "• " + l.text) : ["• Контракты — как показано построчно."]), "",
+          "Пачка применяется целиком либо не применяется."].join("\n");
+        const ok = await showConfirmDialog(msg, { confirmLabel: "Применить", multiline: true, danger: c.release_contracts > 0 });
+        if (!ok) return;
+        st.busy = true; st.error = ""; draw();
+        const status = st.status, items = itemsPayload();
+        try {
+          const resp = await api.post("/element-ops/status-rows", { mode: "apply", object_id: objectId, status, items,
+            expect: { release_contracts: c.release_contracts, replace_contracts: c.replace_contracts, without_contract: c.without_contract } });
+          m.close({ banner: { level: !resp.already_applied && resp.applied.length !== items.length ? "warn" : "ok",
+            text: resp.already_applied ? `Уже выполнено: ${nf(resp.already.length)} изд. — повторная запись не выполнялась.`
+              : `Статус «${statusLabel(status)}» установлен у ${nf(resp.applied.length)} изд. (по ответу сервера).` },
+            applied: [...(resp.applied || []), ...(resp.already || [])] });
+        } catch (err) {
+          if (unknownOutcome(err)) {
+            try {
+              const v = await verify(items.map((it) => ({ id: it.element_id,
+                matches: (x) => x.current_status === status && (x.contract_id ?? null) === (it.contract_id ?? null),
+                untouched: (x) => x.current_status === it.expected_status && (x.contract_id ?? null) === (it.expected_contract_id ?? null) })));
+              m.close({ banner: verdictText(v, `статус «${statusLabel(status)}» по строкам`), needReload: true });
+            } catch (e2) { m.close({ banner: { level: "err", text: "Ответ не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте статусы." } }); }
+            return;
+          }
+          if (err instanceof ApiError && (err.status === 409 || err.status === 404)) { m.close({ banner: { level: "err", text: `${errText(err, "Не удалось изменить статусы")} Ничего не изменено. Схема обновлена — выберите изделия заново.` }, needReload: true }); return; }
+          st.error = errText(err, "Не удалось изменить статусы"); st.busy = false; draw();
+        }
+      }
+      draw();
+    } });
+    if (!res || isDead()) return;
+    if (res.applied) applyToScene(res.applied);
+    if (res.banner) setBanner(res.banner.level, res.banner.text);
+    if (res.needReload) send("reload");
+    repaint();
+  }
+
   // ================================================================ привязка обработчиков
   function bind(body) {
     const s = sc();
     const id = s?.selected?.id;
     const on = (sel, ev, fn) => body.querySelectorAll(sel).forEach((n) => n.addEventListener(ev, fn));
+    // --- вложения (список читает любой, кому видна карточка; загрузка/удаление — по правам). Идемпотентно: st.loaded/st.loading гасят повтор.
+    if (id != null) {
+      const at = F(id).at;
+      if (!at.loaded && !at.loading) loadAttachments(api, at, id, repaint);
+      bindAttachments(body, api, at, id, { canDelete: R.attachmentsDelete }, repaint);
+    }
     // --- одно изделие
     const sf = body.querySelector("#ws-sform");
     if (sf && id != null) {
@@ -767,6 +964,8 @@ export function createElementOps(ctx) {
       gp.addEventListener("submit", (ev) => { ev.preventDefault(); groupPlanned(false); });
     }
     on('[data-eo="gpd-clear"]', "click", () => groupPlanned(true));
+    on('[data-eo="rows-status"]', "click", () => openStatusRowsModal());
+    on('[data-eo="rows-planned"]', "click", () => openPlannedRowsModal());
   }
 
   // Фокус и позиция курсора переживают перерисовку панели (движок присылает снимки часто)
