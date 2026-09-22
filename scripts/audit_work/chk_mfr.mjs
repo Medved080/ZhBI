@@ -98,6 +98,34 @@ try {
   await tap(b, `#ws-panel-body [data-act="reset-filters"]`); await sleep(3000);
   const after = await b.eval(`({ dyn: document.querySelector('[data-mbp-d="on"]')?.checked, levels: document.querySelectorAll('[data-mpick="level"][aria-pressed="true"]').length, sections: document.querySelectorAll('[data-mpick="section"][aria-pressed="true"]').length })`);
   check("«Сбросить все»: этажи и секции сняты, динамика факта выключена (как V1)", after.dyn === false && after.sections === 0, JSON.stringify(after) + ` (${st0})`);
+  // «Сроки»: таблица работ по строкам (V1 block-works-dates-table) — правка строки карточкой ЗР, таблица перечитана
+  await tap(b, `.ws-tabs [data-tab="props"]`); await sleep(800);
+  const pt = await b.eval(`(()=>{const f=document.querySelector('iframe.ws-frame'); const d=f.contentDocument; const fr=f.getBoundingClientRect(); const id=${one};
+    for (const e of d.querySelectorAll('rect[data-block-id="'+id+'"]')) { const r=e.getBoundingClientRect(); if (r.width<12||r.height<12) continue;
+      for (const [px,py] of [[.5,.5],[.3,.3],[.7,.7],[.3,.7],[.7,.3]]) { const x=r.x+r.width*px, y=r.y+r.height*py; const h=d.elementFromPoint(x,y); if (h && h.getAttribute && h.getAttribute('data-block-id')===String(id)) return {x:fr.x+x,y:fr.y+y}; } }
+    return null; })()`);
+  if (pt) {
+    await b.click(pt.x, pt.y); await sleep(1500);
+    await b.waitFor(`document.querySelector('#ws-panel-body [data-mbp="dates"]')`, 20000);
+    await tap(b, '#ws-panel-body [data-mbp="dates"]');
+    await b.waitFor(`document.querySelectorAll('.mfr-modal [data-bd-row]').length > 0`, 20000);
+    const nRows = await b.eval(`document.querySelectorAll('.mfr-modal [data-bd-row]').length`);
+    const nSql = sql1(S.db, `SELECT COUNT(*) FROM block_works WHERE block_id=${one} AND retired_at IS NULL`);
+    check("«Сроки»: таблица по строкам — все работы блока (= SQL)", nRows === nSql, `${nRows} / ${nSql}`);
+    const bw = Number(await b.eval(`document.querySelector('.mfr-modal [data-bd-row]').dataset.bdRow`));
+    await tap(b, `.mfr-modal [data-bd-row="${bw}"]`);
+    await b.waitFor(`document.querySelectorAll('.mfr-modal').length === 2 && document.querySelector('.mfr-modal:last-of-type input[data-f="plan_start"], .mfr-zr input[data-f="plan_start"]')`, 20000);
+    await b.eval(`(()=>{for (const [f,v] of [['plan_start','2026-10-01'],['plan_end','2026-10-15']]) { const i=document.querySelector('.mfr-zr input[data-f="'+f+'"]'); i.value=v; i.dispatchEvent(new Event('input',{bubbles:true})); }})()`);
+    await sleep(300);
+    await tap(b, '.mfr-zr [data-save="plan"]');
+    await b.waitFor(`/сохранено/.test(document.querySelector('.mfr-zr #bw-status')?.textContent || '')`, 20000);
+    check("строка «Изменить…» → карточка ЗР: базовый срок записан (SQL)", sql1(S.db, `SELECT plan_start || '..' || plan_end FROM block_works WHERE id=${bw}`) === "2026-10-01..2026-10-15");
+    await b.eval(`[...document.querySelectorAll('.mfr-modal')].at(-1).querySelector('[data-mclose]').click()`);
+    await sleep(1500);
+    const rowTxt = await b.eval(`document.querySelector('.mfr-modal [data-bd-row="${bw}"]')?.closest('tr')?.innerText || ''`);
+    check("после правки строка таблицы «Сроки» перечитана (01.10–15.10)", /01\.10–15\.10/.test(rowTxt), rowTxt.replace(/\s+/g, " "));
+    await b.eval(`document.querySelector('.mfr-modal [data-mclose]')?.click()`); await sleep(500);
+  } else check("«Сроки»: блок найден на плане для щелчка", false);
   check("исключений JavaScript нет", b.exceptions.length === 0, b.exceptions.join(" | ").slice(0, 300));
 } catch (e) {
   console.log("СБОЙ:", e.stack || e);
