@@ -13,6 +13,8 @@ import { mountReadScreen } from "./read-screen.js";
 
 const unknownOutcome = (e) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
 const fmtNum = (n) => Number(n || 0).toLocaleString("ru-RU");
+// Склонение числительного (как в app.js: 1 запись, 2 записи, 5 записей).
+const plural = (n, one, few, many) => { const с = Math.abs(n) % 100, е = с % 10; if (с > 10 && с < 20) return many; if (е > 1 && е < 5) return few; return е === 1 ? one : many; };
 const fmtSize = (b) => (b >= 1073741824 ? `${(b / 1073741824).toFixed(1)} ГБ` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} МБ` : b >= 1024 ? `${Math.round(b / 1024)} КБ` : `${b || 0} Б`);
 const can = (rights, key, kind) => !!rights?.system_admin || (kind === "read" ? ["read", "write"].includes(rights?.features?.[key]) : rights?.features?.[key] === "write");
 
@@ -361,9 +363,23 @@ export function mountActivity(el, ctx) {
   const { screen, groupTitle, api, rights } = ctx;
   const canClean = can(rights, "activity_log", "write") && checkWrite("POST", "/activity/cleanup", {}).allowed;
   el.className = "v2-page";
-  el.innerHTML = `<div id="ac-read"></div>${canClean ? `<div class="v2-container v2-screen" style="margin-top:0"><section class="v2-result" id="ac-clean"></section></div>` : ""}`;
+  el.innerHTML = `<div class="v2-container v2-screen" style="margin-bottom:0;padding-bottom:0"><p class="v2-muted" id="ac-stats" role="status" aria-live="polite">Считаю объём журнала…</p></div>
+    <div id="ac-read"></div>${canClean ? `<div class="v2-container v2-screen" style="margin-top:0"><section class="v2-result" id="ac-clean"></section></div>` : ""}`;
   const readModule = mountReadScreen(el.querySelector("#ac-read"), { ...ctx, screen: { ...screen, impl: "read" } });
   let busy = false, dead = false;
+  (async () => {
+    const box = el.querySelector("#ac-stats");
+    try {
+      const s = await api.get("/activity/stats");
+      if (dead || !box) return;
+      const parts = [`В журнале ${fmtNum(s.rows)} ${plural(s.rows, "запись", "записи", "записей")}`];
+      parts.push(s.bytes == null ? "объём таблицы неизвестен (сборка SQLite без dbstat)" : `${fmtSize(s.bytes)} с индексами из ${fmtSize(s.db_bytes)} базы`);
+      if (s.errors) parts.push(`ошибок и отказов: ${fmtNum(s.errors)}`);
+      if (s.oldest) parts.push(`самая ранняя запись — ${String(s.oldest).slice(0, 10)}`);
+      box.textContent = parts.join(" · ");
+      box.title = "Очистка убирает записи, но файл базы сам по себе не уменьшается: освободившееся место SQLite отдаёт под новые записи. Полностью вернуть его диску можно только сжатием базы (VACUUM).";
+    } catch (e) { if (!dead && box) box.textContent = `Не удалось узнать объём журнала: ${errText(e)}`; }
+  })();
   const host = el.querySelector("#ac-clean");
   if (host) {
     host.innerHTML = `<h3>Очистка журнала</h3>

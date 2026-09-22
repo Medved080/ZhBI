@@ -1,0 +1,12 @@
+import { session, ok, summary, openSection } from "../verify_admin_lib.mjs";
+const PORT = process.argv[2] || 8190;
+const BASE = `http://127.0.0.1:${PORT}`;
+const b = await session(BASE, "admin");
+await openSection(b, "activity");
+await b.sleep(900);
+const text = await b.eval(`document.getElementById('ac-stats')?.innerText`);
+console.log("stats text:", text);
+ok("статистика показывает число записей", /В журнале/.test(text || ""));
+ok("статистика показывает размер", /базы|неизвестен/.test(text || ""));
+await b.close();
+process.exit(summary());
