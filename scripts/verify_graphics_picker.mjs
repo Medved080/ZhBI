@@ -87,20 +87,23 @@ async function setSelect(b, sel, value) {
 }
 
 // ============================================================== 4. Документы контрактации: права user2/user4 (object 1)
-// У обоих ролей (`view`/`user`) `doc_supplier_change`/`doc_link_swap` не выше «read» (`/me/permissions`), а сам ЭКРАН в реестре
-// (`app/static/v2/screen-structure.json`, "supplier-change".menu_features) открыт только при «write» на любую из них (перенос
-// правила пункта меню V1, не относится к области «graphics» и не менялся этим переносом) — значит и user2, и user4 РЕДИРЕКТЯТСЯ
-// с #/supplier-change обратно, экран для них недостижим целиком, а не только кнопка записи внутри него. Ожидать открытия экрана
-// (как одноимённый комментарий предполагал раньше) — неверная посылка теста, а не баг подбора; проверяем то, что действительно
-// происходит: редирект + прямая запись всё равно отклоняется сервером.
+// У обоих ролей (`view`/`user`) `doc_supplier_change`/`doc_link_swap` — «read» (`/me/permissions`). До 2026-09-22 экран открывался
+// только при «write» (перенос правила пункта меню V1) и оба РЕДИРЕКТИЛИСЬ; по решению пользователя «нужен просмотр» экран открыт
+// при «read» в режиме «только просмотр» (screens.json feature, supplier-docs.js; Docs/v2-progress/docsview.md). Проверяем новое
+// поведение: экран открыт, кнопок создания нет, подбор (и мини-схема) недоступен, прямая запись отклоняется СЕРВЕРОМ. Подробный
+// сценарий просмотра (документы обоих видов в обоих состояниях, SQL до/после, смешанные права) — scripts/verify_docsview.mjs.
 for (const [user, label] of [["user2", "user2 (роль «user»)"], ["user4", "user4 (роль «view»)"]]) {
   const b = await session({ base: BASE, user, objectId: 1, shots: SHOTS });
   try {
     console.log(`== Документы контрактации: права ${label} ==`);
     await b.eval(`location.hash='#/supplier-change'`);
-    await sleep(1000);
+    await b.waitFor(`(document.querySelector('#sd-inner')?.innerText||'').includes('Документы объекта')`, 15000).catch(() => {});
+    await sleep(500);
     const hashAfter = await b.eval(`location.hash`);
-    c.ok(hashAfter !== "#/supplier-change", `${label}: экран «Документы контрактации» недоступен без write на doc_supplier_change/doc_link_swap — редирект (хэш: «${hashAfter}»)`);
+    c.ok(hashAfter === "#/supplier-change" && await b.eval(`!!document.querySelector('[data-readonly-note]') && !document.querySelector('[data-a^="new-"]')`), `${label}: экран открыт в режиме «только просмотр» — пояснение есть, кнопок создания нет (хэш: «${hashAfter}»)`);
+    await tap(b, '[data-open]');                                        // настоящий щелчок по номеру документа
+    await b.waitFor(`!!document.querySelector('[data-readonly-tag]')`, 15000).catch(() => {});
+    c.ok(await b.eval(`!!document.querySelector('[data-readonly-tag]') && !document.querySelector('[data-a="pick"]') && !document.querySelector('#sd-pick-svg')`), `${label}: документ открыт «только просмотр», «Подбор…» и мини-схемы нет — выбор изменить нечем`);
     const resp = await b.eval(`fetch('/supplier-changes', {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({object_id:1, kind:'link_swap', doc_date:'2026-09-22', from_contract_id:13, to_contract_id:14, mark:'4П-12', side_a:[], side_b:[]})}).then(r=>r.status)`);
     c.ok(resp === 403, `${label}: прямой POST документа — сервер отвечает 403 (${resp})`);
   } finally { await b.close(); }
