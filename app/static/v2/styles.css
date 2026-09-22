@@ -358,6 +358,49 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
 .v2-dialog p { margin: 0 0 16px; font-size: 14px; }
 .v2-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
+/* Окно выбора объекта в шапке (2026-09-22, shell-object-picker.js) — тот же .v2-dialog-backdrop/.v2-dialog,
+   что у диалогов подтверждения, но шире и с собственной высотой (список может быть длинным). Ряды переиспользуют
+   классы дерева "Проекты и объекты" (.v2-tree-name/.v2-tree-count/.v2-tree-chevron/.v2-status-dot) — название
+   слева с многоточием, счётчик колонкой справа, который не сжимается длинным названием. */
+.v2-objpick { width: 640px; max-width: calc(100vw - 32px); max-height: min(720px, calc(100vh - 64px)); display: flex; flex-direction: column; padding: 16px 16px 12px; }
+.v2-objpick-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; flex: none; }
+.v2-objpick-head .v2-search { flex: 1; min-width: 220px; }
+.v2-objpick-archived { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.v2-objpick-list { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+.v2-objpick-section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 10px 8px 4px;
+}
+.v2-objpick-section-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: none;
+}
+.v2-objpick-section-toggle:hover { color: var(--ink); }
+.v2-objpick-project { margin: 2px 0; }
+.v2-objpick-project-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; border-radius: 6px;
+  background: none; padding: 7px 8px; color: var(--ink); font-size: 13px;
+}
+.v2-objpick-project-head:hover { background: var(--surface); }
+.v2-objpick-project-head .v2-tree-name { font-weight: 600; }
+.v2-objpick-project > .v2-objpick-row { padding-left: 20px; }
+.v2-objpick-row { display: flex; align-items: center; gap: 2px; border-radius: 6px; }
+.v2-objpick-row:hover, .v2-objpick-row:has(.kb-focus) { background: var(--surface); }
+.v2-objpick-row.active { background: var(--sel); }
+.v2-objpick-item {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; text-align: left; border: 0; background: none;
+  padding: 7px 8px; color: var(--ink); font-size: 13px;
+}
+.v2-objpick-check { width: 14px; flex: none; color: var(--accent); font-weight: 700; }
+.v2-objpick-badge { flex: none; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.v2-objpick-pin {
+  flex: none; width: 30px; height: 30px; margin-right: 4px; border: 0; border-radius: 6px; background: none;
+  color: var(--muted); font-size: 15px; display: flex; align-items: center; justify-content: center;
+}
+.v2-objpick-pin:hover { background: var(--surface); color: var(--ink); }
+.v2-objpick-pin[aria-pressed="true"] { color: var(--accent); }
+.v2-objpick-item.kb-focus, .v2-objpick-item:focus-visible { background: var(--sel); outline: none; }
+.v2-objpick-empty { padding: 24px 8px; text-align: center; }
+.v2-objpick-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; flex: none; }
+
 /* Переупорядочивание ролей (point 9 — перенос порядка ролей из V1) */
 .v2-role-row { display: flex; align-items: center; gap: 4px; }
 .v2-role-row button[data-role] { flex: 1; }
@@ -533,37 +576,119 @@ input:disabled, select:disabled, textarea:disabled {
 
 /* ================= Оболочка полного интерфейса: левая навигация, начальная страница, каркасы экранов ================= */
 
-.v2-body { flex: 1; min-height: 0; display: flex; }
+.v2-body { position: relative; flex: 1; min-height: 0; display: flex; }
 .v2-body > .v2-page { flex: 1; min-width: 0; }
 
-/* Левая навигация по группам. Класс .v2-nav оставлен ради общего вида фокуса и доступности; горизонтальные
-   правила вкладок раздела (.v2-nav .v2-container и др.) к вертикальному меню не применяются. */
-.v2-nav.v2-shellnav {
-  width: 264px; flex: none; border-bottom: 0; border-right: 1px solid var(--line);
-  overflow-y: auto; padding: 12px 10px 24px; display: flex; flex-direction: column; gap: 2px;
-  background: var(--surface);
+/* ---- Левая навигация: три состояния (2026-09-22, shell-nav.js) ----
+   Обёртка #v2-side — ВСЕГДА обычный участник flex-раскладки (.v2-body), ширина зависит от data-mode:
+     collapsed/temp — фиксированная узкая полоса (содержимое НЕ подвинуто, схема не пересчитывается);
+     pinned         — реальная ширина панели (содержимое подвинуто по-настоящему, "занимает остальную ширину").
+   Сама панель (.v2-shellnav-rail) — дочерний элемент обёртки: в collapsed/temp это position:absolute поверх
+   содержимого (не меняет раскладку), в pinned — обычный блок, заполняющий обёртку. Один и тот же DOM у temp и
+   pinned — переключение между ними это смена CSS, а не пересборка меню. */
+.v2-shellnav { flex: none; width: 50px; position: relative; background: var(--surface); border-right: 1px solid var(--line); }
+.v2-shellnav[data-mode="pinned"] { width: var(--shellnav-w, 260px); }
+.v2-shellnav-strip {
+  position: absolute; inset: 0; width: 50px; overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 0;
 }
-.v2-shellnav button {
-  display: block; width: 100%; text-align: left; border: 0; border-radius: 6px; background: none;
-  padding: 7px 10px; color: var(--ink); border-bottom: 0;
+.v2-shellnav[data-mode="collapsed"] .v2-shellnav-strip { visibility: visible; }
+.v2-shellnav:not([data-mode="collapsed"]) .v2-shellnav-strip { visibility: hidden; pointer-events: none; }
+.v2-shellnav-icon-btn {
+  position: relative; width: 36px; height: 36px; flex: none; border: 0; border-radius: 8px; background: none;
+  color: var(--ink); display: flex; align-items: center; justify-content: center;
 }
-.v2-shellnav button:hover { background: var(--sel); }
-.v2-shellnav button[aria-pressed="true"] { background: var(--sel); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
-.v2-shellnav .v2-nav-group { margin-top: 8px; }
-.v2-shellnav .v2-nav-group-head {
-  font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 6px 10px;
-  display: flex; justify-content: space-between;
+.v2-shellnav-icon-btn:hover, .v2-shellnav-icon-btn:focus-visible { background: var(--sel); }
+.v2-shellnav-icon-btn[aria-pressed="true"] { background: var(--sel); color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+/* Подсказка по наведению И по фокусу (не только native title, которого на клавиатуре не видно) — п.2а задания. */
+.v2-shellnav-icon-btn[data-tooltip]::after {
+  content: attr(data-tooltip); position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  background: var(--ink); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 5px; white-space: nowrap;
+  opacity: 0; pointer-events: none; transition: opacity .1s; z-index: 30;
 }
-.v2-shellnav .v2-nav-group-head::before { content: "▾"; margin-right: 6px; }
-.v2-shellnav .v2-nav-group-head[aria-expanded="false"]::before { content: "▸"; }
-.v2-shellnav .v2-nav-group-head { justify-content: flex-start; }
-.v2-shellnav .v2-nav-group-head .v2-muted { margin-left: auto; }
-.v2-nav-search { width: 100%; margin-bottom: 6px; }
-.v2-nav-tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
-.v2-nav-empty { padding: 8px 10px; }
+.v2-shellnav-icon-btn[data-tooltip]:hover::after, .v2-shellnav-icon-btn[data-tooltip]:focus-visible::after { opacity: 1; }
 
-.v2-ctx { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-.v2-ctx select { max-width: 280px; }
+.v2-shellnav-rail {
+  position: absolute; left: 0; top: 0; bottom: 0; width: var(--shellnav-w, 260px);
+  background: var(--surface); display: flex; flex-direction: column; z-index: 5;
+  visibility: hidden; pointer-events: none;
+}
+.v2-shellnav[data-mode="temp"] .v2-shellnav-rail {
+  visibility: visible; pointer-events: auto; box-shadow: 2px 0 16px rgb(0 0 0 / 22%); z-index: 25;
+}
+.v2-shellnav[data-mode="pinned"] .v2-shellnav-rail { visibility: visible; pointer-events: auto; width: 100%; position: static; flex: 1; min-height: 0; }
+.v2-shellnav-panelhead { display: flex; gap: 6px; padding: 10px 10px 6px; flex: none; }
+.v2-shellnav-search { flex: 1; min-width: 0; }
+.v2-shellnav-pin {
+  flex: none; width: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+}
+.v2-shellnav-pin:hover { background: var(--sel); }
+.v2-shellnav-pin[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.v2-shellnav-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 20px; }
+
+.v2-shellnav-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; border-radius: 6px;
+  background: none; padding: 8px 10px; color: var(--ink); font-size: 13px;
+}
+.v2-shellnav-item:hover { background: var(--sel); }
+.v2-shellnav-item[aria-pressed="true"] { background: var(--sel); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+.v2-shellnav-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-shellnav-hint { color: var(--muted); font-weight: 400; flex: none; }
+.v2-shellnav-home { margin-bottom: 6px; }
+
+/* Заголовки визуально ОТЛИЧАЮТСЯ от пунктов (п.4 задания: не одинаковый список кнопок) — без чисел (счётчик
+   пунктов группы — техническая деталь, из вида убрана; данные остаются в screens.json для документации). */
+.v2-shellnav-static-head {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  padding: 10px 10px 4px;
+}
+.v2-shellnav-work { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
+.v2-shellnav-group { margin-top: 2px; }
+.v2-shellnav-group-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: none;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 8px 10px;
+}
+.v2-shellnav-group-head:hover { color: var(--ink); }
+.v2-shellnav-chevron { width: 10px; flex: none; }
+.v2-shellnav-group-body { display: flex; flex-direction: column; gap: 1px; }
+.v2-shellnav-divider { height: 1px; background: var(--line); margin: 10px 6px; }
+.v2-shellnav-empty { padding: 8px 10px; }
+
+/* Разделитель ширины (temp и pinned) — широкая зона захвата (12px), тонкая видимая линия по центру, курсор
+   col-resize; тот же приём pointer-events на iframe схемы во время драга, что у workspace.js::ws-resize. */
+/* left, а не right: в "temp" сама .v2-shellnav (для которой это absolute позиционируется) остаётся УЗКОЙ
+   50px-полосой в раскладке — видимая ширина живёт в --shellnav-w у .v2-shellnav-rail (см. выше), и разделитель
+   должен следовать за НЕЙ, а не за узким флекс-треком собственного контейнера. В "pinned" ширина обеих
+   совпадает — формула работает одинаково в обоих режимах. */
+.v2-shellnav-resize {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--shellnav-w, 260px) - 6px); width: 12px; cursor: col-resize; z-index: 26;
+  display: flex; justify-content: center;
+}
+.v2-shellnav-resize::after { content: ""; width: 1px; height: 100%; background: var(--line); }
+.v2-shellnav-resize:hover::after, .v2-shellnav-resize:focus-visible::after { background: var(--accent); width: 2px; }
+.v2-shellnav-resize:focus-visible { outline: none; }
+.v2-shellnav[data-mode="collapsed"] .v2-shellnav-resize { display: none; }
+body.v2-noselect { user-select: none; }
+
+/* Выбор объекта в шапке (2026-09-22, shell-object-picker.js): кнопка вместо <select> — открывает окно выбора
+   (поиск, «Закреплённые», иерархия проект→объект). Ширина ограничена, чтобы длинное название объекта не
+   раздувало шапку — полный текст всегда доступен через title (см. main.js::updateObjectButton). */
+.v2-objbtn {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 280px;
+  padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--ink); font-size: 13px;
+}
+.v2-objbtn:hover { background: var(--surface); }
+.v2-objbtn .v2-status-dot { flex: none; }
+.v2-objbtn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* «Текущее рабочее место подписано в шапке» (п.2 задания) — видно и при свёрнутой/спрятанной навигации.
+   В режиме рабочего места (v2-ws-mode) не дублируется: своя подпись уже есть в ws-top (workspace.js). */
+.v2-head-section {
+  font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px;
+}
+.v2-head-section:not(:empty)::before { content: "· "; }
+#v2-root.v2-ws-mode .v2-head-section { display: none; }
 
 /* Начальная страница */
 .v2-home-title { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
@@ -610,9 +735,10 @@ input:disabled, select:disabled, textarea:disabled {
 .v2-wire-table th, .v2-wire-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
 .v2-wire-table th { background: var(--surface); font-weight: 500; color: var(--muted); }
 
+/* Левая навигация НЕ переходит в горизontальную полосу на узких окнах (в отличие от старой версии) — на узком
+   окне закреплённая панель сама ведёт себя как временная (см. shell-nav.js::NARROW_WINDOW_PX), .v2-body
+   остаётся строкой в любой ширине. */
 @media (max-width: 800px) {
-  .v2-body { flex-direction: column; }
-  .v2-nav.v2-shellnav { width: auto; max-height: 36vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .v2-facts { grid-template-columns: 1fr; }
 }
 
@@ -647,8 +773,7 @@ input:disabled, select:disabled, textarea:disabled {
 /* Узкое окно: правая часть шапки переносится, а не уходит за край */
 @media (max-width: 800px) {
   .v2-head-right { flex-wrap: wrap; width: 100%; }
-  .v2-ctx { flex: 1 1 100%; }
-  .v2-ctx select { flex: 1; max-width: none; }
+  .v2-objbtn { flex: 1 1 100%; max-width: none; }
 }
 
 /* Формы карточек */
