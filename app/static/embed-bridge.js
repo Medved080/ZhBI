@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -121,9 +121,17 @@
       excluded: excludedCount(),
       // Внешние 3D-модели объекта в сцене ЖБИ (флажки окна V1 «Внешний вид»: благоустройство, фасады из FBX)
       external: { models: extChecked("zhbi-show-external-models"), facades: extChecked("zhbi-show-external-facades") },
+      // Сеансовые «Подписи» (окно V1 «Настройки → Вид»): по типу изделия — показ подписи и её допстроки «Даты»
+      labels: labelToggles(),
     };
   }
   function extChecked(id) { const c = document.getElementById(id); return c ? c.checked : true; }
+  function labelToggles() {
+    return Array.from(document.querySelectorAll("#label-toggles input[data-type]")).map((c) => {
+      const d = document.querySelector(`#label-toggles input[data-dates-type="${CSS.escape(c.dataset.type)}"]`);
+      return { type: c.dataset.type, on: c.checked, dates: d ? d.checked : null };
+    });
+  }
 
   let stateTimer = null;
   function scheduleState() {
@@ -584,6 +592,17 @@
       if (!["models", "facades"].includes(a.kind) || typeof a.on !== "boolean") throw new Error("параметры внешней модели");
       const c = document.getElementById(a.kind === "models" ? "zhbi-show-external-models" : "zhbi-show-external-facades");
       if (!c) throw new Error("нет переключателя внешней модели");
+      if (c.checked !== a.on) { c.checked = a.on; c.dispatchEvent(new Event("change")); }
+      scheduleState();
+    },
+    // Сеансовые «Подписи» по типу изделия и их допстрока «Даты» — те же флажки окна V1 и их обработчики (каскад «тип → даты»,
+    // прореживание по коллизиям); как в V1, действует до перезагрузки схемы и не сохраняется.
+    setLabelVisible(a) {
+      if (typeof a.type !== "string" || a.type.length > 120 || !["label", "dates"].includes(a.part) || typeof a.on !== "boolean") throw new Error("параметры подписи");
+      const attr = a.part === "label" ? "data-type" : "data-dates-type";
+      const c = document.querySelector(`#label-toggles input[${attr}="${CSS.escape(a.type)}"]`);
+      if (!c) throw new Error("нет такого типа подписи");
+      if (c.disabled) throw new Error("«Даты» недоступны, пока подпись типа скрыта");
       if (c.checked !== a.on) { c.checked = a.on; c.dispatchEvent(new Event("change")); }
       scheduleState();
     },

@@ -650,6 +650,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       ${mbp ? mbp.viewHtml() : ""}
       ${mfr && sc?.mfr?.layers?.length ? `<h4>Слои</h4>${sc.mfr.layers.map((l) => `<label class="ws-check"><input type="checkbox" data-mlayer="${esc(l.key)}" ${l.on ? "checked" : ""} ${l.disabled ? "disabled" : ""}> <span>${esc(l.label)}</span></label>`).join("")}` : ""}
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
+      ${!mfr && sc?.labels?.length ? `<h4>Подписи</h4>${sc.labels.map((l) => `<label class="ws-check"><input type="checkbox" data-label-type="${esc(l.type)}" ${l.on ? "checked" : ""}> <span>${esc(l.type)}</span></label>${l.dates === null ? "" : `<label class="ws-check ws-check-sub"><input type="checkbox" data-label-dates="${esc(l.type)}" ${l.dates ? "checked" : ""} ${l.on ? "" : "disabled"}> <span>Даты</span></label>`}`).join("")}<p class="v2-muted">Как в V1: действует до перезагрузки схемы; с чего начинать — «Видимость подписей» в настройках.</p>` : ""}
       ${!mfr && sc?.external ? `<h4>Внешние 3D-модели (в 3D)</h4>${[["models", "Благоустройство"], ["facades", "Фасады из FBX"]].map(([k, t]) => `<label class="ws-check"><input type="checkbox" data-ext="${k}" ${sc.external[k] ? "checked" : ""}> <span>${t}</span></label>`).join("")}<p class="v2-muted">Если модели объекта загружены. Действует до перезагрузки схемы, как в V1.</p>` : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
   }
@@ -695,6 +696,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     body.querySelectorAll("[data-mlayer]").forEach((c) => c.addEventListener("change", () => send("mfrLayer", { layer: c.dataset.mlayer, on: c.checked })));
     body.querySelectorAll("[data-zone]").forEach((c) => c.addEventListener("change", () => send("setZoneVisible", { category: c.dataset.zone, on: c.checked })));
     body.querySelectorAll("[data-ext]").forEach((c) => c.addEventListener("change", () => send("setExternalVisible", { kind: c.dataset.ext, on: c.checked })));
+    body.querySelectorAll("[data-label-type]").forEach((c) => c.addEventListener("change", () => send("setLabelVisible", { type: c.dataset.labelType, part: "label", on: c.checked })));
+    body.querySelectorAll("[data-label-dates]").forEach((c) => c.addEventListener("change", () => send("setLabelVisible", { type: c.dataset.labelDates, part: "dates", on: c.checked })));
     body.querySelectorAll("[data-group]").forEach((b) => b.addEventListener("click", () => {
       const g = b.dataset.group;
       if (mfr) closedGroups.has(g) ? closedGroups.delete(g) : closedGroups.add(g);
