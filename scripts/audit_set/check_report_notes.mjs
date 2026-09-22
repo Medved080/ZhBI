@@ -1,5 +1,5 @@
 // «События, задачи, вопросы»: поведение V1 — при открытии выбрана самая свежая редакция, в списке «пунктов: N · автор», новая —
-// на сегодняшнюю дату; дата из отчёта (ключ sessionStorage v2.reportNotes.date) открывает новую редакцию на эту дату; создание,
+// на сегодняшнюю дату; дата из отчёта «Динамика» (одноразовый ключ sessionStorage v2.notesPrefill {objectId, date} — только для своего объекта) открывает новую редакцию на эту дату; создание,
 // правка, удаление с подтверждением; сторож несохранённого; 403 у user2/user4. Настоящий backend, вход формой, настоящий ввод.
 //   node scripts/audit_set/check_report_notes.mjs <копия БД> <порт>
 import { session, sql, sqlExec, ok, summary, go, click, fill, DB, BASE, setObject, as, onBail, overflowX } from "./lib.mjs";
@@ -23,12 +23,19 @@ ok("новая редакция — на сегодняшнюю дату (как
 // нетронутая новая форма не «изменена»: уход без вопроса
 await go(b, "home");
 ok("нетронутая новая форма не держит уход (нет вопроса о несохранённом)", await b.eval("location.hash==='#/' && !document.querySelector('.v2-dialog-backdrop')"));
-// дата из отчёта
-await b.eval(`sessionStorage.setItem('v2.reportNotes.date','${FREE}')`);
+// дата из отчёта: подстановка ДРУГОГО объекта не применяется (открывается последняя редакция, ключ всё равно снимается)
+await b.eval(`sessionStorage.setItem('v2.notesPrefill', JSON.stringify({ objectId: 2, date: '${FREE}' }))`);
+await go(b, "report-notes");
+await b.waitFor("!!document.querySelector('#rn-date')", 20000); await b.sleep(400);
+ok("дата из отчёта другого объекта не применяется — открыта последняя редакция", await b.eval(`document.querySelector('#rn-date').value==='${revs[0].d}'`));
+ok("ключ чужой подстановки снят", (await b.eval("sessionStorage.getItem('v2.notesPrefill')")) === null);
+await go(b, "home");
+// дата из отчёта своего объекта
+await b.eval(`sessionStorage.setItem('v2.notesPrefill', JSON.stringify({ objectId: 1, date: '${FREE}' }))`);
 await go(b, "report-notes");
 await b.waitFor("!!document.querySelector('#rn-date')", 20000); await b.sleep(400);
 ok("дата из отчёта: открыта новая редакция на эту дату", await b.eval(`document.querySelector('#rn-date').value==='${FREE}' && !document.querySelector('#rn-date').disabled && !document.querySelector('[aria-pressed="true"][data-rev]')`));
-ok("ключ передачи даты одноразовый", (await b.eval("sessionStorage.getItem('v2.reportNotes.date')")) === null);
+ok("ключ передачи даты одноразовый", (await b.eval("sessionStorage.getItem('v2.notesPrefill')")) === null);
 // создание: настоящий ввод текста
 await fill(b, 'textarea[data-nf="events"]', "QA-событие 1");
 await fill(b, 'textarea[data-nf="tasks"]', "QA-задача 1");
