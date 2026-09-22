@@ -120,12 +120,16 @@ try {
   c.ok(cycleWt !== null, "в матрице есть ячейка статуса (сек/компл)");
   if (cycleWt) {
     const [wt, secId] = cycleWt.split("|");
+    // реальные обезличенные данные: у ячейки уже может быть любой статус (не «plan») — читаем ДО клика и сверяем цикл plan→in_progress→done, а не жёстко «in_progress»
+    const statusBefore = (secId ? one(`SELECT status FROM work_progress WHERE work_type_id=${wt} AND block_id IS NULL AND section_id=${secId}`)
+                                 : one(`SELECT status FROM work_progress WHERE work_type_id=${wt} AND block_id IS NULL AND section_id IS NULL`))?.status || "plan";
+    const expected = statusBefore === "plan" ? "in_progress" : statusBefore === "in_progress" ? "done" : null;
     await tap(b, `.v2-matrix-cycle[data-wt="${wt}"]${secId ? `[data-sec="${secId}"]` : ""}`);
     await sleep(900);
     const row = secId ? one(`SELECT status FROM work_progress WHERE work_type_id=${wt} AND block_id IS NULL AND section_id=${secId}`)
                        : one(`SELECT status FROM work_progress WHERE work_type_id=${wt} AND block_id IS NULL AND section_id IS NULL`);
-    if (!(row && row.status === "in_progress")) console.log("  ДИАГНОСТИКА: cycleWt=", cycleWt, "cell-msg=", await b.eval(`document.querySelector('#bs-cell-msg')?.textContent`), "req=", b.requests.filter((r) => /work-progress\/cell$/.test(r.url)).slice(-1));
-    c.ok(row && row.status === "in_progress", "клик по ячейке статуса — «в работе» в БД (SQL)");
+    if (!(row && row.status === expected)) console.log("  ДИАГНОСТИКА: cycleWt=", cycleWt, "было=", statusBefore, "ожидалось=", expected, "cell-msg=", await b.eval(`document.querySelector('#bs-cell-msg')?.textContent`), "req=", b.requests.filter((r) => /work-progress\/cell$/.test(r.url)).slice(-1));
+    c.ok(row && row.status === expected, `клик по ячейке статуса — цикл ${statusBefore} → ${expected} в БД (SQL)`);
   }
   await tap(b, "#rd-print");
   await sleep(200);
