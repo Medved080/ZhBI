@@ -231,6 +231,7 @@ export function anChartHtml(dyn) {
 // конкретного отчёта. `kind` — поле колонок отчётов (reports.js), `fmt` — колонок read-screen.js (screens.json);
 // заголовок колонки «Марка» — признак минимальной ширины (задание «tables», п.2).
 export function colDataType(col) {
+  if (col.key === "guid") return "code";   // идентификатор: моноширинно и приглушённо, как V1 .cmp-guid
   if (col.kind === "num" || col.fmt === "size" || col.fmt === "score") return "num";
   if (col.kind === "date" || col.fmt === "date" || col.fmt === "datetime") return "date";
   if (col.kind === "status" || col.fmt === "color") return "status";
@@ -325,7 +326,7 @@ function completionReport(data, state) {
   const rows = q ? data.rows.filter((r) => Object.values(r).some((v) => v != null && String(v).toLowerCase().includes(q))) : data.rows;
   const offset = Math.min(state.page || 0, Math.max(0, Math.ceil(rows.length / PAGE) - 1)) * PAGE;
   const pageRows = rows.slice(offset, offset + PAGE);
-  const cols = data.columns.filter((c) => c.key !== "guid");
+  const cols = data.columns;   // все колонки сервера, как V1 renderCompletionReport (включая GUID)
   return `${data.warning ? `<div class="v2-callout" role="note">${esc(data.warning)}</div>` : ""}
     <p class="v2-muted" role="status">${q ? `Найдено ${rows.length} из ${data.rows.length}` : `Позиций: ${data.rows.length}`}${data.total ? ` · ${esc(data.total.label)}: ${esc(num(data.total.count))} шт.` : ""}${rows.length ? ` · строки ${offset + 1}–${offset + pageRows.length}` : ""}</p>
     ${rows.length ? tableHtml(cols, pageRows, { cap: PAGE }) : `<p class="v2-muted">${q ? `Ничего не найдено по запросу «${esc(state.search)}».` : "Позиций нет."}</p>`}
