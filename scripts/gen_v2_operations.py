@@ -80,6 +80,105 @@ def apply_blocker(op, blockers):
     op["v2"]["state"] = "blocked_external"
     op["action"] = f"заблокирована: {reason}"
 
+
+# Вручную-курируемый словарь {"старый МЕТОД путь": (новый маршрут/операция или None, примечание)} — 2026-09-22,
+# аудит по прямому требованию пользователя: «старый API, заменённый безопасным новым API, не означает отсутствие
+# пользовательской функции». Старый маршрут матрица раньше числила «только переход в V1»/«заблокирована», хотя
+# функция уже перенесена в V2 — либо под ДРУГИМ путём (новый безопасный API), либо ПОД ТЕМ ЖЕ путём, но вызов
+# устроен так, что статический разбор (`api.get/post/...` от строкового литерала) его не видит: шаблонный литерал
+# с обращением к полю объекта (`${spec.endpoint}`, `${sec.endpoint}`), путь картинки в `<img src>` не через `api.js`.
+# Проверено ЖИВЫМ прогоном на настоящем backend (не только чтением кода) — Docs/v2-progress/gaps.md.
+# Значение `None` вместо нового пути — «замены нет, это ТОТ ЖЕ маршрут» (просто не увиден статически).
+# Старый маршрут НЕ убирается из backend (им пользуется V1) — только не считается отдельным пробелом V2.
+REPLACED_BY = {
+    "PATCH /elements/{element_id}/status": (
+        "POST /element-ops/status-batch",
+        "смена статуса ОДНОГО изделия — тот же маршрут, что у пачки (один элемент в списке `items`); безопасный "
+        "режим — сервер сверяет ожидаемое состояние, а не «текущий контракт», предпросмотр последствий без записи "
+        "(app/element_ops.py: status_batch; write-gate.js: element.status.batch)."),
+    "PATCH /elements/bulk-status": (
+        "POST /element-ops/status-batch",
+        "массовая смена статуса — тот же маршрут, что у одного изделия (список `items` из нескольких элементов, "
+        "единое значение статуса на всех); построчная версия с разным контрактом на строку — POST /element-ops/status-rows (app/element_rows.py)."),
+    "PATCH /elements/bulk-planned-delivery-date": (
+        "POST /element-ops/planned-date-batch",
+        "массовая плановая дата — единое значение на всех выбранных изделиях, сверка прежней даты, всё или ничего "
+        "(app/element_ops.py: planned_date_batch); построчная версия — POST /element-ops/planned-date-rows (app/element_rows.py)."),
+    "PATCH /elements/{element_id}/contract": (
+        "POST /element-ops/contract",
+        "назначение/смена/снятие контракта БЕЗ смены статуса, со сверкой ожидаемого состояния и стражем остатка "
+        "(app/element_ops.py: contract_set; write-gate.js: element.contract.set)."),
+    "POST /objects/{object_id}/block-works/bulk-edit/apply": (
+        "POST /objects/{object_id}/block-works/bulk-edit/apply-strict",
+        "V2 использует более строгий вариант применения — «всё или ничего» со сверкой значений «было», изменившихся "
+        "после сверки (app/block_ops.py; write-gate.js: bulk-edit.apply); V1-путь `apply` с другой семантикой (без "
+        "«всё или ничего») сохранён сознательно для V1 — распространять ли строгий режим и на него, решения "
+        "пользователя нет (mfr2.md; вопрос повторён в Docs/v2-progress/gaps.md)."),
+    "КЛИЕНТ app.js:23021": (
+        "клиентская операция read-screen.js: printReportTable()",
+        "печать отчёта — общий узел печати `print.js` (кнопка «Печать», #rd-print), подключена ПО УМОЛЧАНИЮ на "
+        "любом экране группы «Отчёты» (sec.printable !== false); живьём проверены все 10 read-экранов группы, "
+        "печать заполняет узел содержимым и вызывает window.print() ровно один раз (scripts/verify_gaps_print.mjs)."),
+    "КЛИЕНТ chess-flat.js:660": (
+        "клиентская операция chess-flat-screen.js: бланк обхода (кнопка печати, форматы A4/A3)",
+        "тот же общий узел печати `print.js`; оба формата бумаги проверены живьём — смена формата на A3 меняет "
+        "класс листа в предпросмотре И в узле печати (scripts/verify_mfr2_browser.mjs)."),
+    "POST /settings/import": (
+        "POST /settings/import/analyze + POST /settings/import/apply",
+        "V2 использует НОВЫЙ двухфазный безопасный вход: сверка (ничего не пишет) → применение по сверенному "
+        "sha256-digest, одна транзакция, копия базы перед применением, 409 при подмене файла/базы после сверки "
+        "(app/settings_import.py; write-gate.js: settings.analyze/settings.apply); старый одношаговый "
+        "`POST /settings/import` сохранён для V1 (поведение не менялось, там же добавлена атомарность записи), "
+        "но интерфейс V2 его не вызывает — exchange-settings.js вызывает только .../analyze и .../apply."),
+    "POST /reports/delivery-schedule/cell": (
+        None,
+        "тот же маршрут уже вызывается из V2 (app/static/v2/reports-exchange.js — атрибут `data-gkeys` кликабельной "
+        "ячейки листовой строки; app/static/v2/read-screen.js — обработчик клика, `api.readPost(`${sec.endpoint}/cell`, ...)`); "
+        "живьём проверено: щелчок по развёрнутой ячейке шлёт запрос и открывает диалог разбора по маркам "
+        "(tmp/inspect6.mjs, разовая проверка сессии). Генератор не разобрал вызов — путь собран из поля объекта "
+        "(`sec.endpoint`), а не строкового литерала."),
+    "GET /zones": (
+        None,
+        "тот же маршрут уже вызывается из V2 (app/static/v2/zones-edit.js: `api.get(`${spec.endpoint}?${q}`)`, "
+        "`spec.endpoint` — значение из screens.json: `screen.zones.endpoint == \"/zones\"`); живьём проверено — "
+        "экран «Зоны» получает 200 и показывает список (tmp/inspect3.mjs). Генератор раскрывает путь из "
+        "screens.json только для модуля read-screen.js, для zones-edit.js — нет."),
+    "GET /objects/{object_id}/avatar": (
+        None,
+        "тот же маршрут уже вызывается из V2, но не через api.js — прямая вставка `<img src=\"/objects/${id}/avatar?t=...\">` "
+        "(app/static/v2/projects-objects.js: renderAvatar(), вкладка «Вложения» карточки объекта, при "
+        "rec.has_avatar); генератор ищет только вызовы api.*()/fetch(), обычный `<img src>` не видит. Само "
+        "назначение/снятие превью (PUT .../avatar) уже опубликовано (write-gate.js: objects.avatar)."),
+    "GET /objects/{object_id}/work-progress": (
+        "POST /reports/block-status",
+        "«бывшая вкладка «Статусы» «Учёта по блокам», перенесённая в «Отчёты»» (дословно докстринг "
+        "app/main.py:report_block_status) — тот же источник (work_progress_mod.matrix через "
+        "block_works.status_report_with_deadlines), с добавлением срока по блоку; экран «report-block-status» "
+        "опубликован и печать/правка ячейки проверены живьём (scripts/verify_gaps_print.mjs, "
+        "scripts/verify_mfr2_browser.mjs). Правка значения — ТОТ ЖЕ маршрут, что был у старой вкладки "
+        "(PUT /objects/{id}/work-progress/cell, без переноса в /reports/*), поэтому отдельным пробелом не числится."),
+    "GET /objects/{object_id}/blocks/fact-changes": (
+        "GET /objects/{object_id}/fact-journal",
+        "«Журнал факта» (app/main.py, докстринг над block_work_types_endpoint) — «прямой доступ к документам "
+        "work_fact_reports ВСЕГО объекта, без предварительного поиска блока/работы» — явный преемник старой сводки "
+        "изменений факта (нужны были date_from/date_to/track_code ДО просмотра); экран `fact-journal` опубликован "
+        "(матрица: статус 5, 7 операций)."),
+}
+
+
+def apply_replacement(op):
+    """Если у операции есть запись в REPLACED_BY и она ещё «только переход в V1» — состояние `replaced`: функция
+    ДЕЙСТВИТЕЛЬНО перенесена (под тем же или под другим путём), просто это не увидел статический разбор или это
+    сознательно другой безопасный маршрут. Старый маршрут не считается отдельным пробелом (см. REPLACED_BY)."""
+    info = REPLACED_BY.get(op["id"])
+    if not info or op["v2"]["state"] != "only_v1":
+        return
+    new_id, note = info
+    op["replaced_by"] = {"by": new_id, "note": note}
+    op["v2"]["state"] = "replaced"
+    op["action"] = (f"перенесена: {note}" if not new_id else f"заменена на `{new_id}`: {note}")
+
+
 HTTP = ("get", "post", "patch", "put", "delete", "head", "options")
 
 
@@ -1866,7 +1965,13 @@ def strip_query_hole(p):
 
 
 def path_sample(p):
-    return re.sub(r"\{[^}]*\}", "1", p)
+    """Образец пути для сверки с шаблонами шлюза (самопроверка «строки шлюза, не совпадающие ни с одним маршрутом»).
+    Обычный параметр — «1» (числовой id); токен (имя параметра содержит «token») — 32 буквенно-цифровых символа:
+    короткая «1» не проходит длину `{20,64}` у токенов вроде `TOKEN_URLSAFE` (write-gate.js) и самопроверка ложно
+    считала строку шлюза «осиротевшей» (2026-09-22, DELETE /shaft-panels/pending/{token} — Docs/v2-progress/gaps.md)."""
+    def sub(m):
+        return "sample12345678901234567890123456" if "token" in m.group(0)[1:-1].lower() else "1"
+    return re.sub(r"\{[^}]*\}", sub, p)
 
 
 def module_screens(screens, v2_files):
@@ -2516,6 +2621,10 @@ def build_matrix(cur_ref, pub_ref):
                        "совпадение набора не проверялось — при переносе экрана сверить, какие настройки вида пользователь ожидает сохранить"),
             "priority": -99,
         })
+    for o in ops:
+        apply_replacement(o)
+    used_replacements = {o["id"] for o in ops if o.get("replaced_by")}
+    stale_replacements = sorted(set(REPLACED_BY) - used_replacements)
     blockers = load_blockers()
     for o in ops:
         apply_blocker(o, blockers)
@@ -2526,7 +2635,7 @@ def build_matrix(cur_ref, pub_ref):
         o["n"] = i
     return {"ops": ops, "C": C, "P": P, "v1": v1, "v1_by_route": v1_by_route, "v1_unmatched": v1_unmatched,
             "cur": cur, "pub": pub, "screens": screens, "pub_screens": pub_screens, "scene_keys": scene_keys,
-            "stale_blockers": stale_blockers}
+            "stale_blockers": stale_blockers, "stale_replacements": stale_replacements}
 
 
 ACTION_RU = {
@@ -2826,6 +2935,10 @@ def self_checks(M):
     checks["lists"]["blockers.json: записи без операции в матрице или для уже реализованной/опубликованной операции (проверить, не устарели ли)"] = stale_blockers
     if stale_blockers:
         pr.append(f"blockers.json: устаревших записей {len(stale_blockers)}")
+    stale_replacements = M.get("stale_replacements") or []
+    checks["lists"]["REPLACED_BY (gen_v2_operations.py): записи без операции в матрице или для уже НЕ «только переход в V1» операции (проверить, не устарели ли)"] = stale_replacements
+    if stale_replacements:
+        pr.append(f"REPLACED_BY: устаревших записей {len(stale_replacements)}")
     for k, v in checks["lists"].items():
         if v and k.startswith(("обращения V1 к путям", "обращения V2 к путям")):
             pr.append(f"{k}: {len(v)}")
@@ -2839,12 +2952,13 @@ STATE_LABEL = {
     "published": "реализована и опубликована на 8000",
     "branch": "реализована в ветке, не опубликована/не проверена",
     "gate_disabled": "в V2, но отключена шлюзом",
+    "replaced": "функция перенесена (замена старого маршрута, см. REPLACED_BY)",
     "only_v1": "только переход в V1",
     "blocked_external": "заблокирована внешним условием",
     "none": "отсутствует",
     "unused": "не вызывается интерфейсами (нет в V1 и V2)",
 }
-STATE_ORDER = ["published", "branch", "gate_disabled", "only_v1", "blocked_external", "none", "unused"]
+STATE_ORDER = ["published", "branch", "gate_disabled", "replaced", "only_v1", "blocked_external", "none", "unused"]
 EFFECT_LABEL = {"read": "чтение", "read-post": "чтение (POST)", "analyze": "разбор файла", "write": "запись", "client": "клиентская"}
 
 
@@ -2871,6 +2985,9 @@ def v2_cell(o):
         where = ", ".join(v["calls"][:2]) if v["calls"] else "сцена V1 в кадре"
         scr = f" · экран `{v['screen']}`" if v["screen"] else ""
         return f"{'есть' if st != 'gate_disabled' else 'форма есть'}: {where}{scr}"
+    if st == "replaced":
+        rep = o.get("replaced_by") or {}
+        return f"заменена на `{rep.get('by')}`" if rep.get("by") else "перенесена (тот же маршрут, не увиден статически)"
     if st == "only_v1":
         return f"только переход в V1 (экран `{v['screen']}`, статус {v['screen_status']})"
     return "нет" + (f" (ближайший экран `{v['screen']}`)" if v["screen"] else "")
@@ -2972,6 +3089,27 @@ def render_md(M, checks, cur_ref, pub_ref):
         c = ss.get(s, Counter())
         w(f"| {s} | " + " | ".join(str(c.get(x, 0)) for x in STATE_ORDER) + f" | {sum(c.values())} |")
     w("")
+    # замены: старый маршрут числился бы «только переход в V1», но функция уже перенесена (REPLACED_BY, 2026-09-22)
+    w("## Замены маршрутов V1 → V2")
+    w("")
+    w("Пользователь прямо указал: «старый API, заменённый безопасным новым API, не означает отсутствие пользовательской "
+      "функции» — раз функция перенесена, старый маршрут не пробел, даже если им продолжает пользоваться V1. Строки ниже "
+      "(словарь `REPLACED_BY` в `scripts/gen_v2_operations.py`) числились бы «только переход в V1»/«заблокирована», но "
+      "проверкой (чтением кода и, где отмечено, живым прогоном) подтверждено, что функция уже в V2 — под тем же путём "
+      "(генератор не разобрал вызов статически) или под новым, более безопасным. В сводках выше это состояние "
+      f"«{STATE_LABEL['replaced']}», отдельной строкой — не гол-пробел.")
+    w("")
+    w("| Старый маршрут (V1) | Новый маршрут/операция (V2) | Примечание |")
+    w("| --- | --- | --- |")
+    replaced_ops = {o["id"]: o for o in ops if o["v2"]["state"] == "replaced"}
+    for old_id, (new_id, note) in REPLACED_BY.items():
+        op = replaced_ops.get(old_id)
+        mark = "" if op else " ⚠ не найдена в текущей матрице — проверить актуальность записи"
+        w(f"| `{cell(old_id)}` | {cell(new_id) if new_id else '_тот же маршрут_'} | {cell(note)}{mark} |")
+    w("")
+    if checks["lists"].get("REPLACED_BY (gen_v2_operations.py): записи без операции в матрице или для уже НЕ «только переход в V1» операции (проверить, не устарели ли)"):
+        w("**Внимание:** есть устаревшие записи `REPLACED_BY` — см. «Самопроверки генератора» ниже.")
+        w("")
     # экраны
     w("## Экраны V2: статус и состав операций")
     w("")
