@@ -114,7 +114,15 @@ let pendingWrites = 0;
 const writeListeners = new Set();
 function notifyPendingWrites() { for (const fn of writeListeners) fn(pendingWrites); }
 
-async function request(method, path, body, { read = false } = {}) {
+// Фоновые записи ЛИЧНЫХ настроек (последний объект, состояние навигации): проходят шлюз как обычная запись, но НЕ считаются
+// «идущим сохранением» — иначе медленный ответ на них молча отменял перерисовку экрана при смене объекта (экран оставался с
+// данными прежнего объекта под шапкой нового). Список закрытый: данные объекта так не пишутся.
+const BACKGROUND_WRITES = [
+  { method: "PUT", re: /^\/me\/last-object$/ },
+  { method: "PATCH", re: /^\/users\/\d+\/v2-shell-prefs$/ },
+];
+
+async function request(method, path, body, { read = false, background = false } = {}) {
   // read: POST-запрос, который ТОЛЬКО читает (отчёты V1 берут параметры отбора телом запроса). Он не считается
   // записью: не блокирует переходы и не показывает «идёт сохранение».
   const isWrite = method !== "GET" && !read;
@@ -133,7 +141,7 @@ async function request(method, path, body, { read = false } = {}) {
       err.blockedByPolicy = true;
       throw err;
     }
-    pendingWrites++; notifyPendingWrites();
+    if (!background) { pendingWrites++; notifyPendingWrites(); }
   }
   try {
     let res;
@@ -161,7 +169,7 @@ async function request(method, path, body, { read = false } = {}) {
     }
     return data;
   } finally {
-    if (isWrite) { pendingWrites--; notifyPendingWrites(); }
+    if (isWrite && !background) { pendingWrites--; notifyPendingWrites(); }
   }
 }
 
@@ -224,6 +232,10 @@ export const api = {
     // теле запроса, порог прав на сервере «schedule: read», ничего не пишет — app/schedule_versions.py: post_deviation)
     if (!/^\/reports\/[a-z0-9-]+(\/cell)?$/.test(path) && !/^\/objects\/\d+\/(block-works\/bulk-preview|blocks\/work-types-settings\/preview)$/.test(path) && path !== "/schedule-versions/deviation") throw new Error(`readPost: «${path}» не отчёт и не предпросмотр — это запись, используйте post()`);
     return request("POST", path, body ?? {}, { read: true });
+  },
+  backgroundWrite: (method, path, body) => {
+    if (!BACKGROUND_WRITES.some((w) => w.method === method && w.re.test(path))) throw new Error(`backgroundWrite: «${method} ${path}» не личная настройка`);
+    return request(method, path, body ?? {}, { background: true });
   },
   hasPendingWrites: () => pendingWrites > 0,
   onPendingWritesChange(fn) { writeListeners.add(fn); return () => writeListeners.delete(fn); },

@@ -77,6 +77,7 @@ function applyThemeFamily(uiTheme) {
 }
 
 let activeModule = null; // {hasUnsavedChanges, guardLeave} текущего смонтированного раздела
+let mountedObjectId = null; // объект, под который смонтирован текущий раздел (сверяется при смене объекта)
 
 // Один переход за раз: пока идёт guardLeave (диалог «Несохранённые
 // изменения», возможное сохранение) и монтирование нового раздела, вторые и
@@ -458,7 +459,7 @@ async function renderShell(user, permissions) {
     writeSession("v2.objectId", String(id));
     // «Последний объект — за пользователем», ТЕМ ЖЕ эндпоинтом, что уже использует V1 (не дублируем в
     // v2-shell-prefs). Не блокирует переключение и не роняет его при отказе — это удобство, а не условие перехода.
-    api.put("/me/last-object", { object_id: id }).catch((e) => { /* не критично — при следующем входе просто не подхватится */ });
+    api.backgroundWrite("PUT", "/me/last-object", { object_id: id }).catch((e) => { /* не критично — при следующем входе просто не подхватится */ });
     rightsOk = await loadRights();
     updateObjectButton();
     legacySelect.value = String(id); // список опций не меняется при простой смене объекта — только значение
@@ -469,16 +470,26 @@ async function renderShell(user, permissions) {
     const cur = currentKey === "home" ? null : screenOf(currentKey);
     // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
     // если экран доступен на новом объекте; иначе — обычный путь (экран недоступен → начальная страница).
-    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { updateGateNote(cur); return true; }
+    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { mountedObjectId = objectId; updateGateNote(cur); return true; }
     // Рабочее место другого типа учёта (ЖБИ ↔ МФР) на новом объекте не применяется — открываем парное, а не начальную страницу.
     if (cur && cur.impl === "workspace" && !allowedScreen(cur)) {
       const twin = registry.screens.find((x) => x.impl === "workspace" && x.id !== cur.id && allowedScreen(x)
         && (cur.ws === "mfr" ? x.ws === "model" : x.ws === "mfr"));
       if (twin) { openSection(twin.id, { force: true, guarded: true }); return true; }
     }
-    if (cur && !isModule(cur)) openSection(currentKey, { force: true, guarded: true });
-    else if (currentKey === "home") openSection("home", { force: true, guarded: true });
+    if ((cur && !isModule(cur)) || currentKey === "home") reopenForObject(currentKey);
     return true;
+  }
+  // Перерисовка раздела под новый объект. Отказ openSection (идёт другой переход или запись) не должен оставлять под шапкой
+  // нового объекта данные прежнего — повтор, пока смонтированный раздел относится к другому объекту. Если его тем временем
+  // смонтировал другой переход уже под новым объектом (или человек ушёл в другой раздел) — повторять нечего, и уже открытый
+  // раздел с возможными несохранёнными правками не трогаем.
+  async function reopenForObject(key) {
+    for (let i = 0; i < 300; i++) {
+      if (mountedObjectId === objectId || currentKey !== key) return;
+      if (await openSection(key, { force: true, guarded: true })) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
   }
 
   // ---- левая навигация: три состояния (свёрнута/временно открыта/закреплена), поиск, группы — shell-nav.js.
@@ -718,6 +729,7 @@ async function renderShell(user, permissions) {
           screen: target, structure: registry.structure[target.id], objectId, rights, groupTitle: groupTitle(target.group),
         });
       }
+      mountedObjectId = objectId;
       updateGateNote(key === "home" ? null : target);
       return true;
     } finally { navBusy = false; }

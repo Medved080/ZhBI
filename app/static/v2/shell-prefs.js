@@ -62,7 +62,7 @@ export function createShellPrefsStore({ api, user }) {
     clearTimeout(timer); timer = null;
     if (!dirty) return;
     dirty = false;
-    try { await api.patch(`/users/${user.id}/v2-shell-prefs`, payload()); }
+    try { await api.backgroundWrite("PATCH", `/users/${user.id}/v2-shell-prefs`, payload()); }
     catch (e) { /* личная настройка — молчаливый отказ (сеть/сессия) не должен мешать работе с оболочкой;
                    следующее изменение (или flush() при выгрузке страницы) попробует снова с уже АКТУАЛЬНЫМ prefs */ }
   }
