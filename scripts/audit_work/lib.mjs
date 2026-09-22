@@ -93,6 +93,16 @@ export async function choose(b, sel, value) {
   await sleep(200);
 }
 export const writes = (b, from = 0) => b.requests.slice(from).filter((r) => r.method !== "GET" && r.method !== "OPTIONS" && !/\/activity$/.test(r.url) && !/\/reports\//.test(r.url));
+// Настоящая перезагрузка страницы (goto на тот же адрес с #… — переход внутри документа, страница НЕ перезагружается)
+export async function reload(b) {
+  b.send("Page.reload", { ignoreCache: true }).catch(() => {});
+  await sleep(800);
+  // несохранённый ввод на странице — браузер спросит «Покинуть страницу?»: отвечаем «да» (ввод и так проверяется отдельно)
+  try { await b.send("Page.handleJavaScriptDialog", { accept: true }, 3000); } catch { /* диалога не было */ }
+  await sleep(500);
+  await b.waitFor(`document.readyState === 'complete'`, 30000);
+  await sleep(500);
+}
 export const noPageScroll = (b) => b.eval(`document.documentElement.scrollHeight <= innerHeight + 1 && document.documentElement.scrollWidth <= innerWidth + 1`);
 
 // Вход в V1 в ТОЙ ЖЕ сессии (cookie общий) — для сверки чисел V2 с V1 на одном сервере

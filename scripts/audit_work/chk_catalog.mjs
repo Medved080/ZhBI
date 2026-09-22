@@ -2,7 +2,7 @@
 // openElementForm). Настоящий backend на копии БД, настоящий вход формой V2, настоящие щелчки и ввод (scripts/cdp.mjs); числа
 // отбора сверены с SQL и с самим V1 на том же сервере; запись (смена статуса, удаление записи истории) — SQL до/после, журнал,
 // двойная отправка, обрыв связи, 403 под ограниченной ролью. Запуск: node scripts/audit_work/chk_catalog.mjs (порт 8375)
-import { startServer, stopServer, check, summary, sleep, SP, session, openScreen, tap, choose, exec, sql, sql1, writes, openV1 } from "./lib.mjs";
+import { startServer, stopServer, check, summary, sleep, SP, session, openScreen, tap, choose, exec, sql, sql1, writes, openV1, reload } from "./lib.mjs";
 
 const PORT = 8375;
 const S = await startServer(PORT, `${SP}/aw_catalog`, {
@@ -85,7 +85,7 @@ try {
   await b.waitFor(`/Смонтирован/.test(document.querySelector('#ec-table tbody tr[data-id="${E.id}"]')?.innerText || '')`, 15000);
   check("смена статуса: строка справочника перечитана (статус «Смонтирован»)", true);
   // результат после перезагрузки страницы: отбор, строка и карточка восстановлены
-  await b.goto(`${S.base}/v2#/element-catalog`, 1500);
+  await reload(b);   // настоящая перезагрузка страницы
   await b.waitFor(`document.querySelector('#ec-card .ws-mark') && /Найдено \\d+/.test(document.querySelector('#ec-summary').textContent)`, 40000);
   const after = await b.eval(`({ filter: document.querySelector('input[data-textfilter="id"]')?.value, active: document.querySelector('#ec-table tr.ec-active')?.dataset.id, chip: document.querySelector('#ec-card .ws-chip')?.textContent })`);
   check("после перезагрузки: отбор, выбранная строка и карточка восстановлены, статус «Смонтирован»", after.filter === String(E.id) && after.active === String(E.id) && /Смонтирован/.test(after.chip), JSON.stringify(after));
@@ -101,15 +101,20 @@ try {
   check("удаление записи истории: SQL — записи нет, статус снова «Доставлен»", sql1(S.db, `SELECT COUNT(*) FROM status_history WHERE id=${lastH}`) === 0 && sql1(S.db, `SELECT current_status FROM elements WHERE id=${E.id}`) === "delivered");
 
   // конфликт устаревших данных: изделие изменили в обход открытой карточки — сервер отказывает (ожидаемый статус), запись не идёт
+  // карточка должна «успокоиться» после удаления записи истории (её перечитывание) — иначе она прочитает изменённое состояние сама
+  for (let i = 0; i < 40; i++) { await sleep(250); if (!b.requests.slice(-20).some((r) => r.status === undefined)) break; }
+  await sleep(1500);
   exec(S.db, `UPDATE elements SET current_status='installed' WHERE id=${E.id}`);
   await choose(b, '#ec-card #ws-sform select[name=status]', "accepted");
+  check("перед конфликтом карточка показывает прежний статус «Доставлен»", /Доставлен/.test(await b.eval(`document.querySelector('#ec-card .ws-chip')?.textContent || ''`)));
   n = b.requests.length;
   await tap(b, '#ec-card #ws-sform button[type=submit]');
-  await b.waitFor(`document.querySelector('#ec-card .ws-err')`, 20000);
+  try { await b.waitFor(`document.querySelector('#ec-card .ws-err')`, 20000); }
+  catch (e) { console.log("ОТЛАДКА карточки:", (await b.eval(`document.querySelector('#ec-card')?.innerText || ''`)).replace(/\n+/g, " | ").slice(0, 900), JSON.stringify(b.requests.slice(n).map((r) => r.method + " " + new URL(r.url).pathname + " " + r.status))); throw e; }
   const conf = b.requests.slice(n).filter((r) => r.url.endsWith("/element-ops/status-batch")).map((r) => `${JSON.parse(r.body).mode}:${r.status}`);
   check("конфликт: изменённое в обход изделие — отказ сервера, «Принят» не записан", sql1(S.db, `SELECT current_status FROM elements WHERE id=${E.id}`) === "installed" && !conf.some((x) => x.startsWith("apply:200")), `${conf.join(",")}; ${await b.eval(`document.querySelector('#ec-card .ws-err').textContent`)}`);
   exec(S.db, `UPDATE elements SET current_status='delivered' WHERE id=${E.id}`);
-  await b.goto(`${S.base}/v2#/element-catalog`, 1500);
+  await reload(b);   // настоящая перезагрузка страницы
   // (после полной перезагрузки страницы первый вход в справочник под нагрузкой бывает дольше — ждём с запасом)
   await b.waitFor(`document.querySelector('#ec-card #ws-sform select[name=status]') && /Доставлен/.test(document.querySelector('#ec-card .ws-chip')?.textContent || '')`, 90000);
 
