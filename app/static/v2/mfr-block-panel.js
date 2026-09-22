@@ -238,6 +238,8 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
       repaint();
     },
     anyActive() { return filterActive(st.filter) || st.dyn.on; },
+    // подписи блоков «секция · этаж» (для перечня выделенных блоков — как полоса группы V1 updateBlockGroupUi)
+    labels() { return labelsMap(); },
     destroy() { dead = true; closeAllModals(); },
   };
 }

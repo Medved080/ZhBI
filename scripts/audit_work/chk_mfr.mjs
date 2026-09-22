@@ -85,6 +85,11 @@ try {
         await b.click(cv.x + cv.w * p1[0], cv.y + cv.h * p1[1]); await sleep(1200);
         await b.click(cv.x + cv.w * p2[0], cv.y + cv.h * p2[1], { meta: true }); await sleep(1500);
         check("⌘-щелчок в 3D добавляет второй блок: «Выбрано блоков: 2»", /Выбрано блоков: 2/.test(await status(b)), await status(b));
+        await tap(b, `.ws-tabs [data-tab="props"]`); await sleep(800);
+        const codes = [one, second].map((id) => sql1(S.db, `SELECT s.code FROM blocks b JOIN object_sections s ON s.id=b.section_id WHERE b.id=${id}`));
+        const pn = await b.eval(`document.querySelector('#ws-panel-body')?.innerText || ''`);
+        check("панель перечисляет выбранные блоки поимённо (как полоса группы V1)", /Выбрано блоков: 2 — /.test(pn) && codes.every((c) => pn.includes(c)), codes.join(",") + " / " + (pn.match(/Выбрано блоков[^\n]*/) || [""])[0]);
+        await tap(b, `.ws-tabs [data-tab="filters"]`); await sleep(300);
       } else check("⌘-щелчок в 3D: найдены точки обоих блоков", false, `p1 ${p1}, p2 ${p2}`);
     } else check("⌘-щелчок в 3D: найдена вторая секция с одним блоком на этаже", false);
   }

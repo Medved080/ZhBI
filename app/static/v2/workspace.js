@@ -578,14 +578,15 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }
     const key = `${sel.kind}:${sel.id}`;
     const d = detail.id === key ? detail.data : null;
-    const many = m.selectedBlocks.length > 1 ? `<p class="v2-muted">Выбрано блоков: ${m.selectedBlocks.length}. Ниже — сведения о последнем выбранном.</p>` : "";
+    const names = m.selectedBlocks.length > 1 ? (() => { const L = mbp?.labels?.() || {}; return m.selectedBlocks.map((id) => L[id] || `блок ${id}`).join(", "); })() : "";
+    const many = m.selectedBlocks.length > 1 ? `<p class="v2-muted">Выбрано блоков: ${m.selectedBlocks.length} — ${esc(names)}. «Состав работ» и «Сроки» применятся ко всем выбранным; ниже — сведения о последнем выбранном.</p>` : "";
     const actions = `<div class="ws-actions"><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button></div>`;
     if (detail.id === key && detail.error) return `<div class="ws-pad"><h3 class="ws-h">${sel.kind === "block" ? "Блок" : "Элемент"}</h3><p class="v2-muted">${esc(detail.error)}</p>${actions}</div>`;
     if (!d) return `<div class="ws-pad"><h3 class="ws-h">${sel.kind === "block" ? "Блок" : "Элемент"}</h3><p class="v2-muted">Загрузка…</p>${actions}</div>`;
     if (sel.kind === "block") {
       const g = d["геометрия"] || {}, st = d["статусы_работ"] || {};
       const boxes = g.boxes || [];
-      const dim = g.ok && boxes.length ? `${Math.round(Math.max(...boxes.map((b) => b.x1)) - Math.min(...boxes.map((b) => b.x0)))}×${Math.round(Math.max(...boxes.map((b) => b.y1)) - Math.min(...boxes.map((b) => b.y0)))}×${Math.round(g.z1 - g.z0)} мм` : `недоступна: ${g.reason || "не определена"}`;
+      const dim = g.ok && boxes.length ? `${Math.round(Math.max(...boxes.map((b) => b.x1)) - Math.min(...boxes.map((b) => b.x0)))}×${Math.round(Math.max(...boxes.map((b) => b.y1)) - Math.min(...boxes.map((b) => b.y0)))}×${Math.round(g.z1 - g.z0)} мм${boxes.length > 1 ? ` (${boxes.length} прямоугольника, общий охват)` : ""}${g.approx_height ? " (высота приблизительно — соседний этаж не даёт точной)" : ""}` : `недоступна: ${g.reason || "не определена"}`;
       return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc([d["секция"], d["этаж"]].filter(Boolean).join(" · ") || "Блок")}</div><div class="ws-type">Блок модели</div></div>${many}${actions}
         <h4>Состав</h4><dl class="ws-dl">${row("Элементов модели", d["элементов"])}${row("Помещений", d["помещений"])}${row("Габарит", dim)}</dl>
         <h4>Виды работ</h4>${st["всего"] ? `<dl class="ws-dl">${row("План", st["план"])}${row("В работе", st["в_работе"])}${row("Выполнено", st["выполнено"])}${row("Всего", st["всего"])}</dl>` : `<p class="v2-muted">Видов работ, адресуемых на блок, не заведено.</p>`}
