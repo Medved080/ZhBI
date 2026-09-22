@@ -49,8 +49,9 @@ from pydantic import BaseModel
 from app import activity
 from app.access import assert_object_feature
 from app.auth import get_current_user
-from app.db import get_connection
+from app.db import begin_write, get_connection
 from app.models import Status
+from app.record_version import assert_fresh, digest
 from app.schedule_import import save_version
 
 router = APIRouter(prefix="/schedule-calc", tags=["schedule"])
@@ -74,6 +75,23 @@ def _work_kinds(conn: sqlite3.Connection, object_id: int) -> dict:
             "rate": r["rate_per_day"], "order": r["order_no"],
         }
     return out
+
+
+def inputs_version(conn: sqlite3.Connection, object_id: int) -> str:
+    """Отпечаток исходных данных расчёта (виды работ + поток) — та же идея, что
+    у `app.record_version` для контрактации (V2, атомарный расчёт с предпросмотром):
+    «Расчёт» и «Сохранить исходные данные» должны отказать, а не молча посчитать
+    или записать поверх данных, которые человек не видел (правку внёс кто-то другой
+    между открытием формы и подтверждением). V1 версию не шлёт — поведение прежнее."""
+    виды = _work_kinds(conn, object_id)
+    поток = _flow(conn, object_id)
+    # sort_keys=True у digest() упорядочивает только ключи словаря верхнего уровня; строки внутри списков
+    # сортируются здесь явным ключом — среди подтипов встречается None, а None и str в Python не сравнить.
+    work_kinds = sorted(([t, st or None, v["rate"], v["order"]] for (t, st), v in виды.items()),
+                        key=lambda r: (r[0], r[1] or ""))
+    flow = sorted(([k[0], k[1], k[2], o] for k, o in поток.items()),
+                  key=lambda r: (r[0], r[1], r[2]))
+    return digest({"work_kinds": work_kinds, "flow": flow})
 
 
 def _flow(conn: sqlite3.Connection, object_id: int) -> dict:
@@ -457,7 +475,7 @@ def get_inputs(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
                 "quantity": в_модели_фронты.get(ключ, 0),
                 "in_model": ключ in в_модели_фронты,
             })
-        return {"work_kinds": строки_видов, "flow": строки_потока}
+        return {"work_kinds": строки_видов, "flow": строки_потока, "version": inputs_version(conn, object_id)}
     finally:
         conn.close()
 
@@ -480,6 +498,9 @@ class InputsIn(BaseModel):
     object_id: int
     work_kinds: list[WorkKindIn]
     flow: list[FlowIn]
+    # Отпечаток исходных данных, который видел человек, открывая форму (V2, оптимистичная проверка).
+    # V1 поле не шлёт — правит и сохраняет как раньше, без сверки.
+    expected_version: Optional[str] = None
 
 
 @router.put("/inputs")
@@ -489,7 +510,9 @@ def put_inputs(body: InputsIn, user: sqlite3.Row = Depends(get_current_user)):
     сохранение потребовало бы отдельно решать судьбу удалённых строк."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи первым действием (app/db.py) — сверка прав, версии и запись идут под одной блокировкой
         assert_object_feature(conn, user, body.object_id, "schedule", "write")
+        assert_fresh(body.expected_version, inputs_version(conn, body.object_id), "Исходные данные расчёта")
         conn.execute("DELETE FROM schedule_work_kinds WHERE object_id = ?", (body.object_id,))
         conn.executemany(
             "INSERT INTO schedule_work_kinds (object_id, element_type, subtype, rate_per_day, order_no) "
@@ -507,7 +530,8 @@ def put_inputs(body: InputsIn, user: sqlite3.Row = Depends(get_current_user)):
         conn.commit()
         activity.log("schedule_inputs_save", user=user, entity_type="object", entity_id=body.object_id,
                      new_value=f"видов работ {len(body.work_kinds)}, фронтов {len(body.flow)}")
-        return {"ok": True, "work_kinds": len(body.work_kinds), "flow": len(body.flow)}
+        return {"ok": True, "work_kinds": len(body.work_kinds), "flow": len(body.flow),
+                "version": inputs_version(conn, body.object_id)}
     finally:
         conn.close()
 
@@ -519,16 +543,28 @@ class CalcIn(BaseModel):
     # на объекте, где монтаж ещё не начинался.
     start_date: str
     skip_installed: bool = True
-    # save=False — «показать, что получится», без записи версии.
+    # save=False — «показать, что получится», без записи версии (предпросмотр V2: та же формула, без записи).
     save: bool = True
     note: Optional[str] = None
+    # Отпечаток исходных данных (темпы, порядок, поток), который человек видел на предпросмотре (V2). При
+    # save=True и заданном отпечатке — сверка ПОД блокировкой записи: кто-то поправил темп между предпросмотром
+    # и подтверждением — отказ 409 без записи версии, а не тихий расчёт по другим числам, чем показано на экране.
+    # V1 поле не шлёт — считает и сохраняет одним движением, без сверки (поведение не изменилось).
+    expected_inputs_version: Optional[str] = None
 
 
 @router.post("")
 def run_calc(body: CalcIn, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
+        if body.save:
+            # Пишущий путь (подтверждение): блокировка первым действием — сверка прав, версии исходных данных
+            # и запись идут под одной блокировкой; второй расчёт того же объекта ждёт, а не читает устаревшее.
+            begin_write(conn)
         assert_object_feature(conn, user, body.object_id, "schedule", "write")
+        if body.save:
+            assert_fresh(body.expected_inputs_version, inputs_version(conn, body.object_id),
+                        "Исходные данные расчёта")
         try:
             итог = calculate(conn, body.object_id, body.start_date, body.skip_installed)
         except ScheduleCalcError as e:
@@ -551,6 +587,9 @@ def run_calc(body: CalcIn, user: sqlite3.Row = Depends(get_current_user)):
             # уложился график, не выкачивая девять тысяч дат.
             "first_date": min((d[0] for d in итог["dates"].values()), default=None),
             "last_date": max((d[1] for d in итог["dates"].values()), default=None),
+            # Отпечаток исходных данных НА МОМЕНТ этого расчёта — предпросмотр (save=False) возвращает его,
+            # чтобы форма отправила его же в подтверждение; при save=True — отпечаток данных, по которым считали.
+            "inputs_version": inputs_version(conn, body.object_id),
         }
     finally:
         conn.close()

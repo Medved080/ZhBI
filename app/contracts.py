@@ -750,39 +750,71 @@ def list_contract_elements(contract_id: int, user: sqlite3.Row = Depends(get_cur
 # Порог — `contract`, а не `admin` (2026-08-04): выбор живёт ВНУТРИ формы
 # «Контракты», которую комплектовщик и открывает; оставь здесь `admin` — и
 # он видел бы список, а каждая смена значения молча получала бы 403.
+def default_contracts_map(conn, object_id: int) -> dict:
+    rows = conn.execute(
+        "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
+        (object_id,),
+    ).fetchall()
+    return {r["element_type"]: r["contract_id"] for r in rows}
+
+
+def default_contracts_version(conn, object_id: int) -> str:
+    """Отпечаток ВСЕЙ карты «контракт по умолчанию» объекта (V2, оптимистичная проверка перед заменой целиком)."""
+    return record_version.digest(default_contracts_map(conn, object_id))
+
+
 @router.get("/default-map")
 def get_default_contracts(object_id: int = Query(...),
                           user: sqlite3.Row = Depends(require_feature("default_contracts", "read"))):
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
-            (object_id,),
-        ).fetchall()
-        return {r["element_type"]: r["contract_id"] for r in rows}
+        return default_contracts_map(conn, object_id)
     finally:
         conn.close()
 
 
 @router.put("/default-map")
 def set_default_contracts(mapping: dict, object_id: int = Query(...),
+                          # V2: замена ВСЕЙ карты объекта, только по ожидаемой версии (см. ниже); V1 параметр не
+                          # шлёт — поведение прежнее: значения из mapping добавляются/обновляются, остальные строки
+                          # не трогаются (V1 отправляет один изменённый тип за раз, а не карту целиком).
+                          expected_version: Optional[str] = Query(None),
                           admin: sqlite3.Row = Depends(require_feature("default_contracts", "write"))):
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи первым действием (app/db.py): сверка версии и запись — под одной блокировкой
+        if expected_version is not None:
+            record_version.assert_fresh(expected_version, default_contracts_version(conn, object_id),
+                                        "Контракты по умолчанию")
+            # Замена ЦЕЛИКОМ (V2): типа нет во входящей карте — значит, для него default снят.
+            keep = list(mapping.keys())
+            if keep:
+                q = ",".join("?" * len(keep))
+                conn.execute(f"DELETE FROM default_contracts WHERE object_id = ? AND element_type NOT IN ({q})",
+                            [object_id, *keep])
+            else:
+                conn.execute("DELETE FROM default_contracts WHERE object_id = ?", (object_id,))
         for element_type, contract_id in mapping.items():
+            if contract_id is not None:
+                # Контракт должен существовать и относиться к ЭТОМУ ЖЕ объекту — иначе INSERT упадёт на FK
+                # (`foreign_keys=ON`, app/db.py) невнятной ошибкой 500; здесь та же проверка, что делает V1 на
+                # клиенте (выбор из списка контрактов объекта), только на сервере — источник запроса не важен.
+                owner = conn.execute(
+                    "SELECT a.object_id FROM contracts co JOIN specifications s ON s.id = co.specification_id "
+                    "JOIN agreements a ON a.id = s.agreement_id WHERE co.id = ?", (contract_id,)).fetchone()
+                if owner is None or owner["object_id"] != object_id:
+                    raise HTTPException(status_code=400,
+                                        detail=f"Контракт для «{element_type}» не найден или относится к другому объекту")
             conn.execute(
                 "INSERT INTO default_contracts (object_id, element_type, contract_id) VALUES (?, ?, ?) "
                 "ON CONFLICT(object_id, element_type) DO UPDATE SET contract_id = excluded.contract_id",
                 (object_id, element_type, contract_id),
             )
         conn.commit()
-        rows = conn.execute(
-            "SELECT element_type, contract_id FROM default_contracts WHERE object_id = ?",
-            (object_id,),
-        ).fetchall()
+        result = default_contracts_map(conn, object_id)
         activity.log("default_contracts", user=admin, entity_type="object", entity_id=object_id,
                      new_value="; ".join(f"{t}: {c}" for t, c in mapping.items())[:500])
-        return {r["element_type"]: r["contract_id"] for r in rows}
+        return result
     finally:
         conn.close()
 

@@ -98,13 +98,15 @@ export function plannedDateBodyProblem(b) {
   return isNullableDate(b.planned_delivery_date) ? null : "дата неверна";
 }
 
-// POST /dictionaries/{counterparty|agreement|specification|contract}/{id}/delete — ТОЛЬКО замена (режим «свёртка дублей» отключён)
+// POST /dictionaries/{counterparty|agreement|specification|contract}/{id}/delete — «replace» (замена ссылок у каждой записи по отдельности)
+// или «merge» (свёртка дублей: подчинённые переезжают к другой записи целиком, замена нужна только для КОРНЯ — server.py сам проверяет план заново)
 const DEL_KEY = /^(counterparty|agreement|specification|contract):\d+$/;
 export function contractingDeleteBodyProblem(b) {
   if (!isObj(b) || !onlyKeys(b, ["replacements", "mode"])) return "лишние поля";
-  if (b.mode !== "replace") return "разрешён только режим замены";
+  if (b.mode !== "replace" && b.mode !== "merge") return "неизвестный режим удаления";
   if (!isObj(b.replacements)) return "замены не заданы";
   for (const [k, v] of Object.entries(b.replacements)) if (!DEL_KEY.test(k) || !isStr(v) || !/^\d+$/.test(v)) return "замена: неверный ключ";
+  if (b.mode === "merge" && Object.keys(b.replacements).length !== 1) return "свёртка: нужна ровно одна замена — для самой записи";
   return null;
 }
 
@@ -136,4 +138,63 @@ export function supplierDocActionBodyProblem(b) {
   if (b === undefined) return null;
   if (!isObj(b) || !onlyKeys(b, ["expected_version"])) return "лишние поля";
   return optVersion(b) ? null : "версия документа не строка";
+}
+
+// ---- график СМР (app/schedule_calc.py, app/schedule_versions.py) ----
+
+// PUT /schedule-calc/inputs — виды работ (темп, порядок) и поток (очередь фронтов крана) целиком, с отпечатком того, что видел человек
+const WORK_KIND_KEYS = ["element_type", "subtype", "rate_per_day", "order_no"];
+const FLOW_KEYS = ["crane_name", "stance_name", "floor", "order_no"];
+const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+export function scheduleInputsBodyProblem(b) {
+  if (!isObj(b) || !onlyKeys(b, ["object_id", "work_kinds", "flow", "expected_version"])) return "лишние поля";
+  if (!isId(b.object_id)) return "не указан объект";
+  if (!Array.isArray(b.work_kinds) || b.work_kinds.length > 500) return "виды работ: неверный список";
+  for (const w of b.work_kinds) {
+    if (!isObj(w) || !onlyKeys(w, WORK_KIND_KEYS)) return "вид работ: лишние поля";
+    if (!isNameStr(w.element_type)) return "вид работ: не указан тип";
+    if ("subtype" in w && !isNullableStr(w.subtype)) return "вид работ: подтип не строка";
+    if ("rate_per_day" in w && w.rate_per_day !== null && (!isNum(w.rate_per_day) || w.rate_per_day < 0)) return "вид работ: темп — число не меньше нуля";
+    if ("order_no" in w && w.order_no !== null && !Number.isInteger(w.order_no)) return "вид работ: порядок — целое число";
+  }
+  if (!Array.isArray(b.flow) || b.flow.length > 5000) return "поток: неверный список";
+  for (const f of b.flow) {
+    if (!isObj(f) || !onlyKeys(f, FLOW_KEYS)) return "поток: лишние поля";
+    if (!isNameStr(f.crane_name) || !isNameStr(f.stance_name)) return "поток: не указаны кран или стоянка";
+    if (!Number.isInteger(f.floor)) return "поток: этаж — целое число";
+    if ("order_no" in f && f.order_no !== null && !Number.isInteger(f.order_no)) return "поток: порядок — целое число";
+  }
+  if (!optVersion(b)) return "отпечаток исходных данных не строка";
+  return null;
+}
+
+// POST /schedule-calc — расчёт (предпросмотр save:false или подтверждение save:true, одна и та же форма тела)
+export function scheduleCalcBodyProblem(b) {
+  if (!isObj(b) || !onlyKeys(b, ["object_id", "start_date", "skip_installed", "save", "note", "expected_inputs_version"])) return "лишние поля";
+  if (!isId(b.object_id)) return "не указан объект";
+  if (!isIsoDate(b.start_date)) return "не указана дата начала работ";
+  if (typeof b.skip_installed !== "boolean") return "не указан режим «считать от факта»";
+  if (typeof b.save !== "boolean") return "не указано, сохранять ли результат";
+  if ("note" in b && !isNullableStr(b.note)) return "примечание не строка";
+  // NB: optVersion(b) саму b проверяет через "expected_version" in b — обёртка {expected_version: b.expected_inputs_version} испортила бы
+  // проверку для предпросмотра (save:false, поля нет вовсе): ключ у обёртки есть всегда, даже со значением undefined.
+  if ("expected_inputs_version" in b && !isStr(b.expected_inputs_version)) return "отпечаток исходных данных не строка";
+  return null;
+}
+
+// ---- контракт по умолчанию по типу изделия (app/contracts.py) ----
+
+const HEX16 = /^[0-9a-f]{16}$/;
+// PUT /contracts/default-map?object_id=...&expected_version=... — замена ВСЕЙ карты объекта, только по ожидаемой версии
+export function defaultContractsMapBodyProblem(b, query) {
+  if (!isObj(b) || Object.keys(b).length > 200) return "карта контрактов по умолчанию: неверная форма";
+  for (const [type, contractId] of Object.entries(b)) {
+    if (!isNameStr(type)) return "карта: пустой тип изделия";
+    if (contractId !== null && !isId(contractId)) return `карта: неверный контракт для «${type}»`;
+  }
+  const q = new URLSearchParams(query || "");
+  if (!isId(Number(q.get("object_id")))) return "не указан объект";
+  const ev = q.get("expected_version");
+  if (!ev || !HEX16.test(ev)) return "нет отпечатка текущей карты — замена целиком возможна только по ожидаемому состоянию";
+  return null;
 }

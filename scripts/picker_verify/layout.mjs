@@ -39,6 +39,10 @@ try {
     check(`L6 ${tag} контракт: рабочее пространство, «Сохранить» видна без прокрутки страницы`, noScroll(await metrics()) && (await b.eval(`(()=>{const e=document.querySelector('#ctr-foot-actions');if(!e)return false;const r=e.getBoundingClientRect();return r.bottom<=innerHeight&&r.top>=0})()`)), JSON.stringify(await metrics()));
     await hardGoto(b, `${base}/v2#/contracts`, 1200); await b.waitFor(`document.querySelectorAll('#cl-inner tbody tr').length>0`, 15000);
     check(`L7 ${tag} контракты, список`, noScroll(await metrics()), JSON.stringify(await metrics()));
+    await hardGoto(b, `${base}/v2#/schedule`, 1200); await b.waitFor(`(document.querySelector('#sc-inner')?.innerText||'').includes('На диаграмме')`, 20000);
+    check(`L9 ${tag} график СМР, «Визуализация»`, noScroll(await metrics()), JSON.stringify(await metrics()));
+    await b.eval(`document.querySelector('[data-sc-tab="inputs"]')?.click()`); await sleep(600);
+    check(`L10 ${tag} график СМР, «Исходные данные расчёта»`, noScroll(await metrics()), JSON.stringify(await metrics()));
   }
   check("L8 ошибок JavaScript нет", b.exceptions.length === 0, b.exceptions.slice(0, 2).join("; "));
 } catch (e) {

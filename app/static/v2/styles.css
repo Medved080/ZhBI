@@ -942,3 +942,21 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-matrix-cycle { border: 1px solid var(--line); background: none; border-radius: 5px; padding: 2px 8px; font-size: 12px; white-space: nowrap; }
 .v2-matrix-in_progress { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .v2-matrix-done { background: color-mix(in srgb, var(--good) 16%, transparent); }
+/* График СМР: диаграмма Ганта (2026-09-22) — имя закреплено слева (--gname), полоса прокручивается вместе со шкалой;
+   план и прогноз — два цвета, повторяющие пару «план — факт» графика «Динамики» V1. */
+.v2-gantt-wrap { --plan: light-dark(#2e6da8, #6fa8dc); --fc: light-dark(#c2571a, #e2924f); max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.v2-gantt-scale { position: sticky; top: 0; z-index: 2; height: 24px; background: var(--surface); border-bottom: 1px solid var(--line); margin-left: var(--gname); }
+.v2-gantt-mon { position: absolute; font-size: 11px; color: var(--muted); padding: 3px 4px; }
+.v2-gantt-today { position: absolute; top: 0; bottom: -2000px; width: 1px; background: var(--bad); opacity: .5; }
+.v2-gantt-body { position: relative; }
+.v2-gantt-row { display: flex; min-height: 22px; border-bottom: 1px solid var(--line); }
+.v2-gantt-name { flex: 0 0 var(--gname); position: sticky; left: 0; background: var(--bg); display: flex; align-items: center; gap: 6px; font-size: 12px; padding-right: 6px; white-space: nowrap; overflow: hidden; z-index: 1; }
+.v2-gantt-txt { overflow: hidden; text-overflow: ellipsis; }
+.v2-gantt-tw { border: 0; background: none; padding: 0; width: 14px; font-size: 11px; color: var(--muted); flex: none; }
+.v2-gantt-track { position: relative; }
+.v2-gantt-bar { position: absolute; top: 5px; height: 5px; border-radius: 2px; }
+.v2-gantt-plan { background: var(--plan); }
+.v2-gantt-fc { top: 12px; background: var(--fc); }
+.v2-gantt-lvl-crane { height: 8px; } .v2-gantt-lvl-crane.v2-gantt-fc { top: 14px; }
+.v2-gantt-lvl-stance { height: 6px; }
+.v2-gantt-pct { position: absolute; top: 12px; font-size: 10px; color: var(--muted); white-space: nowrap; }

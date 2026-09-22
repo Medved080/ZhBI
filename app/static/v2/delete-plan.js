@@ -41,12 +41,15 @@ export function consequencesText(node, withLabel) {
 
 const refsText = (n) => (n.refs || []).map((r) => `${r.label}: ${r.count}`).join(", ");
 
-// Окно выбора замен. Отправку выполняет `submit(replacements)` внутри окна: при отказе сервера окно остаётся открытым, выбор сохраняется, человек
+// Окно выбора замен — и, если запись «сворачиваема» (mergeable), выбора режима «перенести подчинённые» (свёртка дублей) вместо «заменить каждую
+// по отдельности» (тот же выбор, что в V1: по умолчанию — перенос, когда он возможен, замена ничего не теряет только у ошибочной записи).
+// В режиме переноса показывается ТОЛЬКО корень — подчинённые переезжают целиком, выбирать им нечего.
+// Отправку выполняет `submit(replacements, mode)` внутри окна: при отказе сервера окно остаётся открытым, выбор сохраняется, человек
 // может поправить выбор или отменить (повторной отправки без него нет). submit → {done:true, result, info?} | {error:"текст"}. Возвращает итог потока.
-function openReplacementDialog({ api, plan, title, lead, submit }) {
+function openReplacementDialog({ api, plan, title, lead, submit, mergeable = false, adoptTitle = "" }) {
   return new Promise((resolve) => {
     const rows = flatten(plan);
-    const need = rows.filter((r) => r.node.needs_replacement);
+    let mode = mergeable ? "merge" : "replace";
     const choice = new Map();                 // nodeId -> выбранный ключ замены
     const cands = new Map();                  // nodeId -> {parentKey, list|null, error}
     let busy = false;
@@ -55,10 +58,13 @@ function openReplacementDialog({ api, plan, title, lead, submit }) {
     backdrop.className = "v2-dialog-backdrop";
     document.body.appendChild(backdrop);
 
+    // Режим «merge» — только корень (переезжают подчинённые целиком); «replace» — вся ветка, только узлы со ссылками.
+    const needRows = () => (mode === "merge" ? [rows[0]] : rows.filter((r) => r.node.needs_replacement));
+    const displayRows = () => (mode === "merge" ? [rows[0]] : rows);
     const parentChoice = (r) => (r.parent ? choice.get(nodeId(r.parent)) ?? null : null);
     async function loadCands(r) {
       const id = nodeId(r.node), pk = parentChoice(r);
-      if (r.parent && need.some((x) => x.node === r.parent) && !pk) { cands.set(id, { parentKey: null, list: null, error: "" }); return; }
+      if (r.parent && needRows().some((x) => x.node === r.parent) && !pk) { cands.set(id, { parentKey: null, list: null, error: "" }); return; }
       const cur = cands.get(id);
       if (cur && cur.parentKey === pk && (cur.list || cur.error)) return;
       cands.set(id, { parentKey: pk, list: null, error: "", loading: true });
@@ -73,26 +79,40 @@ function openReplacementDialog({ api, plan, title, lead, submit }) {
       }
       paint();
     }
-    async function refreshAll() { for (const r of need) await loadCands(r); }
+    async function refreshAll() { for (const r of needRows()) await loadCands(r); }
+    async function switchMode(next) {
+      if (mode === next) return;
+      mode = next; choice.clear(); cands.clear();
+      paint();
+      await refreshAll();
+    }
 
-    const complete = () => need.every((r) => choice.get(nodeId(r.node)));
+    const complete = () => needRows().every((r) => choice.get(nodeId(r.node)));
     function paint(errorText = "") {
       const focusedId = backdrop.contains(document.activeElement) ? document.activeElement.dataset?.dpSel : null;
+      const need = needRows();
+      const modeChoice = !mergeable ? "" : `<div class="v2-callout" role="radiogroup" aria-label="Что сделать с подчинёнными записями" style="margin:8px 0">
+        <label style="display:block"><input type="radio" name="dp-mode" value="merge" ${mode === "merge" ? "checked" : ""} ${busy ? "disabled" : ""}/>
+          Перенести ${esc(adoptTitle || "подчинённые записи")} к другой записи <span class="v2-muted">— свернуть задвоенное: содержимое переедет целиком, совпавшие по номеру сольются</span></label>
+        <label style="display:block"><input type="radio" name="dp-mode" value="replace" ${mode === "replace" ? "checked" : ""} ${busy ? "disabled" : ""}/>
+          Заменить каждую запись по отдельности <span class="v2-muted">— годится, когда запись ошибочна и её содержимое не нужно</span></label></div>`;
       backdrop.innerHTML = `<div class="v2-dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}" style="width:720px;max-height:calc(100vh - 48px);overflow:auto">
         <h3 style="margin:0 0 8px;font-size:16px">${esc(title)}</h3>
         <p style="white-space:pre-line">${esc(lead)}</p>
-        <div id="dp-tree">${rows.map((r) => {
-          const n = r.node, id = nodeId(n), needs = !!n.needs_replacement, c = cands.get(id);
+        ${modeChoice}
+        <div id="dp-tree">${displayRows().map((r) => {
+          const n = r.node, id = nodeId(n), needs = need.some((x) => x.node === n), c = cands.get(id);
           const sel = !needs ? `<span class="v2-muted">уходит без замены</span>` : !c || c.loading ? `<span class="v2-muted">${r.parent && need.some((x) => x.node === r.parent) && !parentChoice(r) ? "сначала выберите замену выше" : "загрузка вариантов…"}</span>`
             : c.error ? `<span class="v2-auth-error">${esc(c.error)}</span>`
             : !c.list.length ? `<span class="v2-auth-error">заменить нечем — заведите другую запись «${esc(n.kind_title)}» у выбранного владельца</span>`
             : `<select data-dp-sel="${esc(id)}" aria-label="Замена: ${esc(n.kind_title)} «${esc(n.label)}»" ${busy ? "disabled" : ""}><option value="">— выберите замену —</option>${c.list.map((o) => `<option value="${esc(o.key)}" ${String(choice.get(id)) === String(o.key) ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
           return `<div style="margin:6px 0 6px ${r.depth * 20}px"><div><strong>${esc(n.kind_title)}</strong> «${esc(n.label)}»${refsText(n) ? ` <small class="v2-muted">— ссылки: ${esc(refsText(n))}</small>` : ""}${(n.cascade || []).length ? ` <small class="v2-muted">— уйдёт: ${esc((n.cascade || []).map((x) => `${x.label}: ${x.count}`).join(", "))}</small>` : ""}</div><div>${sel}</div></div>`;
         }).join("")}</div>
-        <p class="v2-muted" style="margin:12px 0 4px">Ссылки (изделия, записи истории, контракт по умолчанию) переносятся на выбранные замены, затем запись и её подчинённые удаляются. Всё выполняется одной операцией: при отказе (например, в замене нет позиции под марку изделий) ничего не изменится.</p>
+        <p class="v2-muted" style="margin:12px 0 4px">${mode === "merge" ? "Подчинённые записи переедут к выбранной, совпавшие по номеру сольются; затем опустевшая запись удаляется." : "Ссылки (изделия, записи истории, контракт по умолчанию) переносятся на выбранные замены, затем запись и её подчинённые удаляются."} Всё выполняется одной операцией: при отказе (например, в замене нет позиции под марку изделий) ничего не изменится.</p>
         <div class="v2-auth-error" id="dp-error" role="alert">${esc(errorText)}</div>
-        <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-dp="cancel" ${busy ? "disabled" : ""}>Отмена</button><button type="button" class="v2-btn v2-danger" data-dp="ok" ${!complete() || busy ? "disabled" : ""}>${busy ? "Перенос…" : "Подтвердить перенос и удалить"}</button></div>
+        <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-dp="cancel" ${busy ? "disabled" : ""}>Отмена</button><button type="button" class="v2-btn v2-danger" data-dp="ok" ${!complete() || busy ? "disabled" : ""}>${busy ? (mode === "merge" ? "Перенос…" : "Удаление…") : (mode === "merge" ? "Подтвердить перенос и удалить" : "Подтвердить замену и удалить")}</button></div>
       </div>`;
+      backdrop.querySelectorAll('input[name="dp-mode"]').forEach((r) => r.addEventListener("change", () => switchMode(r.value)));
       backdrop.querySelectorAll("[data-dp-sel]").forEach((s) => s.addEventListener("change", async () => {
         const id = s.dataset.dpSel;
         choice.set(id, s.value || undefined);
@@ -108,10 +128,10 @@ function openReplacementDialog({ api, plan, title, lead, submit }) {
       backdrop.querySelector('[data-dp="ok"]').addEventListener("click", async () => {
         if (busy || !complete()) return;
         const replacements = {};
-        for (const r of need) replacements[nodeId(r.node)] = String(choice.get(nodeId(r.node)));
+        for (const r of needRows()) replacements[nodeId(r.node)] = String(choice.get(nodeId(r.node)));
         busy = true; paint();                         // блокировка ДО первого await: двойной щелчок — один запрос
         let res;
-        try { res = await submit(replacements); } catch (err) { res = { error: err?.detail || err?.message || "Не удалось удалить" }; }
+        try { res = await submit(replacements, mode); } catch (err) { res = { error: err?.detail || err?.message || "Не удалось удалить" }; }
         if (res.done) { finish(res.result, res.info); return; }
         busy = false; paint(res.error || "");
       });
@@ -163,9 +183,10 @@ export async function runDeleteFlow({ api, kind, id }) {
     return "failed";
   }
   const consequences = consequencesText(plan.plan, withWhat);
+  const mergeable = !!plan.plan.mergeable;
 
   // Сама отправка. План перечитывается НЕПОСРЕДСТВЕННО перед удалением: за время выбора его мог изменить другой пользователь
-  const submit = async (replacements) => {
+  const submit = async (replacements, mode = "replace") => {
     try {
       const fresh = await api.get(`/dictionaries/${kind}/${id}/delete-plan`);
       if (planSignature(fresh.plan) !== planSignature(plan.plan) || fresh.blockers?.length) {
@@ -175,17 +196,17 @@ export async function runDeleteFlow({ api, kind, id }) {
       return { error: `Не удалось перечитать план удаления — ничего не удалено: ${err?.detail || err?.message || ""}` };
     }
     let outcome;
-    try { outcome = await postDelete(api, kind, id, { replacements, mode: "replace" }); }
+    try { outcome = await postDelete(api, kind, id, { replacements, mode }); }
     catch (err) { return { error: err?.detail || err?.message || "Не удалось удалить" }; }   // отказ определённый: ничего не изменено
     if (outcome === "exists") return { done: true, result: "exists", info: "Ответ сервера не получен, запись осталась на месте (проверено чтением). Ничего не отправлено повторно — повторите удаление вручную." };
     if (outcome === "unknown") return { done: true, result: "unknown", info: "Ответ сервера не получен, и проверить результат не удалось: исход неизвестен. Ничего не отправлено повторно — обновите страницу и проверьте список." };
     return { done: true, result: "deleted" };
   };
 
-  if (plan.plan.needs_replacement) {
+  if (plan.plan.needs_replacement || mergeable) {
     const r = await openReplacementDialog({
-      api, plan: plan.plan, title: `Удалить ${what} «${plan.plan.label}»`, submit,
-      lead: `На запись или на её подчинённые записи ссылаются данные системы.${consequences}\nВыберите, на что заменить каждую запись — ссылки будут перенесены на замену.`,
+      api, plan: plan.plan, title: `Удалить ${what} «${plan.plan.label}»`, submit, mergeable, adoptTitle: plan.plan.adopt_title,
+      lead: `${plan.plan.needs_replacement ? "На запись или на её подчинённые записи ссылаются данные системы." : "У записи есть подчинённые."}${consequences}\n${mergeable ? "Выберите, что сделать с подчинёнными записями." : "Выберите, на что заменить каждую запись — ссылки будут перенесены на замену."}`,
     });
     if (r.info) await showInfoDialog(r.info);
     return r.result;
