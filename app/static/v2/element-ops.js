@@ -95,7 +95,7 @@ export function createElementOps(ctx) {
   const forms = new Map();
   const F = (id) => { if (!forms.has(id)) forms.set(id, { st: { status: "", at: "", comment: "", contractId: null, contractLabel: "", busy: false, error: "", done: "", warn: "" },
     pd: { open: false, date: "", busy: false, error: "", done: "" }, cm: { open: false, text: "", busy: false, error: "", done: "" }, ct: { busy: false, error: "", done: "" },
-    hs: { busy: false, error: "", done: "" }, ef: { done: "" }, at: attachState() }); return forms.get(id); };
+    hs: { busy: false, error: "", done: "" }, ef: { done: "" }, at: attachState(), mm: { loaded: false, loading: false, error: "", data: null } }); return forms.get(id); };
   // Итог групповой операции показывается вверху панели и переживает перечитывание схемы (оно снимает выделение вместе с формой)
   const banner = { kind: "", text: "" };
   const setBanner = (kind, text) => { banner.kind = kind; banner.text = text; };
@@ -175,6 +175,65 @@ export function createElementOps(ctx) {
   }
   const refreshDetailIfSelected = (id) => { const s = sc(); if (s?.selected?.id === id) reloadDetail(id); };
 
+  // ------------------------------------------------------------ мини-карта расположения изделия (2026-09-22): где оно стоит — оси, зоны, контур.
+  // Устройство повторяет предпросмотр геометрии зоны (zones-edit.js): та же проекция, тот же порядок координат, тот же приём с масштабом «по bbox».
+  // Загружается лениво при показе карточки (как вложения — bindAttachments), кэш живёт, пока не сброшен через reset() при смене объекта/перезагрузке схемы.
+  const MM_W = 400, MM_H = 300;
+  async function loadContext(id) {
+    const f = F(id), m = f.mm;
+    if (m.loaded || m.loading) return;
+    m.loading = true; repaint();
+    try {
+      const data = await api.get(`/elements/${id}/context`);
+      m.data = data; m.loaded = true; m.error = "";
+    } catch (err) {
+      m.error = errText(err, "Не удалось загрузить карту расположения");
+    } finally {
+      m.loading = false; if (!isDead()) repaint();
+    }
+  }
+  function contextSvg(data) {
+    if (!data || !data.bbox) return `<text x="${MM_W / 2}" y="${MM_H / 2}" text-anchor="middle" font-size="12" fill="currentColor" opacity="0.55">Нет геометрии для показа</text>`;
+    let [minX, minY, maxX, maxY] = data.bbox;
+    const pad = Math.max(maxX - minX, maxY - minY) * 0.03 || 1;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    const scale = Math.min(MM_W / (maxX - minX || 1), MM_H / (maxY - minY || 1));
+    const offX = (MM_W - (maxX - minX) * scale) / 2, offY = (MM_H - (maxY - minY) * scale) / 2;
+    const sx = (x) => offX + (x - minX) * scale, sy = (y) => MM_H - offY - (y - minY) * scale;
+    const parts = [];
+    for (const axis of data.axes || []) {
+      parts.push(axis.kind === "numeric"
+        ? `<line x1="${sx(axis.coord).toFixed(1)}" y1="0" x2="${sx(axis.coord).toFixed(1)}" y2="${MM_H}" stroke="currentColor" stroke-width="0.5" opacity="0.35"/>`
+        : `<line x1="0" y1="${sy(axis.coord).toFixed(1)}" x2="${MM_W}" y2="${sy(axis.coord).toFixed(1)}" stroke="currentColor" stroke-width="0.5" opacity="0.35"/>`);
+    }
+    // Свои зоны — поверх чужих и ярче: ответ на «в какой захватке стоит», а не фон.
+    const zones = (data.zones || []).slice().sort((a, b) => (a.own ? 1 : 0) - (b.own ? 1 : 0));
+    for (const z of zones) {
+      const pts = (z.outline || []).map((p) => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
+      parts.push(z.own
+        ? `<polygon points="${pts}" fill="#2471a3" fill-opacity="0.14" stroke="#2471a3" stroke-opacity="0.9" stroke-width="1.4"/>`
+        : `<polygon points="${pts}" fill="#888" fill-opacity="0.04" stroke="#888" stroke-opacity="0.25" stroke-width="0.7"/>`);
+    }
+    // Само изделие: настоящий контур, если есть, плюс заметный маркер (контур на фоне стройки в сотни метров — несколько пикселей, глазами не найти).
+    const el = data.element || {};
+    if (el.outline && el.outline.length > 2) {
+      parts.push(`<polygon points="${el.outline.map((p) => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ")}" fill="#d68910" fill-opacity="0.9" stroke="#7d5109" stroke-width="0.8"/>`);
+    }
+    const cx = sx(el.x), cy = sy(el.y);
+    parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="9" fill="none" stroke="#d68910" stroke-width="1.6" opacity="0.9"/>`);
+    parts.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="#d68910"/>`);
+    return parts.join("");
+  }
+  function miniMapHtml(f) {
+    const m = f.mm;
+    if (m.error) return `<div class="eo-mm"><p class="ws-err" role="alert">${esc(m.error)}</p></div>`;
+    if (!m.loaded) return `<div class="eo-mm"><p class="v2-muted">Загрузка…</p></div>`;
+    const own = new Map();
+    for (const z of m.data.zones || []) if (z.own) own.set(z.id, `${z.category} «${z.name || "—"}»`);
+    const hint = own.size ? Array.from(own.values()).join(", ") : "зоны не определены";
+    return `<div class="eo-mm"><svg viewBox="0 0 ${MM_W} ${MM_H}" class="eo-mm-svg" role="img" aria-label="Мини-карта расположения изделия: оси, зоны, положение">${contextSvg(m.data)}</svg><p class="v2-muted eo-mm-hint">${esc(hint)}</p></div>`;
+  }
+
   // ------------------------------------------------------------ вспомогательное: предпросмотр и запись смены статуса (одно изделие или пачка)
   const statusBody = (mode, objectId, status, at, comment, assign, items, expect) => {
     const b = { mode, object_id: objectId, status, items };
@@ -210,6 +269,7 @@ export function createElementOps(ctx) {
       <div class="ws-actions"><button type="button" class="v2-btn" data-act="locate">Показать на схеме</button><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button>${R.fields ? `<button type="button" class="v2-btn" data-eo="ef-open">Форма элемента…</button>` : ""}</div>
       ${f.ef.done ? `<p class="ws-ok" role="status">${esc(f.ef.done)}</p>` : ""}
       <h4>Размещение</h4><dl class="ws-dl">${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
+      <h4>Мини-карта</h4>${miniMapHtml(f)}
       <h4>Контрактация</h4><dl class="ws-dl">${contractBlock}</dl>
       ${canContract ? `<div class="ws-actions"><button type="button" class="v2-btn" data-eo="ct-pick" ${f.ct.busy ? "disabled" : ""}>${e.contract_id ? "Изменить контракт…" : "Назначить контракт…"}</button></div>` : ""}
       ${f.ct.error ? `<p class="ws-err" role="alert">${esc(f.ct.error)}</p>` : ""}${f.ct.done ? `<p class="ws-ok" role="status">${esc(f.ct.done)}</p>` : ""}
@@ -915,6 +975,7 @@ export function createElementOps(ctx) {
       const at = F(id).at;
       if (!at.loaded && !at.loading) loadAttachments(api, at, id, repaint);
       bindAttachments(body, api, at, id, { canDelete: R.attachmentsDelete }, repaint);
+      loadContext(id);
     }
     // --- одно изделие
     const sf = body.querySelector("#ws-sform");
