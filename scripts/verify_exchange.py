@@ -584,10 +584,46 @@ def seed_external_model(object_id, name="Проверка V2"):
     return model_id
 
 
+import gen_synthetic_fbx as fbxgen  # noqa: E402
+
+
+def fbxup(s, path, content, name="m.fbx", meta=None, data=None, timeout=60):
+    payload = dict(data or {})
+    payload["meta"] = json.dumps(meta or {"kind": "ground", "source_anchor_mm": {"x": 0, "y": 0, "z": 0}}, ensure_ascii=False)
+    return s.post(BASE + path, files={"file": (name, content, "application/octet-stream")}, data=payload, timeout=timeout)
+
+
 def section_external_models():
     print("== внешние 3D-модели объекта (FBX)")
     admin = login("admin")
     OBJ = 1
+
+    # ---- загрузка: синтетический бинарный FBX (реальный меш, scripts/gen_synthetic_fbx.py) ----
+    ok_fbx = fbxgen.generate("ok")
+    good_meta = {"kind": "ground", "source_anchor_mm": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "bbox_size_mm": {"x": 1000.0, "y": 1000.0, "z": 1000.0}, "mesh_count": 1, "triangle_count": 1,
+                "texture_count": 0, "warnings": []}
+    for user in ("user2", "user4"):
+        before = snap()
+        r = fbxup(login(user), f"/objects/{OBJ}/external-models", ok_fbx, meta=good_meta)
+        check(r.status_code == 403 and snap() == before, f"upload: {user} → {r.status_code}, БД не изменена")
+    for variant, needle in (("bad_axis", "профиль"), ("bad_unit", "unitscalefactor")):
+        before = snap()
+        r = fbxup(admin, f"/objects/{OBJ}/external-models", fbxgen.generate(variant), meta=good_meta)
+        check(r.status_code == 422 and needle.lower() in r.text.lower() and snap() == before,
+              f"upload: {variant} отклонён понятным текстом ({r.status_code}: {r.text[:100]}), БД не изменена")
+    r = fbxup(admin, f"/objects/{OBJ}/external-models", ok_fbx, name="m.obj", meta=good_meta)
+    check(400 <= r.status_code < 500, f"upload: неверное расширение → {r.status_code}")
+    j0 = journal_max()
+    r = fbxup(admin, f"/objects/{OBJ}/external-models", ok_fbx, meta={**good_meta, "name": "Загруженная модель"})
+    check(r.status_code == 200, f"upload: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    up_id = res["id"]
+    check(res["name"] == "Загруженная модель" and res["kind"] == "ground" and res["scale"]["x"] == 1.0, f"upload: поля модели верны ({res.get('name')}, {res.get('kind')}, scale={res.get('scale')})")
+    check(rows(f"select count(*) n from object_external_models where id={up_id} and object_id={OBJ}")[0]["n"] == 1, "upload: запись в БД")
+    check(len(journal_since(j0, "external_model_upload")) == 1, "журнал: одно событие external_model_upload")
+    r = admin.delete(BASE + f"/objects/{OBJ}/external-models/{up_id}")
+    check(r.status_code == 200, "upload: подчистили за собой (удаление)")
 
     # ---- список: права, форма ----
     r = admin.get(BASE + f"/objects/{OBJ}/external-models")

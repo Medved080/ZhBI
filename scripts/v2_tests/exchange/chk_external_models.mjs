@@ -2,7 +2,7 @@
 // Тестовая запись заводится напрямую в копии БД (как в scripts/verify_exchange.py, section_external_models) — GET/PATCH/
 // recenter/DELETE не читают файл с диска (delete_file() не падает на отсутствие файла).
 import { execFileSync } from "node:child_process";
-import { open, screen, text, reload, clk, SP, sql, maxid, journal, chk, summary } from "./hx.mjs";
+import { open, screen, text, reload, clk, setFile, EX, SP, sql, maxid, journal, chk, summary } from "./hx.mjs";
 
 const OBJ = 1;
 const PY = process.env.V2_EX_PY || ".venv/bin/python";
@@ -25,10 +25,42 @@ c.close()
 `], { encoding: "utf8" }).trim();
 }
 
-const modelId = Number(seed("БраузерТест"));
-
 const b = await open("admin");
 await screen(b, "external-models");
+await b.eval(`document.querySelector('#em-upload-details').open = true`);
+
+console.log("== загрузка FBX: настоящий разбор клиентом (Three.js/FBXLoader), диалог называет геометрию, применение");
+await setFile(b, "#em-file", EX + "/bad_axis.fbx");
+await b.eval(`document.querySelector('#em-name').value = 'Неподдержанные оси'`);
+await clk(b, "#em-go");
+// клиентский разбор (app/static/external-models/fbx-global-settings.js — та же проверка профиля осей, что и на сервере)
+// отклоняет файл ДО диалога подтверждения и ДО сети — запрос на сервер не уходит вовсе.
+await b.waitFor(`document.querySelector('#em-upload-status').className.includes('bad')`, 15000);
+chk(/не распознан/i.test(await text(b, "#em-upload-status")) && /профил|ос[ьи]/i.test(await text(b, "#em-upload-status")),
+  "неподдержанный профиль осей отклонён клиентским разбором (та же проверка, что на сервере), текст показан: " + (await text(b, "#em-upload-status")));
+chk(!(await b.eval(`!!document.querySelector('.v2-dialog')`)), "диалог подтверждения не открывался — отказ до сети");
+
+await setFile(b, "#em-file", EX + "/ok.fbx");
+await b.eval(`document.querySelector('#em-kind').value = 'ground'; document.querySelector('#em-name').value = 'Загрузка браузером'`);
+const j0up = maxid();
+await clk(b, "#em-go");
+// разбор ждёт до 20с таймаута загрузки текстур (app/static/external-models/fbx.js, DEFAULT_LIMITS.textureTimeoutMs) — у синтетического
+// меша без текстур LoadingManager.onLoad никогда не срабатывает сам, ждём именно запасной таймаут (то же самое поведение у V1).
+await b.waitFor(`document.querySelector('.v2-dialog')`, 25000);
+const uploadDlg = await b.eval(`document.querySelector('.v2-dialog').innerText`);
+chk(/мешей 1/.test(uploadDlg) && /треугольников 1/.test(uploadDlg), "диалог называет РЕАЛЬНО разобранную геометрию (1 меш, 1 треугольник): " + uploadDlg.slice(0, 200));
+await clk(b, '[data-choice="confirm"]');
+await b.waitFor(`document.querySelector('#em-upload-status').className.includes('ok')`, 15000);
+chk((await text(b, "#em-upload-status")).includes("загружена"), "загрузка: результат показан — " + (await text(b, "#em-upload-status")));
+await b.waitFor(`document.querySelector('#em-list').innerText.includes('Загрузка браузером')`, 5000);
+chk(true, "новая модель появилась в списке без перезагрузки страницы");
+const uploaded = sql(`select id, kind, size_bytes from object_external_models where name='Загрузка браузером'`)[0];
+chk(uploaded && uploaded.kind === "ground" && uploaded.size_bytes > 0, `в БД запись создана: ${JSON.stringify(uploaded)}`);
+const evUp = journal("external_model_upload", j0up);
+chk(evUp.length === 1, `журнал: одно событие external_model_upload (найдено ${evUp.length})`);
+
+const modelId = Number(seed("БраузерТест"));
+await reload(b, "#/external-models");
 await b.waitFor(`document.querySelector('#em-list').innerText.includes('БраузерТест')`, 10000);
 chk(true, "список показывает заведённую модель");
 
