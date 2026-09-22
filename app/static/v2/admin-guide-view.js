@@ -32,7 +32,7 @@ export function mountAdminGuideView(el, { screen, structure, objectId, api, grou
         <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>Просмотр в новом интерфейсе.</strong> Текст подставлен под этот сервер; команды копируются в буфер обмена.
-        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}<button type="button" class="v2-btn" id="ag-download">Скачать .md</button></div></div>
+        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}<button type="button" class="v2-btn" id="ag-download">Скачать .md</button><button type="button" class="v2-btn" id="ag-copy-all">Копировать всю памятку</button></div></div>
       <div id="ag-body"></div>
     </div>`;
   const $ = (s) => el.querySelector(s);
@@ -80,6 +80,21 @@ export function mountAdminGuideView(el, { screen, structure, objectId, api, grou
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { /* второстепенно — кнопку можно нажать ещё раз */ }
+  });
+  $("#ag-copy-all").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    try {
+      const res = await fetch("/admin-guide.md", { credentials: "same-origin" });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const ok = await copyText(await res.text());
+      const was = btn.textContent;
+      btn.textContent = ok ? "Скопировано" : "Буфер обмена недоступен — воспользуйтесь «Скачать .md»";
+      setTimeout(() => { if (!dead) btn.textContent = was; }, 2500);
+    } catch (err) {
+      const was = btn.textContent;
+      btn.textContent = `Не удалось скопировать: ${errText(err)}`;
+      setTimeout(() => { if (!dead) btn.textContent = was; }, 2500);
+    }
   });
 
   paint();
