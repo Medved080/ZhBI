@@ -72,10 +72,19 @@ export async function frameEval(b, expr) {
   return r.result.value;
 }
 
-/** Дождаться, пока сцена в кадре загрузит данные (снимок моста: loaded). */
-export async function waitScene(b, timeout = 60000) {
+/** Дождаться, пока сцена в кадре ЗАГРУЗИТ ДАННЫЕ (кадр виден уже на время загрузки — этого мало): по умолчанию — изделия схемы ЖБИ
+ *  и цвета статусов в состоянии движка; для МФР передать своё выражение готовности (вычисляется в кадре). */
+export async function waitScene(b, timeout = 60000, ready = "typeof state === 'object' && state.elements.length > 0 && !!state.statusColors") {
   await b.waitFor(`(()=>{const f=document.querySelector('iframe.ws-frame');return !!(f&&f.style.visibility==='visible')})()`, timeout, 300);
-  await b.sleep(800);
+  const t0 = Date.now();
+  for (;;) {
+    let v = false;
+    try { v = await frameEval(b, ready); } catch (e) { v = false; }
+    if (v) break;
+    if (Date.now() - t0 > timeout) throw new Error("сцена в кадре не загрузила данные: " + ready);
+    await b.sleep(400);
+  }
+  await b.sleep(600);
 }
 
 /** Горизонтальная прокрутка страницы/контейнера раздела (переполнение вёрстки). */

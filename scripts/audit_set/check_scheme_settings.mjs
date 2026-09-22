@@ -163,7 +163,7 @@ await m.sleep(1500);
 const rv = JSON.parse(sql(DB, "select value from app_settings where key='revit_colors' and object_id=4")[0]?.value || "{}");
 ok("mfr-colors: SQL цвет «Стены» объекта 4 = #ff8800", rv.colors?.["Стены"] === "#ff8800", JSON.stringify(rv.colors || {}).slice(0, 80));
 await go(m, "ws-mfr");
-await waitScene(m, 90000);
+await waitScene(m, 90000, "revitPlanState.objectId === 4 && revitColors.presets && revitColors.presets.length > 0");
 const mc = await frameEval(m, `(()=>({wall: revitColors.colors['Стены'], preset: revitColors.preset}))()`);
 ok("схема МФР V2: цвет «Стены» из сохранённой схемы", mc?.wall === "#ff8800", JSON.stringify(mc));
 if (SHOTS) await m.shot(`${SHOTS}/scheme-settings-mfr.png`);
