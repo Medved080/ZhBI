@@ -98,9 +98,16 @@ def make_doc(skip=0):
     a = pos["contract_id"]
     b = c.execute("SELECT co.id FROM contracts co JOIN specifications s ON s.id = co.specification_id JOIN agreements ag ON ag.id = s.agreement_id "
                   "WHERE ag.object_id = 1 AND co.is_archived = 0 AND co.id != ? ORDER BY co.id LIMIT 1", (a,)).fetchone()["id"]
-    for cid, qty in ((a, 3), (b, 3)):
+    # Количество — ПОВЕРХ уже привязанного на a/b под эту (тип, марка) факта, а не абсолютная тройка: на накопленных
+    # данных копии там уже может быть что-то привязано, и абсолютное число создавало бы фиктивное превышение остатка
+    # ещё ДО теста (тот же приём, что в verify_picker_backend.py и S14 — тот же класс дефекта фикстуры, найден
+    # 2026-09-22 при добавлении стража в unpost_supplier_change).
+    for cid, extra in ((a, 3), (b, 3)):
+        fact = c.execute(
+            "SELECT COUNT(*) n FROM elements WHERE contract_id = ? AND element_type = ? AND mark = ? AND current_status != 'planned'",
+            (cid, pos["element_type"], pos["mark"])).fetchone()["n"]
         c.execute("DELETE FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark = ?", (cid, pos["element_type"], pos["mark"]))
-        c.execute("INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)", (cid, pos["element_type"], pos["mark"], qty))
+        c.execute("INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)", (cid, pos["element_type"], pos["mark"], fact + extra))
     c.execute("UPDATE elements SET contract_id = ?, current_status = 'contracting' WHERE id = ?", (a, ids[0]))
     c.execute("INSERT INTO status_history (element_id, status, changed_by, contract_id) VALUES (?, 'contracting', 'тест', ?)", (ids[0], a))
     c.commit()
