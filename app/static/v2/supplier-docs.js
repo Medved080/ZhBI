@@ -13,6 +13,14 @@
 // Защита операций: блокировка на время запроса ДО первого await (двойной щелчок — один запрос); правка/проведение/отмена уходят с
 // `expected_version` (версия документа, которую видел человек; при расхождении сервер отвечает 409 без изменений); неизвестный исход (обрыв связи)
 // НЕ повторяется — состояние перечитывается с сервера; выход из несохранённого черновика — сторож «Остаться / Не сохранять / Сохранить».
+//
+// Режим «только просмотр» (2026-09-22, решение пользователя «нужен просмотр»). Экран открывается при праве «Чтение» на любой из двух
+// разделов (screens.json, поле feature), а не только при «Изменении», как пункт меню V1. Документ вида, который человеку не дано
+// изменять, открывается так же, как проведённый: поля заблокированы, состав — таблицей/сторонами, без кнопок создания, правки, удаления,
+// подбора, проведения и отмены. Справочные запросы формы (/refs, /candidates, /contract-marks, /mark-contracts, /swap-elements) сервер
+// отдаёт только при «Изменении» — это материал для ПРАВКИ; просмотру хватает самого документа (GET /supplier-changes/{id}: названия
+// контрактов в шапке, состав с адресами и статусами), поэтому читателю они не запрашиваются вовсе. Изменяющие запросы по-прежнему
+// проверяет сервер (403) — здесь только не показываются кнопки, которые он всё равно отклонил бы.
 import { showUnsavedDialog, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 import { ApiError } from "./api.js";
 
@@ -58,7 +66,11 @@ function pickerShown(x, pk) {
 export function mountSupplierDocs(container, { screen, objectId, api, rights, groupTitle }) {
   let dead = false;
   const can = (kind) => !!rights?.system_admin || (rights?.features || {})[KIND_FEATURE[kind]] === "write";
+  // Просмотр: «Чтение» или «Изменение» (изменение включает просмотр, app/features.py)
+  const canRead = (kind) => !!rights?.system_admin || ["read", "write"].includes((rights?.features || {})[KIND_FEATURE[kind]]);
   const canAny = can("supplier_change") || can("link_swap");
+  // Документ только для просмотра: проведён (его состав не правит никто) или изменять документы этого вида человеку не дано
+  const readOnly = (x) => !x || x.status === "posted" || !can(x.kind);
 
   const S = {
     view: "list",                       // "list" | "doc"
@@ -114,7 +126,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     return JSON.stringify([x.number.trim(), x.date, x.reason.trim(), x.comment.trim(), String(x.from), String(x.to), x.kind === "link_swap" ? x.mark : "",
       x.kind === "supplier_change" ? [...x.chosen.keys()].sort((a, b) => a - b) : [x.sideA.map((e) => e.id), x.sideB.map((e) => e.id)]]);
   }
-  const isDirty = () => S.view === "doc" && !!f() && f().status === "draft" && fingerprint(f()) !== f().saved;
+  const isDirty = () => S.view === "doc" && !!f() && !readOnly(f()) && fingerprint(f()) !== f().saved;
   function fromDoc(d) {
     const x = blankForm(d.kind);
     Object.assign(x, { id: d.id, status: d.status, version: d.version, number: d.number, date: d.doc_date, reason: d.reason || "", comment: d.comment || "",
@@ -130,7 +142,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (S.busy) return;
     S.busy = true; paint();
     try {
-      if (!S.refs.loaded) await loadRefs();
+      // контракты объекта нужны только правке (сервер отдаёт их при «Изменении»); просмотр берёт названия из шапки документа
+      if (!S.refs.loaded && canAny) await loadRefs();
       const d = await api.get(`/supplier-changes/${id}`);
       S.f = fromDoc(d); S.view = "doc"; S.message = "";
       S.busy = false;
@@ -155,7 +168,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
 
   // Данные, зависящие от выбора контрактов: кандидаты (замена) или марки/стороны (обмен)
   async function loadFormData(initial) {
-    const x = f(); if (!x || x.status === "posted") return;
+    const x = f(); if (!x || readOnly(x)) return;
     if (x.kind === "supplier_change") await loadCandidates(); else await loadMarks(initial);
   }
   async function loadCandidates() {
@@ -206,7 +219,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   const unknownText = "Ответ сервера не получен. Ничего не отправлено повторно — ниже показано, что сервер видит сейчас.";
 
   async function saveDraft() {
-    const x = f(); if (!x || S.busy || x.status !== "draft") return false;
+    const x = f(); if (!x || S.busy || readOnly(x)) return false;
     const problem = validate(x); if (problem) { x.error = problem; paint(); return false; }
     S.busy = true; x.error = ""; S.message = ""; paint();
     const snapshot = fingerprint(x);
@@ -231,7 +244,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function loadFormDataSoon() { queueMicrotask(() => { if (!dead) loadFormData(true); }); }
 
   async function deleteDraft() {
-    const x = f(); if (!x || !x.id || S.busy || x.status !== "draft") return;
+    const x = f(); if (!x || !x.id || S.busy || readOnly(x)) return;
     if (!(await showConfirmDialog(`Удалить черновик № ${x.number}? Данные изделий он не менял — удаляется только документ.`, { confirmLabel: "Удалить", danger: true }))) return;
     if (S.busy || f() !== x) return;
     S.busy = true; x.error = ""; paint();
@@ -276,7 +289,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   }
 
   async function postOrUnpost(undo) {
-    const x = f(); if (!x || !x.id || S.busy) return;
+    const x = f(); if (!x || !x.id || S.busy || !can(x.kind)) return;
     if (!undo && isDirty()) { x.error = "Сначала сохраните изменения — проводится то, что сохранено."; paint(); return; }
     S.busy = true; paint();                                 // блокировка ДО первого await
     let text;
@@ -313,7 +326,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   // ------------------------------------------------------------ подбор изделий
   const elLabel = (e) => [e.mark || "—", e.address || `№${e.id}`, e.floor != null ? `этаж ${e.floor}` : null, STATUS[e.status || e.current_status] || e.status || e.current_status].filter(Boolean).join(" · ");
   async function openPicker(side) {
-    const x = f(); if (!x || S.busy) return;
+    const x = f(); if (!x || S.busy || readOnly(x)) return;
     const contract = side === "a" ? x.from : x.to;
     if (!contract || !x.mark) return;
     // view/base — охват мини-схемы (мировые координаты); context — фон (остальные изделия того же типа, точкой) — оба заполняются
@@ -433,7 +446,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function listHtml() {
     if (S.list.error && !S.list.loaded) return `<p class="v2-note">${esc(S.list.error)} <button type="button" class="v2-btn" data-a="reload-list">Повторить</button></p>`;
     if (!S.list.loaded) return `<p class="v2-muted">Загрузка…</p>`;
-    const rows = S.list.items;
+    // Только виды, которые человеку дано смотреть: сервер отдаёт список при «Чтении» хотя бы одного из двух разделов, а открыть
+    // документ разрешает по разделу ЕГО вида — без отбора строка чужого вида вела бы в отказ 403.
+    const rows = S.list.items.filter((d) => canRead(d.kind));
     return `<div class="v2-bar"><h3>Документы объекта</h3><div class="v2-inline">
         ${can("supplier_change") ? `<button type="button" class="v2-btn v2-primary" data-a="new-supplier_change" ${S.busy ? "disabled" : ""}>Новая замена поставщика</button>` : ""}
         ${can("link_swap") ? `<button type="button" class="v2-btn v2-primary" data-a="new-link_swap" ${S.busy ? "disabled" : ""}>Новый обмен привязками</button>` : ""}
@@ -441,6 +456,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       ${S.listNote ? `<p class="v2-ok" role="status">${esc(S.listNote)}</p>` : ""}
       ${S.list.error ? `<p class="v2-auth-error" role="alert">${esc(S.list.error)}</p>` : ""}
       <p class="v2-muted">«Замена поставщика» переводит непоставленные изделия одного контракта на другой; «Обмен привязками» меняет местами изделия одной марки между двумя контрактами. Документ — черновик, пока его не проведут.</p>
+      ${canAny ? "" : `<p class="v2-note" data-readonly-note>Только просмотр: на этом объекте у вас нет права изменять документы контрактации — создание, правка, подбор, проведение и отмена проведения недоступны.</p>`}
       ${rows.length ? `<table class="v2-table"><thead><tr><th>№</th><th>Дата</th><th>Вид</th><th>Состояние</th><th>Марка</th><th>Из контракта</th><th>В контракт</th><th>Изделий</th><th>Создал</th></tr></thead><tbody>
         ${rows.map((d) => `<tr><td><button type="button" class="v2-link" data-open="${d.id}">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.kind_title)}</td><td>${esc(d.status_title)}</td><td>${esc(d.mark || "—")}</td><td>${esc(d.from_contract_name)}</td><td>${esc(d.to_contract_name)}</td><td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов пока нет.</p>`}`;
   }
@@ -467,11 +483,10 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       ${blocked.length ? `<p class="v2-muted"><b>Не переносится: ${blocked.reduce((s, b) => s + b.count, 0)} шт.</b> — статус «${esc(x.cand.blocked_from_label)}» и выше, изделия уже поставлены на площадку: ${blocked.map((b) => `${esc(b.element_type || "—")} · ${esc(b.mark || "—")} — ${b.count}`).join("; ")}.</p>` : ""}`;
   }
 
-  function swapHtml(x) {
-    const ro = x.status === "posted";
+  function swapHtml(x, ro) {
     const sideBox = (sideKey, title, list, other) => `<div><h4>${title}: ${list.length} шт.</h4>${list.length ? list.map((e, i) => `<div class="v2-inline" style="margin:2px 0"><span class="v2-tag">${i + 1}</span><span title="${esc(elLabel(e))}">${esc(elLabel(e))}</span>${i >= other.length ? ' <small class="v2-auth-error">без пары</small>' : ""}${ro ? "" : `<button type="button" class="v2-btn" data-a="mv" data-side="${sideKey}" data-i="${i}" data-d="-1" ${S.busy ? "disabled" : ""} aria-label="Выше">↑</button><button type="button" class="v2-btn" data-a="mv" data-side="${sideKey}" data-i="${i}" data-d="1" ${S.busy ? "disabled" : ""} aria-label="Ниже">↓</button><button type="button" class="v2-btn" data-a="rm" data-side="${sideKey}" data-i="${i}" ${S.busy ? "disabled" : ""} aria-label="Убрать">✕</button>`}</div>`).join("") : `<p class="v2-muted">пусто${ro ? "" : " — нажмите «Подбор…»"}</p>`}
       ${ro ? "" : `<button type="button" class="v2-btn" data-a="pick" data-side="${sideKey}" ${S.busy || !x.mark || !(sideKey === "a" ? x.from : x.to) ? "disabled" : ""}>Подбор…</button>`}</div>`;
-    const pk = x.picker;
+    const pk = ro ? null : x.picker;    // только для просмотра подбор не показывается вовсе — выбор менять нечем и некому
     // Мини-схема слева, список — рядом справа (перенос из V1 scd-picker: клик/рамка по фигурам и список — два способа ОДНОГО
     // выбора, синхронизированные тем, что оба читают и пишут `pk.sel`). Список остаётся ДОПОЛНИТЕЛЬНЫМ способом — не убран.
     const pickerHtml = !pk ? "" : `<div class="v2-callout" role="group" aria-label="Подбор изделий">
@@ -493,22 +508,36 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
 
   function docHtml() {
     const x = f(); if (!x) return "";
-    const ro = x.status === "posted";
+    const posted = x.status === "posted";
+    const viewOnly = !can(x.kind);       // нет права изменять документы этого вида — только просмотр
+    const ro = posted || viewOnly;
     const swap = x.kind === "link_swap";
     const dis = ro || S.busy ? "disabled" : "";
     const onlyB = swap ? new Set([...x.sideBCounts.keys()]) : null;
-    return `<div class="v2-bar"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (ro ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span></h3><button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div>
-      <p class="v2-muted">${ro ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится — сначала отмените проведение.` : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести»."}</p>
+    // Только просмотр: выбор контракта и марки показывается одной строкой — тем, что записано в документе (контракты объекта
+    // читателю не запрашиваются, см. шапку файла). Пишущему — прежние списки.
+    const fixed = (value, label) => `<option value="${esc(value)}" selected>${esc(label)}</option>`;
+    const fromOpts = viewOnly ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from)
+      : `${contractOptions(x.from)}${x.from && !contractById(x.from) ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from) : ""}`;
+    const toOpts = viewOnly ? fixed(x.to, x.head?.to_contract_name || "контракт " + x.to)
+      : `${contractOptions(x.to, swap && !ro ? onlyB : null)}${x.to && !contractById(x.to) ? fixed(x.to, x.head?.to_contract_name || "контракт " + x.to) : ""}`;
+    const markOpts = viewOnly ? fixed(x.mark, x.mark || "—")
+      : `<option value="">${x.from ? "— выберите марку —" : "— сначала контракт стороны 1 —"}</option>${x.marks.map((m) => `<option value="${esc(m.mark)}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · ${esc(m.element_type || "—")} · ${m.count} шт.</option>`).join("")}${x.mark && !x.marks.some((m) => m.mark === x.mark) ? fixed(x.mark, x.mark) : ""}`;
+    const note = posted
+      ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится${viewOnly ? "." : " — сначала отмените проведение."}`
+      : (viewOnly ? "Черновик: данные изделий он не менял — изменения вносит проведение." : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести».");
+    return `<div class="v2-bar"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span>${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div>
+      <p class="v2-muted">${note}</p>
       <div class="v2-fields" style="max-width:none">
         <label class="v2-field">Дата документа<input type="date" data-f="date" value="${esc(x.date)}" ${dis}></label>
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
-        <label class="v2-field">${swap ? "Контракт стороны 1" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}>${contractOptions(x.from)}${x.from && !contractById(x.from) ? `<option value="${esc(x.from)}" selected>${esc(x.head?.from_contract_name || "контракт " + x.from)}</option>` : ""}</select></label>
-        ${swap ? `<label class="v2-field">Марка обмена<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}><option value="">${x.from ? "— выберите марку —" : "— сначала контракт стороны 1 —"}</option>${x.marks.map((m) => `<option value="${esc(m.mark)}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · ${esc(m.element_type || "—")} · ${m.count} шт.</option>`).join("")}${x.mark && !x.marks.some((m) => m.mark === x.mark) ? `<option value="${esc(x.mark)}" selected>${esc(x.mark)}</option>` : ""}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
-        <label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${contractOptions(x.to, swap && !ro ? onlyB : null)}${x.to && !contractById(x.to) ? `<option value="${esc(x.to)}" selected>${esc(x.head?.to_contract_name || "контракт " + x.to)}</option>` : ""}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>
+        <label class="v2-field">${swap ? "Контракт стороны 1" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}>${fromOpts}</select></label>
+        ${swap ? `<label class="v2-field">Марка обмена<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
+        <label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>
         <label class="v2-field v2-span">Причина<input data-f="reason" value="${esc(x.reason)}" ${dis} maxlength="300"></label>
         <label class="v2-field v2-span">Комментарий<input data-f="comment" value="${esc(x.comment)}" ${dis} maxlength="600"></label>
       </div>
-      <div style="margin-top:16px">${swap ? swapHtml(x) : positionsHtml(x, false)}</div>
+      <div style="margin-top:16px">${swap ? swapHtml(x, ro) : positionsHtml(x, ro)}</div>
       ${x.error ? `<p class="v2-auth-error" role="alert" style="margin-top:12px">${esc(x.error)}</p>` : ""}
       ${S.message ? `<p class="v2-ok" role="status" style="margin-top:12px">${esc(S.message)}</p>` : ""}`;
   }
@@ -516,7 +545,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function footHtml() {
     if (S.view !== "doc" || !f()) return "";
     const x = f(), busy = S.busy, dirty = isDirty(), writable = can(x.kind);
-    if (!writable) return `<span class="v2-muted">Нет права изменять документы этого вида на объекте.</span>`;
+    if (!writable) return `<span class="v2-muted" data-readonly-foot>Только просмотр: нет права изменять документы этого вида на объекте.</span>`;
     const b = (label, act, primary, extra = "") => `<button type="button" class="v2-btn ${primary ? "v2-primary" : ""}" data-a="${act}" ${busy || extra ? "disabled" : ""}>${label}</button>`;
     if (x.status === "posted") return b("Отменить проведение", "unpost", false);
     const swapPairsOk = x.kind !== "link_swap" || (x.sideA.length === x.sideB.length && x.sideA.length > 0);
@@ -588,6 +617,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (a === "new-supplier_change" || a === "new-link_swap") { newDoc(a.slice(4)); return; }
     if (a === "back") { backToList(false); return; }
     if (!x) return;
+    // Документ вида, который изменять не дано: кнопок записи и подбора нет в разметке, но и прочие пути к ним закрыты здесь
+    if (!can(x.kind) && a !== "toggle-pos") return;
     if (a === "save") saveDraft();
     else if (a === "post") postOrUnpost(false);
     else if (a === "unpost") postOrUnpost(true);
@@ -620,7 +651,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   }
   (async () => {
     S.busy = true; paint();
-    await Promise.all([loadList(), loadRefs(), loadColors()]);
+    // контракты объекта и цвета мини-схемы нужны только правке и подбору — читателю их не запрашиваем (сервер отдал бы 403 на /refs)
+    await Promise.all([loadList(), canAny ? loadRefs() : null, canAny ? loadColors() : null]);
     S.busy = false; paint();
   })();
 

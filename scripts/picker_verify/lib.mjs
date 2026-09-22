@@ -6,8 +6,9 @@ import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { launch } from "../cdp.mjs";
 
 export const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
-export const SP = "/private/tmp/claude-501/-Users-max-zhbi-tool/fb1df937-b060-4b0c-8d96-fc3a39879326/scratchpad";
-export const BASE_DB = `${SP}/guard_base.db`;
+// PV_SP / PV_BASE_DB — свой каталог и база-источник (параллельные исполнители, очищенный scratchpad); по умолчанию — как было
+export const SP = process.env.PV_SP || "/private/tmp/claude-501/-Users-max-zhbi-tool/fb1df937-b060-4b0c-8d96-fc3a39879326/scratchpad";
+export const BASE_DB = process.env.PV_BASE_DB || `${SP}/guard_base.db`;
 export const PASS = "Test-Pass-1234!";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
