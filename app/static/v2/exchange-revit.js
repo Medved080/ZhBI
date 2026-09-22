@@ -4,7 +4,9 @@
 // Семантика V1: объект выбирается ЯВНО (имена моделей меняются между выдачами, угадывать объект нельзя); «исчезло из модели» считается строго
 // внутри раздела пакета; сводка показывает, что приехало, что изменится, что появится в справочниках, качество данных и план контуров
 // (серым — что уже в объекте, цветом — новое). Применение идёт этапами (справочники → элементы → секции по геометрии), как в V1, после
-// копии базы; токен применяется один раз. Отладочная очистка справочников объекта («Стереть безвозвратно» в форме V1) в V2 не переносится.
+// копии базы; токен применяется один раз. Отладочная очистка справочников объекта («Стереть безвозвратно» в форме V1) — тот же серверный
+// маршрут, что у pdf-import (app/main.py: clear_import_data, source различает раздел PDF от остальных разделов Revit — app/import_reset.py),
+// блок скопирован из exchange-pdf.js (2026-09-22, точка продолжения exchange2.md).
 import { showConfirmDialog } from "./dialogs.js";
 import {
   esc, errText, isUnknownOutcome, fmtSize, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, objectOptions, factsHtml, MAX_UPLOAD_MB,
@@ -49,7 +51,17 @@ export function mountRevitImport(el, ctx) {
       </form>
       <div id="rv-status" class="v2-ex-status" role="status" aria-live="polite"></div>
       <div id="rv-review"></div>
-      <div id="rv-result"></div>`,
+      <div id="rv-result"></div>
+      <details class="v2-collapsible" id="rv-clear-details" style="margin-top:14px">
+        <summary>Очистить справочники объекта перед загрузкой (отладка)</summary>
+        <div class="v2-callout v2-callout-bad" role="note">Стирает отмеченное СРАЗУ, без сводки для проверки. Перед стиранием сервер снимает резервную копию.</div>
+        <label class="v2-wire-check"><input type="checkbox" id="rv-clear-elements"> Элементы модели Revit на этом объекте (все разделы, кроме PDF)</label>
+        <label class="v2-wire-check"><input type="checkbox" id="rv-clear-structure"> Секции и этажи объекта</label>
+        <p class="v2-muted v2-ex-hint">Общие с «Учётом по блокам»: удаление каскадом сотрёт и блоки, и проставленные по ним статусы работ.</p>
+        <label class="v2-wire-check"><input type="checkbox" id="rv-clear-work"> Виды работ и статусы блоков</label>
+        <div class="v2-bar"><button type="button" class="v2-btn v2-danger" id="rv-clear-go">Очистить отмеченное</button></div>
+        <div id="rv-clear-status" class="v2-ex-status" role="status" aria-live="polite"></div>
+      </details>`,
   });
   const $ = (s) => el.querySelector(s);
   const status = makeStatus($("#rv-status"));
@@ -165,7 +177,26 @@ export function mountRevitImport(el, ctx) {
     }
   }
 
+  async function runClear() {
+    const oid = Number($("#rv-object").value) || null;
+    if (!oid) { $("#rv-clear-status").textContent = "Сначала выберите объект."; return; }
+    const body = { source: "revit", elements: $("#rv-clear-elements").checked, structure: $("#rv-clear-structure").checked, work: $("#rv-clear-work").checked };
+    if (!(body.elements || body.structure || body.work)) { $("#rv-clear-status").textContent = "Отметьте хотя бы одну группу для очистки."; return; }
+    const what = [body.elements && "элементы модели Revit", body.structure && "секции и этажи", body.work && "виды работ и статусы блоков"].filter(Boolean).join(", ");
+    const ok = await showConfirmDialog(`Очистить у объекта: ${what}?\n\nЭто необратимо через интерфейс (кроме восстановления из резервной копии, которую сервер снимет перед очисткой). Сводки «что изменится» здесь нет — стирается сразу.`, { confirmLabel: "Очистить", danger: true, multiline: true });
+    if (!ok) return;
+    const btn = $("#rv-clear-go"); btn.disabled = true;
+    $("#rv-clear-status").textContent = "Очищаем…";
+    try {
+      const res = await api.post(`/objects/${oid}/clear-import-data`, body);
+      $("#rv-clear-status").textContent = `Готово: ${Object.entries(res.counts || {}).map(([k, v]) => `${k} — ${v}`).join(", ") || "нечего было чистить"}.`;
+    } catch (err) {
+      $("#rv-clear-status").textContent = err.blockedByPolicy ? errText(err) : `Не удалось очистить: ${errText(err)}`;
+    } finally { btn.disabled = false; }
+  }
+
   $("#rv-form").addEventListener("submit", (e) => { e.preventDefault(); analyze(); });
+  $("#rv-clear-go").addEventListener("click", runClear);
   return {
     hasUnsavedChanges: () => !!analysis,
     async guardLeave() { return !analysis || (await showConfirmDialog("Разбор пакетов не применён — результат разбора будет потерян (в базу ничего не записано). Уйти?", { confirmLabel: "Уйти", cancelLabel: "Остаться" })); },
