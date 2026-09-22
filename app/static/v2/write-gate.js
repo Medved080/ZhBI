@@ -197,6 +197,22 @@ function zoneBodyProblem(b) {
   return null;
 }
 
+// ---- форма тела «последнего объекта» (тот же эндпоинт V1, что у PUT /me/last-object — своего в V2 не заводим) ----
+function lastObjectBodyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => k !== "object_id")) return "лишние поля";
+  return b.object_id === null || (Number.isInteger(b.object_id) && b.object_id > 0) ? null : "неверный идентификатор объекта";
+}
+
+// ---- форма тела личных настроек оболочки V2 (закреплённые объекты шапки, состояние левой навигации) ----
+function shellPrefsBodyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["pinned_objects", "nav_pinned", "nav_width", "nav_group_state"].includes(k))) return "лишние поля";
+  if (!Array.isArray(b.pinned_objects) || b.pinned_objects.length > 200 || !b.pinned_objects.every((x) => Number.isInteger(x) && x > 0)) return "список закреплённых объектов";
+  if (typeof b.nav_pinned !== "boolean") return "состояние закрепления панели";
+  if (!(b.nav_width === null || b.nav_width === undefined || (typeof b.nav_width === "number" && Number.isFinite(b.nav_width) && b.nav_width >= 160 && b.nav_width <= 600))) return "ширина панели";
+  if (!isObj(b.nav_group_state) || Object.keys(b.nav_group_state).length > 200 || !Object.values(b.nav_group_state).every((v) => typeof v === "boolean")) return "состояние групп меню";
+  return null;
+}
+
 // allowed: true — операция разрешена (пройден барьер безопасности и есть проверка на настоящем backend);
 // allowed: false — отключена, `why` — коротко почему; `onlyKeys` — разрешены только эти поля тела (остальные — отказ).
 // risk: «личная» — своя настройка пользователя; «общая» — настройка, видимая всем пользователям (V1 тоже); «данные» — рабочие
@@ -230,6 +246,10 @@ export const POLICY = [
   { id: "element.allocate", screen: "ws-picker", action: "Комплектовщик: распределение изделий одной позиции на контракт — одна пачка (запланированные → «Контрактация», прочие статусы сохраняются; всё или ничего)", method: "POST", path: re(`/contracts/\\d+/allocations`), check: allocationBodyProblem, risk: "рабочие данные, история статусов (не отменяется), остатки контракта", allowed: ALLOCATION_ENABLED, proof: "проверено на копии БД по HTTP (scripts/verify_allocation.py) и в браузере; остаток под блокировкой записи, конфликт вместо молчаливого сужения", why: "включается только вместе с исправлением backend (атомарность остатка, `app/allocation.py`); без него на сервере старого образца остаток при одновременных запросах не гарантирован" },
 
   // ==== разрешённые операции по областям переноса: каждая область дописывает строки ТОЛЬКО в свой блок (меньше конфликтов слияния) ====
+  // ==== область: shell (оболочка — выбор объекта в шапке, левая навигация) ====
+  { id: "shell.prefs.set", screen: "shell", action: "Личные настройки оболочки: закреплённые объекты выбора объекта в шапке, состояние левой навигации (закреплена/нет, ширина, раскрытые группы)", method: "PATCH", path: re(`/users/\\d+/v2-shell-prefs`), check: shellPrefsBodyProblem, risk: "личная (только V2 — у V1 своего представления этих настроек нет)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат после перезагрузки, отказ формы (лишние поля/диапазон), 403 на чужого пользователя (scripts/v2_tests/shell)" },
+  { id: "shell.last-object.set", screen: "shell", action: "Запомнить последний выбранный объект за пользователем — ТОТ ЖЕ эндпоинт, что у V1 (своего в V2 не заводили)", method: "PUT", path: re("/me/last-object"), check: lastObjectBodyProblem, risk: "личная, общий эндпоинт с V1", allowed: true, proof: "живая проверка: смена объекта → SQL users.last_object_id → тот же объект после перезагрузки (scripts/shell_verify)" },
+
   // ==== область: model (прораб, модель ЖБИ, операции над элементами) ====
   // Все операции ниже выполняются в интерфейсе ТОЛЬКО из карточки выбранного изделия и панели группового выделения на схеме (element-ops.js);
   // права проверяет сервер (раздел и порог «запись» на объекте изделия), форма тела проверяется здесь (element-ops-rules.js).
