@@ -30,7 +30,8 @@ const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
 const VIEWS_MFR = [["2d", "2D"], ["3d", "3D"]];
 const TABS_MFR = [["props", "Свойства"], ["filters", "Фильтры"], ["view", "Вид"]];
 // Комплектовщик: срезы отбора, показатели, контракты (свой отбор, независимый от фильтров «Модели»), свойства выбранного элемента, вид
-const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["alloc", "Распределение"], ["props", "Свойства"], ["view", "Вид"]];
+// «Статус» — сводка статусов по изделиям среза (V1: вкладка «Статус» правой панели есть и у АРМ комплектовщика)
+const TABS_PICKER = [["pick", "Отбор"], ["metrics", "Показатели"], ["contracts", "Контракты"], ["alloc", "Распределение"], ["props", "Свойства"], ["status", "Статус"], ["view", "Вид"]];
 const FRAME_TIMEOUT_MS = 45000;
 
 const fmtDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
@@ -67,7 +68,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   // Здесь только связка: снимок сцены, права, перерисовка панели, команды кадру.
   const ops = createElementOps({
     api, send: (c, a) => send(c, a), getScene: () => sc, getObjectId: () => curObject, statusLabel: (k) => stLabel(k), statusColor: (k) => sw(k),
-    repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null), groupOps: !picker,
+    repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null),
+    // групповые операции есть и у комплектовщика (как панель группового выделения V1); Ctrl + щелчок там только убирает из рамки (мост его не расширяет)
+    groupOps: true, ctrlAdds: !picker,
   });
   let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте (распределение комплектовщика)
   const openGroups = new Set(["status", "pk:elementType"]);
@@ -629,7 +632,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
         const val = m.value === null ? "—" : nf(m.value);
         const sub = m.key === "contracted" && m.value !== null ? `модель: ${nf(m.base)} · ${m.value >= m.base ? "покрыто" : "дефицит " + nf(m.base - m.value)}` : m.share !== null && m.share !== undefined ? `${m.share}% среза` : "";
         const tag = m.clickable ? "button" : "div";
-        return `<${tag} ${m.clickable ? `type="button" data-pkm="${esc(m.key)}" aria-pressed="${m.on}"` : ""} class="ws-tile${m.on ? " on" : ""}" title="${esc(m.reason || m.hint || "")}" ${color ? `style="border-left-color:${esc(color)}"` : ""}><span class="ws-tile-t">${esc(m.title)}</span><b class="ws-tile-v">${esc(val)}</b><span class="ws-tile-s">${esc(m.value === null ? (m.reason || "") : sub)}</span></${tag}>`;
+        const tip = `${m.reason || m.hint || ""}${m.skippedNoMark ? `. Не учтено позиций без марки: ${m.skippedNoMark}` : ""}`;   // как подсказка плитки V1
+        return `<${tag} ${m.clickable ? `type="button" data-pkm="${esc(m.key)}" aria-pressed="${m.on}"` : ""} class="ws-tile${m.on ? " on" : ""}" title="${esc(tip)}" ${color ? `style="border-left-color:${esc(color)}"` : ""}><span class="ws-tile-t">${esc(m.title)}</span><b class="ws-tile-v">${esc(val)}</b><span class="ws-tile-s">${esc(m.value === null ? (m.reason || "") : sub)}</span></${tag}>`;
       }).join("")}</div></div>`;
   }
   function contractsHtml() { return panels.contractsHtml(); }

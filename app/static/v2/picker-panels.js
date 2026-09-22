@@ -13,7 +13,8 @@
 //  * две ссылки сброса: «сбросить контракты» и «сбросить позиции» (марки и типы, выбранные кликами по позициям);
 //  * оговорка «привязано и остаток — внутри выбранного среза», строка-ответ подсветки несвязанных («подсвечено N» / «подсвечивать нечего»).
 const CONTRACTED_KEYS = new Set(["elementType", "mark"]);          // блоки, где у строки бывают числа контракта
-const ROWS_LIMIT = 150;
+// V1 показывает блок среза целиком (без предела): предел здесь — только страховка от тысяч значений у одной колонки
+const ROWS_LIMIT = 5000;
 
 export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }) {
   const sort = new Map();                 // ключ блока -> {col: "label"|"count"|"contracted"|"diff", dir: 1|-1}
@@ -49,7 +50,9 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
       }
       const notInSlice = CONTRACTED_KEYS.has(g.key) && !g.contractedShown
         ? `<p class="v2-muted ws-fnote" title="У позиции контракта есть только тип элемента и марка: по подтипу, крану, стоянке, этажу и показателю она не делится">законтрактовано — не в этом разрезе${pk.metricsSelected ? (pk.metricsSelected > 1 ? " (выбраны показатели)" : " (выбран показатель)") : ""}</p>` : "";
+      // «сбросить» у каждого блока (как V1 buildPickerSlicer) — снимает выбор только этого среза
       const body = !open ? "" : `<div class="ws-fbody">
+        ${g.selected ? `<button type="button" class="v2-link-btn" data-pk-clear="${esc(g.key)}" title="Снять выбор в срезе «${esc(g.title)}»">сбросить (${g.selected})</button>` : ""}
         ${g.rows.length > 12 ? `<input type="search" class="ws-fsearch" data-search="${esc(id)}" placeholder="Найти…" value="${esc(ui.groupSearch.get(id) || "")}" aria-label="Найти в срезе «${esc(g.title)}»">` : ""}
         ${notInSlice}
         <div class="ws-pkcols"><span>${head(g.key, "label", "значение")}</span><em>${head(g.key, "count", "модель")}</em>${g.contractedShown ? `<em class="ws-pkc">${head(g.key, "contracted", "контракт")}</em><em>${head(g.key, "diff", "Δ")}</em>` : ""}</div>
@@ -76,7 +79,10 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
     const onlyRem = ui.onlyRemainder();
     // Замена поставщика и обмен привязками — документы ПЕРЕПРИВЯЗКИ контракта (не «смена планируемого поставщика»: такой сущности в модели данных нет)
     const docs = `<p class="v2-muted ws-fnote ws-pad">Перепривязка контракта у уже привязанных изделий (замена поставщика, обмен привязками) оформляется документом: <a href="#/supplier-change">Документы контрактации</a>. Изделия без контракта привязывает вкладка «Распределение».</p>`;
-    const groups = pk.contracts.map((g) => ({ ...g, rows: onlyRem ? g.rows.filter((r) => r.on || r.remainder !== 0) : g.rows })).filter((g) => g.rows.length);
+    const listed = pk.contracts.map((g) => ({ ...g, rows: onlyRem ? g.rows.filter((r) => r.on || r.remainder !== 0) : g.rows })).filter((g) => g.rows.length);
+    // как V1 (renderPickerContracts): при суженном срезе сначала контрагенты, чьи контракты есть в срезе, затем черта «нет в текущем срезе»
+    const groups = pk.narrowed ? [...listed.filter((g) => g.inSlice), ...listed.filter((g) => !g.inSlice)] : listed;
+    const firstOut = pk.narrowed ? groups.findIndex((g) => !g.inSlice) : -1;
     const tools = `<div class="ws-pad ws-pk-tools"><button type="button" class="v2-btn" data-pkhl="1" aria-pressed="${pk.highlightUnlinked}" title="Показать на схеме изделия без контракта: при выбранном (или развёрнутом) контракте — только те, чью марку он ещё не добрал; иначе — все несвязанные изделия среза">${pk.highlightUnlinked ? "Подсветка несвязанных включена" : "Подсветить несвязанные"}</button>
       <button type="button" class="v2-btn" data-pkrem="1" aria-pressed="${onlyRem}" title="Скрыть контракты, у которых остаток (всего минус привязано) равен нулю — закупать по ним больше нечего">${onlyRem ? "Показаны только с остатком" : "Показать только с остатком"}</button>
       ${pk.contractSelected ? `<button type="button" class="v2-link-btn" data-pk-clear="contract" title="Снять отбор по контрактам">сбросить контракты (${pk.contractSelected})</button>` : ""}
@@ -87,7 +93,8 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
     const cols = `<div class="ws-pkcols ws-pkcols-c"><span></span><em>всего</em><em>привязано</em><em>остаток</em></div>`;
     const exp = (id, open) => `<button type="button" class="ws-cex" data-pk-exp="${id}" aria-expanded="${open}" title="${open ? "Свернуть позиции" : "Показать позиции по маркам"}">${open ? "▾" : "▸"}</button>`;
     let html = docs + tools + notes + `<div class="ws-fbody">${cols}`;
-    for (const g of groups) {
+    for (const [gi, g] of groups.entries()) {
+      if (gi === firstOut && gi > 0) html += `<div class="ws-sep">нет в текущем срезе</div>`;
       const ids = g.rows.map((r) => r.id), all = ids.length && g.rows.every((r) => r.on);
       html += `<div class="ws-cgroup${g.inSlice ? "" : " ws-dim"}"><button type="button" class="ws-crow ws-chead${all ? " on" : ""}${g.over ? " over" : ""}" data-pkgrp="${ids.join(",")}" data-on="${all ? 0 : 1}" title="${g.over ? "У контрактов контрагента есть привязки мимо спецификации или сверх количества" : "Выбрать все контракты контрагента"}"><span>${esc(g.name)}</span><em>${nf(g.total)}</em><em>${nf(g.linked)}</em><em class="${remCls(g.total - g.linked)}">${nf(g.total - g.linked)}</em></button>`;
       for (const r of g.rows) {
