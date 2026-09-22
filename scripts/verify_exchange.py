@@ -31,7 +31,7 @@ import gen_synthetic_shaft_dxf as shaftgen  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models", "misc"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -690,6 +690,79 @@ def section_external_models():
     check(r.status_code == 404, f"повторное удаление → {r.status_code}")
 
 
+def section_misc():
+    print("== остальные операции обмена (образцы, версии чертежа, активность, справка, ячейка Графика поставки)")
+    admin = login("admin")
+    OBJ_ZHBI = 1
+
+    # ---- образец файла импорта (используется во всех формах загрузки — mountTemplates, exchange-common.js) ----
+    r = admin.get(BASE + "/import-templates")
+    check(r.status_code == 200 and r.json()["templates"], f"образцы: список форматов доступен ({r.status_code})")
+    key = r.json()["templates"][0]["key"]
+    r = admin.get(BASE + f"/import-templates/{key}/sample")
+    check(r.status_code == 200 and len(r.content) > 0, f"образец «{key}»: скачивается ({r.status_code}, {len(r.content)} байт)")
+    r = admin.get(BASE + "/import-templates/несуществующий/sample")
+    check(r.status_code == 404, f"образец неизвестного ключа → {r.status_code}")
+
+    # ---- список версий чертежа объекта ----
+    r = admin.get(BASE + f"/objects/{OBJ_ZHBI}/drawings")
+    check(r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0, f"версии чертежа: список получен ({r.status_code}, {len(r.json()) if r.status_code == 200 else '?'} версий)")
+    check(any(d["is_current"] for d in r.json()), "версии чертежа: хотя бы одна текущая")
+    r = admin.get(BASE + "/objects/999999/drawings")
+    check(r.status_code == 404, f"версии чертежа несуществующего объекта → {r.status_code}")
+
+    # ---- справка отчёта (любой вошедший) ----
+    for k in ("status", "mywork", "delivery", "completion"):
+        r = admin.get(BASE + f"/report-help/{k}")
+        check(r.status_code == 200 and r.json().get("sections"), f"справка «{k}»: получена ({r.status_code})")
+    r = admin.get(BASE + "/report-help/несуществующий")
+    check(r.status_code == 200, f"справка неизвестного ключа: не падает, отдаёт заглушку ({r.status_code})")
+    r = login("user4").get(BASE + "/report-help/status")
+    check(r.status_code == 200, f"справка: доступна и роли view ({r.status_code})")
+
+    # ---- активность (кого показывать в «Моей работе») ----
+    r = admin.get(BASE + f"/objects/{OBJ_ZHBI}/activity-users")
+    check(r.status_code == 200 and r.json()["can_choose"] is True, f"активность: администратору можно выбирать ({r.status_code}, can_choose={r.json().get('can_choose')})")
+    check(len(r.json()["users"]) >= 1, "активность: список пользователей не пуст")
+    r = login("user4").get(BASE + f"/objects/{OBJ_ZHBI}/activity-users")
+    check(r.status_code in (200, 403), f"активность: user4 → {r.status_code}")
+    if r.status_code == 200:
+        check(r.json()["can_choose"] is False and len(r.json()["users"]) == 1, f"активность: обычному пользователю — только он сам ({r.json()})")
+
+    # ---- разбор ячейки «Графика поставки» ----
+    rpt = admin.post(BASE + "/reports/delivery-schedule", json={"object_id": OBJ_ZHBI})
+    check(rpt.status_code == 200, f"график поставки: 200 (получен {rpt.status_code})")
+    data = rpt.json()
+    date_from, date_to, step = data.get("date_from"), data.get("date_to"), data.get("step")
+
+    def first_leaf_path(nodes, path):
+        for n in nodes:
+            p = path + [n["gkey"]]
+            if n.get("children"):
+                found = first_leaf_path(n["children"], p)
+                if found:
+                    return found
+            else:
+                return p
+        return None
+    leaf_path = first_leaf_path(data.get("rows", []), [])
+    check(leaf_path is not None, "график поставки: есть хотя бы одна конечная строка для разбора ячейки")
+    if leaf_path is not None:
+        cols = [c["key"] for c in data.get("columns", [])]
+        for col in cols:
+            r = admin.post(BASE + "/reports/delivery-schedule/cell", json={
+                "object_id": OBJ_ZHBI, "date_from": date_from, "date_to": date_to, "step": step,
+                "path": leaf_path, "column": col,
+            })
+            if r.status_code == 200 and r.json().get("marks"):
+                break
+        check(r.status_code == 200, f"разбор ячейки: 200 (получен {r.status_code}: {r.text[:150]})")
+        cell = r.json()
+        check("column_label" in cell and "marks" in cell, f"разбор ячейки: форма ответа верна ({list(cell.keys())})")
+        r = admin.post(BASE + "/reports/delivery-schedule/cell", json={"object_id": OBJ_ZHBI, "path": leaf_path, "column": cols[0] if cols else "before"})
+        check(r.status_code == 400, f"разбор ячейки: без периода → {r.status_code} (сервер не подставляет период сам)")
+
+
 # ---------------------------------------------------------------- вспомогательное: внесение сбоя в копию БД
 class Fault:
     """Временный триггер в КОПИИ БД: заставляет операцию упасть посреди записи — так проверяется откат и отсутствие событий журнала."""
@@ -1288,10 +1361,10 @@ def section_revit():
         TABLES = saved_tables
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft, "pdf": section_pdf, "external_models": section_external_models}
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft, "pdf": section_pdf, "external_models": section_external_models, "misc": section_misc}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models", "misc"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")

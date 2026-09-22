@@ -176,8 +176,9 @@ export const api = {
   },
   // Чтение POST-запросом. Допустимы только отчёты (`/reports/…`) — остальное это запись и должно идти через post().
   readPost: (path, body) => {
-    // отчёты и предпросмотры учёта по блокам (`…/bulk-preview`, `…/work-types-settings/preview` — считают последствия и ничего не пишут)
-    if (!/^\/reports\/[a-z0-9-]+$/.test(path) && !/^\/objects\/\d+\/(block-works\/bulk-preview|blocks\/work-types-settings\/preview)$/.test(path)) throw new Error(`readPost: «${path}» не отчёт и не предпросмотр — это запись, используйте post()`);
+    // отчёты, разбор одной ячейки «Графика поставки» (тот же отчёт, отдельным запросом — app/report_delivery.py) и
+    // предпросмотры учёта по блокам (`…/bulk-preview`, `…/work-types-settings/preview` — считают последствия и ничего не пишут)
+    if (!/^\/reports\/[a-z0-9-]+(\/cell)?$/.test(path) && !/^\/objects\/\d+\/(block-works\/bulk-preview|blocks\/work-types-settings\/preview)$/.test(path)) throw new Error(`readPost: «${path}» не отчёт и не предпросмотр — это запись, используйте post()`);
     return request("POST", path, body ?? {}, { read: true });
   },
   hasPendingWrites: () => pendingWrites > 0,
