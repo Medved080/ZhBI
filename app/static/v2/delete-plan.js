@@ -150,7 +150,7 @@ async function postDelete(api, kind, id, body) {
   }
 }
 
-const KIND_TEXT = { counterparty: ["контрагента", "контрагентом"], agreement: ["договор", "договором"], specification: ["спецификацию", "спецификацией"] };
+const KIND_TEXT = { counterparty: ["контрагента", "контрагентом"], agreement: ["договор", "договором"], specification: ["спецификацию", "спецификацией"], mark: ["марку", "маркой"], zone: ["зону", "зоной"] };
 
 /** Полный поток удаления. Возвращает "deleted" | "cancelled" | "failed" | "exists" | "unknown"; сообщения об ошибках показывает сам. */
 export async function runDeleteFlow({ api, kind, id }) {

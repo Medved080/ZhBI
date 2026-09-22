@@ -93,6 +93,30 @@ export function strictApplyProblem(b) {
   return b.changes.every((c) => isObj(c) && Number.isInteger(c.bw_id) && BULK_FIELDS.includes(c.field) && "was" in c && "now" in c) ? null : "строка изменения";
 }
 
+// ---- формы тел операций справочников «Марки» и «Зоны» ----
+function markBodyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["object_id", "element_type", "name"].includes(k))) return "лишние поля";
+  if (!Number.isInteger(b.object_id) || b.object_id <= 0) return "не указан объект";
+  if (typeof b.element_type !== "string" || !b.element_type) return "не указан тип элемента";
+  if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 200) return "название марки пусто или слишком длинно";
+  return null;
+}
+function zoneBodyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["number", "name", "parent_zone_id", "levels"].includes(k))) return "лишние поля";
+  if (!(b.number === null || b.number === undefined || Number.isInteger(b.number))) return "номер не целое число";
+  if (!(b.name === null || b.name === undefined || typeof b.name === "string")) return "неверное наименование";
+  if (!(b.parent_zone_id === null || b.parent_zone_id === undefined || (Number.isInteger(b.parent_zone_id) && b.parent_zone_id > 0))) return "неверный кран-владелец";
+  if (!Array.isArray(b.levels) || !b.levels.length) return "у зоны должен быть хотя бы один ярус";
+  for (const l of b.levels) {
+    if (!isObj(l) || !("id" in l) || !("elevation_mm" in l) || !("outline" in l)) return "ярус неверной формы";
+    if (!(l.id === null || Number.isInteger(l.id))) return "ярус: неверный идентификатор";
+    if (!(l.elevation_mm === null || Number.isInteger(l.elevation_mm))) return "ярус: неверная отметка";
+    if (!Array.isArray(l.outline) || l.outline.length < 3) return "ярус: контур короче трёх точек";
+    if (!l.outline.every((p) => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === "number" && Number.isFinite(n)))) return "ярус: точка контура не пара чисел";
+  }
+  return null;
+}
+
 // allowed: true — операция разрешена (пройден барьер безопасности и есть проверка на настоящем backend);
 // allowed: false — отключена, `why` — коротко почему; `onlyKeys` — разрешены только эти поля тела (остальные — отказ).
 // risk: «личная» — своя настройка пользователя; «общая» — настройка, видимая всем пользователям (V1 тоже); «данные» — рабочие
@@ -174,6 +198,13 @@ export const POLICY = [
   { id: "individuals.create", screen: "dict-individuals", action: "Физлица: добавить запись", method: "POST", path: re("/individuals"), onlyKeys: ["name"], risk: "общая (справочник, персональные данные)", allowed: true, proof: "HTTP+браузер: успех, дубль 409, пустое 400, 403 без права, журнал" },
   { id: "individuals.rename", screen: "dict-individuals", action: "Физлица: переименовать", method: "PATCH", path: re(`/individuals/\\d+`), onlyKeys: ["name"], risk: "общая (справочник, персональные данные)", allowed: true, proof: "HTTP+браузер: успех, дубль 409, 404, 403" },
   { id: "individuals.delete", screen: "dict-individuals", action: "Физлица: удалить НЕиспользуемую запись (по плану; с зависимостями — отказ, замена в V1)", method: "POST", path: re(`/dictionaries/individual/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "общая, необратимо", allowed: true, proof: "HTTP+браузер: удаление неиспользуемой, отказ для используемой, повтор 404" },
+  // -- справочники «Марки», «Зоны» (2026-09-22; проверено на настоящем backend, scripts/verify_admin2_backend.py + браузер) --
+  { id: "mark.create", screen: "subtypes", action: "Марки: создание", method: "POST", path: re("/marks"), onlyKeys: ["object_id", "element_type", "name"], check: markBodyProblem, risk: "общая (справочник объекта)", allowed: true, proof: "HTTP+браузер: успех, дубль 409, пустое 422, 403" },
+  { id: "mark.rename", screen: "subtypes", action: "Марки: переименование — текст марки переносится у изделий и в позициях контрактов (план последствий и подтверждение — в интерфейсе, перед отправкой)", method: "PATCH", path: re(`/marks/\\d+`), onlyKeys: ["object_id", "element_type", "name"], check: markBodyProblem, risk: "общая (справочник объекта), рабочие данные (текст марки у изделий и позиций контрактов)", allowed: true, proof: "HTTP+браузер: успех и перенос текста у изделий/позиций, дубль 409, 404, 403" },
+  { id: "mark.delete", screen: "subtypes", action: "Марки: удаление записи с заменой ссылок (по плану последствий)", method: "POST", path: re(`/dictionaries/mark/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "общая, необратимо, рабочие данные (переносит ссылки у изделий и позиций контрактов)", allowed: true, proof: "HTTP+браузер: план, замена, откат при отказе, отказ без выбранной замены, 403" },
+  { id: "zone.update", screen: "zones", action: "Зоны: правка (номер, наименование, кран-владелец, геометрия ярусов; пересчёт привязки элементов — автоматически на сервере)", method: "PATCH", path: re(`/zones/\\d+`), check: zoneBodyProblem, risk: "рабочие данные (геометрия зоны и привязка изделий к зонам)", allowed: true, proof: "HTTP+браузер: успех и пересчёт привязки, отказ валидации (самопересечение, дубль номера), 403" },
+  { id: "zone.undo", screen: "zones", action: "Зоны: откат последней правки целиком (реквизиты, геометрия, привязки изделий, которые задел пересчёт)", method: "POST", path: re(`/zones/\\d+/undo`), risk: "рабочие данные, необратимо после следующей правки", allowed: true, proof: "HTTP+браузер: откат и восстановление привязок, отказ «нечего отменять» 409, 403" },
+  { id: "zone.delete", screen: "zones", action: "Зоны: удаление записи с заменой ссылок (по плану последствий)", method: "POST", path: re(`/dictionaries/zone/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "общая, необратимо, рабочие данные (переносит привязку изделий)", allowed: true, proof: "HTTP+браузер: план, замена, откат при отказе, 403" },
   { id: "projects.create", screen: "projects-objects", action: "Проекты: создание", method: "POST", path: re("/projects"), onlyKeys: ["name", "status", "description", "address", "address_note", "address_code", "address_source", "address_region", "address_parts", "postal_code", "lat", "lon"], risk: "данные иерархии", allowed: true, proof: "HTTP+браузер: успех и перезагрузка, пустое/дубль, 403, журнал" },
   { id: "projects.update", screen: "projects-objects", action: "Проекты: правка (с проверкой «запись устарела»)", method: "PATCH", path: re(`/projects/\\d+`), onlyKeys: ["name", "status", "description", "address", "address_note", "address_code", "address_source", "address_region", "address_parts", "postal_code", "lat", "lon", "expected_version"], check: (b) => (typeof b?.expected_version === "string" ? null : "нет версии записи"), risk: "данные иерархии", allowed: true, proof: "HTTP+браузер: успех, устаревшая версия 409 без записи, архивация проекта с активными объектами отказ, 403" },
   { id: "projects.delete", screen: "projects-objects", action: "Проекты: удаление ПУСТОГО проекта (план последствий, подтверждение вводом названия)", method: "POST", path: re(`/dictionaries/project/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "данные иерархии, необратимо", allowed: true, proof: "HTTP+браузер: удаление пустого, отказ для проекта с объектами (без изменений), повтор 404, обрыв ответа, 403" },
@@ -232,7 +263,7 @@ export const POLICY = [
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
-  { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: контракт по умолчанию по типу изделия, свёртка дублей справочников (режим переноса подчинённых), прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
+  { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: контракт по умолчанию по типу изделия, свёртка дублей справочников (режим переноса подчинённых), прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/|mark/|zone/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
 ];
 
 // ---- проверка ----
