@@ -3,7 +3,7 @@
 import { launch } from "./cdp.mjs";
 
 const base = process.argv[2] || "http://127.0.0.1:8250";
-const objectId = Number(process.argv[3] || 4);
+const objectId = Number(process.argv[3] || 1);   // объект 1 — ЖБИ (не МФР): нужна реальная схема/график по обычному объекту
 const PASSWORD = "Test-Pass-1234!";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -15,6 +15,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await b.clickSel("#v2-login-pass"); await b.type(PASSWORD);
   await b.key("Enter");
   await b.waitFor(`document.querySelector('#v2-object')`, 20000);
+  // Опции скрытого select#v2-object подгружаются асинхронно (после /projects-tree) — дожидаемся нужной, иначе
+  // .value=... молча не находит совпадения и объект не меняется (найдено 2026-09-22 при проверке).
+  await b.waitFor(`[...document.querySelectorAll('#v2-object option')].some(o=>o.value==='${objectId}')`, 15000);
   await b.eval(`(()=>{const s=document.querySelector('#v2-object'); s.value=String(${objectId}); s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await sleep(600);
   await b.eval(`location.hash='#/schedule'`);
