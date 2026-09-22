@@ -7,7 +7,7 @@
 import { ApiError } from "./api.js";
 import { STATUS_LABEL } from "./registry.js";
 import { esc, linkList } from "./screen-view.js";
-import { REPORT_RENDERERS, bindReport } from "./reports.js";
+import { REPORT_RENDERERS, bindReport, colDataType } from "./reports.js";
 import { mountBlockWorkForm } from "./block-work-form.js";
 import { printHtml } from "./print.js";
 import { showInfoDialog } from "./dialogs.js";
@@ -74,8 +74,8 @@ function paintRecord(sec, data) {
     const rows = pick(data, t.rowsPath);
     const list = Array.isArray(rows) ? rows : [];
     return `<h3 class="v2-report-h">${esc(t.title)}</h3>` + (list.length
-      ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${t.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}</tr></thead>
-         <tbody>${list.slice(0, RENDER_LIMIT).map((r) => `<tr>${t.columns.map((c) => `<td>${cellHtml(c, r, data)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+      ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${t.columns.map((c) => `<th data-col-type="${colDataType(c)}">${esc(c.title)}</th>`).join("")}</tr></thead>
+         <tbody>${list.slice(0, RENDER_LIMIT).map((r) => `<tr>${t.columns.map((c) => `<td data-col-type="${colDataType(c)}">${cellHtml(c, r, data)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
       : `<p class="v2-muted">${esc(t.empty || "Записей нет.")}</p>`);
   }).join("");
   return `${fields ? `<dl class="v2-facts">${fields}</dl>` : ""}${tables}`;
@@ -136,8 +136,12 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
 
   sections.forEach((sec, i) => (sec.controls || []).forEach((c) => { if (c.default === "today") st[i].params[c.param] = todayIso(); }));
 
+  // Табличные экраны (отчёты, справочники, реестры, журналы) занимают всю доступную ширину рабочей области —
+  // карточка записи («record») и инструкция («guide») читаются лучше при ограниченной ширине формы, как обычные
+  // формы V2 (задание «tables», п.1). Ширина остатка после левой навигации уже даёт раскладка .v2-body (flex).
+  const wide = sections.some((sec) => sec.kind !== "record" && sec.kind !== "guide");
   el.innerHTML = `
-    <div class="v2-container v2-screen">
+    <div class="v2-container v2-screen${wide ? " v2-container--wide" : ""}">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head">
         <h2>${esc(screen.title)}</h2>
@@ -304,8 +308,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       return;
     }
     body.innerHTML = `${ackBarHtml(sec, s)}${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${RENDER_LIMIT} из ${rows.length} — уточните поиск.</p>` : ""}
-      <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${sec.columns.map((c) => `<th>${esc(c.title)}</th>`).join("")}${canEditRows(sec) ? "<th></th>" : ""}</tr></thead>
-      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td>${cellHtml(c, r, s.data)}</td>`).join("")}${canEditRows(sec) ? `<td><button type="button" class="v2-btn" data-row-edit="${esc(r.id)}" aria-label="Открыть карточку работы ${esc(r["код"] ?? r.id)}">Сроки</button></td>` : ""}</tr>`).join("")}</tbody></table></div>
+      <div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${sec.columns.map((c) => `<th data-col-type="${colDataType(c)}">${esc(c.title)}</th>`).join("")}${canEditRows(sec) ? "<th></th>" : ""}</tr></thead>
+      <tbody>${shown.map((r) => `<tr>${sec.columns.map((c) => `<td data-col-type="${colDataType(c)}">${cellHtml(c, r, s.data)}</td>`).join("")}${canEditRows(sec) ? `<td><button type="button" class="v2-btn" data-row-edit="${esc(r.id)}" aria-label="Открыть карточку работы ${esc(r["код"] ?? r.id)}">Сроки</button></td>` : ""}</tr>`).join("")}</tbody></table></div>
       ${sec.paging ? `<div class="v2-bar"><button type="button" class="v2-btn" id="rd-prev" ${s.offset <= 0 ? "disabled" : ""}>← Назад</button>
         <button type="button" class="v2-btn" id="rd-next" ${s.total != null && s.offset + s.rows.length >= s.total ? "disabled" : ""}>Дальше →</button></div>` : ""}`;
     $("#rd-ack")?.addEventListener("click", () => ackSection(active));

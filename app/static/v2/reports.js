@@ -9,6 +9,19 @@ const dateRu = (v) => {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : String(v ?? "");
 };
 
+// Тип колонки для общих правил ширины/переноса (`.v2-read-tbl [data-col-type]` в styles.css) — ОБЩИЙ механизм
+// для ЛЮБОЙ таблицы общего компонента (отчёты здесь и списки read-screen.js), не завязан на позицию колонки
+// конкретного отчёта. `kind` — поле колонок отчётов (reports.js), `fmt` — колонок read-screen.js (screens.json);
+// заголовок колонки «Марка» — признак минимальной ширины (задание «tables», п.2).
+export function colDataType(col) {
+  if (col.kind === "num" || col.fmt === "size" || col.fmt === "score") return "num";
+  if (col.kind === "date" || col.fmt === "date" || col.fmt === "datetime") return "date";
+  if (col.kind === "status" || col.fmt === "color") return "status";
+  if (col.fmt === "bool") return "bool";
+  if (/^марка$/i.test(col.label || col.title || "")) return "mark";
+  return "text";
+}
+
 function cellByKind(col, row) {
   const v = row[col.key];
   if (v == null || v === "") return "";
@@ -20,8 +33,8 @@ function cellByKind(col, row) {
 
 function tableHtml(columns, rows, { cap = 500 } = {}) {
   const shown = rows.slice(0, cap);
-  return `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${columns.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
-    <tbody>${shown.map((r) => `<tr>${columns.map((c) => `<td${c.kind === "num" ? ' class="num"' : ""}>${cellByKind(c, r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+  return `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${columns.map((c) => `<th data-col-type="${colDataType(c)}">${esc(c.label)}</th>`).join("")}</tr></thead>
+    <tbody>${shown.map((r) => `<tr>${columns.map((c) => `<td data-col-type="${colDataType(c)}"${c.kind === "num" ? ' class="num"' : ""}>${cellByKind(c, r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
     ${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${shown.length} из ${rows.length}.</p>` : ""}`;
 }
 
@@ -42,7 +55,7 @@ function treeRows(nodes, path, columns, collapsed, out) {
     const isCollapsed = collapsed.has(p);
     out.push(`<tr class="lvl-${n.level}"><td style="padding-left:${12 + n.level * 18}px">
       ${hasKids ? `<button type="button" class="v2-tree-toggle" data-path="${esc(p)}" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Развернуть" : "Свернуть"} ${esc(n.label)}">${isCollapsed ? "▸" : "▾"}</button>` : `<span class="v2-tree-toggle-gap"></span>`}${esc(n.label)}</td>
-      ${columns.map((c) => `<td class="num">${esc(num(n.values?.[c.key]))}</td>`).join("")}</tr>`);
+      ${columns.map((c) => `<td class="num" data-col-type="num">${esc(num(n.values?.[c.key]))}</td>`).join("")}</tr>`);
     if (hasKids && !isCollapsed) treeRows(n.children, p, columns, collapsed, out);
   }
 }
@@ -52,8 +65,8 @@ function statusReport(data, state) {
   const out = [];
   treeRows(data.rows || [], "", data.columns || [], collapsed, out);
   const total = data.total;
-  return `<div class="v2-read-table"><table class="v2-read-tbl v2-tree-tbl"><thead><tr><th>${esc(data.root_label || "")}</th>${(data.columns || []).map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
-    <tbody>${out.join("")}${total ? `<tr class="lvl-total"><td><strong>${esc(total.label)}</strong></td>${(data.columns || []).map((c) => `<td class="num"><strong>${esc(num(total.values?.[c.key]))}</strong></td>`).join("")}</tr>` : ""}</tbody></table></div>`;
+  return `<div class="v2-read-table"><table class="v2-read-tbl v2-tree-tbl"><thead><tr><th>${esc(data.root_label || "")}</th>${(data.columns || []).map((c) => `<th class="num" data-col-type="num">${esc(c.label)}</th>`).join("")}</tr></thead>
+    <tbody>${out.join("")}${total ? `<tr class="lvl-total"><td><strong>${esc(total.label)}</strong></td>${(data.columns || []).map((c) => `<td class="num" data-col-type="num"><strong>${esc(num(total.values?.[c.key]))}</strong></td>`).join("")}</tr>` : ""}</tbody></table></div>`;
 }
 
 // ---- «Статус комплектации» (перечень): плоская таблица, поиск и страницы на клиенте.
