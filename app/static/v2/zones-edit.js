@@ -383,7 +383,8 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     busy = true;
     try {
       const result = await runDeleteFlow({ api, kind: "zone", id: zoneId });
-      if (result === "deleted" || result === "exists") { await loadList(); setStatusAfterList("Зона удалена."); }
+      if (result === "deleted") { await loadList(); setStatusAfterList("Зона удалена."); }
+      else if (result === "exists") { await loadList(); setStatusAfterList("Зона осталась на месте (ответ сервера не дошёл) — повторите удаление вручную."); }
       else if (result === "unknown") { await loadList(); setStatusAfterList("Неизвестно, удалена ли зона — проверьте список."); }
     } finally { busy = false; if (!st.editing) paint(); }
   }

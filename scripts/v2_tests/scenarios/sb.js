@@ -67,7 +67,7 @@ export const tests = [
     },
   },
   {
-    id: "SB-04", title: "Подтип с изделиями здесь не удаляется: объяснение, запросов на удаление нет",
+    id: "SB-04", title: "Подтип с изделиями удаляется только с заменой (как в V1): окно плана, без замены отправить нельзя, отмена ничего не пишет; замена → запрос с заменой",
     async run(t) {
       const a = await openApp({ home: true });
       await waitFor(() => a.$("#v2-object"), { what: "оболочка" });
@@ -75,12 +75,24 @@ export const tests = [
       (a.ctl.data.settings.subtypeUse ||= {})[`${oid}|Колонна|верхняя`] = 5;
       await open(a);
       a.click(a.$('[data-del="верхняя"][data-type="Колонна"]'));
-      await waitFor(() => a.dialog(), { what: "объяснение" });
-      t.has(a.dialog().textContent, "используется", "сказано, что подтип используется");
-      t.has(a.dialog().textContent, "в текущем интерфейсе", "путь — удаление с заменой в V1");
-      await a.answerDialog("Понятно");
-      t.eq(posts(a).length, 0, "запросов на удаление нет");
+      await waitFor(() => a.$("[data-dp-sel] option[value]:not([value=''])"), { what: "окно замены" });
+      t.has(a.$(".v2-dialog").textContent, "Изделия", "в плане показаны изделия, которые ссылаются");
+      t.ok(a.$('[data-dp="ok"]').disabled, "без выбранной замены удалить нельзя");
+      a.click(a.$('[data-dp="cancel"]'));
+      await a.settle(60);
+      t.eq(posts(a).length, 0, "отмена — запросов на удаление нет");
       t.ok(subs(a, "Колонна").includes("верхняя"), "подтип на месте");
+      a.click(a.$('[data-del="верхняя"][data-type="Колонна"]'));
+      await waitFor(() => a.$("[data-dp-sel] option[value]:not([value=''])"), { what: "окно замены" });
+      const sel = a.$("[data-dp-sel]");
+      sel.value = `${oid}|Колонна|нижняя`; sel.dispatchEvent(new a.win.Event("change", { bubbles: true }));
+      await waitFor(() => !a.$('[data-dp="ok"]').disabled, { what: "кнопка удаления доступна" });
+      a.click(a.$('[data-dp="ok"]'));
+      await waitFor(() => !subs(a, "Колонна").includes("верхняя"), { what: "подтип исчез" });
+      const key = encodeURIComponent(`${oid}|Колонна|верхняя`);
+      t.eq(posts(a).length, 1, "один запрос удаления");
+      t.eq(posts(a)[0].path, `/dictionaries/subtype/${key}/delete`, "удаление по ключу");
+      t.eq(posts(a)[0].body, { replacements: { [`subtype:${oid}|Колонна|верхняя`]: `${oid}|Колонна|нижняя` }, mode: "replace" }, "замена на выбранный подтип");
     },
   },
   {
