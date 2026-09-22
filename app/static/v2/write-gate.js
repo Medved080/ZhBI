@@ -101,6 +101,13 @@ function markBodyProblem(b) {
   if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 200) return "название марки пусто или слишком длинно";
   return null;
 }
+function fillScopeApplyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["project_id", "object_id", "keys"].includes(k))) return "лишние поля";
+  if (!(b.project_id === null || (Number.isInteger(b.project_id) && b.project_id > 0))) return "неверный проект";
+  if (!(b.object_id === null || (Number.isInteger(b.object_id) && b.object_id > 0))) return "неверный объект";
+  if (!Array.isArray(b.keys) || !b.keys.length || !b.keys.every((k) => typeof k === "string" && k)) return "не выбрано ни одного справочника";
+  return null;
+}
 function boolMapProblem(b) {
   if (!isObj(b)) return "тело не объект";
   if (!Object.keys(b).length) return "нет изменённых строк";
@@ -238,6 +245,7 @@ export const POLICY = [
   { id: "map.upload", screen: "map-admin", action: "Карта: загрузить файл подложки PMTiles", method: "POST", path: re("/map/tiles/upload"), risk: "файлы на сервере", allowed: true, proof: "HTTP+браузер: успех, не-PMTiles отказ без следа на диске, 403" },
   { id: "activity.cleanup", screen: "activity", action: "Журнал действий: очистить записи раньше даты (счёт заранее, подтверждение датой)", method: "POST", path: re("/activity/cleanup"), risk: "журнал, необратимо", allowed: true, proof: "HTTP+браузер: счёт, очистка, факт очистки в журнале, 403" },
   { id: "release.run", screen: "changelog", action: "Что нового: повторить обработку данных обновления (копия базы снимается сервером)", method: "POST", path: re(`/release-tasks/[^/]+/run`), risk: "данные, служебное", allowed: true, proof: "HTTP+браузер: повтор выполненной обработки идемпотентен, 404, 403" },
+  { id: "fill-scope.apply", screen: "fill-scope", action: "Заполнить пустые «Объект» и «Проект» у отмеченных справочников (временная необратимая обработка, предпросмотр и подтверждение словом — в интерфейсе)", method: "POST", path: re("/admin/fill-empty-scope/apply"), check: fillScopeApplyProblem, risk: "данные иерархии нескольких справочников, необратимо через интерфейс, служебное (администратор сервиса)", allowed: true, proof: "HTTP+браузер: применение отмеченного → SQL (пустых полей стало меньше), 403 у не-администратора, конфликт объекта/проекта из разных строк — отказ без изменений" },
   { id: "users.create", screen: "users-access", action: "Пользователи: создание учётной записи", method: "POST", path: re("/users"), onlyKeys: ["last_name", "first_name", "domain_login", "role"], risk: "права и учётные записи", allowed: true, proof: "HTTP+браузер: успех и БД, 403 у user2/user4, дубль логина 409, пустые поля 422, журнал" },
   { id: "users.update", screen: "users-access", action: "Пользователи: правка карточки (с проверкой «запись устарела»)", method: "PATCH", path: re(`/users/\\d+`), onlyKeys: ["last_name", "first_name", "patronymic", "position", "department", "domain_login", "role", "auth_method", "must_change_password", "expected_version"], check: (b) => (typeof b?.expected_version === "string" ? null : "нет версии записи"), risk: "права и учётные записи", allowed: true, proof: "HTTP+браузер: успех, устаревшая версия 409 без записи, снятие своей роли администратора 409, 403" },
   { id: "users.password", screen: "users-access", action: "Пароль пользователя: задать или заблокировать вход (пустой пароль — только чужому)", method: "POST", path: re(`/users/\\d+/set-password`), onlyKeys: ["password", "must_change_password"], check: (b) => (typeof b?.password === "string" ? null : "нет пароля"), risk: "пароли (значение вводит человек; в журнал не попадает)", allowed: true, proof: "HTTP+браузер на тестовых пользователях копии: политика 422, 403 у не-админов, блокировка, вход настоящей формой, сеансы завершаются, журнал без паролей и хэшей" },
