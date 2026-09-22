@@ -10,6 +10,8 @@
   S7  ожидание блокировки: писатель ждёт не дольше busy_timeout, затем чистый отказ (без частичных изменений), после освобождения — успех;
   S10 контракт ЧУЖОГО объекта с позицией под ту же марку не принимается (пачкой и одиночной сменой статуса);
   S11 одиночная смена статуса без contract_id (как делает форма V2) — что происходит с контрактом (наблюдение);
+  S14 отмена проведения замены поставщика (unpost) против операции, занимающей освободившийся остаток «прежнего» контракта —
+      только один исход побеждает, отмена не превышает остаток молча (2026-09-22, дефект app/supplier_change.py unpost_supplier_change);
   (журнал действий при откате пачки проверяет scripts/verify_activity_journal.py)
   S8  СВОЙСТВА пачки bulk-status (не гонка): что она делает с контрактом (перезапись устаревшим, снятие, «Запланирован», архивный, чужой объект).
 
@@ -489,12 +491,70 @@ def s11(round_no):
     return [], facts
 
 
+def s14(round_no):
+    """Отмена проведения замены поставщика (unpost) против операции, занимающей освободившийся остаток «прежнего» контракта.
+
+    Готовим: контракт A (прежний) — 2 места, оба заняты; контракт B (новый) — 2 места, занято 1. Проводим замену поставщика,
+    переносящую одно изделие A → B (в B было свободно ровно 1 место): после проведения в A освобождается ровно 1 место.
+    Гоняем НАПЕРЕГОНКИ отмену проведения этого документа (она вернёт изделие назад в A) и отдельную операцию, занимающую то же
+    освободившееся место в A другим изделием той же позиции. Ровно один исход должен победить при любом порядке — либо отмена
+    успевает первой и конкурент получает честный отказ (точечная проверка assert_link_allowed, она была и раньше), либо
+    конкурент успевает первым и ТЕПЕРЬ отмена обязана отказать 409 (assert_no_regression, дефект 2026-09-22, до исправления
+    отмена превышала остаток молча). В обоих случаях привязано в A не должно быть больше закупленного.
+    """
+    fresh_db()
+    c = db()
+    pos, ids = find_position(c, 6)
+    a_id = pos["contract_id"]
+    b_row = c.execute("SELECT co.id FROM contracts co JOIN specifications s ON s.id = co.specification_id JOIN agreements a ON a.id = s.agreement_id "
+                      "WHERE a.object_id = 1 AND co.is_archived = 0 AND co.id != ? ORDER BY co.id LIMIT 1", (a_id,)).fetchone()
+    b_id = b_row["id"]
+    # Количество — ПОВЕРХ уже привязанного на каждом контракте под эту позицию (как make_room), а не абсолютное число: в
+    # накопленных данных на a_id/b_id уже может быть что-то привязано под эту же (тип, марка), и абсолютная цифра тогда
+    # создавала бы фиктивное превышение с самого начала, не относящееся к проверяемой гонке.
+    fact_a = linked_n(c, a_id, pos["element_type"], pos["mark"])
+    fact_b = linked_n(c, b_id, pos["element_type"], pos["mark"])
+    for cid, qty in ((a_id, fact_a + 2), (b_id, fact_b + 2)):
+        c.execute("DELETE FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark = ?", (cid, pos["element_type"], pos["mark"]))
+        c.execute("INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)", (cid, pos["element_type"], pos["mark"], qty))
+    # A: +2 новых привязки — полностью занят (0 свободных мест из добавленных qty). B: +1 — остаётся ровно 1 свободное
+    # место (второе из добавленных qty) — его займёт проведение замены поставщика.
+    for e, cid in ((ids[0], a_id), (ids[1], a_id), (ids[2], b_id)):
+        c.execute("UPDATE elements SET contract_id = ?, current_status = 'contracting' WHERE id = ?", (cid, e))
+        c.execute("INSERT INTO status_history (element_id, status, changed_by, contract_id) VALUES (?, 'contracting', 'тест', ?)", (e, cid))
+    c.commit()
+    c.close()
+    doc = sc.create_supplier_change(sc.SupplierChangeIn(object_id=1, doc_date="2026-09-21", from_contract_id=a_id, to_contract_id=b_id, element_ids=[ids[0]]), USER)
+    sc.post_supplier_change(doc["id"], USER)   # A: свободно ровно 1 место (переехавшее); B: полностью занят
+    res = race([
+        (sc.unpost_supplier_change, doc["id"], USER),
+        (main.update_status_bulk, bulk_body([ids[3]], a_id), USER),   # занимает то же свободное место в A
+    ])
+    c = db()
+    n = linked_n(c, a_id, pos["element_type"], pos["mark"]); q = bought(c, a_id, pos["element_type"], pos["mark"])
+    doc_status = c.execute("SELECT status FROM supplier_change_docs WHERE id = ?", (doc["id"],)).fetchone()["status"]
+    c.close()
+    bad = []
+    if n > q:
+        bad.append(f"в «прежнем» контракте привязано {n} > закуплено {q}")
+    ok_n = sum(1 for r in res if r[0] == "ok")
+    if ok_n != 1:
+        bad.append(f"успешных {ok_n}, ожидался 1")
+    unpost_ok = res[0][0] == "ok"
+    if unpost_ok and doc_status != sc.DRAFT:
+        bad.append(f"отмена сообщила об успехе, но документ не в статусе «черновик» (статус «{doc_status}»)")
+    if not unpost_ok and doc_status != sc.POSTED:
+        bad.append(f"отмена отклонена, но документ не остался проведённым (статус «{doc_status}»)")
+    return bad, Counter(str(r[0]) for r in res)
+
+
 SCENARIOS = [("S1", "последнее место: 8 одновременных пачек по 1 изделию", s1), ("S2", "две пачки по 2 на остаток 3 (всё или ничего)", s2),
              ("S3", "три разных обработчика на последнее место", s3), ("S4", "проведение замены поставщика против распределения", s4),
              ("S5", "уменьшение количества контракта против распределения", s5), ("S6", "откат при отказе внутри пачки", s6),
              ("S7", "ожидание блокировки и чистый отказ", s7), ("S10", "контракт чужого объекта отклоняется", s10),
              ("S12", "проведение замены поставщика против НОВОГО распределения (allocations)", lambda k: s4(k, alloc=True)),
-             ("S13", "уменьшение количества позиции против НОВОГО распределения (allocations)", lambda k: s5(k, alloc=True))]
+             ("S13", "уменьшение количества позиции против НОВОГО распределения (allocations)", lambda k: s5(k, alloc=True)),
+             ("S14", "отмена проведения замены поставщика против занятия освободившегося остатка", s14)]
 
 if __name__ == "__main__":
     USER = admin_row()

@@ -1065,6 +1065,16 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
     документом, потом возвращаются переехавшие, и только затем пересчитываются
     производные (текущий статус и фактическая дата). В другом порядке
     пересчёт опирался бы на историю, которую ещё не вернули.
+
+    Страж остатка контракта (симметрично post_supplier_change, см.
+    app/contract_guard.py): пока документ был проведён, освободившееся место
+    на «прежнем» контракте мог занять кто-то другой — другая замена,
+    распределение, ручное назначение. Возврат привязки вслепую тогда создал
+    бы превышение остатка молча. Снимаем покрытие участвующих контрактов ДО
+    возврата, после возврата сверяем assert_no_regression — как в
+    проведении, запрещаем именно УХУДШЕНИЕ, а не любое накопленное
+    превышение (оно уже могло быть и до этой операции по не связанной с ней
+    причине).
     """
     conn = get_connection()
     try:
@@ -1083,42 +1093,73 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
             "SELECT * FROM supplier_change_history_moves WHERE doc_id = ? ORDER BY id DESC", (doc_id,)
         ).fetchall()
 
-        затронутые = set()
-        for m in moves:
-            if m["prev_element_id"] is None:
-                conn.execute("DELETE FROM status_history WHERE id = ?", (m["history_id"],))
-            else:
-                conn.execute("UPDATE status_history SET element_id = ? WHERE id = ?",
-                             (m["prev_element_id"], m["history_id"]))
-                затронутые.add(m["prev_element_id"])
-        conn.execute("DELETE FROM supplier_change_history_moves WHERE doc_id = ?", (doc_id,))
-
+        # Участники сверки — контракты шапки (симметрично проведению) плюс
+        # прежний контракт каждой позиции (то самое значение, что возврат
+        # сейчас туда запишет) плюс ТЕКУЩИЙ контракт элемента прямо сейчас
+        # (на случай, если после проведения его успела передвинуть ДРУГАЯ
+        # операция — тогда список из одной шапки документа его бы не поймал).
+        участники = {c for c in (doc["from_contract_id"], doc["to_contract_id"]) if c}
         for it in items:
-            # Прежний контракт: у документов, записанных до появления
-            # проведения, prev_contract_id пуст — там изделие пришло с
-            # from_contract_id шапки, другого варианта у той операции не было.
             прежний = it["prev_contract_id"]
             if прежний is None and doc["kind"] == KIND_SUPPLIER:
                 прежний = doc["from_contract_id"]
-            conn.execute(
-                "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
-                (прежний, it["element_id"]),
-            )
-            if doc["kind"] == KIND_SWAP:
-                conn.execute(
-                    "UPDATE elements SET planned_delivery_date = ? WHERE id = ?",
-                    (it["prev_planned_delivery_date"], it["element_id"]),
-                )
-            затронутые.add(it["element_id"])
-            conn.execute(
-                "UPDATE supplier_change_items SET prev_contract_id = NULL, "
-                "prev_planned_delivery_date = NULL, status_at_move = NULL WHERE id = ?", (it["id"],)
-            )
+            if прежний:
+                участники.add(прежний)
+        ids_now = [it["element_id"] for it in items]
+        if ids_now:
+            места = ",".join("?" * len(ids_now))
+            for r in conn.execute(f"SELECT DISTINCT contract_id FROM elements WHERE id IN ({места})", ids_now):
+                if r["contract_id"]:
+                    участники.add(r["contract_id"])
+        покрытие_до = {c: contract_guard.coverage_state(conn, c) for c in участники}
 
-        for element_id in затронутые:
-            if conn.execute("SELECT 1 FROM status_history WHERE element_id = ? LIMIT 1",
-                            (element_id,)).fetchone():
-                recompute_status_and_actual_date(conn, element_id)
+        затронутые = set()
+        try:
+            for m in moves:
+                if m["prev_element_id"] is None:
+                    conn.execute("DELETE FROM status_history WHERE id = ?", (m["history_id"],))
+                else:
+                    conn.execute("UPDATE status_history SET element_id = ? WHERE id = ?",
+                                 (m["prev_element_id"], m["history_id"]))
+                    затронутые.add(m["prev_element_id"])
+            conn.execute("DELETE FROM supplier_change_history_moves WHERE doc_id = ?", (doc_id,))
+
+            for it in items:
+                # Прежний контракт: у документов, записанных до появления
+                # проведения, prev_contract_id пуст — там изделие пришло с
+                # from_contract_id шапки, другого варианта у той операции не было.
+                прежний = it["prev_contract_id"]
+                if прежний is None and doc["kind"] == KIND_SUPPLIER:
+                    прежний = doc["from_contract_id"]
+                conn.execute(
+                    "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
+                    (прежний, it["element_id"]),
+                )
+                if doc["kind"] == KIND_SWAP:
+                    conn.execute(
+                        "UPDATE elements SET planned_delivery_date = ? WHERE id = ?",
+                        (it["prev_planned_delivery_date"], it["element_id"]),
+                    )
+                затронутые.add(it["element_id"])
+                conn.execute(
+                    "UPDATE supplier_change_items SET prev_contract_id = NULL, "
+                    "prev_planned_delivery_date = NULL, status_at_move = NULL WHERE id = ?", (it["id"],)
+                )
+
+            for element_id in затронутые:
+                if conn.execute("SELECT 1 FROM status_history WHERE element_id = ? LIMIT 1",
+                                (element_id,)).fetchone():
+                    recompute_status_and_actual_date(conn, element_id)
+
+            contract_guard.assert_no_regression(
+                conn, участники, покрытие_до,
+                "Отмена проведения оставила бы изделия без позиции в контракте:")
+        except HTTPException:
+            # Страж отказал (или сам возврат наткнулся на исключение) —
+            # откатываем ВСЮ транзакцию: документ остаётся проведённым,
+            # привязки и история статусов не меняются (см. assert_no_regression).
+            conn.rollback()
+            raise
 
         conn.execute(
             "UPDATE supplier_change_docs SET status = ?, posted_at = NULL, posted_by = NULL, "
