@@ -77,7 +77,17 @@ t(!A("POST", "/shaft-panels/apply", { token: tok, acknowledged_warnings: ["plan_
 t(!A("POST", "/shaft-panels/apply", { token: "zz", acknowledged_warnings: [], retire_missing: false }), "shaft: короткий токен");
 t(A("DELETE", "/shaft-panels/pending/" + tok, undefined), "shaft: отмена анализа своим токеном");
 t(!A("DELETE", "/shaft-panels/pending/zz", undefined), "shaft: отмена — короткий токен в адресе");
-t(!A("POST", "/import-pdf/apply", { token: tok }), "pdf apply отключён");
+// загрузка из PDF: фоновый разбор (полный) и синхронный разбор (только фасады), применение по токену, отладочная очистка
+t(A("POST", "/import-pdf/analyze/start", fd({ object_id: "3" }, "p.pdf")), "pdf: запуск фонового разбора");
+t(!A("POST", "/import-pdf/analyze/start", fd({}, "p.pdf")), "pdf: без объекта");
+t(!A("POST", "/import-pdf/analyze/start", fd({ object_id: "3" }, "p.xlsx")), "pdf: расширение");
+t(A("POST", "/import-pdf/apply", { token: tok }), "pdf: применение по токену");
+t(!A("POST", "/import-pdf/apply", { token: tok, x: 1 }), "pdf: лишнее поле");
+t(A("POST", "/import-pdf-facade/analyze", fd({ object_id: "3" }, "p.pdf")), "pdf facade: разбор");
+t(A("POST", "/import-pdf-facade/apply", { token: tok }), "pdf facade: применение по токену");
+t(A("POST", "/objects/3/clear-import-data", { source: "pdf", elements: true, structure: false, work: false }), "pdf: отладочная очистка (помещения)");
+t(!A("POST", "/objects/3/clear-import-data", { source: "pdf", elements: false, structure: false, work: false }), "pdf: очистка без отмеченной группы");
+t(!A("POST", "/objects/3/clear-import-data", { source: "xlsx", elements: true, structure: false, work: false }), "pdf: очистка — неизвестный источник");
 t(!A("POST", "/admin/db-transfer/apply", {}), "перенос базы отключён");
 console.log(`проверок пройдено: ${ok}, не пройдено: ${bad.length}`); bad.forEach((b) => console.log("НЕ ПРОЙДЕНО:", b));
 process.exit(bad.length ? 1 : 0);

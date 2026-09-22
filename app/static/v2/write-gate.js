@@ -237,6 +237,11 @@ export const POLICY = [
   { id: "shaft.analyze", screen: "shaft-panels", action: "Панели облицовки шахты: разбор DXF по объекту (толщина панели — необязательное поле), сводка расхождений (в базу не пишет)", method: "POST", path: re("/shaft-panels/analyze"), check: shaftAnalyzeProblem, risk: "чтение (разбор), данные не меняются; файл — во временной папке сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF профиля ГП1/ГП2, отказ 403 у не-админа, 4xx на неверный профиль/оси/марки/перекрытие" },
   { id: "shaft.apply", screen: "shaft-panels", action: "Панели облицовки шахты: применить показанную сводку по токену (подтверждённые замечания, снятие актуальности отсутствующих)", method: "POST", path: re("/shaft-panels/apply"), check: shaftApplyProblem, risk: "изделия объекта (тип «Панель облицовки шахты»), сетка осей чертежа; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, конфликты блокируют применение, отказ 403 у не-админа, журнал после сохранения" },
   { id: "shaft.cancel", screen: "shaft-panels", action: "Панели облицовки шахты: отменить незавершённый анализ (освобождает токен)", method: "DELETE", path: re(`/shaft-panels/pending/${TOKEN_URLSAFE}`), risk: "ничего не меняет — снимает временную запись разбора своего же токена", allowed: true, proof: "настоящий backend: отмена своего токена, чужой токен и неизвестный токен отклоняются сервером" },
+  { id: "pdf.analyze.start", screen: "pdf-import", action: "Загрузка из PDF: запуск фонового разбора помещений (в базу не пишет)", method: "POST", path: re("/import-pdf/analyze/start"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор в фоновом потоке), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF (детально и «только фасады»), отказ 403 у не-админа, 4xx на неверный/битый файл" },
+  { id: "pdf.apply", screen: "pdf-import", action: "Загрузка из PDF: применить показанную сводку помещений по токену", method: "POST", path: re("/import-pdf/apply"), check: tokenOnlyProblem, risk: "секции/этажи/помещения модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
+  { id: "pdf.facade.analyze", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: синхронный разбор макета блоков (в базу не пишет)", method: "POST", path: re("/import-pdf-facade/analyze"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF, отказ 403 у не-админа, 4xx на неверный/битый файл" },
+  { id: "pdf.facade.apply", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: применить показанный макет блоков по токену", method: "POST", path: re("/import-pdf-facade/apply"), check: tokenOnlyProblem, risk: "секции/этажи/блоки модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
+  { id: "pdf.clear", screen: "pdf-import", action: "Загрузка из PDF: отладочная очистка справочников объекта перед повторной загрузкой (применяется сразу, без сводки)", method: "POST", path: re(`/objects/\\d+/clear-import-data`), check: clearImportDataProblem, risk: "необратимо через интерфейс (помещения из PDF и/или секции/этажи и/или виды работ блоков); копия базы перед очисткой", allowed: true, proof: "настоящий backend: очистка по отмеченным группам, счётчики в ответе, отказ 403, журнал" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
   { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: контракт по умолчанию по типу изделия, свёртка дублей справочников (режим переноса подчинённых), прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
@@ -404,6 +409,16 @@ function shaftAnalyzeProblem(body) {
     const v = Number(th[0]);
     if (!Number.isFinite(v) || v <= 0 || v > 500) return "толщина должна быть числом больше 0 и не больше 500 мм";
   }
+  return null;
+}
+
+// Отладочная очистка справочников объекта перед повторной загрузкой (Revit/PDF): источник и хотя бы одна из трёх групп.
+function clearImportDataProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["source", "elements", "structure", "work"].includes(k))) return "лишние поля";
+  if (!["revit", "pdf"].includes(body.source)) return "источник должен быть revit или pdf";
+  if (typeof body.elements !== "boolean" || typeof body.structure !== "boolean" || typeof body.work !== "boolean") return "флаги групп должны быть да/нет";
+  if (!(body.elements || body.structure || body.work)) return "не отмечена ни одна группа для очистки";
   return null;
 }
 

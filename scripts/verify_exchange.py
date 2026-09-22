@@ -31,7 +31,7 @@ import gen_synthetic_shaft_dxf as shaftgen  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -440,6 +440,128 @@ def section_shaft():
     r = admin.delete(BASE + f"/shaft-panels/pending/{other_token}")
     check(r.status_code == 403, f"отмена чужого токена → 403 (получен {r.status_code})")
     login("user3").delete(BASE + f"/shaft-panels/pending/{other_token}")  # прибраться за собой
+
+
+import gen_synthetic_pdf_set as pdfgen  # noqa: E402
+
+
+def _pdf(variant):
+    return pdfgen.build(variant).write()
+
+
+def pdfup(s, path, content, name="p.pdf", data=None, timeout=90):
+    return s.post(BASE + path, files={"file": (name, content, "application/pdf")}, data=data or {}, timeout=timeout)
+
+
+def poll_pdf_job(s, job_id, timeout=60):
+    import time
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        r = s.get(BASE + f"/import-pdf/analyze/progress/{job_id}")
+        if r.status_code != 200:
+            return r  # ошибка — вызывающий код проверит status_code/detail
+        body = r.json()
+        if body.get("status") == "done":
+            return r
+        time.sleep(0.3)
+    raise TimeoutError("фоновый разбор PDF не завершился за отведённое время")
+
+
+def section_pdf():
+    print("== загрузка из PDF (детально и «только фасады»)")
+    admin = login("admin")
+    OBJ = 3  # объект МФР копии без данных раздела PDF (revit_elements.section_code='PDF' пуст — есть только АР/КР из Revit)
+    small = _pdf("small")
+
+    # ---- права: 403 у user2/user4 на обеих ветках ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r = pdfup(login(user), "/import-pdf/analyze/start", small, data={"object_id": str(OBJ)})
+        check(r.status_code == 403 and snap() == before, f"analyze/start: {user} → {r.status_code}, БД не изменена")
+        r = pdfup(login(user), "/import-pdf-facade/analyze", small, data={"object_id": str(OBJ)})
+        check(r.status_code == 403 and snap() == before, f"facade/analyze: {user} → {r.status_code}, БД не изменена")
+
+    # ---- валидация: без файла / не PDF / пустой ----
+    r = admin.post(BASE + "/import-pdf/analyze/start", data={"object_id": str(OBJ)})
+    check(r.status_code == 422, f"analyze/start: без файла → {r.status_code}")
+    before = snap()
+    r = pdfup(admin, "/import-pdf/analyze/start", b"not a pdf", data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"analyze/start: битый файл запускает задачу (ошибка увидится в progress) → {r.status_code}")
+    job = r.json().get("job_id")
+    pr = poll_pdf_job(admin, job)
+    check(pr.status_code >= 400, f"progress: битый PDF → ошибка задачи ({pr.status_code}: {pr.text[:100]})")
+    check(snap() == before, "битый PDF: БД не изменена")
+
+    # ---- файл без слоя помещений: понятная ошибка ----
+    before = snap()
+    r = pdfup(admin, "/import-pdf/analyze/start", _pdf("no_rooms"), data={"object_id": str(OBJ)})
+    job = r.json()["job_id"]
+    pr = poll_pdf_job(admin, job)
+    check(pr.status_code == 422 and "помещени" in pr.text.lower(), f"no_rooms: понятная ошибка ({pr.status_code}: {pr.text[:120]})")
+    check(snap() == before, "no_rooms: БД не изменена")
+
+    # ---- детальный разбор: фоновая задача → сводка (в БД не пишет) ----
+    before = snap()
+    r = pdfup(admin, "/import-pdf/analyze/start", small, data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"analyze/start: 200 (получен {r.status_code})")
+    job = r.json()["job_id"]
+    pr = poll_pdf_job(admin, job)
+    check(pr.status_code == 200, f"progress: успешное завершение ({pr.status_code})")
+    result = pr.json()["result"]
+    check(result["total_rooms"] > 0 and result["new"] > 0, f"analyze: разобраны помещения (total_rooms={result['total_rooms']}, new={result['new']})")
+    check(snap() == before, "analyze/start: ничего не пишет (снимок БД совпал)")
+    token = result["token"]
+
+    # ---- применение: права, затем успех ----
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + "/import-pdf/apply", json={"token": token})
+        check(r.status_code == 403, f"apply: {user} → {r.status_code}")
+    j0 = journal_max()
+    r = admin.post(BASE + "/import-pdf/apply", json={"token": token})
+    check(r.status_code == 200, f"apply: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["rooms_written"] == result["total_rooms"], f"apply: rooms_written совпадает с разбором ({res['rooms_written']} vs {result['total_rooms']})")
+    check(rows(f"select count(*) n from revit_elements where object_id={OBJ} and section_code='PDF' and category='Помещение' and is_current=1")[0]["n"] == result["total_rooms"],
+          "в БД появились текущие помещения раздела PDF")
+    ev = journal_since(j0, "import_pdf")
+    check(len(ev) == 1, f"журнал: одно событие import_pdf (найдено {len(ev)})")
+    # повторное применение того же токена — отклонено (использован/забыт)
+    r = admin.post(BASE + "/import-pdf/apply", json={"token": token})
+    check(r.status_code >= 400, f"apply: повтор токена → отказ ({r.status_code})")
+
+    # ---- повторный разбор того же файла: идемпотентно (0 новых, все без изменений) ----
+    r = pdfup(admin, "/import-pdf/analyze/start", small, data={"object_id": str(OBJ)})
+    job2 = r.json()["job_id"]
+    result2 = poll_pdf_job(admin, job2).json()["result"]
+    # unchanged считает ВСЕ категории элементов раздела PDF (помещения+стены/окна+плиты), а не только помещения — тот же набор, что дал "new" на первом разборе.
+    check(result2["new"] == 0 and result2["unchanged"] == result["new"], f"повторный разбор: new=0, unchanged={result2['unchanged']} (ожидалось {result['new']})")
+
+    # ---- «только фасады»: синхронный разбор + применение ----
+    before = snap()
+    r = pdfup(admin, "/import-pdf-facade/analyze", small, data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"facade/analyze: 200 (получен {r.status_code}: {r.text[:120]})")
+    fr = r.json()
+    check(fr["total_blocks"] > 0, f"facade/analyze: блоков {fr['total_blocks']}")
+    check(snap() == before, "facade/analyze: ничего не пишет")
+    j0 = journal_max()
+    r = admin.post(BASE + "/import-pdf-facade/apply", json={"token": fr["token"]})
+    check(r.status_code == 200, f"facade/apply: успех → {r.status_code} ({r.text[:150]})")
+    fres = r.json()
+    check(fres["blocks_written"] == fr["total_blocks"], f"facade/apply: blocks_written совпадает ({fres['blocks_written']} vs {fr['total_blocks']})")
+    check(len(journal_since(j0, "import_pdf_facade")) == 1, "журнал: одно событие import_pdf_facade")
+
+    # ---- очистка справочников (отладка): только помещения раздела PDF ----
+    before_rooms = rows(f"select count(*) n from revit_elements where object_id={OBJ} and section_code='PDF' and category='Помещение' and is_current=1")[0]["n"]
+    check(before_rooms > 0, "перед очисткой в БД есть текущие помещения PDF")
+    j0 = journal_max()
+    r = admin.post(BASE + f"/objects/{OBJ}/clear-import-data", json={"source": "pdf", "elements": True, "structure": False, "work": False})
+    check(r.status_code == 200, f"clear-import-data: 200 (получен {r.status_code}: {r.text[:120]})")
+    after_rooms = rows(f"select count(*) n from revit_elements where object_id={OBJ} and section_code='PDF' and category='Помещение' and is_current=1")[0]["n"]
+    check(after_rooms == 0, f"clear-import-data: помещений PDF не осталось текущими (найдено {after_rooms})")
+    check(len(journal_since(j0, "clear_import_data")) == 1, "журнал: одно событие clear_import_data")
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + f"/objects/{OBJ}/clear-import-data", json={"source": "pdf", "elements": True, "structure": False, "work": False})
+        check(r.status_code == 403, f"clear-import-data: {user} → {r.status_code}")
 
 
 # ---------------------------------------------------------------- вспомогательное: внесение сбоя в копию БД
@@ -1040,10 +1162,10 @@ def section_revit():
         TABLES = saved_tables
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft}
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft, "pdf": section_pdf}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")
