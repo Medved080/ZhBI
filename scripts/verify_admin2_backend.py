@@ -7,6 +7,7 @@
 Запуск: .venv/bin/python scripts/verify_admin2_backend.py <порт> <каталог_копии>
 """
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -291,11 +292,65 @@ def group_label_visibility():
     admin.put(f"/label-dates-visibility?object_id={OBJ}", {t: bool(before_d["dates_visible"])})
 
 
+# ==================================================================== T — перенос базы целиком
+def group_db_transfer():
+    print("\n== T — перенос базы целиком (ТОЛЬКО на копии) ==")
+    st, d = admin.get("/admin/db-transfer/current")
+    check("GET /admin/db-transfer/current → 200", st == 200, f"{st} {d}")
+
+    r = admin.s.post(BASE + "/admin/db-transfer/export")
+    check("POST /admin/db-transfer/export → 200 (архив)", r.status_code == 200, str(r.status_code))
+    archive = r.content
+    check("экспорт непустой", len(archive) > 1000)
+
+    before_elements = q1("SELECT COUNT(*) AS n FROM elements")["n"]
+    before_users = q1("SELECT COUNT(*) AS n FROM users")["n"]
+
+    st, d = user2.upload("/admin/db-transfer/stage", {}, {"file": ("snap.zip", archive, "application/zip")})
+    check("POST /admin/db-transfer/stage user2(не админ) → 403", st == 403, f"{st} {d}")
+
+    st, d = admin.upload("/admin/db-transfer/stage", {}, {"file": ("snap.zip", archive, "application/zip")})
+    check("POST /admin/db-transfer/stage admin (свой же снимок) → 200", st == 200, f"{st} {d}")
+    token = d.get("token") if st == 200 else None
+    check("сверка: число изделий совпало", st == 200 and d.get("snapshot", {}).get("tables", {}).get("elements") == before_elements)
+
+    if token:
+        st, d = admin.post("/admin/db-transfer/apply", {"token": token, "confirm": "неверное"})
+        check("apply неверное слово → 400, без изменений", st == 400, f"{st} {d}")
+        after_wrong = q1("SELECT COUNT(*) AS n FROM elements")["n"]
+        check("SQL: изделия не изменились после неверного слова", after_wrong == before_elements)
+
+        st, d = admin.post("/admin/db-transfer/forget", {"token": token})
+        check("POST /admin/db-transfer/forget → 200", st == 200, f"{st} {d}")
+        st, d = admin.post("/admin/db-transfer/apply", {"token": token, "confirm": "080"})
+        check("apply забытого токена → 404", st == 404, f"{st} {d}")
+
+    st, d = admin.upload("/admin/db-transfer/stage", {}, {"file": ("snap2.zip", archive, "application/zip")})
+    token2 = d.get("token") if st == 200 else None
+    check("повторная сверка тем же архивом → 200", st == 200, f"{st} {d}")
+    if token2:
+        backups_before = {f for f in os.listdir(WORK + "/backups")} if os.path.isdir(WORK + "/backups") else set()
+        st, d = admin.post("/admin/db-transfer/apply", {"token": token2, "confirm": "080"})
+        check("apply верное слово → 200 (ЗАМЕНА выполнена)", st == 200, f"{st} {d}")
+        if st == 200:
+            check("ответ: снята служебная копия", bool((d.get("safety_backup") or {}).get("name")))
+            backups_after = set(os.listdir(WORK + "/backups")) if os.path.isdir(WORK + "/backups") else set()
+            check("на диске появился файл служебной копии auto_before_transfer", any("auto_before_transfer" in f for f in (backups_after - backups_before)))
+            after_elements = q1("SELECT COUNT(*) AS n FROM elements")["n"]
+            after_users = q1("SELECT COUNT(*) AS n FROM users")["n"]
+            check("SQL: число изделий после замены совпало (снимок своей же базы)", after_elements == before_elements)
+            check("SQL: число пользователей совпало", after_users == before_users)
+            # сессия входа административного клиента должна остаться действительной (та же строка приехала в снимке)
+            st2, d2 = admin.get("/me")
+            check("сессия входа осталась действительной после замены", st2 == 200, f"{st2} {d2}")
+
+
 if __name__ == "__main__":
     group_marks()
     group_zones()
     group_appearance()
     group_label_visibility()
+    group_db_transfer()
     print(f"\nИТОГО: {PASSED[0]} из {PASSED[0] + len(FAILS)}"
           + (f"; провалы: {', '.join(FAILS)}" if FAILS else ""))
     sys.exit(1 if FAILS else 0)

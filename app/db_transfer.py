@@ -127,7 +127,10 @@ def _table_counts(path: Path) -> dict:
     """Сколько строк в каждой таблице. Тот же приём, что у резервных копий:
     полнота снимка должна быть ВИДНА числами, а не продекларирована."""
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        # immutable=1: копия снята с базы в режиме WAL и несёт его признак в заголовке; «mode=ro» без готовых
+        # файлов -wal/-shm открыть такую копию не может («unable to open database file») — тот же приём, что
+        # у резервных копий (app/backups.py, _db_stats).
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
     except sqlite3.Error:
         return {}
     try:
@@ -154,7 +157,7 @@ def _db_release_version(path: Path) -> Optional[str]:
     release_tasks: там функция работает с ТЕКУЩЕЙ базой, а нам нужна чужая
     из архива."""
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)   # см. _table_counts выше
     except sqlite3.Error:
         return None
     try:
@@ -324,7 +327,7 @@ def _check_db_file(path: Path) -> dict:
     """База из архива пригодна: открывается, цела, и это база ЭТОГО
     сервиса. Проверяется ДО замены — после уже поздно."""
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)   # см. _table_counts выше
     except sqlite3.Error:
         raise TransferError(400, "Файл базы в архиве не открывается")
     try:
@@ -496,7 +499,7 @@ def apply_archive(token: str, confirm: str,
             comment="автоматически перед полной заменой базы снимком другого сервера",
         )
 
-        source = sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True)
+        source = sqlite3.connect(f"file:{db_copy}?mode=ro&immutable=1", uri=True)   # см. _table_counts выше
         try:
             target = sqlite3.connect(_db.DB_PATH)
             try:

@@ -101,6 +101,17 @@ function markBodyProblem(b) {
   if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 200) return "название марки пусто или слишком длинно";
   return null;
 }
+const isTransferToken = (v) => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
+function dbTransferApplyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["token", "confirm"].includes(k))) return "лишние поля";
+  if (!isTransferToken(b.token)) return "нет идентификатора загруженного снимка";
+  if (typeof b.confirm !== "string" || !b.confirm.trim() || b.confirm.length > 50) return "не введено кодовое слово";
+  return null;
+}
+function dbTransferForgetProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => k !== "token")) return "лишние поля";
+  return isTransferToken(b.token) ? null : "нет идентификатора загруженного снимка";
+}
 function fillScopeApplyProblem(b) {
   if (!isObj(b) || Object.keys(b).some((k) => !["project_id", "object_id", "keys"].includes(k))) return "лишние поля";
   if (!(b.project_id === null || (Number.isInteger(b.project_id) && b.project_id > 0))) return "неверный проект";
@@ -246,6 +257,9 @@ export const POLICY = [
   { id: "activity.cleanup", screen: "activity", action: "Журнал действий: очистить записи раньше даты (счёт заранее, подтверждение датой)", method: "POST", path: re("/activity/cleanup"), risk: "журнал, необратимо", allowed: true, proof: "HTTP+браузер: счёт, очистка, факт очистки в журнале, 403" },
   { id: "release.run", screen: "changelog", action: "Что нового: повторить обработку данных обновления (копия базы снимается сервером)", method: "POST", path: re(`/release-tasks/[^/]+/run`), risk: "данные, служебное", allowed: true, proof: "HTTP+браузер: повтор выполненной обработки идемпотентен, 404, 403" },
   { id: "fill-scope.apply", screen: "fill-scope", action: "Заполнить пустые «Объект» и «Проект» у отмеченных справочников (временная необратимая обработка, предпросмотр и подтверждение словом — в интерфейсе)", method: "POST", path: re("/admin/fill-empty-scope/apply"), check: fillScopeApplyProblem, risk: "данные иерархии нескольких справочников, необратимо через интерфейс, служебное (администратор сервиса)", allowed: true, proof: "HTTP+браузер: применение отмеченного → SQL (пустых полей стало меньше), 403 у не-администратора, конфликт объекта/проекта из разных строк — отказ без изменений" },
+  { id: "db-transfer.stage", screen: "bulk-edit", action: "Перенос базы: принять снимок (.zip) и сверить с текущей базой — ничего не меняет", method: "POST", path: re("/admin/db-transfer/stage"), check: uploadCheck({ ext: ["zip"] }), risk: "чтение (сверка), файл лежит в очереди на диске до применения или отмены", allowed: true, proof: "HTTP+браузер: сверка своим же снимком, числа таблиц совпадают, предупреждения по несовпадению версии/таблиц, 403 у не-администратора" },
+  { id: "db-transfer.apply", screen: "bulk-edit", action: "Перенос базы: ПОЛНАЯ ЗАМЕНА текущей базы и вложений содержимым сверенного снимка (кодовое слово проверяет сервер; служебная копия текущего состояния снимается перед заменой)", method: "POST", path: re("/admin/db-transfer/apply"), onlyKeys: ["token", "confirm"], check: dbTransferApplyProblem, risk: "ВСЯ база и вложения, необратимо интерфейсом (только из служебной копии)", allowed: true, proof: "HTTP+браузер на копии БД: применение своим же снимком → служебная копия создана, счётчики совпали, неверное слово отклонено без изменений, 403 у не-администратора" },
+  { id: "db-transfer.forget", screen: "bulk-edit", action: "Перенос базы: убрать снимок из очереди, не применяя", method: "POST", path: re("/admin/db-transfer/forget"), onlyKeys: ["token"], check: dbTransferForgetProblem, risk: "служебное (файл снимка на диске)", allowed: true, proof: "HTTP+браузер: повторное применение забытого токена → 404" },
   { id: "users.create", screen: "users-access", action: "Пользователи: создание учётной записи", method: "POST", path: re("/users"), onlyKeys: ["last_name", "first_name", "domain_login", "role"], risk: "права и учётные записи", allowed: true, proof: "HTTP+браузер: успех и БД, 403 у user2/user4, дубль логина 409, пустые поля 422, журнал" },
   { id: "users.update", screen: "users-access", action: "Пользователи: правка карточки (с проверкой «запись устарела»)", method: "PATCH", path: re(`/users/\\d+`), onlyKeys: ["last_name", "first_name", "patronymic", "position", "department", "domain_login", "role", "auth_method", "must_change_password", "expected_version"], check: (b) => (typeof b?.expected_version === "string" ? null : "нет версии записи"), risk: "права и учётные записи", allowed: true, proof: "HTTP+браузер: успех, устаревшая версия 409 без записи, снятие своей роли администратора 409, 403" },
   { id: "users.password", screen: "users-access", action: "Пароль пользователя: задать или заблокировать вход (пустой пароль — только чужому)", method: "POST", path: re(`/users/\\d+/set-password`), onlyKeys: ["password", "must_change_password"], check: (b) => (typeof b?.password === "string" ? null : "нет пароля"), risk: "пароли (значение вводит человек; в журнал не попадает)", allowed: true, proof: "HTTP+браузер на тестовых пользователях копии: политика 422, 403 у не-админов, блокировка, вход настоящей формой, сеансы завершаются, журнал без паролей и хэшей" },
