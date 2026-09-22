@@ -24,6 +24,7 @@
 """
 import argparse
 import struct
+from pathlib import Path
 
 MAGIC = b"Kaydara FBX Binary  \x00\x1a\x00"  # 21 байт подписи + 0x1A 0x00 = 23 байта
 VERSION = 7400
@@ -265,7 +266,9 @@ def main():
     args = ap.parse_args()
 
     data = generate(args.variant)
-    with open(args.output, "wb") as f:
+    out = Path(args.output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "wb") as f:
         f.write(data)
     print(f"{args.output}: вариант={args.variant} размер={len(data)} байт")
 

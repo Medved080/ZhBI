@@ -3,9 +3,17 @@
 import { execFileSync } from "node:child_process";
 import { open, screen, setFile, text, reload, clk, EX, SP, sql, maxid, journal, chk, summary } from "./hx.mjs";
 
+const PY = process.env.V2_EX_PY || ".venv/bin/python";
+const ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");   // корень репозитория относительно самого файла — не привязано к конкретной рабочей копии
+function gen(variant, name) {
+  const out = EX + "/" + name;
+  execFileSync(PY, [ROOT + "/scripts/gen_synthetic_pdf_set.py", out, "--variant", variant], { encoding: "utf8" });
+  return out;
+}
+
 const OBJ = 3; // объект МФР копии без данных раздела PDF (есть только АР/КР из Revit — не пересекается)
-const small = EX + "/small.pdf";
-const noRooms = EX + "/no_rooms.pdf";
+const small = gen("small", "small.pdf");
+const noRooms = gen("no_rooms", "no_rooms.pdf");
 
 const b = await open("admin");
 // «pdf_import» помечен not_applicable у объектов не-МФР (screenAllowed скрывает раздел даже админу) — сперва выбрать
@@ -97,7 +105,6 @@ await b.sleep(1800); // очередь журнала пишется пачка�
 chk(journal("clear_import_data", j2).length === 1, "в журнале одно событие clear_import_data");
 
 console.log("== права: user2/user4 получают 403 при настоящей попытке разбора");
-const PY = process.env.V2_EX_PY || ".venv/bin/python";
 for (const user of ["user2", "user4"]) {
   const out = execFileSync(PY, ["-W", "ignore", "-c", `
 import warnings; warnings.filterwarnings("ignore")

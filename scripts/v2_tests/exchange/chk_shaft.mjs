@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { open, screen, setFile, text, reload, clk, EX, SP, sql, maxid, journal, chk, summary, posts } from "./hx.mjs";
 
 const PY = process.env.V2_EX_PY || ".venv/bin/python";
-const ROOT = "/Users/max/zhbi-w-exchange2";
+const ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");   // корень репозитория относительно самого файла — не привязано к конкретной рабочей копии
 function gen(variant, name) {
   const out = EX + "/" + name;
   execFileSync(PY, [ROOT + "/scripts/gen_synthetic_shaft_dxf.py", out, "--variant", variant], { encoding: "utf8" });

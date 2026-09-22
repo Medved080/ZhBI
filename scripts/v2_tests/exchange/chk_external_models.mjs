@@ -6,7 +6,16 @@ import { open, screen, text, reload, clk, setFile, EX, SP, sql, maxid, journal, 
 
 const OBJ = 1;
 const PY = process.env.V2_EX_PY || ".venv/bin/python";
+const ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "");   // корень репозитория относительно самого файла — не привязано к конкретной рабочей копии
 const DB = `${process.env.V2_EX_WORK || (SP)}/exchange_work/work.db`;
+
+function genFbx(variant, name) {
+  const out = EX + "/" + name;
+  execFileSync(PY, [ROOT + "/scripts/gen_synthetic_fbx.py", out, "--variant", variant], { encoding: "utf8" });
+  return out;
+}
+genFbx("bad_axis", "bad_axis.fbx");
+genFbx("ok", "ok.fbx");
 
 function seed(name) {
   return execFileSync(PY, ["-W", "ignore", "-c", `
