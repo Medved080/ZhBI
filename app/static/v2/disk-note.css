@@ -1,0 +1,15 @@
+/* Предупреждение о нехватке места на диске (главная оболочка, main.js: warnAboutDiskSpace) — отдельный файл:
+   styles.css общий (параллельно правит другой исполнитель — «tables»), трогать напрямую нельзя. Визуально —
+   тот же язык, что у .v2-gate-note/.v2-exp-banner рядом (используются только общие переменные --surface/--line/
+   --ink/--bad), но своя левая полоса и крестик закрытия. */
+.v2-disk-note {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 24px; font-size: 13px; background: var(--surface); border-bottom: 1px solid var(--line);
+  border-left: 4px solid var(--bad, #b23b3b); color: var(--ink);
+}
+.v2-disk-note[hidden] { display: none; }
+.v2-disk-note-critical { border-left-color: var(--bad, #b23b3b); font-weight: 600; }
+.v2-disk-note span { flex: 1; min-width: 0; }
+#v2-disk-note-x { flex: none; border: 0; background: none; padding: 2px 6px; color: var(--muted); font-size: 14px; cursor: pointer; }
+#v2-disk-note-x:hover { color: var(--ink); }
+#v2-root.v2-ws-mode .v2-disk-note { padding: 4px 14px; font-size: 12px; }

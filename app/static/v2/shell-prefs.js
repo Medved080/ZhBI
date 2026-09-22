@@ -24,11 +24,18 @@ function normalize(raw) {
   const navGroupState = r.nav_group_state && typeof r.nav_group_state === "object" && !Array.isArray(r.nav_group_state)
     ? Object.fromEntries(Object.entries(r.nav_group_state).filter(([, v]) => typeof v === "boolean"))
     : {};
+  // Порядок и избранное пунктов навигации (2026-09-22) — СВОИ данные, независимые от menu_prefs V1 (панель «Действия»).
+  const itemOrder = r.item_order && typeof r.item_order === "object" && !Array.isArray(r.item_order)
+    ? Object.fromEntries(Object.entries(r.item_order).filter(([, v]) => Array.isArray(v)).map(([k, v]) => [k, v.filter((x) => typeof x === "string")]))
+    : {};
+  const favorites = Array.isArray(r.favorites) ? [...new Set(r.favorites.filter((x) => typeof x === "string" && x))] : [];
   return {
     pinnedObjects,
     navPinned: r.nav_pinned === true,
     navWidth: r.nav_width != null ? clampNavWidth(r.nav_width) : NAV_WIDTH_DEFAULT,
     navGroupState,
+    itemOrder,
+    favorites,
   };
 }
 
@@ -46,6 +53,8 @@ export function createShellPrefsStore({ api, user }) {
       nav_pinned: prefs.navPinned,
       nav_width: prefs.navWidth,
       nav_group_state: prefs.navGroupState,
+      item_order: prefs.itemOrder,
+      favorites: prefs.favorites,
     };
   }
 
@@ -93,6 +102,20 @@ export function createShellPrefsStore({ api, user }) {
     setGroupOpen(groupId, isOpen) {
       prefs = { ...prefs, navGroupState: { ...prefs.navGroupState, [groupId]: !!isOpen } };
       schedule(300);
+    },
+    /** Желаемый порядок пунктов ВНУТРИ группы (id экранов) — группа без записи не переставлена (см. shell-nav.js). */
+    getItemOrder: (groupId) => prefs.itemOrder[groupId] || null,
+    setItemOrder(groupId, order) {
+      prefs = { ...prefs, itemOrder: { ...prefs.itemOrder, [groupId]: [...order] } };
+      schedule(300);
+    },
+    isFavorite: (id) => prefs.favorites.includes(id),
+    /** Отметить/снять «избранное» у пункта. Возвращает новое состояние (true — теперь избранный). */
+    toggleFavorite(id) {
+      const now = !prefs.favorites.includes(id);
+      prefs = { ...prefs, favorites: now ? [...prefs.favorites, id] : prefs.favorites.filter((x) => x !== id) };
+      schedule(300);
+      return now;
     },
     flush,
   };
