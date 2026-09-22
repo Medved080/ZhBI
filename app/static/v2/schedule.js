@@ -19,6 +19,7 @@ const ruMoment = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})
 const plural = (n, one, few, many) => { const a = Math.abs(n) % 100, b = a % 10; return a > 10 && a < 20 ? many : b === 1 ? one : b > 1 && b < 5 ? few : many; };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const unknownText = "Ответ сервера не получен — исход неизвестен. Ничего не отправлено повторно.";
+const sign = (v) => (v === null || v === undefined ? "—" : v > 0 ? `+${v}` : String(v));
 
 const TABS = [["gantt", "Визуализация"], ["versions", "Версии"], ["inputs", "Исходные данные расчёта"], ["calc", "Расчёт"]];
 const GANTT_LEVELS = [[1, "Краны"], [2, "Стоянки"], [3, "Этажи"], [4, "Тип + подтип"]];
@@ -32,6 +33,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
   const S = {
     tab: "gantt",
     versions: { loaded: false, error: "", items: [], baselineId: null, currentId: null },
+    deviation: { open: false, loading: false, error: "", data: null },
     inputs: { loaded: false, error: "", workKinds: [], flow: [], version: null, status: "" },
     calc: { startDate: today(), skipInstalled: true, busy: false, preview: null, status: "", error: "" },
     gantt: { loaded: false, error: "", data: null, versionId: null, collapsed: new Set(), depth: 4, pxPerDay: null, status: "" },
@@ -65,6 +67,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
       paint(); return;
     }
     S.gantt.loaded = false; S.gantt.data = null;   // диаграмма могла строиться по удалённой версии
+    S.deviation.data = null;                       // сводка отклонения могла считаться по удалённой версии
     await loadVersions();
     paint();
   }
@@ -72,13 +75,47 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     const v = S.versions;
     if (v.error && !v.loaded) return `<p class="v2-note">${esc(v.error)} <button type="button" class="v2-btn" data-a="retry-v">Повторить</button></p>`;
     if (!v.loaded) return `<p class="v2-muted">Загрузка…</p>`;
-    if (!v.items.length) return `<p class="v2-note">Версий графика ещё нет. Базовый график загружается через «Обмен данными → Импорт графика MS Project из XLS», актуализированный — там же или расчётом на вкладке «Расчёт».</p>`;
+    if (!v.items.length) return `<p class="v2-note">Версий графика ещё нет. Базовый график загружается через «Обмен данными → Импорт графика MS Project из XLS», актуализированный — там же или расчётом на вкладке «Расчёт».</p>` + deviationHtml();
     return `<table class="v2-table"><thead><tr><th>Вид</th><th>Название</th><th>Изделий</th><th>Откуда</th><th>Загружена</th><th>Кто</th><th></th></tr></thead><tbody>
       ${v.items.map((r) => `<tr><td>${esc(r.kind_label)}</td><td>${esc(r.title || "—")}${r.id === v.currentId ? ` <span class="v2-muted">· текущий прогноз</span>` : ""}</td>
         <td>${r.elements}</td><td>${r.origin === "calc" ? "расчёт системы" : esc(r.source_file || "файл")}</td>
         <td>${esc(ruMoment(r.loaded_at))}</td><td>${esc(r.loaded_by || "—")}</td>
         <td>${canWrite ? `<button type="button" class="v2-btn" data-del-v="${r.id}">Удалить</button>` : ""}</td></tr>`).join("")}
-      </tbody></table>`;
+      </tbody></table>` + deviationHtml();
+  }
+
+  // ------------------------------------------------------------ отклонение графика (сводка по текущему прогнозу, рядом со списком версий)
+  // POST — не запись: тело несёт список id (в строку запроса не поместился бы), сервер только читает и ничего не создаёт
+  // (app/schedule_versions.py: post_deviation, порог прав «schedule: read»); поэтому api.readPost(), а не api.post() и без строки шлюза записи.
+  async function loadDeviation() {
+    S.deviation.loading = true; S.deviation.error = ""; paint();
+    try {
+      S.deviation.data = await api.readPost("/schedule-versions/deviation", { object_id: objectId });
+    } catch (err) { S.deviation.error = err?.detail || err?.message || "Не удалось получить отклонение"; }
+    S.deviation.loading = false; paint();
+  }
+  function devRow(title, s) {
+    if (!s) return `<div class="v2-inline" style="gap:14px"><b>${esc(title)}</b><span class="v2-muted">нет данных</span></div>`;
+    return `<div class="v2-inline" style="gap:14px"><b>${esc(title)}</b><span>изделий: ${s.count}</span><span>отстают: ${s.late}</span><span>среднее: ${esc(sign(s.avg))} дн</span><span>от ${esc(sign(s.min))} до ${esc(sign(s.max))} дн</span></div>`;
+  }
+  function deviationHtml() {
+    const dv = S.deviation;
+    return `<div class="v2-callout" style="margin:14px 0 0">
+      <div class="v2-inline" style="justify-content:space-between">
+        <strong>Отклонение графика</strong>
+        <button type="button" class="v2-btn" data-a="dev-toggle" ${dv.loading ? "disabled" : ""}>${dv.loading ? "Загрузка…" : dv.open ? "Скрыть" : dv.data ? "Обновить" : "Показать"}</button>
+      </div>
+      ${dv.open ? (dv.error ? `<p class="v2-note">${esc(dv.error)}</p>` : dv.data ? deviationBodyHtml(dv.data) : "") : ""}
+    </div>`;
+  }
+  function deviationBodyHtml(d) {
+    if (!d.version_id) return `<p class="v2-muted">Версий графика ещё нет — сравнивать не с чем.</p>`;
+    return `<p class="v2-muted">Прогноз: «${esc(d.version_title || "без названия")}», загружен ${esc(ruMoment(d.loaded_at))}. Изделий с прогнозом дат: ${d.elements}.</p>
+      ${devRow("Начало СМР", d.start)}${devRow("Завершение СМР", d.end)}
+      ${d.by_zakhvatka.length ? `<h4 style="margin-top:10px">По захваткам (отклонение завершения)</h4>
+        <table class="v2-table"><thead><tr><th>Захватка</th><th>Изделий</th><th>Отстают</th><th>Среднее, дн</th><th>Мин…макс, дн</th></tr></thead><tbody>
+        ${d.by_zakhvatka.map((z) => `<tr><td>${esc(z.label)}</td>${z.end ? `<td>${z.end.count}</td><td>${z.end.late}</td><td>${esc(sign(z.end.avg))}</td><td>${esc(sign(z.end.min))}…${esc(sign(z.end.max))}</td>` : `<td colspan="4" class="v2-muted">нет данных</td>`}</tr>`).join("")}
+        </tbody></table>` : ""}`;
   }
 
   // ------------------------------------------------------------ исходные данные
@@ -189,6 +226,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
       S.calc.status = `Готово: фронтов ${d.fronts}, изделий ${d.elements}, сроки с ${ruDate(d.first_date)} по ${ruDate(d.last_date)}.${d.warnings.length ? ` ${d.warnings.join(" ")}` : ""}`;
       S.calc.preview = null;
       S.gantt.loaded = false; S.gantt.data = null;
+      S.deviation.data = null;
       await loadVersions();
       S.tab = "versions";
     } catch (err) {
@@ -338,6 +376,11 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     inner.querySelector('[data-a="retry-i"]')?.addEventListener("click", async () => { await loadInputs(); paint(); });
     inner.querySelector('[data-a="retry-g"]')?.addEventListener("click", async () => { await loadGantt(); paint(); });
     inner.querySelectorAll("[data-del-v]").forEach((b) => b.addEventListener("click", () => deleteVersion(S.versions.items.find((x) => String(x.id) === b.dataset.delV))));
+    inner.querySelector('[data-a="dev-toggle"]')?.addEventListener("click", () => {
+      S.deviation.open = !S.deviation.open;
+      if (S.deviation.open && !S.deviation.data && !S.deviation.loading) { loadDeviation(); return; }
+      paint();
+    });
     // исходные данные
     inner.querySelectorAll("#sc-inner input[data-kind]").forEach((inp) => inp.addEventListener("change", (e) => { S.inputs.workKinds[Number(e.target.dataset.kind)][e.target.dataset.field] = e.target.value === "" ? null : Number(e.target.value); }));
     inner.querySelectorAll("#sc-inner input[data-flow]").forEach((inp) => inp.addEventListener("change", (e) => { S.inputs.flow[Number(e.target.dataset.flow)][e.target.dataset.field] = e.target.value === "" ? null : Number(e.target.value); }));
