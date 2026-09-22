@@ -38,7 +38,17 @@ export async function launch({ width = 1920, height = 1080, dpr = 1, args = [] }
     else if (m.method === "Network.responseReceived") { const r = requests.find((x) => x.id === m.params.requestId); if (r) r.status = m.params.response.status; }
     else if (m.method === "Network.loadingFailed") { const r = requests.find((x) => x.id === m.params.requestId); if (r) r.status = 0; }
   };
-  const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pending.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
+  // Таймаут на отдельный вызов DevTools: изредка (природа не выяснена — вероятно, потеря ответа на стороне headless-Chrome при
+  // навигации мимо готового execution-контекста) конкретный Runtime.evaluate/... не получает ответа НИКОГДА — без этого предела
+  // `await send(...)` висит вечно, а внешние таймауты `waitFor`/`waitFor(timeout)` не срабатывают, потому что они ждут ОТВЕТА
+  // именно от этого зависшего вызова, а не отсчитывают своё время сами (пойман на 9+ минутах реального повисания в проверках
+  // области graphics, 09-22). 20 с с запасом больше любого одиночного округления сети/рендера.
+  const send = (method, params = {}, timeoutMs = 20000) => new Promise((res, rej) => {
+    const i = ++id;
+    const timer = setTimeout(() => { if (pending.has(i)) { pending.delete(i); rej(new Error(`DevTools-вызов ${method} завис без ответа дольше ${timeoutMs} мс`)); } }, timeoutMs);
+    pending.set(i, { res: (v) => { clearTimeout(timer); res(v); }, rej: (e) => { clearTimeout(timer); rej(e); } });
+    ws.send(JSON.stringify({ id: i, method, params }));
+  });
   await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable");
   await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: false });
   const mods = (o) => (o?.shift ? 8 : 0) | (o?.ctrl ? 2 : 0) | (o?.alt ? 1 : 0) | (o?.meta ? 4 : 0);

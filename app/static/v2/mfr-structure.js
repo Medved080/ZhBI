@@ -7,10 +7,16 @@
 //  * удаление секции/этажа/блока — сначала сервер (без `force`), при 409 показывается ТОЧНЫЙ план (что удалится каскадом — блоки со
 //    сроками/фактом, что потеряет привязку — элементы модели/помещения), подтверждение, повтор с `?force=true`; неиспользуемая
 //    запись удаляется без вопросов (терять нечего);
-//  * привязка секции к осям (Docs/TZ.md «Геометрия блока») в V2 НЕ редактируется — переименование пересылает ось как есть, иначе PATCH
-//    стёр бы уже заданную привязку (`app/blocks.py::update_section` перезаписывает обе оси при каждом вызове);
-//  * геометрия блока — полный набор прямоугольников разом (форма всегда шлёт весь список, как V1); предупреждение о пересечении с
-//    соседней секцией от сервера не блокирует сохранение (мягкая проверка, как в V1);
+//  * привязка секции к осям (Docs/TZ.md «Геометрия блока») — выпадающий список осей объекта (как в V1, а не текстовое поле): выбор
+//    оси уходит тем же PATCH, что и подпись секции; сервер требует ОБЕ оси сразу или ни одной (`app/blocks.py::_set_section_axes`) —
+//    если выбрана только одна, PATCH вернёт понятную ошибку, вторая ось сохранится следующим выбором (та же гонка, что и в V1: там
+//    два select'а тоже шлют PATCH независимо друг от друга при каждом `change`);
+//  * геометрия блока — полный набор прямоугольников разом (форма всегда шлёт весь список, как V1); правится ДВУМЯ синхронными
+//    способами (перетаскивание мышью за угол/ребро/целиком — SVG-редактор по образцу V1, и числовые поля x0/x1/y0/y1) — оба меняют
+//    один и тот же рабочий набор `g.boxes`; во время жеста граница СВОЕГО прямоугольника не может пересечь чужой того же этажа
+//    (клиентский клампинг, идентичный V1 `blkGeoClampEdgeValue`/`blkGeoClampMove`) — сервер и после сохранения только предупреждает
+//    (мягкая проверка), но на этапе правки конфликт виден сразу, а не молча; соседние блоки того же этажа рисуются для сверки, но
+//    НЕ перетаскиваются — правятся только через свою же карточку;
 //  * неизвестный исход (обрыв/5xx) не повторяется — список перечитывается, ответ по факту.
 import { esc, errText, unknownOutcome } from "./mfr-common.js";
 import { showConfirmDialog, showInfoDialog } from "./dialogs.js";
@@ -18,11 +24,14 @@ import { ApiError } from "./api.js";
 
 const LEVEL_KIND_LABEL = { "этаж": "этаж", "подземный": "подземный этаж", "кровля": "кровля" };
 
+// Запас от «прилипания» на стыке из-за float — тот же порог, что в V1 (BLK_GEO_EPS).
+const GEO_EPS = 1;
+
 export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) {
   let dead = false;
   const st = {
     loading: true, error: "",
-    sections: [], levels: [], blocks: [],
+    sections: [], levels: [], blocks: [], grids: [], gridsLoaded: false,   // grids — метки осей объекта, для привязки секции (пусто у PDF-only/без Revit-осей)
     status: "", statusBad: false,
     recalcBusy: false, recalcReport: "",
     addSec: { code: "", name: "" },
@@ -30,22 +39,34 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     geo: null,   // {blockId, sectionCode, levelId, levelName, boxes, others, floorMode, loading, error, warnings, dirty}
     busy: false,
   };
+  let geoDrag = null;   // {kind:"move"|"edge"|"corner", boxIndex, edge?, corner?, startSvg, orig, bounds} — во время жеста, вне st (не часть отрисовки)
   const $ = (s) => host.querySelector(s);
   const setStatus = (t, bad = false) => { st.status = t; st.statusBad = bad; const n = $("#st-status"); if (n) { n.textContent = t; n.style.color = bad ? "var(--bad)" : "var(--good)"; } };
 
-  async function load() {
-    st.loading = true; st.error = ""; paint();
+  // silent — фоновая перезагрузка после записи (afterWrite): без плашки «Загрузка…», которая на секунду стирала ВЕСЬ бланк
+  // (включая открытую геометрию блока и кнопку «Сохранить») — реального разрыва данных не было (сервер уже принял запись), но
+  // клик/жест, начатый в этот момент, попадал в пустоту (элемента ещё нет); первичная загрузка и кнопка «Повторить» — как раньше.
+  async function load(silent = false) {
+    st.error = "";
+    if (!silent) { st.loading = true; paint(); }
     try {
-      const [sections, levels, blocks] = await Promise.all([
-        api.get(`/objects/${objectId}/sections`), api.get(`/objects/${objectId}/levels`), api.get(`/objects/${objectId}/blocks`),
-      ]);
+      // Метки осей — из ТЯЖЁЛОГО эндпоинта (`revit_plan.filters` считает агрегаты по всей модели объекта, не только оси); сами
+      // оси меняются ТОЛЬКО загрузкой новой выгрузки Revit, а не правкой секций/блоков — грузим один раз за монтирование вкладки,
+      // а не на КАЖДЫЙ afterWrite (иначе на серии быстрых сохранений подряд запрос копится в очереди позади других и держит
+      // `st.busy`/кнопку «Сохранить» заблокированной дольше, чем длится сама запись — живой баг, пойман 09-22 при проверке).
+      const reqs = [api.get(`/objects/${objectId}/sections`), api.get(`/objects/${objectId}/levels`), api.get(`/objects/${objectId}/blocks`)];
+      if (!st.gridsLoaded) reqs.push(api.get(`/revit-plan/filters?object_id=${objectId}`).catch(() => null));
+      const [sections, levels, blocks, filters] = await Promise.all(reqs);
       if (dead) return;
       st.sections = sections; st.levels = levels; st.blocks = blocks; st.loading = false;
+      // У PDF-only объекта или выгрузки без сохранённых осей список пуст, как в V1 (loadBlkSectionsLevels) — тогда столбцы
+      // привязки просто не показываются.
+      if (!st.gridsLoaded) { st.grids = (filters && filters.grids) || []; st.gridsLoaded = true; }
     } catch (e) { if (dead) return; st.loading = false; st.error = errText(e); }
     paint();
   }
 
-  async function afterWrite() { await load(); onChanged?.(); }
+  async function afterWrite() { await load(true); onChanged?.(); }
 
   // ---- удаление по плану последствий (409 UsageWarning -> подтверждение -> force=true) ----
   async function deleteWithPlan(basePath, whatLabel) {
@@ -79,14 +100,26 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     } catch (e) { setStatus(errText(e), true); }
     st.busy = false; paint();
   }
-  async function saveSection(s, name) {
-    const trimmed = name.trim();
+  // PATCH шлёт все три поля разом (`app/blocks.py::update_section` перезаписывает их все при каждом вызове), поэтому читаем
+  // значения ЖИВЬЁМ из DOM строки (как V1: `fromSel.value`/`toSel.value`/`nameInput.value` в `renderBlkSections`), а не из
+  // закэшированного объекта секции — три поля правятся ТРЕМЯ независимыми обработчиками `change`, и без этого второй select
+  // отправлял бы PATCH со СТАРЫМ значением первого. По той же причине ошибка сервера («нужны обе оси сразу») НЕ перечитывает
+  // список — форма перезагрузилась бы и стёрла только что выбранную первую ось раньше, чем пользователь дойдёт до второй
+  // (живой баг этого переноса, пойман при проверке — до правки вторая ось никогда не сохранялась выбором по одной).
+  async function saveSection(s) {
+    const row = $(`[data-sec-row="${s.id}"]`);
+    const nameInput = row?.querySelector("[data-sec-name]");
+    const fromSel = row?.querySelector('[data-axis-field="from"]');
+    const toSel = row?.querySelector('[data-axis-field="to"]');
+    const trimmed = (nameInput ? nameInput.value : s.name || "").trim();
     if (!trimmed) { setStatus("Подпись секции не может быть пустой", true); paint(); return; }
+    const axis_from = fromSel ? (fromSel.value || null) : (s.axis_from || null);
+    const axis_to = toSel ? (toSel.value || null) : (s.axis_to || null);
     try {
-      await api.patch(`/objects/${objectId}/sections/${s.id}`, { name: trimmed, axis_from: s.axis_from, axis_to: s.axis_to });
+      await api.patch(`/objects/${objectId}/sections/${s.id}`, { name: trimmed, axis_from, axis_to });
       setStatus(`Секция «${s.code}» сохранена`);
       await afterWrite();
-    } catch (e) { setStatus(`Секция «${s.code}»: ${errText(e)}`, true); await load(); }
+    } catch (e) { setStatus(`Секция «${s.code}»: ${errText(e)}`, true); }
   }
   async function deleteSection(s) {
     const r = await deleteWithPlan(`/objects/${objectId}/sections/${s.id}`, "секция");
@@ -144,7 +177,7 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
   async function deleteBlock(b) {
     const r = await deleteWithPlan(`/objects/${objectId}/blocks/${b.id}`, "блок");
     if (r === "deleted") {
-      if (st.geo?.blockId === b.id) st.geo = null;
+      if (st.geo?.blockId === b.id) { geoDrag = null; st.geo = null; }
       setStatus(`Блок «${b.section_code} · ${b.level_name || b.floor}» удалён`);
       await afterWrite();
     } else paint();
@@ -169,25 +202,173 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
   // ---------------------------------------------------------------- геометрия блока
   function geoBounds(g) {
     const all = [...g.boxes, ...g.others.flatMap((o) => o.boxes)];
-    if (!all.length) return { minX: 0, minY: 0, w: 10000, h: 10000, strokeW: 40 };
+    if (!all.length) return { minX: 0, minY: 0, w: 10000, h: 10000, strokeW: 40, handleR: 60 };
     const margin = 1500;
     const minX = Math.min(...all.map((b) => b.x0)) - margin, maxX = Math.max(...all.map((b) => b.x1)) + margin;
     const minY = Math.min(...all.map((b) => b.y0)) - margin, maxY = Math.max(...all.map((b) => b.y1)) + margin;
     const w = maxX - minX, h = maxY - minY, scale = Math.max(w, h);
-    return { minX, minY, w, h, strokeW: Math.max(scale / 300, 30) };
+    // Ручки/обводка — долей охвата, не в фиксированных пикселях (та же формула, что в V1 blkGeoBounds): на площадке в десятки тысяч
+    // мм фиксированные значения были бы невидимы.
+    return { minX, minY, w, h, strokeW: Math.max(scale / 300, 30), handleR: Math.max(scale / 90, 60) };
   }
   function geoSvg(g) {
-    const { minX, minY, w, h, strokeW } = geoBounds(g);
+    const { minX, minY, w, h, strokeW, handleR } = geoBounds(g);
     const toSvgY = (y) => h - (y - minY);
     const fontSize = Math.max(w, h) / 55;
     const others = g.others.flatMap((o) => o.boxes.map((b) => `
       <rect x="${b.x0 - minX}" y="${toSvgY(b.y1)}" width="${b.x1 - b.x0}" height="${b.y1 - b.y0}" fill="var(--muted)" fill-opacity="0.18" stroke="var(--muted)" stroke-opacity="0.6" stroke-width="${strokeW}"/>
       <text x="${b.x0 - minX + fontSize * 0.3}" y="${toSvgY(b.y1) + fontSize}" font-size="${fontSize}" fill="var(--muted)">${esc(o.секция)}</text>`).join(""));
-    const mine = g.boxes.map((b) => `<rect x="${b.x0 - minX}" y="${toSvgY(b.y1)}" width="${b.x1 - b.x0}" height="${b.y1 - b.y0}" fill="var(--accent)" fill-opacity="0.3" stroke="var(--accent)" stroke-width="${strokeW}"/>`).join("");
-    return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:220px;background:var(--surface);border:1px solid var(--line);border-radius:8px" preserveAspectRatio="xMidYMid meet">${others}${mine}</svg>`;
+    // Обзор этажа (floorMode) — только показ, ручек перетаскивания нет: владельца-блока для сохранения там не выбрано (как в V1).
+    const barLen = handleR * 2.4, barThick = handleR * 1.1;
+    const mine = g.floorMode ? "" : g.boxes.map((b, i) => {
+      const x = b.x0 - minX, y = toSvgY(b.y1), rw = b.x1 - b.x0, rh = b.y1 - b.y0;
+      const corners = [["tl", x, y], ["tr", x + rw, y], ["bl", x, y + rh], ["br", x + rw, y + rh]];
+      // Ручки на РЁБРАХ (перекладина посередине стороны, тянет только эту границу) — перенос из V1 (см. bindBlkGeoDrag).
+      const edges = [
+        { edge: "n", cx: x + rw / 2, cy: y, bw: barLen, bh: barThick },
+        { edge: "s", cx: x + rw / 2, cy: y + rh, bw: barLen, bh: barThick },
+        { edge: "w", cx: x, cy: y + rh / 2, bw: barThick, bh: barLen },
+        { edge: "e", cx: x + rw, cy: y + rh / 2, bw: barThick, bh: barLen },
+      ].map(({ edge, cx, cy, bw, bh }) => `<rect class="mfr-geo-edge" data-box-i="${i}" data-edge="${edge}" x="${cx - bw / 2}" y="${cy - bh / 2}" width="${bw}" height="${bh}" rx="${Math.min(bw, bh) / 2}"/>`).join("");
+      return `<rect class="mfr-geo-box" data-box-i="${i}" x="${x}" y="${y}" width="${rw}" height="${rh}" fill="var(--accent)" fill-opacity="0.3" stroke="var(--accent)" stroke-width="${strokeW}"/>
+        ${edges}
+        ${corners.map(([c, cx, cy]) => `<circle class="mfr-geo-handle" data-box-i="${i}" data-corner="${c}" cx="${cx}" cy="${cy}" r="${handleR}"/>`).join("")}`;
+    }).join("");
+    // Подсказка «упирается в границу» — ВНУТРИ SVG (текстовый узел, а не отдельный DOM-блок под канвасом): не участвует в layout
+    // документа, появление/исчезание во время pointermove не дёргает картинку (та же причина, что в V1 renderBlkGeoEditor).
+    return `<svg id="mfr-geo-svg" viewBox="0 0 ${w} ${h}" style="width:100%;height:220px;background:var(--surface);border:1px solid var(--line);border-radius:8px;touch-action:none" preserveAspectRatio="xMidYMid meet">${others}${mine}
+      <text id="mfr-geo-hint" x="${fontSize * 0.5}" y="${fontSize * 1.4}" font-size="${fontSize * 1.3}" font-weight="bold" fill="var(--bad)" style="display:none"></text></svg>`;
+  }
+
+  // -------- Живой запрет на пересечение с соседней секцией во время перетаскивания (перенос из V1: blkGeoClampEdgeValue/blkGeoClampMove) --------
+  function geoFlatOthers(g) { return g.others.flatMap((o) => o.boxes.map((b) => ({ ...b, секция: o.секция }))); }
+  // `ref` — коробка ДО этого шага драга (все четыре границы); порог берётся из ЕЁ ЖЕ двигаемой границы, иначе сосед, уже
+  // легально перекрывающий блок в его текущей ширине (мягкая проверка сервера), ошибочно считался бы преградой.
+  function geoClampEdgeValue(ref, edge, value, others) {
+    let bound = null, blockedBy = null;
+    for (const o of others) {
+      const across = (edge === "x0" || edge === "x1")
+        ? ref.y0 < o.y1 - GEO_EPS && o.y0 < ref.y1 - GEO_EPS
+        : ref.x0 < o.x1 - GEO_EPS && o.x0 < ref.x1 - GEO_EPS;
+      if (!across) continue;
+      if (edge === "x1" && o.x0 >= ref.x1 - GEO_EPS && (bound === null || o.x0 < bound)) { bound = o.x0; blockedBy = o.секция; }
+      else if (edge === "x0" && o.x1 <= ref.x0 + GEO_EPS && (bound === null || o.x1 > bound)) { bound = o.x1; blockedBy = o.секция; }
+      else if (edge === "y1" && o.y0 >= ref.y1 - GEO_EPS && (bound === null || o.y0 < bound)) { bound = o.y0; blockedBy = o.секция; }
+      else if (edge === "y0" && o.y1 <= ref.y0 + GEO_EPS && (bound === null || o.y1 > bound)) { bound = o.y1; blockedBy = o.секция; }
+    }
+    if (bound === null) return { value, blocked: null };
+    const grows = edge === "x1" || edge === "y1";
+    if (grows ? value > bound : value < bound) return { value: bound, blocked: blockedBy };
+    return { value, blocked: null };
+  }
+  // Перенос всего прямоугольника — оси клампятся по очереди (сначала X по несдвинутому Y, потом Y по уже сдвинутому X).
+  function geoClampMove(orig, dxWorld, dyWorld, others) {
+    let dxMin = -Infinity, dxMax = Infinity, blockedX = null;
+    for (const o of others) {
+      if (!(orig.y0 < o.y1 - GEO_EPS && o.y0 < orig.y1 - GEO_EPS)) continue;
+      if (o.x0 >= orig.x1 && o.x0 - orig.x1 < dxMax) { dxMax = o.x0 - orig.x1; blockedX = o.секция; }
+      if (o.x1 <= orig.x0 && o.x1 - orig.x0 > dxMin) { dxMin = o.x1 - orig.x0; blockedX = o.секция; }
+    }
+    const dx = Math.min(Math.max(dxWorld, dxMin), dxMax);
+    const shiftedX0 = orig.x0 + dx, shiftedX1 = orig.x1 + dx;
+    let dyMin = -Infinity, dyMax = Infinity, blockedY = null;
+    for (const o of others) {
+      if (!(shiftedX0 < o.x1 - GEO_EPS && o.x0 < shiftedX1 - GEO_EPS)) continue;
+      if (o.y0 >= orig.y1 && o.y0 - orig.y1 < dyMax) { dyMax = o.y0 - orig.y1; blockedY = o.секция; }
+      if (o.y1 <= orig.y0 && o.y1 - orig.y0 > dyMin) { dyMin = o.y1 - orig.y0; blockedY = o.секция; }
+    }
+    const dy = Math.min(Math.max(dyWorld, dyMin), dyMax);
+    return { dx, dy, blocked: (dx !== dxWorld ? blockedX : null) || (dy !== dyWorld ? blockedY : null) };
+  }
+  function geoSvgPoint(svg, evt) {
+    const pt = svg.createSVGPoint();
+    pt.x = evt.clientX; pt.y = evt.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  }
+  // Полный paintGeo() пересчитывает охват (geoBounds) из ТЕКУЩИХ прямоугольников — вызванный на каждый pointermove, он сдвинул бы
+  // viewBox/CTM, а startSvg (снят один раз на pointerdown, в СТАРОЙ системе координат) перестал бы соответствовать курсору.
+  // Поэтому во время жеста охват ЗАМОРОЖЕН (geoDrag.bounds), обновляются только атрибуты нужных SVG-узлов и числовые поля;
+  // полный перерисовка — только по pointerup (перенос приёма из V1 bindBlkGeoDrag, тот же живой баг однажды пойман там).
+  function onGeoPointerMove(e) {
+    if (!geoDrag) return;
+    const svg = $("#mfr-geo-svg");
+    const g = st.geo;
+    if (!svg || !g || !g.boxes[geoDrag.boxIndex]) { geoDrag = null; return; }
+    const p = geoSvgPoint(svg, e);
+    const dxWorld = p.x - geoDrag.startSvg.x;
+    const dyWorld = -(p.y - geoDrag.startSvg.y);   // SVG вниз = мир вниз по Y (см. toSvgY)
+    const box = g.boxes[geoDrag.boxIndex], orig = geoDrag.orig;
+    const others = geoFlatOthers(g);
+    let blocked = null;
+    if (geoDrag.kind === "move") {
+      const r = geoClampMove(orig, dxWorld, dyWorld, others);
+      box.x0 = orig.x0 + r.dx; box.x1 = orig.x1 + r.dx; box.y0 = orig.y0 + r.dy; box.y1 = orig.y1 + r.dy;
+      blocked = r.blocked;
+    } else if (geoDrag.kind === "edge") {
+      const fixed = { x0: orig.x0, x1: orig.x1, y0: orig.y0, y1: orig.y1 };
+      if (geoDrag.edge === "w") { const r = geoClampEdgeValue(fixed, "x0", orig.x0 + dxWorld, others); box.x0 = r.value; blocked = r.blocked; }
+      else if (geoDrag.edge === "e") { const r = geoClampEdgeValue(fixed, "x1", orig.x1 + dxWorld, others); box.x1 = r.value; blocked = r.blocked; }
+      else if (geoDrag.edge === "n") { const r = geoClampEdgeValue(fixed, "y1", orig.y1 + dyWorld, others); box.y1 = r.value; blocked = r.blocked; }
+      else if (geoDrag.edge === "s") { const r = geoClampEdgeValue(fixed, "y0", orig.y0 + dyWorld, others); box.y0 = r.value; blocked = r.blocked; }
+    } else {
+      // Угол двигает ДВЕ границы разом, обе клампятся по ОДНОМУ и тому же замороженному `orig` (не по текущему `box`) — иначе
+      // X-шаг и Y-шаг попеременно читают состояние друг у друга с разных кадров (тот же живой баг, что был в V1: дрожь у угла).
+      const west = geoDrag.corner.includes("l"), north = geoDrag.corner === "tl" || geoDrag.corner === "tr";
+      const refBox = { x0: orig.x0, x1: orig.x1, y0: orig.y0, y1: orig.y1 };
+      if (west) { const r = geoClampEdgeValue(refBox, "x0", orig.x0 + dxWorld, others); box.x0 = r.value; blocked = blocked || r.blocked; }
+      else { const r = geoClampEdgeValue(refBox, "x1", orig.x1 + dxWorld, others); box.x1 = r.value; blocked = blocked || r.blocked; }
+      if (north) { const r = geoClampEdgeValue(refBox, "y1", orig.y1 + dyWorld, others); box.y1 = r.value; blocked = blocked || r.blocked; }
+      else { const r = geoClampEdgeValue(refBox, "y0", orig.y0 + dyWorld, others); box.y0 = r.value; blocked = blocked || r.blocked; }
+    }
+    if (box.x1 - box.x0 < 50) box.x1 = box.x0 + 50;   // запасной пол — вырожденный прямоугольник хуже, чем временный крошечный
+    if (box.y1 - box.y0 < 50) box.y1 = box.y0 + 50;
+    g.dirty = true;
+    updateBoxVisual(geoDrag.boxIndex, geoDrag.bounds, blocked);
+  }
+  function onGeoPointerUp() {
+    if (!geoDrag) return;
+    geoDrag = null;
+    const hint = $("#mfr-geo-hint"); if (hint) hint.style.display = "none";
+    paintGeo();   // один раз, начисто — пересчитать охват под итог
+  }
+  function updateBoxVisual(i, bounds, blocked) {
+    const g = st.geo; if (!g) return;
+    const b = g.boxes[i]; if (!b) return;
+    const { minX, minY, h } = bounds;
+    const toSvgY = (y) => h - (y - minY);
+    const x = b.x0 - minX, y = toSvgY(b.y1), rw = b.x1 - b.x0, rh = b.y1 - b.y0;
+    const rect = $(`.mfr-geo-box[data-box-i="${i}"]`);
+    if (rect) { rect.setAttribute("x", x); rect.setAttribute("y", y); rect.setAttribute("width", rw); rect.setAttribute("height", rh); rect.classList.toggle("mfr-geo-box-blocked", !!blocked); }
+    const hint = $("#mfr-geo-hint");
+    if (hint) { hint.style.display = blocked ? "" : "none"; if (blocked) hint.textContent = `Упирается в границу секции «${blocked}»`; }
+    const corners = { tl: [x, y], tr: [x + rw, y], bl: [x, y + rh], br: [x + rw, y + rh] };
+    for (const [c, [cx, cy]] of Object.entries(corners)) { const handle = $(`.mfr-geo-handle[data-box-i="${i}"][data-corner="${c}"]`); if (handle) { handle.setAttribute("cx", cx); handle.setAttribute("cy", cy); } }
+    const edgeMid = { n: [x + rw / 2, y], s: [x + rw / 2, y + rh], w: [x, y + rh / 2], e: [x + rw, y + rh / 2] };
+    for (const [edge, [cx, cy]] of Object.entries(edgeMid)) {
+      const bar = $(`.mfr-geo-edge[data-box-i="${i}"][data-edge="${edge}"]`);
+      if (bar) { const bw = Number(bar.getAttribute("width")), bh = Number(bar.getAttribute("height")); bar.setAttribute("x", cx - bw / 2); bar.setAttribute("y", cy - bh / 2); }
+    }
+    host.querySelectorAll(`[data-box-i="${i}"][data-field]`).forEach((inp) => { inp.value = Math.round(b[inp.dataset.field]); });
+  }
+  function bindGeoDrag(g) {
+    const svg = $("#mfr-geo-svg");
+    if (!svg || g.floorMode || !canWrite) return;
+    svg.querySelectorAll(".mfr-geo-handle, .mfr-geo-box, .mfr-geo-edge").forEach((el) => el.addEventListener("pointerdown", (e) => {
+      if (st.busy) return;
+      e.preventDefault();
+      const i = Number(el.dataset.boxI);
+      const p = geoSvgPoint(svg, e);
+      const bounds = geoBounds(g);
+      const orig = { ...g.boxes[i] };
+      if (el.classList.contains("mfr-geo-handle")) geoDrag = { kind: "corner", boxIndex: i, corner: el.dataset.corner, startSvg: p, orig, bounds };
+      else if (el.classList.contains("mfr-geo-edge")) geoDrag = { kind: "edge", boxIndex: i, edge: el.dataset.edge, startSvg: p, orig, bounds };
+      else geoDrag = { kind: "move", boxIndex: i, startSvg: p, orig, bounds };
+      svg.setPointerCapture(e.pointerId);
+    }));
   }
   async function openGeometry(b) {
     const sec = st.sections.find((s) => s.id === b.section_id);
+    geoDrag = null;   // смена карточки блока обрывает начатый жест (индексы boxes принадлежали прежней геометрии)
     st.geo = { blockId: b.id, sectionCode: sec?.code || b.section_code, levelId: b.level_id, levelName: b.level_name || (b.floor + " этаж"), floorMode: false, loading: true, error: "", warnings: "", dirty: false, boxes: [], others: [] };
     paint();
     try {
@@ -203,6 +384,7 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     paint();
   }
   async function openFloorView(l) {
+    geoDrag = null;
     st.geo = { blockId: null, sectionCode: "", levelId: l.id, levelName: l.name || l.key, floorMode: true, loading: true, error: "", warnings: "", dirty: false, boxes: [], others: [] };
     paint();
     try {
@@ -232,7 +414,6 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     if (dead) return;
     if (st.loading) { host.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
     if (st.error) { host.innerHTML = `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить.</strong> ${esc(st.error)}<div class="v2-callout-actions"><button type="button" class="v2-btn" id="st-retry">Повторить</button></div></div>`; $("#st-retry").addEventListener("click", load); return; }
-    const grids = 0; // привязка к осям не редактируется в V2 — колонки осей не показываем
     host.innerHTML = `
       <p class="v2-muted mfr-hint">Этаж — общая запись объекта (как в модели Revit); кровля — исключение, у каждой секции своя. Блоки — НЕ декартово произведение секций и этажей: отмечайте клетки матрицы явно.</p>
       <p id="st-status" class="mfr-status" role="status" aria-live="polite" style="color:${st.statusBad ? "var(--bad)" : "var(--good)"}">${esc(st.status)}</p>
@@ -264,13 +445,24 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     paintGeo();
   }
 
+  function axisSelectHtml(field, secId, selected) {
+    const options = ['<option value="">—</option>'].concat(
+      st.grids.map((g2) => `<option value="${esc(g2.label)}" ${g2.label === selected ? "selected" : ""}>${esc(g2.label)}</option>`),
+    ).join("");
+    return `<select class="mfr-inline" data-sec-axis="${secId}" data-axis-field="${field}" ${st.busy ? "disabled" : ""}>${options}</select>`;
+  }
   function sectionsTable() {
     if (!st.sections.length) return `<p class="v2-muted">Секций ещё нет.</p>`;
-    return `<table class="v2-read-tbl"><thead><tr><th>Код</th><th>Подпись</th>${canWrite ? "<th></th>" : ""}</tr></thead><tbody>
+    const withAxis = st.grids.length > 0;   // осей у объекта нет (PDF-only / выгрузка без сохранённых осей) — столбцы не показываем, как в V1
+    return `<table class="v2-read-tbl"><thead><tr><th>Код</th><th>Подпись</th>${withAxis ? "<th>Ось от</th><th>Ось до</th>" : ""}${canWrite ? "<th></th>" : ""}</tr></thead><tbody>
       ${st.sections.map((s) => `<tr data-sec-row="${s.id}"><td>${esc(s.code)}</td>
         <td>${canWrite ? `<input type="text" class="mfr-inline" data-sec-name="${s.id}" value="${esc(s.name || "")}" ${st.busy ? "disabled" : ""}>` : esc(s.name || "")}</td>
+        ${withAxis ? (canWrite
+          ? `<td>${axisSelectHtml("from", s.id, s.axis_from)}</td><td>${axisSelectHtml("to", s.id, s.axis_to)}</td>`
+          : `<td>${esc(s.axis_from || "—")}</td><td>${esc(s.axis_to || "—")}</td>`) : ""}
         ${canWrite ? `<td><button type="button" class="v2-link-btn" data-sec-del="${s.id}" ${st.busy ? "disabled" : ""}>удалить</button></td>` : ""}</tr>`).join("")}
-      </tbody></table>`;
+      </tbody></table>
+      ${withAxis ? "" : `<p class="v2-muted mfr-hint">Осей у объекта нет — привязка границ секции недоступна, пока не загружена выгрузка Revit с осями.</p>`}`;
   }
   function levelsTable() {
     if (!st.levels.length) return `<p class="v2-muted">Этажей ещё нет.</p>`;
@@ -313,12 +505,18 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
           <button type="button" class="v2-btn v2-primary" id="st-geo-save" ${st.busy ? "disabled" : ""}>Сохранить</button></div>` : ""}
         <p class="mfr-status ${g.warnings && /^x1|Упирается|Не удалось/.test(g.warnings) ? "bad" : "ok"}" role="status">${esc(g.warnings)}</p>`}
       </div>`;
-    box.querySelector("#st-geo-close")?.addEventListener("click", () => { st.geo = null; paintGeo(); });
+    box.querySelector("#st-geo-close")?.addEventListener("click", () => { geoDrag = null; st.geo = null; paintGeo(); });
     if (!g.floorMode) {
-      box.querySelectorAll("[data-box-i]").forEach((inp) => inp.addEventListener("change", () => {
+      // Числовое поле — АЛЬТЕРНАТИВНЫЙ способ ввода ТОГО ЖЕ значения, что и перетаскивание: тот же клампинг по соседям (перенос
+      // V1 blkGeoClampEdgeValue), то же предупреждение, если значение подрезано на границе соседней секции.
+      box.querySelectorAll("[data-box-i][data-field]").forEach((inp) => inp.addEventListener("change", () => {
         const i = Number(inp.dataset.boxI), field = inp.dataset.field, v = Number(inp.value);
         if (!Number.isFinite(v)) return;
-        g.boxes[i][field] = v; g.dirty = true; paintGeo();
+        const bx = g.boxes[i];
+        const r = geoClampEdgeValue({ x0: bx.x0, x1: bx.x1, y0: bx.y0, y1: bx.y1 }, field, v, geoFlatOthers(g));
+        bx[field] = r.value; g.dirty = true;
+        g.warnings = r.blocked ? `Упирается в границу секции «${r.blocked}» — значение подрезано, области не должны пересекаться.` : g.warnings;
+        paintGeo();
       }));
       box.querySelectorAll("[data-box-remove]").forEach((btn) => btn.addEventListener("click", () => { g.boxes.splice(Number(btn.dataset.boxRemove), 1); g.dirty = true; paintGeo(); }));
       box.querySelector("#st-geo-add")?.addEventListener("click", () => {
@@ -327,6 +525,7 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
       });
       box.querySelector("#st-geo-reset")?.addEventListener("click", () => { g.boxes = []; g.dirty = true; paintGeo(); });
       box.querySelector("#st-geo-save")?.addEventListener("click", saveGeometry);
+      bindGeoDrag(g);
     }
   }
   function bindStatic() {
@@ -334,7 +533,13 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     $("#st-sec-name")?.addEventListener("input", (e) => { st.addSec.name = e.target.value; });
     $("#st-sec-add")?.addEventListener("click", addSection);
     host.querySelectorAll("[data-sec-name]").forEach((inp) => inp.addEventListener("change", () => {
-      const s = st.sections.find((x) => x.id === Number(inp.dataset.secName)); if (s) saveSection(s, inp.value);
+      const s = st.sections.find((x) => x.id === Number(inp.dataset.secName)); if (s) saveSection(s);
+    }));
+    // Привязка секции к осям — выпадающий список (как в V1): выбор уходит тем же PATCH, что подпись; оба select'а независимы —
+    // если выбрана только одна ось, сервер вернёт «нужны обе оси сразу — или ни одной», вторая ось сохранится следующим выбором
+    // (saveSection читает ОБА select'а из DOM в момент вызова, поэтому порядок выбора и промежуточная ошибка не мешают друг другу).
+    host.querySelectorAll("[data-sec-axis]").forEach((sel) => sel.addEventListener("change", () => {
+      const s = st.sections.find((x) => x.id === Number(sel.dataset.secAxis)); if (s) saveSection(s);
     }));
     host.querySelectorAll("[data-sec-del]").forEach((btn) => btn.addEventListener("click", () => {
       const s = st.sections.find((x) => x.id === Number(btn.dataset.secDel)); if (s) deleteSection(s);
@@ -367,9 +572,18 @@ export function mountStructureTab(host, { api, objectId, canWrite, onChanged }) 
     }));
   }
 
+  // Слушатели жеста — на window (курсор при перетаскивании уходит за пределы SVG), а не на самом узле, который каждый paintGeo()
+  // пересоздаёт: один раз на монтирование, снимаются в destroy(), не копятся при повторном открытии геометрии/паке экрана.
+  window.addEventListener("pointermove", onGeoPointerMove);
+  window.addEventListener("pointerup", onGeoPointerUp);
+
   load();
   return {
     refresh: load,
-    destroy() { dead = true; },
+    destroy() {
+      dead = true;
+      window.removeEventListener("pointermove", onGeoPointerMove);
+      window.removeEventListener("pointerup", onGeoPointerUp);
+    },
   };
 }

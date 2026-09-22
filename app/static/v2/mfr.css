@@ -158,6 +158,15 @@
 .mfr-struct-geo { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
 .mfr-struct-boxrow { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
 .mfr-struct-boxrow input { width: 90px; }
+/* Перетаскивание геометрии блока мышью (перенос из V1: перекладина на ребре +
+   ручка на углу, оба тянут ТОЛЬКО прямоугольник своего блока; курсор подсказывает
+   направление). Заливка/цвет — акцентный, как у самого прямоугольника блока. */
+#mfr-geo-svg .mfr-geo-box { cursor: move; touch-action: none; }
+#mfr-geo-svg .mfr-geo-box.mfr-geo-box-blocked { fill: var(--bad); fill-opacity: 0.35; stroke: var(--bad); }
+#mfr-geo-svg .mfr-geo-handle { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; cursor: nwse-resize; touch-action: none; }
+#mfr-geo-svg .mfr-geo-edge { fill: var(--accent); fill-opacity: .85; stroke: var(--surface); stroke-width: 1; touch-action: none; }
+#mfr-geo-svg .mfr-geo-edge[data-edge="n"], #mfr-geo-svg .mfr-geo-edge[data-edge="s"] { cursor: ns-resize; }
+#mfr-geo-svg .mfr-geo-edge[data-edge="w"], #mfr-geo-svg .mfr-geo-edge[data-edge="e"] { cursor: ew-resize; }
 
 /* бланк обхода плоской шахматки: предпросмотр в окне + содержимое печати (mfr2, перенос из V1 app/static/chess-flat.js) */
 .mfr-cf-p-preview { overflow: auto; max-height: 60vh; padding: 8px 0; }
