@@ -20,7 +20,7 @@ export function mountAddressClassifier(el, { screen, structure, objectId, api, r
   el.className = "v2-page";
   const canWrite = !!rights?.system_admin || rights?.features?.address_load === "write";
   let dead = false, busy = false, pollTimer = null;
-  const st = { data: null, error: "", regions: null, regionsError: "", houses: true, file: null, status: "", progress: "" };
+  const st = { data: null, error: "", regions: null, regionsError: "", houses: true, loadHouses: true, file: null, status: "", progress: "" };
 
   el.innerHTML = `
     <div class="v2-container v2-screen">
@@ -56,19 +56,22 @@ export function mountAddressClassifier(el, { screen, structure, objectId, api, r
         ${canWrite ? `<div class="v2-inline" style="margin-top:8px">
           <input type="file" id="ac-file" accept=".7z,.zip,.dbf" aria-label="Файл классификатора" ${busy ? "disabled" : ""}>
           <button type="button" class="v2-btn" id="ac-upload" ${busy ? "disabled" : ""}>Загрузить файл</button>
-          <label class="v2-role-check"><input type="checkbox" id="ac-houses" ${st.houses ? "checked" : ""} ${busy ? "disabled" : ""}><span>Распаковывать/загружать и файл домов</span></label>
+          <label class="v2-role-check" title="Дома нужны для проверки номера и уточнения индекса"><input type="checkbox" id="ac-houses" ${st.houses ? "checked" : ""} ${busy ? "disabled" : ""}><span>С домами (архив распакуется дольше)</span></label>
           <button type="button" class="v2-btn" id="ac-fetch" ${busy || (job && job.state === "running") ? "disabled" : ""}>Скачать классификатор с сайта ФНС</button>
         </div>` : ""}
       </section>
       ${canWrite ? `<section class="v2-result"><h3>Регионы в файле</h3><div id="ac-regions"></div>
-        <div class="v2-inline" style="margin-top:8px"><button type="button" class="v2-btn v2-primary" id="ac-load" disabled>Загрузить отмеченные</button></div></section>` : ""}
+        <div class="v2-inline" style="margin-top:8px"><label class="v2-role-check" title="Дома нужны для проверки номера и уточнения индекса"><input type="checkbox" id="ac-load-houses" ${st.loadHouses ? "checked" : ""} ${busy ? "disabled" : ""}><span>Загружать дома в базу (точнее почтовый индекс)</span></label>
+          <button type="button" class="v2-btn v2-primary" id="ac-load" disabled>Загрузить отмеченные</button></div></section>` : ""}
       <p class="v2-muted" id="ac-progress" role="status" aria-live="polite">${esc(st.progress || (job && job.state === "running" ? progressText(job) : ""))}</p>
       <p class="v2-muted" id="ac-status" role="status" aria-live="polite">${esc(st.status || "")}</p>`;
     if (canWrite) {
       box.querySelectorAll("[data-unpack]").forEach((b) => b.addEventListener("click", () => unpack(b.dataset.unpack)));
       $("#ac-file").addEventListener("change", (e) => { st.file = e.target.files[0] || null; });
       $("#ac-upload").addEventListener("click", upload);
+      // Два независимых флага, как в V1: «С домами» — распаковка и скачивание архива; «Загружать дома в базу» — загрузка регионов
       $("#ac-houses").addEventListener("change", (e) => { st.houses = e.target.checked; });
+      $("#ac-load-houses").addEventListener("change", (e) => { st.loadHouses = e.target.checked; });
       $("#ac-fetch").addEventListener("click", fetchFromFns);
       $("#ac-load").addEventListener("click", runLoad);
       paintRegions();
@@ -157,7 +160,7 @@ export function mountAddressClassifier(el, { screen, structure, objectId, api, r
     const codes = [...el.querySelectorAll("[data-region]:checked")].map((c) => c.value);
     if (!codes.length) { setStatus("Отметьте хотя бы один регион."); return; }
     busy = true; lockAll(); setStatus("");
-    try { await api.post("/address/load", { regions: codes, houses: st.houses }); setStatus("Загрузка начата — следите за прогрессом ниже."); startPolling(); }
+    try { await api.post("/address/load", { regions: codes, houses: st.loadHouses }); setStatus("Загрузка начата — следите за прогрессом ниже."); startPolling(); }
     catch (e) { setStatus(errText(e)); busy = false; if (!dead) lockAll(); }
   }
 
