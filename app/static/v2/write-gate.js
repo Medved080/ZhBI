@@ -26,6 +26,8 @@ export const EXPERIMENTAL_NOTICE =
   "Экспериментальный интерфейс. Часть функций ещё дорабатывается. Непроверенные операции выполняйте в текущем интерфейсе";
 
 const ID = "[^/]+";
+// secrets.token_urlsafe(32) (Python) — base64 URL-safe без паддинга, для 32 случайных байт обычно 43 символа; допуск с запасом.
+const TOKEN_URLSAFE = "[A-Za-z0-9_-]{20,64}";
 const re = (s) => new RegExp("^" + s + "$");
 
 // Распределение изделий на контракт (`POST /contracts/{id}/allocations`, одна серверная операция на пачку): включается ТОЛЬКО вместе с версией backend,
@@ -232,6 +234,9 @@ export const POLICY = [
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
   { id: "settings.analyze", screen: "settings-io", action: "Экспорт/импорт настроек: сверка файла (копии учётных записей) с базой — ничего не пишет", method: "POST", path: re("/settings/import/analyze"), check: uploadCheck({ ext: ["json"] }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения по пользователям/цветам/видимости подписей, 422 на неверный JSON, отказ 403 у не-админа" },
   { id: "settings.apply", screen: "settings-io", action: "Экспорт/импорт настроек: применить файл (копию учётных записей) по сверенному digest", method: "POST", path: re("/settings/import/apply"), check: uploadCheck({ ext: ["json"], fields: { digest: isHexDigest } }), risk: "пользователи (пароли, роли), цвета статусов, видимость подписей; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по сверенному digest, устаревшая сверка (409) при подмене файла/базы, отказ 403 у не-админа, журнал после сохранения" },
+  { id: "shaft.analyze", screen: "shaft-panels", action: "Панели облицовки шахты: разбор DXF по объекту (толщина панели — необязательное поле), сводка расхождений (в базу не пишет)", method: "POST", path: re("/shaft-panels/analyze"), check: shaftAnalyzeProblem, risk: "чтение (разбор), данные не меняются; файл — во временной папке сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF профиля ГП1/ГП2, отказ 403 у не-админа, 4xx на неверный профиль/оси/марки/перекрытие" },
+  { id: "shaft.apply", screen: "shaft-panels", action: "Панели облицовки шахты: применить показанную сводку по токену (подтверждённые замечания, снятие актуальности отсутствующих)", method: "POST", path: re("/shaft-panels/apply"), check: shaftApplyProblem, risk: "изделия объекта (тип «Панель облицовки шахты»), сетка осей чертежа; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, конфликты блокируют применение, отказ 403 у не-админа, журнал после сохранения" },
+  { id: "shaft.cancel", screen: "shaft-panels", action: "Панели облицовки шахты: отменить незавершённый анализ (освобождает токен)", method: "DELETE", path: re(`/shaft-panels/pending/${TOKEN_URLSAFE}`), risk: "ничего не меняет — снимает временную запись разбора своего же токена", allowed: true, proof: "настоящий backend: отмена своего токена, чужой токен и неизвестный токен отклоняются сервером" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
   { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: контракт по умолчанию по типу изделия, свёртка дублей справочников (режим переноса подчинённых), прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
@@ -376,5 +381,39 @@ function tokenOnlyProblem(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
   if (Object.keys(body).some((k) => k !== "token")) return "лишние поля";
   if (typeof body.token !== "string" || !/^[0-9a-f]{16,64}$/.test(body.token)) return "нет токена разбора";
+  return null;
+}
+
+// Разбор DXF панелей облицовки шахты: объект обязателен, толщина панели — НЕОБЯЗАТЕЛЬНОЕ поле формы (первый проход без
+// неё показывает только лицевые поверхности; uploadCheck() не умеет необязательные поля, поэтому проверка своя).
+function shaftAnalyzeProblem(body) {
+  if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
+  const keys = new Set(body.keys());
+  if ([...keys].some((k) => !["file", "object_id", "thickness_mm"].includes(k))) return "лишние поля формы";
+  const files = body.getAll("file");
+  if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
+  const f = files[0];
+  if ((f.name.split(".").pop() || "").toLowerCase() !== "dxf") return "неверное расширение файла";
+  if (!(f.size > 0)) return "файл пуст";
+  if (f.size > 30 * 1024 * 1024) return "файл больше лимита сервера (30 МБ)";
+  const oid = body.getAll("object_id");
+  if (oid.length !== 1 || !isIntStr(oid[0])) return "не указан объект";
+  const th = body.getAll("thickness_mm");
+  if (th.length > 1) return "толщина указана дважды";
+  if (th.length === 1) {
+    const v = Number(th[0]);
+    if (!Number.isFinite(v) || v <= 0 || v > 500) return "толщина должна быть числом больше 0 и не больше 500 мм";
+  }
+  return null;
+}
+
+// Применение сводки панелей облицовки шахты по токену: подтверждённые замечания (коды строками) и решение о снятии
+// актуальности отсутствующих панелей.
+function shaftApplyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["token", "acknowledged_warnings", "retire_missing"].includes(k))) return "лишние поля";
+  if (typeof body.token !== "string" || body.token.length < 20 || body.token.length > 64) return "нет токена разбора";
+  if (!Array.isArray(body.acknowledged_warnings) || body.acknowledged_warnings.some((w) => typeof w !== "string")) return "список подтверждённых замечаний неверен";
+  if (typeof body.retire_missing !== "boolean") return "решение о снятии актуальности не задано";
   return null;
 }

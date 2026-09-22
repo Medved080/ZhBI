@@ -66,6 +66,17 @@ t(!A("POST", "/settings/import/apply", fd({ digest: "abc" }, "s.json")), "settin
 t(!A("POST", "/settings/import/apply", fd({ digest: dg }, "s.xlsx")), "settings: применение — расширение");
 // прочее по-прежнему отключено
 t(!A("POST", "/settings/import", fd({}, "s.json")), "settings/import (одношаговый V1-эндпоинт) в V2 отключён — только analyze/apply");
+// панели облицовки шахты: разбор (толщина — необязательное поле формы) и применение по токену
+t(A("POST", "/shaft-panels/analyze", fd({ object_id: "1" }, "p.dxf")), "shaft: разбор без толщины");
+t(A("POST", "/shaft-panels/analyze", fd({ object_id: "1", thickness_mm: "300" }, "p.dxf")), "shaft: разбор с толщиной");
+t(!A("POST", "/shaft-panels/analyze", fd({ thickness_mm: "300" }, "p.dxf")), "shaft: без объекта");
+t(!A("POST", "/shaft-panels/analyze", fd({ object_id: "1", thickness_mm: "0" }, "p.dxf")), "shaft: нулевая толщина");
+t(!A("POST", "/shaft-panels/analyze", fd({ object_id: "1" }, "p.xlsx")), "shaft: расширение");
+t(A("POST", "/shaft-panels/apply", { token: tok, acknowledged_warnings: ["plan_joint"], retire_missing: false }), "shaft: применение");
+t(!A("POST", "/shaft-panels/apply", { token: tok, acknowledged_warnings: ["plan_joint"] }), "shaft: без retire_missing");
+t(!A("POST", "/shaft-panels/apply", { token: "zz", acknowledged_warnings: [], retire_missing: false }), "shaft: короткий токен");
+t(A("DELETE", "/shaft-panels/pending/" + tok, undefined), "shaft: отмена анализа своим токеном");
+t(!A("DELETE", "/shaft-panels/pending/zz", undefined), "shaft: отмена — короткий токен в адресе");
 t(!A("POST", "/import-pdf/apply", { token: tok }), "pdf apply отключён");
 t(!A("POST", "/admin/db-transfer/apply", {}), "перенос базы отключён");
 console.log(`проверок пройдено: ${ok}, не пройдено: ${bad.length}`); bad.forEach((b) => console.log("НЕ ПРОЙДЕНО:", b));

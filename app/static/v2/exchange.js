@@ -6,10 +6,11 @@ import { mountBulkEdit } from "./exchange-bulk.js";
 import { mountDrawingUpload } from "./exchange-drawing.js";
 import { mountRevitImport } from "./exchange-revit.js";
 import { mountSettingsIo } from "./exchange-settings.js";
+import { mountShaftPanels } from "./exchange-shaft-panels.js";
 
 const OPS = {
   ...IMPORT_OPS, "bulk-edit": mountBulkEdit, "upload-drawing": mountDrawingUpload, "revit-import": mountRevitImport,
-  "settings-io": mountSettingsIo,
+  "settings-io": mountSettingsIo, "shaft-panels": mountShaftPanels,
 };
 
 export function hasExchangeOp(key) { return Object.prototype.hasOwnProperty.call(OPS, key); }

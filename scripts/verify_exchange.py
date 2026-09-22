@@ -16,17 +16,22 @@
 import hashlib
 import io
 import json
+import os
 import sqlite3
 import sys
+import tempfile
 import warnings
 
 warnings.filterwarnings("ignore")
 import requests  # noqa: E402
 import openpyxl  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gen_synthetic_shaft_dxf as shaftgen  # noqa: E402
+
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -328,6 +333,113 @@ def section_settings():
     check(r.status_code == 422, f"V1 /settings/import: неверный цвет → {r.status_code}")
     check(snap() == before, "V1 /settings/import: неверный цвет — БД не изменена")
     check(not journal_since(j0, "settings_import"), "V1 /settings/import: неверный цвет — журнала нет")
+
+
+def _shaft_dxf(variant):
+    doc = shaftgen.build(variant)
+    buf = io.BytesIO()
+    with tempfile.NamedTemporaryFile(suffix=".dxf") as tmp:
+        doc.saveas(tmp.name)
+        tmp.seek(0)
+        buf.write(tmp.read())
+    return buf.getvalue()
+
+
+def dxfup(s, path, content, name="p.dxf", data=None):
+    return s.post(BASE + path, files={"file": (name, content, "application/dxf")}, data=data or {}, timeout=60)
+
+
+def section_shaft():
+    print("== панели облицовки шахты")
+    admin = login("admin")
+    OBJ = 1  # объект копии, у чертежей которого уже есть зарегистрированная сетка осей 5/7/Е/Ж (реальные оси анонимной копии)
+    ok = _shaft_dxf("ok")
+
+    # ---- права: 403 у user2/user4 (нет «Чертежи» на этом объекте в тестовой копии), 200 у второго админа ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r = dxfup(login(user), "/shaft-panels/analyze", ok, data={"object_id": str(OBJ)})
+        check(r.status_code == 403 and snap() == before, f"analyze: {user} → {r.status_code}, БД не изменена")
+
+    # ---- без объекта / без файла / неверное расширение ----
+    r = admin.post(BASE + "/shaft-panels/analyze", data={"object_id": str(OBJ)})
+    check(r.status_code == 422, f"analyze: без файла → {r.status_code}")
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", b"not a dxf", name="p.dxf", data={"object_id": str(OBJ)})
+    check(400 <= r.status_code < 500 and snap() == before, f"analyze: битый DXF → {r.status_code}, БД не изменена")
+
+    # ---- профиль: без осей / без марки / перекрытие / несогласованные отметки — 4xx, БД не меняется ----
+    for variant, needle in (("no_axes", "оси"), ("missing_mark", "марк"), ("overlap", "ерекр"), ("bad_level", "масштаб")):
+        before = snap()
+        r = dxfup(admin, "/shaft-panels/analyze", _shaft_dxf(variant), data={"object_id": str(OBJ), "thickness_mm": "300"})
+        check(r.status_code == 422 and needle.lower() in r.text.lower() and snap() == before,
+              f"analyze: вариант {variant} отклонён понятным текстом ({r.status_code}: {r.text[:100]}), БД не изменена")
+
+    # ---- разбор без толщины: панели видны, объёмы (analysis) не считаются ----
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", ok, data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"analyze без толщины: 200 (получен {r.status_code})")
+    d = r.json()
+    check(d["analysis"] is None and len(d["drawing"]["panels"]) == 14, f"analyze без толщины: панелей 14, сводки для применения нет (получено panels={len(d['drawing']['panels'])}, analysis={d['analysis']})")
+    check(snap() == before, "analyze без толщины: ничего не пишет")
+    token_nothick = d["token"]
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": token_nothick, "acknowledged_warnings": [w["code"] for w in d["drawing"]["warnings"]], "retire_missing": False})
+    check(r.status_code >= 400, f"apply без толщины (нет сводки): отказ ({r.status_code})")
+    check(snap() == before, "apply без толщины: БД не изменена")
+
+    # ---- разбор с толщиной: сводка для применения, конфликтов нет ----
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", ok, data={"object_id": str(OBJ), "thickness_mm": "300"})
+    check(r.status_code == 200, f"analyze с толщиной: 200 (получен {r.status_code})")
+    d = r.json()
+    check(d["analysis"] and d["analysis"]["counts"]["new"] == 14 and not d["analysis"]["conflicts"], f"analyze с толщиной: 14 новых, конфликтов нет ({d['analysis']['counts'] if d['analysis'] else None})")
+    check(snap() == before, "analyze с толщиной: ничего не пишет")
+
+    # ---- применение без подтверждения замечаний — отказ ----
+    before = snap()
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": d["token"], "acknowledged_warnings": [], "retire_missing": False})
+    check(r.status_code >= 400, f"apply: без подтверждения замечаний → отказ ({r.status_code})")
+    check(snap() == before, "apply: без подтверждения замечаний — БД не изменена")
+
+    # ---- успешное применение (retire_missing=False: реальные панели объекта, загруженные ранее в ту же область, не трогаем) ----
+    j0 = journal_max()
+    warn_codes = [w["code"] for w in d["drawing"]["warnings"]]
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": d["token"], "acknowledged_warnings": warn_codes, "retire_missing": False})
+    check(r.status_code == 200, f"apply: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["new"] == 14 and res.get("retired", 0) == 0, f"apply: добавлено 14, ничего не списано (получено {res})")
+    after = snap()
+    check("elements" in changed(before, after) and "status_history" in changed(before, after), f"в БД появились новые изделия и записи истории: {changed(before, after)}")
+    check(rows(f"select count(*) n from elements where object_id={OBJ} and element_type='Панель облицовки шахты' and is_current=1 and mark like 'ПП%'")[0]["n"] >= 14,
+          "в БД не меньше 14 текущих панелей марки ПП*")
+    ev = journal_since(j0, "import_dxf")
+    def _details(e):
+        v = e.get("details")
+        return json.loads(v) if isinstance(v, str) else (v or {})
+    check(any(_details(e).get("kind") == "shaft_panels" for e in ev), f"в журнале событие import_dxf с kind=shaft_panels (найдено {len(ev)} событий import_dxf)")
+    # повторное применение того же (уже использованного) токена — отклонено (истёк/потрачен)
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": d["token"], "acknowledged_warnings": warn_codes, "retire_missing": False})
+    check(r.status_code >= 400, f"apply: повтор потраченного токена → отказ ({r.status_code})")
+
+    # ---- повторный разбор того же файла: без изменений (идемпотентность) ----
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", ok, data={"object_id": str(OBJ), "thickness_mm": "300"})
+    d2 = r.json()
+    check(d2["analysis"]["counts"]["new"] == 0 and d2["analysis"]["counts"]["unchanged"] == 14, f"повторный разбор: новых 0, без изменений 14 (получено {d2['analysis']['counts']})")
+    check(snap() == before, "повторный разбор: ничего не пишет")
+
+    # ---- отмена незавершённого анализа (DELETE /shaft-panels/pending/{token}) ----
+    token2 = d2["token"]
+    r = admin.delete(BASE + f"/shaft-panels/pending/{token2}")
+    check(r.status_code == 200, f"отмена анализа: 200 (получен {r.status_code})")
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": token2, "acknowledged_warnings": warn_codes, "retire_missing": False})
+    check(r.status_code >= 400, f"apply отменённым токеном → отказ ({r.status_code})")
+    # чужой токен: user3 не может применить/отменить чужой (использует общий пароль стенда, но токен принадлежит своему user_id)
+    r3 = dxfup(login("user3"), "/shaft-panels/analyze", ok, data={"object_id": str(OBJ), "thickness_mm": "300"})
+    other_token = r3.json()["token"]
+    r = admin.delete(BASE + f"/shaft-panels/pending/{other_token}")
+    check(r.status_code == 403, f"отмена чужого токена → 403 (получен {r.status_code})")
+    login("user3").delete(BASE + f"/shaft-panels/pending/{other_token}")  # прибраться за собой
 
 
 # ---------------------------------------------------------------- вспомогательное: внесение сбоя в копию БД
@@ -928,10 +1040,10 @@ def section_revit():
         TABLES = saved_tables
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings}
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")
