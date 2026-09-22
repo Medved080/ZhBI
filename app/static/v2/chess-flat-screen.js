@@ -9,10 +9,16 @@
 //  * ключ идемпотентности: повтор того же пакета (потерянный ответ) не создаёт вторую запись;
 //  * двойной клик — один запрос; неизвестный исход (обрыв, 5xx) — без автоповтора, сверка чтением: записано или нет;
 //  * без права «Учёт по блокам: изменение» экран только показывает проценты (полей ввода нет).
-// Печать бланка обхода (A4/A3) остаётся в текущем интерфейсе.
+// Бланк обхода (mfr2, перенос из V1 `app/static/chess-flat.js`): окно «Бланк обхода» — формат A4/A3, охват (всё здание или диапазон
+// этажей), предпросмотр листов (лист — своя группа секций по ширине бумаги), печать окном браузера (`window.print()`,
+// `app/static/v2/print.js`) и выгрузка в PDF/XLSX тем же запросом, что у V1 (`POST …/chess-flat-export.pdf|.xlsx`, сервер сам
+// раскладывает секции по страницам — см. `app/chess_flat.py`). Разбиение строк ВНУТРИ листа по физическим страницам — на браузере
+// (`break-inside: avoid`, повтор заголовка таблицы), а не измерением пикселей, как в V1: проще и не расходится с содержимым PDF/XLSX,
+// которые считает сервер по тем же данным без постраничной разбивки листа.
 import { esc, errText, fmtDate, canAccounting, todayIso, isRealDate, openModal, settle, isConflict, conflictItems, OUTCOME_TEXT } from "./mfr-common.js";
-import { STATUS_LABEL, v1Href } from "./registry.js";
+import { STATUS_LABEL } from "./registry.js";
 import { showUnsavedDialog } from "./dialogs.js";
+import { printHtml } from "./print.js";
 
 const RANGE_SIZE = 3;
 const fmtFloor = (n) => (String(n).startsWith("-") ? "−" + String(n).slice(1) : String(n));
@@ -43,14 +49,15 @@ export function mountChessFlatScreen(el, { screen, structure, objectId, api, rig
   el.className = "v2-page v2-app mfr-scr";
   const canWrite = canAccounting(rights, "write");
   let dead = false, seq = 0, busy = false;
-  const st = { tracks: [], trackCode: null, layout: null, rows: [], ranges: [], rangeIdx: 0, date: todayIso(), draft: new Map(), loading: true, error: "", msg: "", msgKind: "", review: null };
+  const st = { tracks: [], trackCode: null, layout: null, rows: [], ranges: [], rangeIdx: 0, date: todayIso(), draft: new Map(), loading: true, error: "", msg: "", msgKind: "", review: null,
+    print: { scope: "all", from: 0, to: 0, format: "A4", blankId: "", exporting: false, msg: "" } };
 
   el.innerHTML = `
     <div class="mfr-head">
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2><span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span>
         <span class="mfr-cap ${canWrite ? "on" : ""}">${canWrite ? "можно: пакетный ввод факта" : "только просмотр"}</span>
-        <a class="v2-link mfr-tab-link" href="${esc(v1Href({ ...screen, ws: "mfr" }, structure, objectId))}" title="Печать бланка обхода А4/А3 — в текущем интерфейсе">Бланк обхода (печать) — в текущем интерфейсе</a></div>
+        <button type="button" class="v2-btn mfr-tab-link" id="cf-blank-open" title="Бланк обхода: печать А4/А3, выгрузка в PDF/XLSX">Бланк обхода (печать/выгрузка)</button></div>
       <div class="v2-bar mfr-cf-bar">
         <label class="v2-wire-field"><span>Доска (вид работ)</span><select id="cf-track"></select></label>
         <label class="v2-wire-field"><span>Дата факта</span><input type="date" id="cf-date" value="${esc(st.date)}" ${canWrite ? "" : "disabled"}></label>
@@ -226,7 +233,132 @@ export function mountChessFlatScreen(el, { screen, structure, objectId, api, rig
     syncBar();
   }
 
+  // ------------------------------------------------------------------ бланк обхода: печать и выгрузка
+  const ascLevels = () => st.rows.slice().reverse();   // экранная матрица — сверху вниз; бланк обхода читается снизу вверх (как в V1)
+  const levelFloorLabel = (row) => (row.floor != null ? fmtFloor(row.floor) : String(row.name || "").slice(0, 12));
+  const boardName = () => st.tracks.find((t) => t["код"] === st.trackCode)?.["название"] || "";
+  function makeBlankId() { const bytes = window.crypto.getRandomValues(new Uint8Array(3)); return [...bytes].map((b) => b.toString(36)).join("").toUpperCase(); }
+  // Ширина листа ограничивает число секций рядом (та же формула, что в V1: графа «Операция» — одна общая на строку).
+  function printCapacitySections(format) {
+    const paperWidthMM = format === "A3" ? 297 : 210;
+    const usable = paperWidthMM - 12 - 8 - 40;
+    return Math.max(1, Math.floor(usable / 30));
+  }
+  function printLevelsAndSections() {
+    const asc = ascLevels();
+    const levels = st.print.scope === "all" ? asc : asc.slice(st.print.from, st.print.to + 1);
+    const levelIds = new Set(levels.flatMap((r) => r.ids));
+    const present = new Set();
+    for (const b of st.layout.blocks) if (levelIds.has(b.level_id)) present.add(b.section_id);
+    return { levels, sections: st.layout.sections.filter((s) => present.has(s.id)) };
+  }
+  // Операции этажа, применимые хотя бы у одного печатаемого блока — группировка по ИМЕНИ (не id): одна и та же работа у разных
+  // секций бывает заведена разными строками справочника (как в V1) — иначе печаталась бы двумя строками вместо одной.
+  function usedOpsForLevel(row, sections) {
+    const applicable = st.layout.ops.filter((op) => sections.some((s) => { const b = blockAt(s.id, row); return b && Object.prototype.hasOwnProperty.call(b.percents, String(op.id)); }));
+    const byName = new Map();
+    for (const op of applicable) { if (!byName.has(op.name)) byName.set(op.name, []); byName.get(op.name).push(op.id); }
+    return [...byName.entries()].map(([name, ids]) => ({ name, ids }));
+  }
+  function rowsData(rows, sections) {
+    return rows.map((row) => ({
+      floor: levelFloorLabel(row),
+      ops: usedOpsForLevel(row, sections).map((op) => ({
+        name: op.name,
+        cells: sections.map((s) => { const b = blockAt(s.id, row); const id = b ? op.ids.find((x) => Object.prototype.hasOwnProperty.call(b.percents, String(x))) : undefined; return id === undefined ? null : b.percents[String(id)]; }),
+      })),
+    }));
+  }
+  function printSheets() {
+    const { levels, sections } = printLevelsAndSections();
+    const cap = printCapacitySections(st.print.format);
+    const chunks = [];
+    for (let i = 0; i < sections.length; i += cap) chunks.push(sections.slice(i, i + cap));
+    if (!chunks.length) chunks.push([]);
+    return chunks.map((sc) => ({ levels: levels.filter((l) => sc.some((s) => blockAt(s.id, l))), sections: sc })).filter((p) => p.sections.length);
+  }
+  function paperHtml(page, idx, total) {
+    const { levels, sections } = page;
+    let rows = "";
+    for (const { floor, ops } of rowsData(levels, sections)) {
+      if (!ops.length) { rows += `<tr class="mfr-cf-row-start"><th class="mfr-cf-p-floor">${esc(floor)}</th><td class="mfr-cf-p-absent"></td>${sections.map(() => `<td colspan="2" class="mfr-cf-p-absent"></td>`).join("")}</tr>`; continue; }
+      ops.forEach((op, oi) => {
+        rows += `<tr class="${oi === 0 ? "mfr-cf-row-start" : ""}">`;
+        if (oi === 0) rows += `<th class="mfr-cf-p-floor" rowspan="${ops.length}">${esc(floor)}</th>`;
+        rows += `<td class="mfr-cf-p-opname">${esc(op.name)}</td>`;
+        for (const pct of op.cells) rows += pct === null ? `<td colspan="2" class="mfr-cf-p-absent"></td>` : `<td class="mfr-cf-p-pct">${pct}%</td><td class="mfr-cf-p-new"></td>`;
+        rows += `</tr>`;
+      });
+    }
+    const rangeLabel = levels.length ? `${levelFloorLabel(levels[0])}…${levelFloorLabel(levels[levels.length - 1])}` : "—";
+    return `<header class="mfr-cf-p-head">
+        <div><strong>Шахматка · ${esc(boardName())}</strong></div>
+        <div><span>${esc(st.layout?.object_name || "")} · уровни ${esc(rangeLabel)}</span></div>
+        <div><span>Снимок системы: ${esc(fmtDate(todayIso()))}</span><span>Дата факта: <b>${esc(fmtDate(st.date))}</b></span></div></header>
+      <table class="mfr-cf-p-matrix" aria-label="Бланк обхода по этажам и секциям">
+        <colgroup><col style="width:8mm"><col>${sections.map(() => `<col style="width:14mm"><col style="width:16mm">`).join("")}</colgroup>
+        <thead><tr><th rowspan="2">Эт.</th><th rowspan="2">Операция</th>${sections.map((s) => `<th colspan="2">${esc(s.name || s.code)}</th>`).join("")}</tr>
+          <tr>${sections.map(() => `<th>В системе</th><th>На дату</th>`).join("")}</tr></thead>
+        <tbody>${rows}</tbody></table>
+      <footer class="mfr-cf-p-foot">
+        <div>Пусто — без записи; 0 — нулевой факт; итоговый процент 0–100.</div>
+        <div><span>Ответственный: ________________ Подпись: ________________</span><span>Бланк ${esc(st.print.blankId)} · Лист ${idx + 1} из ${total}</span></div></footer>`;
+  }
+  function doPrint() {
+    const pages = printSheets();
+    printHtml(pages.map((p, i) => `<div class="mfr-cf-paper${st.print.format === "A3" ? " a3" : ""}">${paperHtml(p, i, pages.length)}</div>`).join(""));
+  }
+  async function doExport(kind) {
+    if (st.print.exporting) return;
+    st.print.exporting = true; st.print.msg = "Готовим файл…"; paintPrint();
+    try {
+      const { levels, sections } = printLevelsAndSections();
+      const rangeLabel = levels.length ? `${levelFloorLabel(levels[0])}…${levelFloorLabel(levels[levels.length - 1])}` : "—";
+      const body = { board: boardName(), object_name: st.layout?.object_name || "", range_label: rangeLabel, snapshot_at: fmtDate(todayIso()), date: fmtDate(st.date), format: st.print.format, sections: sections.map((s) => s.name || s.code), rows: rowsData(levels, sections) };
+      const blob = await api.download(`/objects/${objectId}/blocks/chess-flat-export.${kind}`, body);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `Шахматка ${boardName()} ${fmtDate(st.date)} ${st.layout?.object_name || ""}.${kind}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      st.print.msg = `Файл сформирован (${Math.max(1, Math.round(blob.size / 1024))} КБ).`;
+    } catch (e) { st.print.msg = `Не удалось сохранить: ${errText(e)}`; }
+    st.print.exporting = false; paintPrint();
+  }
+  let printModal = null;
+  function openPrintDialog() {
+    if (!st.layout) return;
+    if (!st.print.blankId) st.print.blankId = makeBlankId();
+    if (!st.print.to) st.print.to = ascLevels().length - 1;
+    printModal = openModal({ title: "Бланк обхода — печать и выгрузка", wide: true });
+    paintPrint();
+  }
+  function paintPrint() {
+    if (!printModal || printModal.closed) return;
+    const asc = ascLevels();
+    const pages = printSheets();
+    printModal.body.innerHTML = `
+      <div class="v2-wire-row">
+        <label class="v2-wire-field"><span>Формат</span><select id="pv-format"><option value="A4" ${st.print.format === "A4" ? "selected" : ""}>A4 · книжная</option><option value="A3" ${st.print.format === "A3" ? "selected" : ""}>A3 · книжная</option></select></label>
+        <label class="v2-wire-field"><span>Охват</span><select id="pv-scope"><option value="all" ${st.print.scope === "all" ? "selected" : ""}>Всё здание</option><option value="range" ${st.print.scope === "range" ? "selected" : ""}>Диапазон этажей</option></select></label>
+        ${st.print.scope === "range" ? `<label class="v2-wire-field"><span>С</span><select id="pv-from">${asc.map((r, i) => `<option value="${i}" ${i === st.print.from ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
+        <label class="v2-wire-field"><span>По</span><select id="pv-to">${asc.map((r, i) => `<option value="${i}" ${i === st.print.to ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>` : ""}</div>
+      <p class="v2-muted">Листов: ${pages.length} (каждый — своя группа секций по ширине бумаги; разбивку по строкам внутри листа довершает браузер при печати).</p>
+      <div class="v2-bar"><button type="button" class="v2-btn v2-primary" id="pv-print" ${pages.length ? "" : "disabled"}>Печать</button>
+        <button type="button" class="v2-btn" id="pv-pdf" ${pages.length && !st.print.exporting ? "" : "disabled"}>Сохранить в PDF</button>
+        <button type="button" class="v2-btn" id="pv-xlsx" ${pages.length && !st.print.exporting ? "" : "disabled"}>Сохранить в XLSX</button></div>
+      <p class="mfr-status" role="status" aria-live="polite">${esc(st.print.msg || "")}</p>
+      <div class="mfr-cf-p-preview">${pages.length ? pages.map((p, i) => `<div class="mfr-cf-paper${st.print.format === "A3" ? " a3" : ""}">${paperHtml(p, i, pages.length)}</div>`).join("") : `<p class="v2-muted">Для этого отбора нет ни одного блока с операциями доски.</p>`}</div>`;
+    printModal.body.querySelector("#pv-format").addEventListener("change", (e) => { st.print.format = e.target.value; paintPrint(); });
+    printModal.body.querySelector("#pv-scope").addEventListener("change", (e) => { st.print.scope = e.target.value; paintPrint(); });
+    printModal.body.querySelector("#pv-from")?.addEventListener("change", (e) => { st.print.from = Number(e.target.value); if (st.print.from > st.print.to) st.print.to = st.print.from; paintPrint(); });
+    printModal.body.querySelector("#pv-to")?.addEventListener("change", (e) => { st.print.to = Number(e.target.value); if (st.print.to < st.print.from) st.print.from = st.print.to; paintPrint(); });
+    printModal.body.querySelector("#pv-print").addEventListener("click", doPrint);
+    printModal.body.querySelector("#pv-pdf").addEventListener("click", () => doExport("pdf"));
+    printModal.body.querySelector("#pv-xlsx").addEventListener("click", () => doExport("xlsx"));
+  }
+
   // ------------------------------------------------------------------ управление
+  $("#cf-blank-open").addEventListener("click", openPrintDialog);
   $("#cf-track").addEventListener("change", async (e) => {
     if (st.draft.size && !(await guard())) { e.target.value = st.trackCode; return; }
     st.draft.clear(); st.trackCode = e.target.value || null; loadLayout();
@@ -247,6 +379,6 @@ export function mountChessFlatScreen(el, { screen, structure, objectId, api, rig
   return {
     hasUnsavedChanges: () => st.draft.size > 0,
     guardLeave: guard,
-    destroy() { dead = true; modal?.close(); },
+    destroy() { dead = true; modal?.close(); printModal?.close(); },
   };
 }

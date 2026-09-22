@@ -931,7 +931,11 @@ def set_cell_percent(conn, user_id: int, object_id: int, block_id: int, work_typ
     settings = block_settings(conn, object_id, block_id)
     if work_type_id not in settings["selected"]:
         raise FactError(422, "Операция не выбрана для этого блока — сначала «Настройки».")
-    items = _percents_as_of(conn, block_id, report_date)
+    # Найденный дефект (mfr2, 2026-09-22, воспроизводится и в V1 — тот же эндпоинт): `_percents_as_of` подмешивает историю
+    # МЯГКО СНЯТЫХ операций блока (были в отборе, есть факт, потом сняты «Настройками» — retired_at, история не теряется), а
+    # `save_report` ниже отклоняет ЛЮБОЙ слепок с операцией вне ТЕКУЩЕГО отбора — правка одной ЯВНО выбранной ячейки падала
+    # 422-й из-за ЧУЖИХ, давно снятых строк того же блока. Слепок — только по операциям текущего отбора.
+    items = {wt: p for wt, p in _percents_as_of(conn, block_id, report_date).items() if wt in settings["selected"]}
     for wt_id in settings["selected"]:
         items.setdefault(wt_id, 0)
     items[work_type_id] = percent

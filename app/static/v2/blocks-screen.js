@@ -7,6 +7,7 @@ import { anyModalDirty, guardModals, closeAllModals, esc, errText, shortDate, ca
 import { STATUS_LABEL } from "./registry.js";
 import { linkList } from "./screen-view.js";
 import { openFactDialog, openZrDialog, openSettingsDialog, openBulkDatesDialog } from "./mfr-dialogs.js";
+import { mountStructureTab } from "./mfr-structure.js";
 
 // «Период по плану/прогнозу»: ЗР входит, если её интервал пересекается с выбранным периодом; без дат — не входит (как у V1)
 export function periodIntersects(start, end, from, to) {
@@ -31,11 +32,12 @@ export const filterActive = (f) => !!(f.tracks.size || f.statuses.size || f.dead
 
 export function mountBlocksScreen(el, { screen, structure, objectId, api, rights, groupTitle }) {
   el.className = "v2-page v2-app mfr-scr";
-  let dead = false, seq = 0, tab = "works";
+  let dead = false, seq = 0, tab = "works", structureCtl = null;
   const canWrite = canAccounting(rights, "write");
   const st = {
     blocks: [], counts: null, tracks: [], workTypes: null, loadError: "", loading: true,
     sel: new Set(), anchor: null, search: "", items: [], itemsLoading: false, itemsError: "", filter: newFilter(), picked: new Set(),
+    wt: { status: "", pending: null, busy: false },
   };
   const blockLabel = (b) => `${b.section_code} · ${b.level_name || (b.floor + " этаж")}`;
   const labels = () => Object.fromEntries(st.blocks.map((b) => [b.id, blockLabel(b)]));
@@ -97,7 +99,14 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
     for (const b of el.querySelectorAll(".v2-read-tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     if (st.loading) { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
     if (st.loadError) { body.innerHTML = `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить блоки.</strong> ${esc(st.loadError)}<div class="v2-callout-actions"><button type="button" class="v2-btn" id="bs-retry">Повторить</button></div></div>`; $("#bs-retry").addEventListener("click", loadBase); return; }
-    if (tab === "blocks") { paintBlocksTab(body); return; }
+    if (tab === "blocks") {
+      if (!structureCtl) {
+        body.innerHTML = `<div class="mfr-scroll" id="bs-structure"></div>`;
+        structureCtl = mountStructureTab($("#bs-structure"), { api, objectId, canWrite, onChanged: () => loadCounts() });
+      }
+      return;
+    }
+    if (structureCtl) { structureCtl.destroy(); structureCtl = null; }
     if (tab === "types") { paintTypesTab(body); return; }
     body.innerHTML = `<div class="mfr-two">
       <aside class="mfr-left" aria-label="Блоки объекта">
@@ -228,16 +237,43 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
     box.querySelectorAll("tr[data-bw]").forEach((tr) => { tr.addEventListener("click", () => openRow(tr)); tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openRow(tr); } }); });
   }
 
-  // ------------------------------------------------------------------ вкладки «Блоки» и «Виды работ» (только чтение)
-  function paintBlocksTab(body) {
-    const q = st.search.trim().toLowerCase();
-    const rows = st.blocks.filter((b) => !q || `${b.section_code} ${b.level_name || b.floor}`.toLowerCase().includes(q));
-    body.innerHTML = `<div class="v2-bar"><input type="search" id="bt-q" class="v2-search" placeholder="Поиск по секции и этажу" aria-label="Поиск по таблице" value="${esc(st.search)}"><span class="v2-muted">Блоков: ${rows.length} из ${st.blocks.length}</span></div>
-      <div class="mfr-scroll"><table class="v2-read-tbl"><thead><tr><th>Секция</th><th>Этаж / уровень</th><th>Этаж №</th><th>Вид</th><th class="num">Работ</th></tr></thead>
-      <tbody>${rows.map((b) => `<tr><td>${esc(b.section_code)}</td><td>${esc(b.level_name || "")}</td><td>${esc(b.floor ?? "")}</td><td>${esc(b.kind || "")}</td><td class="num">${st.counts && st.counts !== "error" ? esc(st.counts[b.id] || 0) : st.counts === "error" ? "?" : "…"}</td></tr>`).join("") || `<tr><td colspan="5" class="v2-muted">Блоков нет.</td></tr>`}</tbody></table></div>
-      <p class="v2-muted mfr-hint">Секции, этажи, блоки и геометрия блоков заводятся и правятся в текущем интерфейсе.</p>`;
-    $("#bt-q").addEventListener("input", (e) => { st.search = e.target.value; const pos = e.target.selectionStart; paintBlocksTab(body); const n = $("#bt-q"); n.focus(); n.setSelectionRange(pos, pos); });
-    if (st.counts === null) loadCounts();
+  // ------------------------------------------------------------------ вкладка «Виды работ»
+  // Загрузка справочника из xlsx — двухфазно, как в V1 (`app/work_types_import.py`): сверка (ничего не пишет) → применение по
+  // токену (добавит новые, вернёт списанные, спишет пропавшие из файла — история статусов сохраняется). Ручного добавления/правки/
+  // порядка/удаления ОДНОЙ строки справочника в V1 нет — вся правка идёт целым файлом, поэтому в V2 переносится то же самое.
+  function wtStatus(t) { st.wt.status = t; const n = $("#wt-status"); if (n) n.textContent = t; }
+  async function wtAnalyze(file) {
+    st.wt.busy = true; wtStatus("Разбор…"); paintWtControls();
+    try {
+      const form = new FormData(); form.append("file", file);
+      const data = await api.upload(`/objects/${objectId}/work-types/analyze`, form);
+      st.wt.pending = data;
+      wtStatus("Разбор готов — проверьте сводку.");
+    } catch (e) { st.wt.pending = null; wtStatus(errText(e)); }
+    st.wt.busy = false; paintTypesTab($("#bs-body"));
+  }
+  async function wtApply() {
+    if (!st.wt.pending || st.wt.busy) return;
+    st.wt.busy = true; paintWtControls();
+    try {
+      const res = await api.post(`/objects/${objectId}/work-types/apply`, { token: st.wt.pending.token });
+      wtStatus(`Готово: добавлено ${res.added}, возвращено ${res.revived}, списано ${res.retired}, треков планирования ${res.tracks}.`);
+      st.wt.pending = null; st.workTypes = null;
+      await loadBase();
+    } catch (e) { wtStatus(errText(e)); }
+    st.wt.busy = false; paintTypesTab($("#bs-body"));
+  }
+  function paintWtControls() {
+    const box = $("#wt-summary-box"); if (!box) return;
+    const p = st.wt.pending;
+    box.querySelectorAll("button").forEach((b) => { b.disabled = st.wt.busy; });
+    if (!p) { box.innerHTML = ""; return; }
+    const warn = (p.warnings || []).length ? `<div class="v2-callout" role="note"><strong>Предупреждения</strong><ul class="mfr-list">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : "";
+    const tracks = p.tracks || [];
+    box.innerHTML = `${warn}<p>Всего строк: <b>${p.total_rows}</b> · новых: <b>${p.new.length}</b> · возвращаются: <b>${p.reviving.length}</b> · спишутся: <b>${p.retiring.length}</b>${p.retiring.length ? " — " + esc(p.retiring.join(", ")) : ""} · без изменений: <b>${p.unchanged}</b></p>
+      <p>Треков планирования на листе PlanningTrack: <b>${tracks.length}</b>${tracks.length ? " — " + esc(tracks.map((t) => `${t["код"]} «${t["название"]}»`).join(", ")) : " (лист не найден или пуст — файл без него импортируется как раньше)"}</p>
+      <button type="button" class="v2-btn v2-primary" id="wt-apply-btn" ${st.wt.busy ? "disabled" : ""}>Применить</button>`;
+    box.querySelector("#wt-apply-btn")?.addEventListener("click", wtApply);
   }
   async function paintTypesTab(body) {
     body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`;
@@ -248,10 +284,18 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
     if (dead || my !== seq || tab !== "types") return;
     const q = st.search.trim().toLowerCase();
     const rows = st.workTypes.filter((o) => !q || `${o.code} ${o.name} ${o.path}`.toLowerCase().includes(q));
-    body.innerHTML = `<div class="v2-bar"><input type="search" id="ty-q" class="v2-search" placeholder="Поиск по видам работ" aria-label="Поиск по таблице" value="${esc(st.search)}"><span class="v2-muted">Видов работ: ${rows.length} из ${st.workTypes.length}</span></div>
+    body.innerHTML = `${canWrite ? `<div class="v2-card" style="margin-bottom:10px">
+        <p class="v2-muted mfr-hint">Справочник видов работ (WBS), перезагружаемый xlsx-файлом целиком: лист «WBS» (уровень, идентификатор, название, единицы, кодификатор; необязательные «Примечание» и «Трек планирования»), расшифровка треков — лист «PlanningTrack». Ключ строки — путь по дереву: повторная загрузка обновляет совпавшее и не трогает уже проставленные статусы.</p>
+        <div class="v2-bar"><input type="file" id="wt-file" accept=".xlsx" aria-label="Файл справочника видов работ">
+          <button type="button" class="v2-btn v2-primary" id="wt-analyze-btn">Разобрать</button></div>
+        <p id="wt-status" class="mfr-status" role="status" aria-live="polite">${esc(st.wt.status)}</p>
+        <div id="wt-summary-box"></div></div>` : ""}
+      <div class="v2-bar"><input type="search" id="ty-q" class="v2-search" placeholder="Поиск по видам работ" aria-label="Поиск по таблице" value="${esc(st.search)}"><span class="v2-muted">Видов работ: ${rows.length} из ${st.workTypes.length}</span></div>
       <div class="mfr-scroll"><table class="v2-read-tbl"><thead><tr><th>Код</th><th>Название</th><th>Трек</th><th>Путь в WBS</th></tr></thead><tbody>${rows.slice(0, 500).map((o) => `<tr><td>${esc(o.code || "")}</td><td>${esc(o.name)}</td><td>${esc(o.planning_track_code || "")}</td><td>${esc(o.path)}</td></tr>`).join("")}</tbody></table></div>
-      ${rows.length > 500 ? `<p class="v2-muted">Показаны первые 500 — уточните поиск.</p>` : ""}<p class="v2-muted mfr-hint">Справочник видов работ загружается и правится в текущем интерфейсе.</p>`;
+      ${rows.length > 500 ? `<p class="v2-muted">Показаны первые 500 — уточните поиск.</p>` : ""}`;
     $("#ty-q").addEventListener("input", (e) => { st.search = e.target.value; const pos = e.target.selectionStart; paintTypesTab(body).then(() => { const n = $("#ty-q"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }); });
+    $("#wt-analyze-btn")?.addEventListener("click", () => { const f = $("#wt-file").files[0]; if (!f) { wtStatus("Выберите файл"); return; } wtAnalyze(f); });
+    paintWtControls();
   }
 
   el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.tab; st.search = ""; paint(); }));
@@ -259,6 +303,6 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
   return {
     hasUnsavedChanges: () => anyModalDirty(),
     guardLeave: () => guardModals(),
-    destroy() { dead = true; closeAllModals(); },
+    destroy() { dead = true; closeAllModals(); structureCtl?.destroy(); },
   };
 }

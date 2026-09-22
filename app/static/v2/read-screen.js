@@ -9,6 +9,7 @@ import { STATUS_LABEL } from "./registry.js";
 import { esc, linkList } from "./screen-view.js";
 import { REPORT_RENDERERS, bindReport } from "./reports.js";
 import { mountBlockWorkForm } from "./block-work-form.js";
+import { printHtml } from "./print.js";
 
 const RENDER_LIMIT = 500;
 
@@ -94,6 +95,14 @@ function paintGuide(data, search) {
   return `<p class="v2-muted" role="status">Блоков инструкции: ${blocks.length} из ${(data?.blocks || []).length}. Вопросов теста: ${esc(data?.questions_total ?? "?")}.</p>${html || `<p class="v2-muted">Ничего не найдено по запросу «${esc(search)}».</p>`}`;
 }
 
+// Печать отчёта (mfr2, перенос из V1: `document.getElementById("report-print").addEventListener("click", () => window.print())`) —
+// системное окно печати браузера, содержимое — снимок текущей таблицы отчёта.
+function printReportTable(title) {
+  const src = document.querySelector("#rd-report");
+  if (!src) return;
+  printHtml(`<h2>${esc(title)}</h2>${src.innerHTML}`);
+}
+
 function errorText(err) {
   if (err instanceof ApiError) {
     const d = err.detail;
@@ -109,6 +118,9 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   let active = 0;
   let editor = null; // открытая карточка строки (правка запланированной работы)
   const canEditRows = (sec) => !!sec.rowEdit && (!!rights?.system_admin || rights?.features?.[sec.rowEdit.feature] === "write");
+  // Отчёт с правкой ячейки прямо в таблице (mfr2: «Учёт по блокам: статусы») — право записи берётся из своего раздела
+  // (`writeFeature`, обычно "work_progress"), НЕ из права на сам отчёт (`report_block_status`) — так же, как в V1.
+  const canWriteReport = (sec) => !!sec.writeFeature && (!!rights?.system_admin || rights?.features?.[sec.writeFeature] === "write");
   async function closeEditor() { if (editor) { if (!(await editor.guard())) return false; editor.destroy(); editor = null; } return true; }
   const todayIso = () => { const d = new Date(); const p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
   // Границы дня: журнал хранит время в UTC, а человек выбирает дни по местным часам (та же функция, что в V1).
@@ -306,15 +318,19 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       return `<label class="v2-wire-field"><span>${esc(c.label)}</span><input type="date" data-param="${esc(c.param)}" value="${esc(val)}"></label>`;
     }).join("");
     const render = REPORT_RENDERERS[sec.report];
-    const exportsBar = (sec.exports || []).length ? `<div class="v2-bar v2-export-bar">${sec.exports.map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>` : "";
-    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${exportsBar}<div id="rd-report">${render(s.data, s.rs)}</div>`;
+    const ctx = { api, objectId, canWrite: canWriteReport(sec), data: s.data };
+    const printBtn = sec.printable ? `<button type="button" class="v2-btn" id="rd-print">Печать</button>` : "";
+    const exportsBar = ((sec.exports || []).length || printBtn) ? `<div class="v2-bar v2-export-bar">${printBtn}${(sec.exports || []).map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>` : "";
+    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${exportsBar}<div id="rd-report">${render(s.data, s.rs, ctx)}</div>`;
     bodyEl.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => exportReport(sec, s, b.dataset.export)));
+    bodyEl.querySelector("#rd-print")?.addEventListener("click", () => printReportTable(screen.title));
     const repaint = (focusPath) => {
-      bodyEl.querySelector("#rd-report").innerHTML = render(s.data, s.rs);
-      bindReport(sec.report, bodyEl, s.rs, repaint);
+      ctx.data = s.data;
+      bodyEl.querySelector("#rd-report").innerHTML = render(s.data, s.rs, ctx);
+      bindReport(sec.report, bodyEl, s.rs, repaint, ctx);
       if (focusPath) bodyEl.querySelector(`[data-path="${CSS.escape(focusPath)}"]`)?.focus();
     };
-    bindReport(sec.report, bodyEl, s.rs, repaint);
+    bindReport(sec.report, bodyEl, s.rs, repaint, ctx);
     bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
       if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
       s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
