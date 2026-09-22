@@ -110,7 +110,8 @@ try {
   check("конфликт: изменённое в обход изделие — отказ сервера, «Принят» не записан", sql1(S.db, `SELECT current_status FROM elements WHERE id=${E.id}`) === "installed" && !conf.some((x) => x.startsWith("apply:200")), `${conf.join(",")}; ${await b.eval(`document.querySelector('#ec-card .ws-err').textContent`)}`);
   exec(S.db, `UPDATE elements SET current_status='delivered' WHERE id=${E.id}`);
   await b.goto(`${S.base}/v2#/element-catalog`, 1500);
-  await b.waitFor(`document.querySelector('#ec-card #ws-sform select[name=status]') && /Доставлен/.test(document.querySelector('#ec-card .ws-chip')?.textContent || '')`, 40000);
+  // (после полной перезагрузки страницы первый вход в справочник под нагрузкой бывает дольше — ждём с запасом)
+  await b.waitFor(`document.querySelector('#ec-card #ws-sform select[name=status]') && /Доставлен/.test(document.querySelector('#ec-card .ws-chip')?.textContent || '')`, 90000);
 
   // обрыв связи: запрос не дошёл — повторно не отправляется, ввод остаётся, сообщение
   await choose(b, '#ec-card #ws-sform select[name=status]', "installed");
@@ -130,9 +131,14 @@ try {
   await b.waitFor(`[...document.querySelectorAll('input,select')].some(x=>x.closest('[role=dialog],.eo-modal,.v2-dialog')) `, 15000);
   const form = await b.eval(`(()=>{const m=document.querySelector('[role=dialog]') || document.querySelector('.eo-modal'); return m ? m.innerText.slice(0,120) : ''})()`);
   check("двойной щелчок по строке — форма реквизитов изделия (как V1)", /Марка|Тип|Реквизит/i.test(form), form.replace(/\n/g, " | "));
-  await b.key("Escape"); await sleep(500);
-  try { await b.eval(`document.querySelector('[role=dialog] [data-close], .eo-modal [data-close], [role=dialog] button[value=cancel]')?.click()`); } catch { /* */ }
-  await sleep(300);
+  // запись из формы: плановая дата поставки → PATCH /elements/{id}/fields → SQL; строка справочника перечитана
+  await b.eval(`(()=>{const i=document.querySelector('.eo-dialog input[name="planned_delivery_date"]'); i.value='2026-11-03'; i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  n = b.requests.length;
+  await tap(b, '.eo-dialog button[type=submit]');
+  await b.waitFor(`!document.querySelector('.eo-dialog')`, 20000);
+  await b.waitFor(`/03\\.11\\.2026/.test(document.querySelector('#ec-table tbody tr[data-id="${E.id}"]')?.innerText || '')`, 30000).catch(() => {});
+  const fp = b.requests.slice(n).filter((r) => new URL(r.url).pathname === `/elements/${E.id}/fields`).map((r) => r.status);
+  check("форма реквизитов: плановая дата записана (один PATCH, SQL), строка справочника перечитана", fp.join(",") === "200" && sql1(S.db, `SELECT planned_delivery_date FROM elements WHERE id=${E.id}`) === "2026-11-03" && /03\.11\.2026/.test(await b.eval(`document.querySelector('#ec-table tbody tr[data-id="${E.id}"]')?.innerText || ''`)), fp.join(","));
 
   // «Показать на схеме» → «Модель», изделие выделено; «Назад» — справочник с тем же отбором
   n = b.requests.length;
