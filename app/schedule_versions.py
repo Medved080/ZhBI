@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from app import activity
 from app.access import assert_object_feature, is_system_admin
 from app.auth import get_current_user
-from app.db import get_connection
+from app.db import begin_write, get_connection
 
 router = APIRouter(prefix="/schedule-versions", tags=["schedule"])
 
@@ -609,6 +609,7 @@ def delete_version(version_id: int, user: sqlite3.Row = Depends(get_current_user
     базового графика (см. save_version)."""
     conn = get_connection()
     try:
+        begin_write(conn)   # блокировка записи первым действием (app/db.py): повторное/параллельное удаление той же версии — чистый 404, а не гонка
         row = conn.execute("SELECT object_id, kind, title FROM schedule_versions WHERE id = ?",
                            (version_id,)).fetchone()
         if row is None:
