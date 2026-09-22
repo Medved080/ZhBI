@@ -626,6 +626,13 @@ class UserOut(BaseModel):
     # разбирать JSON на клиенте пришлось бы в двух местах (вход и повторное
     # чтение), и одно из них однажды забыло бы про пустое значение.
     menu_prefs: Optional[dict] = None
+    # Личные настройки оболочки V2 (2026-09-22): закреплённые объекты в выборе
+    # объекта шапки и состояние левой навигации (закреплена/нет, ширина,
+    # раскрытые группы меню). Тот же приём, что у menu_prefs — разобранный
+    # объект, а не строка. Хранится в `users.recent_objects` (переиспользован
+    # сознательно — см. app/users.py::set_v2_shell_prefs), у V1 своего
+    # представления этих настроек нет.
+    v2_shell_prefs: Optional[dict] = None
     # Есть ли в «Что нового» непрочитанная запись (2026-08-03). Считает
     # сервер (changelog_unseen_of): иначе клиент тянул бы весь журнал версий
     # при каждом входе только чтобы решить, показывать его или нет.
@@ -652,6 +659,19 @@ def menu_prefs_of(user: sqlite3.Row) -> Optional[dict]:
         return None
     try:
         значение = json.loads(user["menu_prefs"])
+    except (ValueError, TypeError):
+        return None
+    return значение if isinstance(значение, dict) else None
+
+
+def v2_shell_prefs_of(user: sqlite3.Row) -> Optional[dict]:
+    """Настройки оболочки V2 разобранными — тот же приём, что menu_prefs_of.
+    Испорченный JSON или значение не-объект — не повод ронять вход, просто
+    настройки открываются пустыми (клиент подставляет свои умолчания)."""
+    if "recent_objects" not in user.keys() or not user["recent_objects"]:
+        return None
+    try:
+        значение = json.loads(user["recent_objects"])
     except (ValueError, TypeError):
         return None
     return значение if isinstance(значение, dict) else None
@@ -691,6 +711,7 @@ def user_out(user: sqlite3.Row) -> UserOut:
         version=user_version(user),
         ui_theme=user["ui_theme"] if "ui_theme" in user.keys() else None,
         menu_prefs=menu_prefs_of(user),
+        v2_shell_prefs=v2_shell_prefs_of(user),
         changelog_unseen=changelog_unseen_of(user),
         view3d_pitch_deg=pitch,
         view3d_yaw_deg=yaw,

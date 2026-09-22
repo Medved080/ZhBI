@@ -38,7 +38,10 @@ import { mountAccessView } from "./access-view.js";
 import { hasAdminScreen, mountAdminScreen } from "./admin-screens.js";
 import { startStatusLog } from "./statuslog.js";
 import { mountShapeEdit } from "./shape-edit.js";
-import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen, hasAllowedWrites } from "./write-gate.js";
+import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen } from "./write-gate.js";
+import { createShellPrefsStore } from "./shell-prefs.js";
+import { mountShellNav } from "./shell-nav.js";
+import { openObjectPicker } from "./shell-object-picker.js";
 
 const root = document.getElementById("v2-root");
 
@@ -237,26 +240,31 @@ async function renderShell(user, permissions) {
     : screenAllowed(s, registry.structure[s.id], rights);
   const groupTitle = (id) => registry.groups.find((g) => g.id === id)?.title || "";
 
-  const objectOptions = tree.projects.map((p) => {
-    const objs = (p.objects || []).filter((o) => (o.status || "active") !== "archived");
-    if (!objs.length) return "";
-    return `<optgroup label="${escapeHtml(p.name)}">${objs.map((o) =>
-      `<option value="${o.id}" ${o.id === objectId ? "selected" : ""}>${escapeHtml(o.name)}${o.elements ? ` · ${o.elements}` : " · пусто"}</option>`).join("")}</optgroup>`;
-  }).join("");
+  // Настройки оболочки — закреплённые объекты и левая навигация (shell-prefs.js): читаются из уже загруженного
+  // /me (user.v2_shell_prefs), лишнего запроса не требуют.
+  const prefsStore = createShellPrefsStore({ api, user });
 
   root.innerHTML = `
     <header class="v2-head">
       <div class="v2-head-title">
         <strong>ЖБИ</strong>
+        <span class="v2-head-section" id="v2-head-section"></span>
         <span class="v2-badge">Новый интерфейс — экспериментальный</span>
         <span class="v2-build" id="v2-build" hidden></span>
       </div>
       <div class="v2-head-right">
-        <label class="v2-ctx" title="Права и переходы в текущий интерфейс считаются по выбранному объекту">Объект
-          <select id="v2-object" ${activeObjects.length ? "" : "disabled"} aria-label="Объект">
-            ${activeObjects.length ? objectOptions : `<option>${tree.failed ? "Не удалось загрузить" : "Нет объектов"}</option>`}
-          </select>
-        </label>
+        <button type="button" class="v2-objbtn" id="v2-object-btn" aria-haspopup="dialog"
+                title="Права и переходы в текущем интерфейсе считаются по выбранному объекту"></button>
+        <!-- Скрытый совместимый хук (НЕ часть видимого интерфейса, aria-hidden, вне табуляции): пока выбор объекта
+             был единственным select#v2-object, несколько браузерных проверок ДРУГИХ областей (обмен, МФР,
+             ЖБИ-линии — scripts/v2_tests/exchange/*.mjs, scripts/verify_mfr_lib.mjs, scripts/verify_lines_ui.mjs)
+             переключают объект напрямую через него (устанавливают .value и шлют событие change), а не через
+             шапку человеком. Задача — заменить select на кнопку с окном выбора; переписывать проверки других,
+             отдельно принимаемых областей — не эта задача и рискует конфликтом с параллельной работой над ними
+             (BRIEF). Тот же changeObject() и тот же список активных объектов — гонки эти же самые данные
+             показывать ДВАЖДЫ по-разному не может. Обнаружить руками: элемент нельзя не заметить в DOM, но
+             display:none и отсутствие визуального следа исключают путаницу с настоящим полем выбора. -->
+        <select id="v2-object" class="v2-hide" aria-hidden="true" tabindex="-1"></select>
         <span class="v2-nav-note" id="v2-nav-note" role="status" aria-live="polite"></span>
         <span class="v2-user-name">${escapeHtml(user.display_name)}</span>
         <button type="button" class="v2-back" id="v2-logout-btn" title="Завершить свой сеанс и вернуться на экран входа">Выйти</button>
@@ -269,7 +277,7 @@ async function renderShell(user, permissions) {
     </div>
     <div class="v2-gate-note" id="v2-gate-note" role="status" aria-live="polite" hidden></div>
     <div class="v2-body">
-      <nav class="v2-nav v2-shellnav" aria-label="Разделы" id="v2-side"></nav>
+      <div id="v2-side"></div>
       <main class="v2-page" id="v2-content"></main>
     </div>
   `;
@@ -299,50 +307,103 @@ async function renderShell(user, permissions) {
   });
   document.getElementById("v2-banner-back").addEventListener("click", (e) => { e.preventDefault(); onBackClick(); });
   const gateNote = document.getElementById("v2-gate-note");
-  const objectSelect = document.getElementById("v2-object");
+  const objectBtn = document.getElementById("v2-object-btn");
+  const headSection = document.getElementById("v2-head-section");
   const content = document.getElementById("v2-content");
   const side = document.getElementById("v2-side");
 
-  // ---- левая навигация: поиск + группы (сворачиваются) + экраны
-  const collapsed = new Set((readSession("v2.navCollapsed") || "").split(",").filter(Boolean));
   let currentKey = null;
-  let searchText = "";
-  function renderNav() {
-    const q = searchText.trim().toLowerCase();
-    const groups = registry.groups.filter((g) => g.id !== "home").map((g) => {
-      const items = registry.screens.filter((s) => s.group === g.id && allowedScreen(s)
-        && (!q || s.title.toLowerCase().includes(q)));
-      return { g, items };
-    }).filter((x) => x.items.length);
-    side.innerHTML = `
-      <input type="search" id="v2-nav-search" class="v2-nav-search" placeholder="Найти раздел" aria-label="Найти раздел" value="${escapeHtml(searchText)}">
-      <button type="button" data-section="home" class="v2-nav-home" aria-pressed="${currentKey === "home"}">Начало</button>
-      ${groups.map(({ g, items }) => {
-        const open = q || !collapsed.has(g.id) || items.some((s) => s.id === currentKey);
-        return `<div class="v2-nav-group">
-          <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
-          ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) || s.impl.startsWith("admin:") || s.impl === "supplier-docs" || s.impl === "contracts-list" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl === "exchange" ? ` <span class="v2-nav-tag" title="Загрузка и выгрузка файлов выполняются в новом интерфейсе">обмен</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.adminExtra ? ` <span class="v2-nav-tag" title="Просмотр и служебные операции в новом интерфейсе">прав.</span>` : (s.impl === "db-transfer" || s.impl === "address-classifier") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` :s.impl === "read" || s.impl === "db-status-view" || s.impl === "admin-guide-view" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
-        </div>`;
-      }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
-    const search = document.getElementById("v2-nav-search");
-    search.addEventListener("input", () => {
-      searchText = search.value;
-      const pos = search.selectionStart;
-      renderNav();
-      const s2 = document.getElementById("v2-nav-search");
-      s2.focus(); try { s2.setSelectionRange(pos, pos); } catch (e) { /* type=search */ }
-    });
-    side.querySelectorAll("[data-group]").forEach((b) => b.addEventListener("click", () => {
-      const id = b.dataset.group;
-      if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
-      writeSession("v2.navCollapsed", [...collapsed].join(","));
-      renderNav();
-      side.querySelector(`[data-group="${id}"]`)?.focus();
-    }));
-    side.querySelectorAll("[data-section]").forEach((b) => b.addEventListener("click", () => openSection(b.dataset.section)));
-    syncPending(api.pendingWritesCount?.() ?? (api.hasPendingWrites() ? 1 : 0));
+
+  // ---- выбор объекта в шапке: кнопка + окно выбора (shell-object-picker.js). Текст кнопки — статус-точка и
+  // «Проект · Объект», полное название — в title (длинные названия не должны раздувать шапку).
+  function objectLabelParts(id) {
+    const o = activeObjects.find((x) => x.id === id);
+    if (!o) return null;
+    const proj = tree.projects.find((p) => (p.objects || []).some((x) => x.id === o.id));
+    return { status: o.status || "active", text: `${proj ? proj.name + " · " : ""}${o.name}` };
   }
+  function updateObjectButton() {
+    const parts = objectLabelParts(objectId);
+    const text = parts ? parts.text : (tree.failed ? "Не удалось загрузить" : (activeObjects.length ? "Объект не выбран" : "Нет объектов"));
+    objectBtn.innerHTML = `${parts ? `<span class="v2-status-dot" data-dot="${escapeHtml(parts.status)}" aria-hidden="true"></span>` : ""}<span class="v2-objbtn-text">${escapeHtml(text)}</span>`;
+    objectBtn.title = text;
+    // Кнопку не блокируем из-за отсутствия АКТИВНЫХ объектов — в окне выбора есть архивные (то же правило
+    // видимости, что в V1), их выбор тоже должен быть доступен, если в дереве вообще есть проекты.
+    objectBtn.disabled = !tree.projects.length;
+  }
+  // Скрытый select-хук (см. комментарий в разметке выше) — тот же список и тот же текст опций, что раньше
+  // строил объектOptions видимого <select>, чтобы проверки других областей, читающие текст опции
+  // ("Название · N"), не начали молча ошибаться.
+  const legacySelect = document.getElementById("v2-object");
+  function syncLegacySelect() {
+    legacySelect.innerHTML = tree.projects.map((p) => {
+      const objs = (p.objects || []).filter((o) => (o.status || "active") !== "archived");
+      if (!objs.length) return "";
+      return `<optgroup label="${escapeHtml(p.name)}">${objs.map((o) =>
+        `<option value="${o.id}">${escapeHtml(o.name)}${o.elements ? ` · ${o.elements}` : " · пусто"}</option>`).join("")}</optgroup>`;
+    }).join("");
+    legacySelect.value = objectId != null ? String(objectId) : "";
+    legacySelect.disabled = !activeObjects.length;
+  }
+  syncLegacySelect();
+  updateObjectButton();
+  objectBtn.addEventListener("click", () => {
+    if (navBusy || api.hasPendingWrites()) return;
+    openObjectPicker({ tree, objectId, prefsStore, onSelect: changeObject, triggerEl: objectBtn });
+  });
+  legacySelect.addEventListener("change", async () => {
+    const id = Number(legacySelect.value) || null;
+    const ok = await changeObject(id);
+    if (!ok) legacySelect.value = objectId != null ? String(objectId) : ""; // отказ («Остаться») — вернуть прежнее значение, как раньше делал видимый select
+  });
+
+  // Смена объекта: тот же сторож несохранённых данных, что и у перехода между разделами (тот же activeModule).
+  // Возвращает true, если объект сменился (или уже был тем же — picker закрывается и в этом случае), false —
+  // отказ «Остаться»: окно выбора остаётся открытым, ничего не потеряно.
+  async function changeObject(id) {
+    if (!id || id === objectId) return true;
+    if (navBusy) return false;
+    if (activeModule?.hasUnsavedChanges?.()) {
+      navBusy = true;
+      let stay = false;
+      try { stay = !(await activeModule.guardLeave()); } finally { navBusy = false; }
+      if (stay) return false;
+    }
+    objectId = id;
+    switchCtx.objectId = id;
+    writeSession("v2.objectId", String(id));
+    // «Последний объект — за пользователем», ТЕМ ЖЕ эндпоинтом, что уже использует V1 (не дублируем в
+    // v2-shell-prefs). Не блокирует переключение и не роняет его при отказе — это удобство, а не условие перехода.
+    api.put("/me/last-object", { object_id: id }).catch((e) => { /* не критично — при следующем входе просто не подхватится */ });
+    rightsOk = await loadRights();
+    updateObjectButton();
+    legacySelect.value = String(id); // список опций не меняется при простой смене объекта — только значение
+    const note = document.getElementById("v2-nav-note");
+    if (note) note.textContent = rightsOk ? "" : "Права объекта не удалось получить — показаны права без объекта";
+    shellNav.render();
+    // Экран, недоступный на новом объекте (или перерисовка каркаса с новой ссылкой в V1), обновляется.
+    const cur = currentKey === "home" ? null : screenOf(currentKey);
+    // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
+    // если экран доступен на новом объекте; иначе — обычный путь (экран недоступен → начальная страница).
+    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { updateGateNote(cur); return true; }
+    // Рабочее место другого типа учёта (ЖБИ ↔ МФР) на новом объекте не применяется — открываем парное, а не начальную страницу.
+    if (cur && cur.impl === "workspace" && !allowedScreen(cur)) {
+      const twin = registry.screens.find((x) => x.impl === "workspace" && x.id !== cur.id && allowedScreen(x)
+        && (cur.ws === "mfr" ? x.ws === "model" : x.ws === "mfr"));
+      if (twin) { openSection(twin.id, { force: true, guarded: true }); return true; }
+    }
+    if (cur && !isModule(cur)) openSection(currentKey, { force: true, guarded: true });
+    else if (currentKey === "home") openSection("home", { force: true, guarded: true });
+    return true;
+  }
+
+  // ---- левая навигация: три состояния (свёрнута/временно открыта/закреплена), поиск, группы — shell-nav.js.
+  // onOpen зовёт openSection ниже (объявлена как function-декларация — доступна и до текстового объявления).
+  const shellNav = mountShellNav(side, {
+    registry, allowedScreen, prefsStore,
+    getCurrentKey: () => currentKey,
+    onOpen: (key) => openSection(key),
+  });
   // Пока идёт любая запись (сохранение, удаление, загрузка файла) переходы
   // между разделами и в V1 недоступны, а причина написана в шапке — не только в
   // подсказке заблокированной кнопки. Снимается и после успеха, и после ошибки:
@@ -351,8 +412,9 @@ async function renderShell(user, permissions) {
   function syncPending(n) {
     backBtn.disabled = n > 0;
     backBtn.title = n > 0 ? "Дождитесь завершения сохранения" : "";
-    objectSelect.disabled = n > 0 || !activeObjects.length;
-    side.querySelectorAll("[data-section], [data-group]").forEach((b) => { if (b.dataset.section) b.disabled = n > 0; });
+    objectBtn.disabled = n > 0 || !tree.projects.length;
+    legacySelect.disabled = n > 0 || !activeObjects.length;
+    shellNav.setBusy(n > 0);
     const note = document.getElementById("v2-nav-note");
     if (note) note.textContent = n > 0 ? WAIT_TEXT : "";
   }
@@ -362,8 +424,11 @@ async function renderShell(user, permissions) {
   // innerHTML не должна сбрасывать фокус клавиатуры на <body>.
   const focusKeeper = keepFocus(content);
 
+  // Возвращает true, когда переход СОСТОЯЛСЯ (включая «уже там были» — key === currentKey без force) — левая
+  // навигация (shell-nav.js) читает это, чтобы закрыть временно открытую панель ТОЛЬКО после настоящего перехода,
+  // а не после отказа guardLeave/занятости записью (тогда экран и панель остаются как были, п.1/2 задания).
   async function openSection(key, opts = {}) {
-    if (navBusy || api.hasPendingWrites()) { if (opts.fromHash) restoreHash(); return; }
+    if (navBusy || api.hasPendingWrites()) { if (opts.fromHash) restoreHash(); return false; }
     navBusy = true;
     try {
       const target = key === "home" ? null : screenOf(key);
@@ -372,11 +437,11 @@ async function renderShell(user, permissions) {
         key = "home";
         content.dataset.note = "unavailable";
       }
-      if (key === currentKey && !opts.force) { if (opts.fromHash) restoreHash(); return; }
-      if (activeModule && !opts.guarded && !(await activeModule.guardLeave())) { if (opts.fromHash) restoreHash(); return; }
+      if (key === currentKey && !opts.force) { if (opts.fromHash) restoreHash(); return true; }
+      if (activeModule && !opts.guarded && !(await activeModule.guardLeave())) { if (opts.fromHash) restoreHash(); return false; }
       // guardLeave мог сохранять данные и сам начать/закончить запись; если
       // после него запись всё ещё идёт (например, второй поток), не уходим.
-      if (api.hasPendingWrites()) { if (opts.fromHash) restoreHash(); return; }
+      if (api.hasPendingWrites()) { if (opts.fromHash) restoreHash(); return false; }
       // destroy() — необязательный хук раздела (у "Проекты и объекты" живая
       // мини-карта MapLibre со своим graphics-контекстом): content.innerHTML ниже
       // уничтожит её DOM-узел, но не сам контекст — без явного remove() браузер
@@ -394,7 +459,10 @@ async function renderShell(user, permissions) {
       if (location.hash !== wanted && !(key === "home" && (location.hash === "" || location.hash === "#"))) {
         history.pushState(null, "", wanted);
       }
-      renderNav();
+      shellNav.render();
+      // «Текущее рабочее место подписано в шапке» (п.2 задания) — видно и когда меню свёрнуто/спрятано.
+      // Для рабочих мест (v2-ws-mode) дублировать незачем: своя подпись уже есть в ws-top (workspace.js).
+      headSection.textContent = key === "home" ? "" : (target ? target.title : "");
       if (key === "home") {
         document.title = "ЖБИ — новый интерфейс";
         const hidden = registry.screens.filter((s) => !allowedScreen(s)).length;
@@ -556,6 +624,7 @@ async function renderShell(user, permissions) {
         });
       }
       updateGateNote(key === "home" ? null : target);
+      return true;
     } finally { navBusy = false; }
   }
   // Пояснение об отключённых операциях экрана (ограниченный выпуск): что именно не работает в экспериментальном
@@ -580,42 +649,7 @@ async function renderShell(user, permissions) {
   window.addEventListener("hashchange", () => { const k = routeFromHash(); if (k !== currentKey) openSection(k, { fromHash: true }); });
   window.addEventListener("popstate", () => { const k = routeFromHash(); if (k !== currentKey) openSection(k, { fromHash: true }); });
 
-  objectSelect.addEventListener("change", async () => {
-    const id = Number(objectSelect.value) || null;
-    if (!id || id === objectId) return;
-    // Экран может держать несохранённую правку ЭТОГО объекта: перед сменой — тот же сторож, что при уходе с экрана.
-    // Отказ («Остаться») возвращает выбор в шапке на прежний объект, чтобы шапка и экран не расходились.
-    if (navBusy) { objectSelect.value = String(objectId); return; }
-    if (activeModule?.hasUnsavedChanges?.()) {
-      navBusy = true;
-      let stay = false;
-      try { stay = !(await activeModule.guardLeave()); } finally { navBusy = false; }
-      if (stay) { objectSelect.value = String(objectId); return; }
-    }
-    objectId = id;
-    switchCtx.objectId = id;
-    writeSession("v2.objectId", String(id));
-    rightsOk = await loadRights();
-    const note = document.getElementById("v2-nav-note");
-    if (note && !rightsOk) note.textContent = "Права объекта не удалось получить — показаны права без объекта";
-    renderNav();
-    // Экран, недоступный на новом объекте (или перерисовка каркаса с новой ссылкой в V1), обновляется.
-    const cur = currentKey === "home" ? null : screenOf(currentKey);
-    // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
-    // если экран доступен на новом объекте; иначе — обычный путь (экран недоступен → начальная страница).
-    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { updateGateNote(cur); return; }
-    // Рабочее место другого типа учёта (ЖБИ ↔ МФР) на новом объекте не применяется — открываем парное, а не начальную страницу.
-    if (cur && cur.impl === "workspace" && !allowedScreen(cur)) {
-      const twin = registry.screens.find((x) => x.impl === "workspace" && x.id !== cur.id && allowedScreen(x)
-        && (cur.ws === "mfr" ? x.ws === "model" : x.ws === "mfr"));
-      if (twin) { openSection(twin.id, { force: true, guarded: true }); return; }
-    }
-    if (cur && !isModule(cur)) openSection(currentKey, { force: true, guarded: true });
-    else if (currentKey === "home") openSection("home", { force: true, guarded: true });
-  });
-
   startStatusLog();   // лента «Сообщения за сеанс» (раздел «Обучение и справка»)
-  renderNav();
   openSection(routeFromHash());
 }
 
