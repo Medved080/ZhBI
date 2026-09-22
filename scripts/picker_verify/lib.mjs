@@ -24,9 +24,10 @@ export function summary() {
 }
 
 // ---- сервер на временной копии ----
-let srv = null;
+let srv = null, lastDir = null;
 export async function startServer(port, dir, { fresh = true, setup = null } = {}) {
   await stopServer();
+  lastDir = dir;
   if (fresh) rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const dbPath = `${dir}/work.db`;
@@ -46,6 +47,8 @@ export async function startServer(port, dir, { fresh = true, setup = null } = {}
 }
 export async function stopServer() {
   if (srv) { try { srv.kill("SIGTERM"); } catch { /* уже остановлен */ } await sleep(500); try { srv.kill("SIGKILL"); } catch { /* */ } srv = null; }
+  // диск ограничен: копия БД и штатные копии сервера удаляются после проверки (KEEP=1 — оставить для разбора падения)
+  if (lastDir && !process.env.KEEP) { rmSync(lastDir, { recursive: true, force: true }); lastDir = null; }
 }
 
 // ---- SQL по копии ----

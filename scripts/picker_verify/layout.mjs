@@ -44,6 +44,6 @@ try {
 } catch (e) {
   console.log("СБОЙ:", e.stack || e);
   check("сценарий выполнен без сбоя", false, String(e.message || e).slice(0, 300));
-  try { await b.shot(`${SP}/picker_layout/fail.png`); } catch { /* */ }
+  try { await b.shot(`${SP}/picker_layout_fail.png`); } catch { /* */ }
 } finally { await b.close(); await stopServer(); }
 process.exit(summary() ? 1 : 0);

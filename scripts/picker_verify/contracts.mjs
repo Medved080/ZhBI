@@ -79,7 +79,7 @@ try {
 } catch (e) {
   console.log("СБОЙ СЦЕНАРИЯ:", e.stack || e);
   check("сценарий выполнен без сбоя", false, String(e.message || e).slice(0, 300));
-  try { await b.shot(`${SP}/picker_contracts/fail.png`); } catch { /* */ }
+  try { await b.shot(`${SP}/picker_contracts_fail.png`); } catch { /* */ }
 } finally {
   try { await b.close(); } catch { /* */ }
   await stopServer();

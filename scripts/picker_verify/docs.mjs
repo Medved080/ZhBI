@@ -11,7 +11,7 @@ const b = await openBrowser(1920, 1080);
 const go = async (hash) => { await hardGoto(b, `${base}/v2${hash}`, 1200); await b.waitFor(`!!document.querySelector('.v2-head')`, 20000); await sleep(600); };
 const waitText = (t, sel = "#sd-inner", to = 15000) => b.waitFor(`(document.querySelector(${JSON.stringify(sel)})?.innerText||'').includes(${JSON.stringify(t)})`, to);
 const docRow = (id) => sql(db, `SELECT * FROM supplier_change_docs WHERE id=${id}`)[0];
-const shot = (n) => b.shot(`${DIR}/${n}.png`);
+const shot = (n) => b.shot(`${DIR}_${n}.png`);
 
 try {
   await login(b, base, "admin");
@@ -323,7 +323,7 @@ try {
 } catch (e) {
   console.log("СБОЙ СЦЕНАРИЯ:", e.stack || e);
   check("сценарий выполнен без сбоя", false, String(e.message || e).slice(0, 300));
-  try { await shot("fail"); console.log("экран:", `${DIR}/fail.png`); } catch { /* */ }
+  try { await shot("fail"); console.log("экран:", `${DIR}_fail.png`); } catch { /* */ }
 } finally {
   try { await b.close(); } catch { /* */ }
   await stopServer();

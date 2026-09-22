@@ -105,11 +105,11 @@ try {
   check("W16 «Показать только с остатком» скрывает контракты с нулевым остатком", rem);
   console.log("\nисключения браузера:", b.exceptions.length, b.exceptions.slice(0, 3));
   check("W17 ошибок JavaScript в панелях нет", b.exceptions.length === 0, b.exceptions.slice(0, 2).join("; "));
-  await b.shot(`${SP}/picker_ws/final.png`);
+  await b.shot(`${SP}/picker_ws_final.png`);
 } catch (e) {
   console.log("СБОЙ:", e.stack || e);
   check("сценарий выполнен без сбоя", false, String(e.message || e).slice(0, 300));
-  try { await b.shot(`${SP}/picker_ws/fail.png`); } catch { /* */ }
+  try { await b.shot(`${SP}/picker_ws_fail.png`); } catch { /* */ }
 } finally {
   await b.close();
   await stopServer();
