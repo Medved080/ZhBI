@@ -410,6 +410,8 @@ app.include_router(allocation_router)
 app.include_router(allocation_state_router)
 from app.element_ops import router as element_ops_router  # noqa: E402
 app.include_router(element_ops_router)
+from app.element_rows import router as element_rows_router  # noqa: E402
+app.include_router(element_rows_router)
 from app.block_ops import router as block_ops_router  # noqa: E402  (предпросмотры и строгая Excel-правка ЗР, интерфейс V2)
 app.include_router(block_ops_router)
 from app.admin_ops import router as admin_ops_router  # noqa: E402  (администрирование V2: политика пароля, сводка доступа, групповая выдача)

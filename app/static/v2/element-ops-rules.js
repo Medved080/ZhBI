@@ -63,6 +63,63 @@ export function contractSetBodyProblem(body) {
   return null;
 }
 
+// ---- построчные групповые операции (область lines): у каждой строки своё значение, всё выбранное человеком явно ----
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const nonNeg = (x) => Number.isInteger(x) && x >= 0;
+
+// Плановые даты по строкам (`POST /element-ops/planned-date-rows`): у каждой строки прежняя и НОВАЯ дата (null — не задана / снять), обе указаны явно.
+export function plannedRowsBodyProblem(body) {
+  if (!isObj(body)) return "тело не объект";
+  if (extra(body, ["mode", "object_id", "expect", "items"])) return "лишние поля";
+  if (body.mode !== "preview" && body.mode !== "apply") return "режим: preview или apply";
+  if (!posInt(body.object_id)) return "не указан объект";
+  if (body.mode === "apply") {
+    const e = body.expect;
+    if (!isObj(e) || extra(e, ["set_new", "replaced", "cleared"]) || !nonNeg(e.set_new) || !nonNeg(e.replaced) || !nonNeg(e.cleared)) return "нет подтверждения последствий";
+  } else if (body.expect !== undefined) return "предпросмотр без подтверждения";
+  if (!Array.isArray(body.items) || !body.items.length || body.items.length > MAX_BATCH) return "пачка пуста или больше лимита";
+  const seen = new Set();
+  for (const it of body.items) {
+    if (!isObj(it) || extra(it, ["element_id", "expected_planned_date", "planned_date"])) return "лишние поля изделия";
+    if (!hasOwn(it, "expected_planned_date") || !hasOwn(it, "planned_date")) return "у строки не указаны прежняя и новая дата";
+    if (!posInt(it.element_id)) return "нет идентификатора изделия";
+    if (it.expected_planned_date !== null && (typeof it.expected_planned_date !== "string" || it.expected_planned_date.length > 12)) return "ожидаемая дата";
+    if (it.planned_date !== null && (typeof it.planned_date !== "string" || !DATE.test(it.planned_date))) return "дата строки ГГГГ-ММ-ДД или null";
+    if (it.planned_date === it.expected_planned_date) return "у строки дата не меняется";
+    if (seen.has(it.element_id)) return "изделие повторяется";
+    seen.add(it.element_id);
+  }
+  return null;
+}
+
+// Смена статуса с контрактом по строкам (`POST /element-ops/status-rows`): у каждой строки ожидаемое состояние и контракт ПОСЛЕ операции (число или null) — явно.
+export function statusRowsBodyProblem(body) {
+  if (!isObj(body)) return "тело не объект";
+  if (extra(body, ["mode", "object_id", "status", "changed_at", "comment", "expect", "items"])) return "лишние поля";
+  if (body.mode !== "preview" && body.mode !== "apply") return "режим: preview или apply";
+  if (!posInt(body.object_id)) return "не указан объект";
+  if (!STATUSES.includes(body.status)) return "неизвестный статус";
+  if (body.changed_at !== undefined && body.changed_at !== null && (typeof body.changed_at !== "string" || body.changed_at.length > 25)) return "дата и время";
+  if (body.comment !== undefined && body.comment !== null && (typeof body.comment !== "string" || body.comment.length > 500)) return "комментарий";
+  if (body.mode === "apply") {
+    const e = body.expect;
+    if (!isObj(e) || extra(e, ["release_contracts", "replace_contracts", "without_contract"]) || !nonNeg(e.release_contracts) || !nonNeg(e.replace_contracts) || !nonNeg(e.without_contract)) return "нет подтверждения последствий";
+  } else if (body.expect !== undefined) return "предпросмотр без подтверждения";
+  if (!Array.isArray(body.items) || !body.items.length || body.items.length > MAX_BATCH) return "пачка пуста или больше лимита";
+  const seen = new Set();
+  for (const it of body.items) {
+    if (!isObj(it) || extra(it, ["element_id", "expected_status", "expected_contract_id", "contract_id"])) return "лишние поля изделия";
+    if (!hasOwn(it, "expected_contract_id") || !hasOwn(it, "contract_id")) return "у строки не указан контракт";
+    if (!posInt(it.element_id) || !STATUSES.includes(it.expected_status)) return "у изделия нет идентификатора или ожидаемого статуса";
+    if (it.expected_contract_id !== null && !posInt(it.expected_contract_id)) return "ожидаемый контракт";
+    if (it.contract_id !== null && !posInt(it.contract_id)) return "контракт строки";
+    if (body.status === "planned" && it.contract_id !== null) return "у «Запланирован» контракта не бывает";
+    if (seen.has(it.element_id)) return "изделие повторяется";
+    seen.add(it.element_id);
+  }
+  return null;
+}
+
 // Комментарий (`PATCH /elements/{id}/comment`) — только текст.
 export function commentBodyProblem(body) {
   if (!isObj(body) || extra(body, ["comment"])) return "лишние поля";
@@ -109,6 +166,36 @@ export function consequenceItems(c, targetLabel) {
 /** То же плоскими строками (для диалогов подтверждения и сообщений). */
 export function consequenceLines(c, targetLabel) {
   return consequenceItems(c, targetLabel).flatMap((x) => [x.text, ...(x.sub || []).map((t) => "     – " + t)]);
+}
+
+/** Последствия построчной смены статуса (`POST /element-ops/status-rows`, режим preview): снятие и ЗАМЕНА контракта названы отдельно и поимённо. */
+export function rowsConsequenceItems(c, targetLabel) {
+  const L = [];
+  if (!c) return L;
+  if (c.release_contracts) {
+    L.push({ text: `Контракт будет СНЯТ у ${n(c.release_contracts)} изд.; изделия вернутся в остаток позиции контракта.`,
+      sub: (c.released_by_contract || []).map((x) => `${x.name || "контракт №" + x.contract_id} — ${n(x.count)} шт.`) });
+  }
+  if (c.replace_contracts) {
+    L.push({ text: `Контракт будет ЗАМЕНЁН у ${n(c.replace_contracts)} изд.`,
+      sub: (c.replaced || []).map((x) => `${x.from_name || "контракт №" + x.from_id} → ${x.to_name || "контракт №" + x.to_id} — ${n(x.count)} шт.`) });
+  }
+  if (c.assigned) {
+    L.push({ text: `Будет назначен контракт: ${n(c.assigned)} изд.`, sub: (c.assigned_by_contract || []).map((x) => `${x.name || "контракт №" + x.contract_id} — ${n(x.count)} шт.`) });
+  }
+  if (c.without_contract) L.push({ text: `${n(c.without_contract)} изд. останутся БЕЗ контракта (выбрано «без контракта»).` });
+  if (c.actual_date_cleared) L.push({ text: `Фактическая дата поставки будет очищена у ${n(c.actual_date_cleared)} изд.` });
+  if (c.effective_differs) L.push({ text: `У ${n(c.effective_differs)} изд. в истории есть более поздние записи: запись «${targetLabel}» будет добавлена, но итоговый статус не изменится.` });
+  for (const w of c.warnings || []) L.push({ text: `Превышение по контракту «${w.contract_name}»: по спецификации ${w.quantity}, фактически ${w.fact}${w.damaged ? `, брак ${w.damaged}` : ""}.` });
+  return L;
+}
+/** Последствия построчной смены плановых дат (`POST /element-ops/planned-date-rows`). */
+export function datesConsequenceLines(c) {
+  const L = [];
+  if (c.set_new) L.push(`Дата будет ЗАДАНА у ${n(c.set_new)} изд. (раньше не была задана).`);
+  if (c.replaced) L.push(`Ранее заданная дата будет ЗАМЕНЕНА у ${n(c.replaced)} изд.`);
+  if (c.cleared) L.push(`Дата будет СНЯТА у ${n(c.cleared)} изд.`);
+  return L;
 }
 
 /** Нужны ли последствия к явному подтверждению человеком (иначе одиночная смена статуса записывается сразу). */
