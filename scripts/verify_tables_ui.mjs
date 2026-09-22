@@ -3,7 +3,7 @@
 // тестовыми строками (.run/tables/seed.py). Ничего не пишет — только чтение экранов и снимки экрана.
 //
 // Запуск:  .venv/bin/python scripts/real_auth_server.py <источник> 8230 .run/tables   (в фоне)
-//          .venv/bin/python .run/tables/seed.py
+//          .venv/bin/python scripts/seed_tables_check.py .run/tables/work.db
 //          node scripts/verify_tables_ui.mjs 8230 .run/tables
 import { session, sql, http, ok, summary, openSection, text, exists } from "./verify_admin_lib.mjs";
 import { mkdirSync } from "node:fs";
