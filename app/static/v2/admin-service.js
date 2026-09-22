@@ -363,8 +363,11 @@ export function mountActivity(el, ctx) {
   const { screen, groupTitle, api, rights } = ctx;
   const canClean = can(rights, "activity_log", "write") && checkWrite("POST", "/activity/cleanup", {}).allowed;
   el.className = "v2-page";
-  el.innerHTML = `<div class="v2-container v2-screen" style="margin-bottom:0;padding-bottom:0"><p class="v2-muted" id="ac-stats" role="status" aria-live="polite">Считаю объём журнала…</p></div>
-    <div id="ac-read"></div>${canClean ? `<div class="v2-container v2-screen" style="margin-top:0"><section class="v2-result" id="ac-clean"></section></div>` : ""}`;
+  // Ширина строки-статистики над таблицей — как у самой таблицы ниже (read-screen.js даёт ей
+  // v2-container--wide для экрана «kind: list»): иначе строка «Считаю объём…» была бы уже, чем журнал под ней
+  // (задание «tables», п.1).
+  el.innerHTML = `<div class="v2-container v2-container--wide v2-screen" style="margin-bottom:0;padding-bottom:0"><p class="v2-muted" id="ac-stats" role="status" aria-live="polite">Считаю объём журнала…</p></div>
+    <div id="ac-read"></div>${canClean ? `<div class="v2-container v2-container--wide v2-screen" style="margin-top:0"><section class="v2-result" id="ac-clean"></section></div>` : ""}`;
   const readModule = mountReadScreen(el.querySelector("#ac-read"), { ...ctx, screen: { ...screen, impl: "read" } });
   let busy = false, dead = false;
   (async () => {

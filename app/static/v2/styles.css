@@ -81,6 +81,11 @@ button:disabled { cursor: default; opacity: .6; }
    Глобальная шапка сервиса (.v2-head) сюда не входит намеренно — у неё
    своя сетка. */
 .v2-container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+/* Табличные экраны (отчёты, справочники, реестры, журналы — read-screen.js) занимают всю доступную ширину
+   рабочей области вместо ширины формы-карточки: отдельный модификатор, а не снятие ограничения у ВСЕХ экранов
+   (задание «tables», п.1). Ширина остатка после левой навигации уже даёт раскладка .v2-body (flex,
+   .v2-shellnav занимает свою ширину сама) — здесь достаточно снять max-width, а не считать 100vw. */
+.v2-container--wide { max-width: none; }
 
 .v2-nav {
   border-bottom: 1px solid var(--line);
@@ -746,16 +751,32 @@ body.v2-noselect { user-select: none; }
 .v2-read-tabs { margin: 12px 0; }
 .v2-read-tab { border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; background: var(--bg); }
 .v2-read-tab[aria-selected="true"] { background: var(--sel); border-color: var(--accent); font-weight: 600; }
-.v2-read-table { overflow-x: auto; }
+/* Своя прокрутка (вертикальная и горизонтальная), а не только горизонтальная: у широкой и длинной таблицы
+   полоса прокрутки видна у нижнего края ЭТОЙ области, а не после прокрутки сотен строк вниз по всей странице
+   (задание «tables», п.3 — тот же приём, что уже был у .v2-gantt-wrap/.v2-ds-wrap/.v2-ex-changes). Заголовок
+   остаётся sticky внутри неё же (ближайший скролл-предок).*/
+.v2-read-table { overflow: auto; max-height: 70vh; }
 .v2-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); vertical-align: -2px; }
 .v2-callout-bad { border-left-color: var(--bad); }
 .v2-screen dl.v2-facts dd { overflow-wrap: anywhere; }
 .v2-read-tbl { width: 100%; border-collapse: separate; border-spacing: 0; text-align: left; }
-.v2-read-tbl th { font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 12px; background: var(--surface); position: sticky; top: 0; z-index: 1; white-space: nowrap; }
-.v2-read-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; max-width: 420px; }
+/* Заголовок переносится по словам (не режется буквами) в 2–3 строки, но капом ширины — иначе длинный заголовок
+   («Прогноз: начало») отнимает ширину у соседних колонок (задание «tables», п.2). */
+.v2-read-tbl th { font-size: 12px; font-weight: 500; color: var(--muted); padding: 10px 12px; background: var(--surface); position: sticky; top: 0; z-index: 1; white-space: normal; word-break: normal; max-width: 200px; }
+/* Перенос по границе слова — НЕ «anywhere»: та считает короткие слова («Колонна», «Запланирован») разрывными
+   уже при расчёте ширины колонки и рвёт их по буквам без необходимости. «break-word» переносит по пробелу/
+   дефису и режет по буквам только настоящую непрерывную строку без пробелов, которая иначе не поместится
+   (задание «tables», п.2). */
+.v2-read-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: break-word; max-width: 420px; }
+/* Тип колонки (`data-col-type`, reports.js::colDataType) — общий механизм для ЛЮБОЙ таблицы общего компонента,
+   не привязан к номеру колонки конкретного отчёта (задание «tables», п.2): дата/статус/«да·нет» — значением в
+   одну строку; «Марка» — минимальная ширина, чтобы типичная марка помещалась без переноса. */
+.v2-read-tbl td[data-col-type="date"], .v2-read-tbl td[data-col-type="status"], .v2-read-tbl td[data-col-type="bool"], .v2-read-tbl td[data-col-type="mark"] { white-space: nowrap; }
+.v2-read-tbl td[data-col-type="bool"] { text-align: center; }
+.v2-read-tbl th[data-col-type="mark"], .v2-read-tbl td[data-col-type="mark"] { min-width: 90px; }
 
 /* Отчёты */
-.v2-read-tbl td.num, .v2-read-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.v2-read-tbl td.num, .v2-read-tbl th.num, .v2-read-tbl td[data-col-type="num"], .v2-read-tbl th[data-col-type="num"] { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .v2-tree-tbl tr.lvl-0 td { font-weight: 600; background: var(--surface); }
 .v2-tree-tbl tr.lvl-total td { border-top: 2px solid var(--line); }
 .v2-tree-toggle { border: 0; background: none; width: 22px; padding: 0; color: var(--muted); }
