@@ -711,6 +711,8 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountReadScreen(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+          // «Показать на схеме» из «Моей работы»: переход на рабочее место и смена объекта — теми же функциями, что у карты
+          go: (k) => openSection(k), switchObject: changeObject, hasObject: (id) => activeObjects.some((o) => o.id === id),
         });
       } else {
         document.title = `${target.title} — ЖБИ`;

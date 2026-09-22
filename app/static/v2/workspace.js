@@ -19,6 +19,7 @@ import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
 import { createElementOps } from "./element-ops.js";
 import { anyModalDirty, guardModals } from "./mfr-common.js";
 import { writeFilterSnapshot } from "./scheme-filter-snapshot.js";
+import { takeLocate } from "./locate-handoff.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -224,6 +225,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     mbp?.onScene(s);
     mfrStartView(s);
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
+    // «Показать на схеме» из отчёта «Моя работа» (locate-handoff.js): выделить изделие и навести кадр, когда схема загружена
+    if (!mfr && s.loaded) { const want = takeLocate(curObject); if (want) { send("select", { id: want }); send("locate", { id: want }); } }
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
     paintAll();
   }

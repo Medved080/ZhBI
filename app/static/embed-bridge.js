@@ -540,7 +540,10 @@
       if (!isInt(a.id)) throw new Error("id");
       const el = state.byId.get(a.id);
       if (!el) throw new Error("элемента нет на схеме");
+      // как locateElementOnPlan в V1: жёлтая обводка поверх выделения и предупреждение, если изделие скрыто фильтром
+      if (typeof markLocated === "function") markLocated(el.id);
       if (state.view3d.active) focus3DOnElement(el); else focus2DOnElement(el);
+      if (typeof passesPlacementFilters === "function" && !passesPlacementFilters(el)) showToast("Изделие скрыто текущим фильтром рабочей области", "warning");
     },
     clearSelection() { clearSelection(); clearMultiSelection(); scheduleState(); },
     setFilter(a) {

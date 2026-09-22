@@ -193,6 +193,13 @@ export function mountProjectCardEdit(el, { screen, structure, objectId, api, gro
 // ======================= События, задачи, вопросы (редакции) =======================
 const NOTE_FIELDS = [["key_events", "Ключевые события (по одному в строке)"], ["key_tasks", "Ключевые задачи (по одной в строке)"], ["open_questions", "Открытые вопросы (по одному в строке)"]];
 
+// Подстановка отчётной даты из «Динамики» (одноразовая, только для своего объекта)
+function takeNotesPrefill(objectId) {
+  let r = null;
+  try { r = JSON.parse(sessionStorage.getItem("v2.notesPrefill") || "null"); sessionStorage.removeItem("v2.notesPrefill"); } catch (e) { r = null; }
+  return r && r.objectId === objectId && /^\d{4}-\d{2}-\d{2}$/.test(r.date || "") ? r.date : null;
+}
+
 export function mountReportNotesEdit(el, { screen, structure, objectId, api, groupTitle, rights }) {
   const spec = screen.notes;
   const canWrite = !!rights?.system_admin || rights?.features?.[spec.feature] === "write";
@@ -280,6 +287,10 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
       const data = await api.get(path);
       if (dead || seq !== st.seq) return false;
       st.revisions = data.revisions || []; st.error = "";
+      // Открыто кнопкой «✎ Изменить» из отчёта «Динамика» (reports-work.js): как в V1 — редакции на отчётную дату нет →
+      // новая с этой датой; есть → она и открывается.
+      const pre = takeNotesPrefill(objectId);
+      if (pre && st.sel === null && !dirty()) { if (rev(pre)) { st.sel = pre; st.draft = draftOfRev(rev(pre)); } else if (canWrite) st.draft = { date: pre, events: "", tasks: "", questions: "" }; }
       if (keepSel && st.sel !== null && !rev(st.sel)) { st.sel = null; st.draft = { date: "", events: "", tasks: "", questions: "" }; ui.setStatus("Открытой редакции больше нет (её удалили) — форма очищена."); }
       else if (st.sel !== null && !dirty()) st.draft = draftOfRev(rev(st.sel));
       paint(); return true;

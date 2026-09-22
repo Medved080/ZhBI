@@ -1,0 +1,72 @@
+/* Отчёты reports-work.js (аудит «рабочие места и отчёты»): вёрстка, перенесённая из V1 (app.js/index.html: .an-*, .dyn-*,
+   .mw-*, .bsch-*, .bw-deadline-*), на цветах и отступах V2. Общий styles.css не трогаем. */
+.rw-bad { color: var(--bad); font-weight: 600; }
+.rw-nowrap { white-space: nowrap; }
+.rw-center { text-align: center; }
+.rw-h4 { font-size: 13px; margin: 8px 0 4px; display: flex; align-items: center; gap: 8px; }
+.rw-mini { font-size: 12px; padding: 2px 8px; }
+.rw-inline { display: inline-flex; align-items: center; gap: 6px; }
+
+/* «Аналитическая справка»: вердикты-плашки и тон плиток (как .an-pill/.an-tile в V1) */
+.rw-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 12px; white-space: nowrap; color: #fff; background: #8a8f98; }
+.rw-pill-started, .rw-pill-late, .rw-pill-no_contract { background: #b03a2e; }
+.rw-pill-in_time, .rw-pill-waiting_delivery { background: #d68910; color: #241a00; }
+.rw-pill-closed, .rw-pill-on_site { background: #2e7d4f; }
+.rw-pill-waiting { background: #6b46c1; }
+.rw-tile-bad .v2-tile-value { color: var(--bad); }
+.rw-tile-ok .v2-tile-value { color: var(--good); }
+.rw-concl { list-style: none; margin: 0 0 10px; padding: 0; }
+.rw-concl li { margin: 4px 0; padding-left: 18px; position: relative; }
+.rw-concl li::before { content: "■"; position: absolute; left: 0; color: var(--muted); }
+.rw-concl li.rw-sev-critical::before { color: var(--bad); }
+.rw-concl li.rw-sev-warning::before { color: #d68910; }
+.rw-concl li.rw-sev-ok::before { color: var(--good); }
+.rw-notes { border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px; margin: 8px 0; }
+.rw-an-table td { padding: 6px 10px; }
+
+/* «Динамика»: блоки событий/задач/вопросов и таблицы статуса монтажа/поставки (как .dyn-* в V1) */
+.rw-dyn-head { text-align: center; margin-bottom: 6px; }
+.rw-dyn-head h3 { margin-bottom: 2px; }
+.rw-dyn-boxes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+.rw-dyn-box { border: 1px solid var(--line); border-radius: 10px; padding: 6px 14px; }
+.rw-dyn-box ul { margin: 4px 0; padding-left: 18px; }
+.rw-dyn-bottom { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.rw-dyn-tbl { max-height: none; margin-bottom: 4px; }
+.rw-dyn-tbl caption { text-align: left; font-weight: 600; padding: 4px 0; }
+.rw-dyn-tbl th { text-align: center; }
+@media (max-width: 1100px) { .rw-dyn-boxes, .rw-dyn-bottom { grid-template-columns: 1fr; } }
+
+/* «Моя работа»: сводка по действиям фишками, строка с изделием ведёт к нему на схеме */
+.rw-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 10px; }
+.rw-chip b { font-variant-numeric: tabular-nums; color: var(--ink); }
+tr.rw-locatable { cursor: pointer; }
+tr.rw-locatable:hover td { background: var(--sel); }
+.rw-locate { text-decoration: underline dotted; }
+
+/* «График работ по блокам»: группировка фишками, строки групп, Гант (как .bsch-* в V1) */
+.rw-gchip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 8px; font-size: 12px; }
+.rw-gchip.off { color: var(--muted); }
+.rw-gchip label { display: inline-flex; align-items: center; gap: 4px; }
+.rw-gmove { border: 0; background: none; color: var(--muted); padding: 0 3px; font-size: 11px; }
+.rw-gmove:disabled { opacity: 0.3; }
+.rw-bsch td { padding: 5px 8px; }
+.rw-bsch tr.rw-bsch-group td { background: var(--surface); }
+.rw-gantt-cell { min-width: 320px; }
+.rw-gantt-track { position: relative; height: 16px; background: var(--surface); border-radius: 3px; }
+.rw-gantt-bar { position: absolute; height: 6px; border-radius: 3px; }
+.rw-gantt-plan { top: 1px; background: #4A86C8; }
+.rw-gantt-forecast { top: 9px; background: #E8703A; }
+.rw-legend { display: inline-block; width: 18px; height: 6px; border-radius: 3px; vertical-align: middle; position: static; }
+.rw-dl-overdue { color: var(--bad); font-weight: 600; }
+.rw-dl-not_started_on_time { color: var(--bad); }
+.rw-dl-behind { color: #b9770e; font-weight: 600; }
+.rw-dl-on_track { color: var(--good); }
+.rw-dl-no_dates { color: var(--muted); }
+
+/* «Учёт по блокам: статусы»: строки разделов WBS */
+.v2-matrix tr.rw-node td { background: var(--surface); }
+
+@media print {
+  .rw-gmove, .rw-mini, #an-only-deficit, #bs-mode { display: none !important; }
+  .rw-dyn-boxes, .rw-dyn-bottom { grid-template-columns: 1fr 1fr; }
+}
