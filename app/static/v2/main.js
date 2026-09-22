@@ -29,6 +29,7 @@ import { mountDbStatusView } from "./db-status-view.js";
 import { mountAdminGuideView } from "./admin-guide-view.js";
 import { mountFillScopeEdit } from "./fill-scope-edit.js";
 import { mountDbTransfer } from "./db-transfer.js";
+import { mountAddressClassifier } from "./address-classifier.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
 import { mountLabelColorEdit } from "./label-color-edit.js";
 import { mountRevitColorsEdit } from "./revit-colors-edit.js";
@@ -320,7 +321,7 @@ async function renderShell(user, permissions) {
         return `<div class="v2-nav-group">
           <button type="button" class="v2-nav-group-head" data-group="${g.id}" aria-expanded="${open}">${escapeHtml(g.title)} <span class="v2-muted">${items.length}</span></button>
           ${open ? items.map((s) => `<button type="button" data-section="${s.id}" aria-pressed="${s.id === currentKey}">
-            ${escapeHtml(s.title)}${isModule(s) || s.impl.startsWith("admin:") || s.impl === "supplier-docs" || s.impl === "contracts-list" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl === "exchange" ? ` <span class="v2-nav-tag" title="Загрузка и выгрузка файлов выполняются в новом интерфейсе">обмен</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.adminExtra ? ` <span class="v2-nav-tag" title="Просмотр и служебные операции в новом интерфейсе">прав.</span>` : s.impl === "db-transfer" && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl === "read" || s.impl === "db-status-view" || s.impl === "admin-guide-view" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
+            ${escapeHtml(s.title)}${isModule(s) || s.impl.startsWith("admin:") || s.impl === "supplier-docs" || s.impl === "contracts-list" ? "" : s.impl === "workspace" ? "" : s.impl === "export-form" ? ` <span class="v2-nav-tag" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl === "exchange" ? ` <span class="v2-nav-tag" title="Загрузка и выгрузка файлов выполняются в новом интерфейсе">обмен</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` : s.impl.endsWith("-edit") ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : s.adminExtra ? ` <span class="v2-nav-tag" title="Просмотр и служебные операции в новом интерфейсе">прав.</span>` : (s.impl === "db-transfer" || s.impl === "address-classifier") && hasAllowedWrites(s.id) ? ` <span class="v2-nav-tag" title="Правится в новом интерфейсе; остальные операции — в текущем">прав.</span>` :s.impl === "read" || s.impl === "db-status-view" || s.impl === "admin-guide-view" ? ` <span class="v2-nav-tag" title="Просмотр в новом интерфейсе; изменение — в текущем">чт.</span>` : ` <span class="v2-nav-tag" title="Функции работают в текущем интерфейсе">V1</span>`}</button>`).join("") : ""}
         </div>`;
       }).join("") || `<p class="v2-muted v2-nav-empty">Ничего не найдено по запросу.</p>`}`;
     const search = document.getElementById("v2-nav-search");
@@ -464,6 +465,11 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "db-transfer") {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountDbTransfer(content, {
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+        });
+      } else if (target.impl === "address-classifier") {
+        document.title = `${target.title} — ЖБИ`;
+        activeModule = mountAddressClassifier(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "sessions-edit") {
