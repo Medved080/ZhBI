@@ -830,7 +830,7 @@ if (want("individuals")) {
 if (want("service")) {
   console.log("== Служебные экраны (браузер)");
   const { existsSync, writeFileSync } = await import("node:fs");
-  const BK_DIR = new URL("../data/backups/", import.meta.url).pathname;
+  const BK_DIR = WORK + "/backups/";   // real_auth_server.py кладёт штатные копии в каталог временной копии, не в data/backups репозитория
   const typed = async (b, word) => { await b.waitFor("!!document.querySelector('#ty-input')"); await fill(b, "#ty-input", word); };
   let b = await session(BASE, "admin");
   // ---------------- резервные копии

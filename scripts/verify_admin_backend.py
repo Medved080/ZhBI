@@ -696,7 +696,7 @@ check("D17 повторное удаление: 404", s in (404,), f"{s}")
 
 # ============================================================ E — служебные операции
 print("E — служебные операции")
-BK_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "backups")
+BK_DIR = os.path.join(WORK, "backups")   # real_auth_server.py кладёт штатные копии в каталог временной копии, не в data/backups репозитория
 # --- резервные копии
 mark = last_log_id()
 s, m1 = ADMIN.post("/admin/backups", {"comment": "QA копия 1"})
