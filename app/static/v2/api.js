@@ -2,6 +2,47 @@
 // (zhbi_session), что и у V1. Никакой отдельной авторизации и никакой
 // копии бизнес-логики: только перенос JSON туда и обратно.
 
+// ==== Режим «Зайти под пользователем» (2026-09-22, В2) ====
+// Тот же приём и тот же ключ sessionStorage, что у V1 (app/static/app.js:
+// IMPERSONATION_HEADER/IMPERSONATION_KEY; устройство режима —
+// app/impersonation.py): токен «от имени» — НЕ в cookie (одна на браузер,
+// подмена задела бы ВСЕ вкладки администратора), а в sessionStorage (своё у
+// каждой вкладки), уходит отдельным заголовком на КАЖДЫЙ запрос. Обёртка
+// над window.fetch, а не правка отдельных вызовов: в V2 к серверу обращается
+// не только api.js (три места — request/download/fetchFile), но и
+// несколько модулей напрямую (admin-guide-view.js, element-attachments.js,
+// exchange-external-models.js, projects-objects.js, registry.js,
+// workspace.js) — забытое место ушло бы от имени администратора вместо
+// подопечного, а это ровно та ошибка, ради поиска которой режим и
+// заводится. Ключ ровно тот же, что у V1 (zhbi_impersonate) неслучайно:
+// рабочее место «Модель»/«МФР» держит сцену V1 в кадре ТОГО ЖЕ окна (тот
+// же top-level browsing context, тот же origin, а sessionStorage общий у
+// них по спецификации) — собственный app.js кадра читает его сам, без
+// единой правки workspace.js.
+const IMPERSONATION_HEADER = "X-Impersonate-Token";
+const IMPERSONATION_KEY = "zhbi_impersonate";
+export function getImpersonationToken() {
+  try { return sessionStorage.getItem(IMPERSONATION_KEY); } catch (e) { return null; }
+}
+export function setImpersonationToken(token) {
+  try {
+    if (token) sessionStorage.setItem(IMPERSONATION_KEY, token);
+    else sessionStorage.removeItem(IMPERSONATION_KEY);
+  } catch (e) { /* приватный режим — тогда и сам режим не переживёт эту вкладку */ }
+}
+(() => {
+  const исходный = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const token = getImpersonationToken();
+    if (!token) return исходный(input, init);
+    const опции = init ? { ...init } : {};
+    const заголовки = new Headers(опции.headers || undefined);
+    заголовки.set(IMPERSONATION_HEADER, token);
+    опции.headers = заголовки;
+    return исходный(input, опции);
+  };
+})();
+
 // Коды ошибок проверки FastAPI/Pydantic → по-русски; остальные показываются
 // собственным текстом сервера (msg).
 const FIELD_ERRORS = {
