@@ -4,9 +4,11 @@
 // тянуть его на каждое открытие страницы ради экрана, куда заходят раз в
 // день, незачем. Приём тот же, что у сцены Three.js.
 //
-// Подложка — файл PMTiles на нашем же сервере: наружу карта не ходит вовсе,
-// потому что сервер в интернет не выпущен. Файла нет — рисуем точки на
-// пустом фоне: взаимное расположение площадок видно и так.
+// Подложка — ОДИН из двух явных режимов (разбор 2026-09-22,
+// Docs/v2-progress/basemap.md): «с сервера» (файлы PMTiles в data/map,
+// наружу не ходит) или «из интернета» (растр OpenStreetMap, если его
+// включил администратор). Вместе они не рисуются никогда. Ни того, ни
+// другого — точки на пустом фоне: взаимное расположение площадок видно и так.
 
 let deps = null;          // {api, escapeHtml, showToast, switchObject, statusColor, statusLabel}
 let maplibre = null;      // window.maplibregl после загрузки UMD-сборки
@@ -122,9 +124,33 @@ async function ensureLibs() {
     // без него пришлось бы поднимать тайловый сервер.
     const протокол = new window.pmtiles.Protocol();
     maplibre.addProtocol("pmtiles", протокол.tile);
+    maplibre.addProtocol("zhbi-glyphs", загрузитьГлифы);
     pmtilesReady = true;
   }
   return maplibre;
+}
+
+// Глифы подписей — только через этот протокол, не прямым адресом.
+//
+// Причина «прямоугольников» на подложке (2026-09-22): вендорены лишь два
+// диапазона глифов (0-255 и 1024-1279), а в названиях из OSM встречаются
+// «№», «–», «’», латиница с диакритикой. Запрос недостающего диапазона
+// отвечал 404, воркер MapLibre ронял разбор ВСЕГО тайла, а 404 он считает
+// «тайла нет» — тайл тихо пустел целиком: без суши, воды и дорог, без
+// единой ошибки. Недостающий диапазон теперь — пустой набор глифов:
+// тайл цел, пропадает только сам отсутствующий символ в подписи.
+const ДИАПАЗОНЫ_ГЛИФОВ = new Set(["0-255", "1024-1279"]);
+
+async function загрузитьГлифы(параметры, прерывание) {
+  const путь = параметры.url.slice("zhbi-glyphs://".length);   // «шрифт/диапазон»
+  const граница = путь.lastIndexOf("/");
+  const шрифт = decodeURIComponent(путь.slice(0, граница));
+  const диапазон = путь.slice(граница + 1);
+  const пусто = { data: new ArrayBuffer(0) };
+  if (!ДИАПАЗОНЫ_ГЛИФОВ.has(диапазон)) return пусто;
+  const ответ = await fetch(`/static/vendor/glyphs/${encodeURIComponent(шрифт)}/${диапазон}.pbf`,
+    { signal: прерывание.signal });
+  return ответ.ok ? { data: await ответ.arrayBuffer() } : пусто;
 }
 
 // Цвет точки по доле смонтированного. Та же логика, что у статусов на схеме:
@@ -138,102 +164,289 @@ function цветПоДоле(percent) {
   return "#9e9e9e";
 }
 
-function стильКарты(config) {
-  const источники = {};
-  const слои = [{
-    id: "фон", type: "background",
-    // На обзорном масштабе слой «земля» есть не в каждом тайле — Protomaps
-    // на низком zoom генерализует так, что часть тайлов, полностью залитых
-    // сушей, вообще не несёт earth-полигона (bucket для earth отсутствует,
-    // проверено напрямую: тайл 63 КБ данных, слоёв earth/water — ноль).
-    // Раньше фон был холодным серым, заметно ОТЛИЧНЫМ от тёплой заливки
-    // земли — такой тайл превращался в дыру-прямоугольник (живой отчёт
-    // 2026-09-22). Правильный фикс — не полагаться на earth как на
-    // обязательный слой: цвет фона = цвет земли, тогда отсутствие earth
-    // в тайле просто не видно, а воду по-прежнему рисует отдельный
-    // (надёжно присутствующий) слой «вода» поверх.
-    paint: { "background-color": "#f3ede0" },
-  }];
+// ------------------------------------------------------------ режим подложки
+//
+// Режим выбирает ЗРИТЕЛЬ (переключатель на карте, если доступны оба), по
+// умолчанию — по настройке администратора: включил «Карту из интернета» —
+// она и открывается. Выбор запоминается в браузере (localStorage), сам по
+// себе режим не меняется: офлайн-режим не ходит в интернет ни при каких
+// условиях, в том числе если файл подложки не читается.
+const КЛЮЧ_РЕЖИМА = "zhbi.map.basemap";
 
-  // Подложка из интернета — если администратор её включил. Растровая: это
-  // готовые картинки, им не нужны ни шрифты, ни файл на диске.
-  if (config.online && config.online_url) {
-    источники.osm = {
-      type: "raster",
-      tiles: [config.online_url],
-      tileSize: 256,
-      maxzoom: 19,
+function режимыПодложки(config) {
+  const файлы = (config.basemaps || []).filter((b) => !b.problem);
+  return { онлайн: !!(config.online && config.online_url), офлайн: файлы.length > 0, файлы };
+}
+
+function начальныйРежим(config) {
+  const есть = режимыПодложки(config);
+  let сохранённый = null;
+  try { сохранённый = localStorage.getItem(КЛЮЧ_РЕЖИМА); } catch (e) { /* хранилище недоступно */ }
+  if (сохранённый === "online" && есть.онлайн) return "online";
+  if (сохранённый === "offline" && есть.офлайн) return "offline";
+  if (есть.онлайн) return "online";
+  if (есть.офлайн) return "offline";
+  return "none";
+}
+
+function запомнитьРежим(режим) {
+  try { localStorage.setItem(КЛЮЧ_РЕЖИМА, режим); } catch (e) { /* не запомнится — не беда */ }
+}
+
+// ---------------------------------------------- несколько файлов PMTiles
+//
+// Обзорный файл страны (z0–8) и детальная вырезка региона (z0–14) —
+// вырезки ОДНОЙ сборки Protomaps: на z0–8 их тайлы совпадают, детальный
+// добавляет только уровни 9–14 и только в своём покрытии (прямоугольник из
+// тайлов, задевающих его bbox). Поэтому: файлы — снизу вверх по max_zoom;
+// каждый следующий рисуется поверх и лишь с уровня, где у пересекающихся с
+// ним нижних файлов кончаются свои тайлы (их max_zoom + 1). Его суша и вода
+// непрозрачны и целиком закрывают нижний файл в своих тайлах, за пределами
+// покрытия остаётся нижний (обзорный). Подписи нижнего файла внутри bbox
+// верхнего на его уровнях отключены — иначе названия задваивались бы.
+function порядокФайлов(файлы) {
+  const bbox = (b) => b.bbox || [-180, -85, 180, 85];
+  const площадь = (b) => { const [з, ю, в, с] = bbox(b); return Math.max(0, в - з) * Math.max(0, с - ю); };
+  const пересекаются = (a, b) => {
+    const [з1, ю1, в1, с1] = bbox(a), [з2, ю2, в2, с2] = bbox(b);
+    return з1 < в2 && з2 < в1 && ю1 < с2 && ю2 < с1;
+  };
+  const предел = (b) => (b.max_zoom === null || b.max_zoom === undefined ? 14 : b.max_zoom);
+  const список = файлы.slice().sort((a, b) => предел(a) - предел(b) || площадь(b) - площадь(a));
+  return список.map((ф, k) => {
+    const ниже = список.slice(0, k).filter((g) => пересекаются(g, ф));
+    const верх = ниже.length ? Math.max(...ниже.map(предел)) : -1;
+    const с = верх >= 0 && верх < предел(ф) ? верх + 1 : 0;
+    const [з, ю, в, сев] = bbox(ф);
+    return { ...ф, с, полигон: { type: "Polygon", coordinates: [[[з, ю], [в, ю], [в, сев], [з, сев], [з, ю]]] } };
+  });
+}
+
+// ------------------------------------------------------ офлайн-стиль
+//
+// Схема данных — Protomaps basemap v4 (метаданные файлов: version 4.15.2):
+// слои earth, water, landcover, landuse, roads, buildings, boundaries,
+// places; свойства kind, kind_detail, min_zoom, population_rank, name и
+// name:ru. Шрифты — только вендоренные Noto Sans Regular/Bold.
+const ЦВЕТ = {
+  нетДанных: "#e3e6ea", земля: "#f3efe6", вода: "#a9cde8",
+  лес: "#d5e5c5", зелень: "#e0ebcf", поле: "#efead8", город: "#ebe5dc",
+  промзона: "#e8e0e4", особое: "#efe1dd", пески: "#efe6d0", лёд: "#fbfdff", болото: "#dde9e1",
+  здание: "#dcd4c7", зданиеКонтур: "#cbc1b1",
+  граница: "#9e8aa6", обводка: "#d3cabb",
+  магистраль: "#f2a67c", главная: "#f7cf90", второстепенная: "#ffffff", улица: "#ffffff", дорожка: "#c9bfae", жд: "#a7a39c",
+  подпись: "#3b3f45", подписьМелкая: "#5f646b", ореол: "#ffffff",
+};
+const НАЗВАНИЕ = ["coalesce", ["get", "name:ru"], ["get", "name"]];
+const ширина = (пары) => ["interpolate", ["exponential", 1.6], ["zoom"], ...пары];
+
+function слоиФайла(ф, ист, п) {
+  const м = ф.с ? { minzoom: ф.с } : {};
+  const полигон = ["==", ["geometry-type"], "Polygon"];
+  const линия = ["==", ["geometry-type"], "LineString"];
+  const вид = (...kinds) => ["match", ["get", "kind"], kinds, true, false];
+  const деталь = (...kinds) => ["match", ["get", "kind_detail"], kinds, true, false];
+  const тоннель = ["case", ["==", ["get", "is_tunnel"], true], 0.45, 1];
+  const цветПокрова = ["match", ["get", "kind"],
+    ["forest", "wood"], ЦВЕТ.лес,
+    ["grassland", "park", "grass", "meadow", "national_park", "nature_reserve", "garden", "golf_course", "dog_park", "playground", "pitch", "cemetery", "allotments", "scrub", "village_green"], ЦВЕТ.зелень,
+    ["farmland", "farmyard", "orchard", "vineyard"], ЦВЕТ.поле,
+    ["urban_area", "residential"], ЦВЕТ.город,
+    ["industrial", "commercial", "retail", "railway", "military", "garages", "construction", "aerodrome", "airfield"], ЦВЕТ.промзона,
+    ["hospital", "school", "university", "college", "kindergarten"], ЦВЕТ.особое,
+    ["barren", "sand", "bare_rock", "beach"], ЦВЕТ.пески,
+    ["glacier"], ЦВЕТ.лёд,
+    ["wetland"], ЦВЕТ.болото,
+    "rgba(0,0,0,0)"];
+  const дорога = (id, фильтр, цвет, пары, доп = {}) => ({
+    id: п + id, type: "line", source: ист, "source-layer": "roads", ...м, ...доп.слой,
+    filter: ["all", линия, фильтр],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": цвет, "line-width": ширина(пары), "line-opacity": тоннель, ...доп.paint },
+  });
+  // Главные дороги: trunk/primary отдельно от secondary/tertiary.
+  const главная = ["all", вид("major_road"), деталь("trunk", "trunk_link", "primary", "primary_link")];
+  const второстепенная = ["all", вид("major_road"), ["!", деталь("trunk", "trunk_link", "primary", "primary_link")]];
+  return [
+    { id: п + "суша", type: "fill", source: ист, "source-layer": "earth", ...м, filter: полигон,
+      paint: { "fill-color": ЦВЕТ.земля } },
+    { id: п + "покров", type: "fill", source: ист, "source-layer": "landcover", ...м, filter: полигон,
+      paint: { "fill-color": цветПокрова, "fill-opacity": 0.7 } },
+    { id: п + "землепользование", type: "fill", source: ист, "source-layer": "landuse", ...м, filter: полигон,
+      paint: { "fill-color": цветПокрова } },
+    // Вода непрозрачна, как и суша: вместе они закрывают нижний файл целиком.
+    { id: п + "вода", type: "fill", source: ист, "source-layer": "water", ...м, filter: полигон,
+      paint: { "fill-color": ЦВЕТ.вода } },
+    { id: п + "реки", type: "line", source: ист, "source-layer": "water", ...м,
+      filter: ["all", линия, вид("river", "canal", "stream")],
+      paint: { "line-color": ЦВЕТ.вода,
+        // Выражение по zoom допускается только одно и только наверху — вид внутри.
+        "line-width": ширина([8, ["match", ["get", "kind"], "river", 0.8, 0], 12, ["match", ["get", "kind"], "river", 2, 0.4],
+          14, ["match", ["get", "kind"], "river", 4, 1.2], 18, ["match", ["get", "kind"], "river", 14, 4]]) } },
+    { id: п + "границы", type: "line", source: ист, "source-layer": "boundaries", ...м,
+      filter: вид("country", "region"),
+      layout: { "line-join": "round" },
+      paint: { "line-color": ЦВЕТ.граница, "line-dasharray": [3, 2],
+        "line-width": ширина([2, ["match", ["get", "kind"], "country", 0.8, 0.3], 10, ["match", ["get", "kind"], "country", 2, 1.2]]),
+        "line-opacity": ["match", ["get", "kind"], "country", 0.9, 0.55] } },
+    { id: п + "здания", type: "fill", source: ист, "source-layer": "buildings", minzoom: Math.max(13, ф.с || 0),
+      paint: { "fill-color": ЦВЕТ.здание, "fill-outline-color": ЦВЕТ.зданиеКонтур } },
+    дорога("дорожки", вид("path"), ЦВЕТ.дорожка, [14, 0.4, 18, 2], { слой: { minzoom: Math.max(15, ф.с || 0) } }),
+    дорога("жд", ["all", вид("rail"), ["!", деталь("subway")]], ЦВЕТ.жд, [9, 0.4, 14, 1.2, 18, 2.5],
+      { слой: { minzoom: Math.max(9, ф.с || 0) }, paint: { "line-dasharray": [4, 2] } }),
+    // Обводки — под заливками своего класса, чтобы белые улицы читались на светлом фоне.
+    дорога("улицы-обводка", вид("minor_road", "other"), ЦВЕТ.обводка, [12, 0.8, 14, 2.4, 18, 16], { слой: { minzoom: Math.max(12, ф.с || 0) } }),
+    дорога("второстепенные-обводка", второстепенная, ЦВЕТ.обводка, [9, 0.8, 14, 4, 18, 22], { слой: { minzoom: Math.max(9, ф.с || 0) } }),
+    дорога("главные-обводка", главная, ЦВЕТ.обводка, [6, 0.6, 14, 5.5, 18, 26]),
+    дорога("улицы", вид("minor_road", "other"), ЦВЕТ.улица, [12, 0.4, 14, 1.6, 18, 13], { слой: { minzoom: Math.max(12, ф.с || 0) } }),
+    дорога("второстепенные", второстепенная, ЦВЕТ.второстепенная, [9, 0.4, 14, 3, 18, 18], { слой: { minzoom: Math.max(9, ф.с || 0) } }),
+    дорога("главные", главная, ЦВЕТ.главная, [6, 0.5, 14, 4, 18, 22]),
+    дорога("магистрали", вид("highway"), ЦВЕТ.магистраль, [4, 0.5, 14, 5, 18, 26]),
+  ];
+}
+
+function подписиФайла(ф, ист, п, выше) {
+  const м = ф.с ? { minzoom: ф.с } : {};
+  // Внутри bbox более детального файла на его уровнях подписи даёт он.
+  const непересекается = выше.map((g) => ["any", ["<", ["zoom"], g.с], ["!", ["within", g.полигон]]]);
+  const видно = [">=", ["zoom"], ["coalesce", ["get", "min_zoom"], 0]];
+  const ранг = ["coalesce", ["get", "population_rank"], 0];
+  return [{
+    id: п + "подписи", type: "symbol", source: ист, "source-layer": "places", ...м,
+    filter: ["all", видно, ...непересекается,
+      ["match", ["get", "kind"], ["country", "region", "locality", "macrohood", "neighbourhood"], true, false],
+      ["any", ["!=", ["get", "kind"], "country"], ["<=", ["zoom"], 6]],
+      ["any", ["!", ["match", ["get", "kind"], ["macrohood", "neighbourhood"], true, false]], [">=", ["zoom"], 12]]],
+    layout: {
+      "text-field": НАЗВАНИЕ,
+      "text-font": ["case", [">=", ранг, 11], ["literal", ["Noto Sans Bold"]], ["literal", ["Noto Sans Regular"]]],
+      "text-size": ["match", ["get", "kind"],
+        "country", 13,
+        ["macrohood", "neighbourhood"], 11,
+        ["interpolate", ["linear"], ранг, 0, 11, 8, 12, 11, 14, 14, 16]],
+      "symbol-sort-key": ["-", 20, ранг],
+      "text-max-width": 8,
+      "text-padding": 3,
+    },
+    paint: {
+      "text-color": ["match", ["get", "kind"], ["macrohood", "neighbourhood"], ЦВЕТ.подписьМелкая, ЦВЕТ.подпись],
+      "text-halo-color": ЦВЕТ.ореол, "text-halo-width": 1.4,
+    },
+  }];
+}
+
+// Источники и слои подложки для режима. Все id начинаются с «подложка-»:
+// по ним переключатель режима снимает старую подложку, не трогая точки
+// объектов, кластеры и всплывашки, которые лежат выше отдельными слоями.
+function подложка(config, режим) {
+  const источники = {}, слои = [];
+  if (режим === "online") {
+    источники["подложка-osm"] = {
+      type: "raster", tiles: [config.online_url], tileSize: 256, maxzoom: 19,
       attribution: config.attribution,
     };
-    слои.push({ id: "osm", type: "raster", source: "osm" });
+    слои.push({ id: "подложка-osm", type: "raster", source: "подложка-osm" });
+  } else if (режим === "offline") {
+    const файлы = порядокФайлов(режимыПодложки(config).файлы);
+    const подписи = [];
+    файлы.forEach((ф, i) => {
+      const ист = "подложка-файл" + i;
+      источники[ист] = { type: "vector", url: "pmtiles://" + ф.url, attribution: config.attribution };
+      слои.push(...слоиФайла(ф, ист, ист + "-"));
+      // Подписи — над геометрией ВСЕХ файлов, верхний файл — первым.
+      подписи.unshift(...подписиФайла(ф, ист, ист + "-", файлы.slice(i + 1)));
+    });
+    слои.push(...подписи);
   }
-  const годныеПодложки = (config.basemaps || []).filter((b) => !b.problem);
-  // Обзорный файл на всю страну и детальная вырезка по региону стройки
-  // обычно ПЕРЕКРЫВАЮТСЯ (оба содержат данные с zoom 0). Заливку земли/воды
-  // поэтому даёт только САМЫЙ ШИРОКИЙ файл (по bbox из заголовка PMTiles,
-  // приходит с сервера) — если давать её всем сразу, одна и та же
-  // территория красится дважды впустую. Основной фикс дыр в земле/воде —
-  // ниже, у слоя «фон» (см. комментарий там); этот выбор base-файла просто
-  // не даёт лишней двойной заливке рисоваться зря.
-  let индексБазового = 0, максПлощадь = -1;
-  годныеПодложки.forEach((b, i) => {
-    if (!b.bbox) return;
-    const [запад, юг, восток, север] = b.bbox;
-    const площадь = Math.max(0, восток - запад) * Math.max(0, север - юг);
-    if (площадь > максПлощадь) { максПлощадь = площадь; индексБазового = i; }
-  });
-  годныеПодложки.forEach((b, i) => {
-    const имя = "basemap" + i;
-    источники[имя] = {
-      type: "vector",
-      url: "pmtiles://" + b.url,
-      attribution: config.attribution,
-    };
-    // Слои подложки намеренно скупые: земля, вода, дороги, здания. Полный
-    // стиль Protomaps — это сорок слоёв со шрифтами и спрайтами, а карте
-    // проектов нужна узнаваемая подложка, а не самостоятельная карта.
-    if (i === индексБазового) {
-      слои.push(
-        { id: имя + "-земля", type: "fill", source: имя, "source-layer": "earth",
-          paint: { "fill-color": "#f3ede0" } },
-        { id: имя + "-вода", type: "fill", source: имя, "source-layer": "water",
-          paint: { "fill-color": "#bbdefb" } },
-      );
-    }
-    // Дороги/здания/подписи — у КАЖДОГО файла подложки: детальная вырезка
-    // добавляет здесь свою реальную точность, а не просто дублирует
-    // базовый файл. Не ограничиваем по zoom — за пределами своей детальной
-    // области у человека всё равно должны остаться хоть какие-то дороги и
-    // подписи от обзорного файла, пусть и попроще.
-    слои.push(
-      { id: имя + "-дороги", type: "line", source: имя, "source-layer": "roads",
-        paint: { "line-color": "#c7bfa9", "line-width": 1 } },
-      { id: имя + "-здания", type: "fill", source: имя, "source-layer": "buildings",
-        minzoom: 13, paint: { "fill-color": "#d8d0bd" } },
-      // Названия населённых пунктов: без них подложка — набор цветных пятен,
-      // и понять, у какого города стоит точка, нельзя.
-      { id: имя + "-подписи", type: "symbol", source: имя, "source-layer": "places",
-        layout: {
-          "text-field": ["get", "name"],
-          "text-font": ["Noto Sans Regular"],
-          "text-size": 12,
-        },
-        paint: {
-          "text-color": "#455a64",
-          "text-halo-color": "#ffffff", "text-halo-width": 1.5,
-        } },
-    );
-  });
+  return { источники, слои };
+}
+
+function стильКарты(config, режим) {
+  const { источники, слои } = подложка(config, режим);
   return {
     version: 8,
     // Глифы — это НЕ шрифт страницы: подписи на векторной карте рисуются
     // заранее подготовленными картинками символов, и без этого адреса
     // символьные слои молча не появляются (ровно так пропало число объектов
-    // в кластере). Лежат у нас же, см. vendor/glyphs/README.txt.
-    glyphs: "/static/vendor/glyphs/{fontstack}/{range}.pbf",
+    // в кластере). Лежат у нас же (vendor/glyphs/README.txt), читаются через
+    // zhbi-glyphs:// — см. загрузитьГлифы().
+    glyphs: "zhbi-glyphs://{fontstack}/{range}",
     sources: источники,
-    layers: слои,
+    // «Фон» виден только там, где данных нет вовсе (за покрытием файлов):
+    // нарочно холоднее суши, чтобы граница данных читалась честно.
+    layers: [{ id: "фон", type: "background", paint: { "background-color": ЦВЕТ.нетДанных } }, ...слои],
   };
+}
+
+// Сменить подложку на уже построенной карте: старые «подложка-*» снять,
+// новые положить ПОД первый слой объектов — точки, кластеры и всплывашки
+// остаются как были.
+function применитьПодложку(карта, config, режим) {
+  const стиль = карта.getStyle();
+  стиль.layers.filter((l) => l.id.startsWith("подложка-")).forEach((l) => карта.removeLayer(l.id));
+  Object.keys(стиль.sources).filter((id) => id.startsWith("подложка-")).forEach((id) => карта.removeSource(id));
+  const { источники, слои } = подложка(config, режим);
+  const над = карта.getStyle().layers.find((l) => l.id !== "фон" && !l.id.startsWith("подложка-"));
+  Object.entries(источники).forEach(([id, s]) => карта.addSource(id, s));
+  слои.forEach((l) => карта.addLayer(l, над ? над.id : undefined));
+}
+
+// Переключатель «С сервера / Из интернета» — только когда доступны оба.
+// Показывает активный режим (aria-pressed) и запоминает выбор.
+function вставитьСтильПереключателя() {
+  if (document.querySelector("style[data-zhbi-basemap]")) return;
+  const s = document.createElement("style");
+  s.setAttribute("data-zhbi-basemap", "1");
+  s.textContent = `
+    .zhbi-basemap-ctrl { display: flex; align-items: stretch; font: 12px/1.2 system-ui, sans-serif; }
+    .zhbi-basemap-ctrl .zhbi-basemap-cap { padding: 0 8px; display: flex; align-items: center; color: #555; }
+    .maplibregl-ctrl-group.zhbi-basemap-ctrl button { width: auto; height: 29px; padding: 0 10px; border: 0;
+      border-left: 1px solid #ddd; font: inherit; color: #333; white-space: nowrap; }
+    .maplibregl-ctrl-group.zhbi-basemap-ctrl button[aria-pressed="true"] { background: #e3ecf7; color: #0b3d75; font-weight: 600; }
+    .zhbi-basemap-ctrl .zhbi-basemap-warn { padding: 0 8px; display: flex; align-items: center; color: #b3261e; border-left: 1px solid #ddd; }
+    .zhbi-basemap-ctrl .zhbi-basemap-warn[hidden] { display: none; }`;
+  document.head.appendChild(s);
+}
+
+class ПереключательПодложки {
+  constructor(config, режим, приСмене) {
+    this.config = config; this.режим = режим; this.приСмене = приСмене;
+  }
+  onAdd(карта) {
+    вставитьСтильПереключателя();
+    const узел = document.createElement("div");
+    узел.className = "maplibregl-ctrl maplibregl-ctrl-group zhbi-basemap-ctrl";
+    узел.setAttribute("role", "group");
+    узел.setAttribute("aria-label", "Подложка карты");
+    узел.innerHTML = `<span class="zhbi-basemap-cap">Подложка:</span>
+      <button type="button" data-basemap="offline" title="Карта из файлов на сервере — работает без интернета">С сервера</button>
+      <button type="button" data-basemap="online" title="Карта OpenStreetMap из интернета">Из интернета</button>
+      <span class="zhbi-basemap-warn" role="status" hidden title="Тайлы из интернета не загружаются — выберите «С сервера»">нет связи</span>`;
+    const отметить = () => узел.querySelectorAll("button").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.basemap === this.режим)));
+    отметить();
+    узел.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-basemap]");
+      if (!b || b.dataset.basemap === this.режим) return;
+      this.режим = b.dataset.basemap;
+      запомнитьРежим(this.режим);
+      отметить();
+      this.сбойСети(false);
+      const применить = () => применитьПодложку(карта, this.config, this.режим);
+      // Стиль ещё грузится — сменим по его готовности, а не молча проглотим щелчок.
+      try { применить(); } catch (err) { карта.once("load", применить); }
+      if (this.приСмене) this.приСмене(this.режим);
+    });
+    this.узел = узел;
+    return узел;
+  }
+  onRemove() { this.узел.remove(); }
+  // Интернет пропал при режиме «Из интернета» — сказать об этом, но режим
+  // не менять: переключается только сам зритель.
+  сбойСети(есть) {
+    const метка = this.узел && this.узел.querySelector(".zhbi-basemap-warn");
+    if (метка) метка.hidden = !(есть && this.режим === "online");
+  }
 }
 
 function точкиGeoJSON(объекты) {
@@ -256,9 +469,10 @@ function точкиGeoJSON(объекты) {
 export async function createMap(контейнер, { center, zoom, interactive = true } = {}) {
   const ml = await ensureLibs();
   const config = await deps.api("/map/config");
+  const режим = начальныйРежим(config);
   const карта = new ml.Map({
     container: контейнер,
-    style: стильКарты(config),
+    style: стильКарты(config, режим),
     center: center || [config.default_center.lon, config.default_center.lat],
     zoom: zoom === undefined ? config.default_zoom : zoom,
     interactive,
@@ -270,7 +484,13 @@ export async function createMap(контейнер, { center, zoom, interactive 
     compact: true, customAttribution: config.attribution,
   }));
   if (interactive) карта.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
-  return { карта, config, ml };
+  const есть = режимыПодложки(config);
+  if (interactive && есть.онлайн && есть.офлайн) {
+    const переключатель = new ПереключательПодложки(config, режим);
+    карта.addControl(переключатель, "top-left");
+    карта.on("error", (e) => { if (e && e.sourceId === "подложка-osm") переключатель.сбойСети(true); });
+  }
+  return { карта, config, ml, режим };
 }
 
 /**

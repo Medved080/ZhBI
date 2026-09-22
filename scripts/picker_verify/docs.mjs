@@ -3,7 +3,7 @@
 import { startServer, stopServer, openBrowser, login, check, summary, sleep, fingerprint, diffFp, SP, hardGoto } from "./lib.mjs";
 import { clickSelScrolled, prepareCopy, text, has, selectValue, selectText, dialogClick, dialogText, clickBtn, btnState, activity, maxActivityId, writeReqs, rawApi, dropResponses, restoreFetch, sql, sql1, exec, USER_PICKER, USER_VIEW } from "./common.mjs";
 
-const PORT = 8131, DIR = `${SP}/picker_docs`;
+const PORT = Number(process.env.PV_PORT) || 8131, DIR = `${SP}/picker_docs`;
 const S = await startServer(PORT, DIR, { setup: prepareCopy });
 const db = S.db, base = S.base;
 const TABLES = ["elements", "status_history", "supplier_change_docs", "supplier_change_items", "supplier_change_history_moves", "contract_lines", "contracts"];
@@ -304,8 +304,11 @@ try {
   try {
     await login(b2, base, USER_VIEW);
     await b2.goto(`${base}/v2#/supplier-change`, 1500);
-    const homeView = await b2.eval(`location.hash + ' | ' + (document.querySelector('#v2-side')?.innerText.includes('Документы контрактации'))`);
-    check("D11.1 роль view: раздел «Документы контрактации» скрыт в навигации", !homeView.includes("true"), homeView);
+    // С 2026-09-22 (решение пользователя «нужен просмотр», Docs/v2-progress/docsview.md) роль view («Чтение» на оба раздела) видит
+    // экран в режиме «только просмотр»; до этого раздел был скрыт (write-гейт пункта меню V1). Подробно — scripts/verify_docsview.mjs.
+    await b2.waitFor(`(document.querySelector('#sd-inner')?.innerText||'').includes('Документы объекта')`, 20000).catch(() => {});
+    const viewState = await b2.eval(`location.hash + ' | ' + !!document.querySelector('[data-readonly-note]') + ' | ' + document.querySelectorAll('[data-a^="new-"]').length`);
+    check("D11.1 роль view: раздел «Документы контрактации» открыт только для просмотра (пояснение есть, кнопок создания нет)", viewState === "#/supplier-change | true | 0", viewState);
     const w = await rawApi(b2, "POST", "/supplier-changes", { object_id: 1, kind: "supplier_change", doc_date: "2026-09-21", from_contract_id: A, to_contract_id: B, element_ids: [ids[0]] });
     check("D11.2 роль view: POST /supplier-changes → 403 от сервера, документ не создан", w.status === 403, String(w.status));
     const p = await rawApi(b2, "POST", `/supplier-changes/2/post`, {});

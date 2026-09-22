@@ -105,6 +105,25 @@ function printReportTable(title) {
   printHtml(`<h2>${esc(title)}</h2>${src.innerHTML}`);
 }
 
+// localStorage может быть недоступен (приватный режим, запрет сайта) — тогда настройка живёт только до ухода с экрана.
+function lsGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function lsSet(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* не критично */ } }
+
+// Уровни группировки (перенос createGroupChooser из V1): из сохранённого берутся только порядок и флажки, состав
+// уровней — из описания экрана, иначе новый уровень не появился бы у тех, у кого настройка уже сохранена. Формат
+// сохранения — V1: [{key, on}] в порядке показа.
+function loadGroups(c) {
+  const fallback = () => c.groups.map((g) => ({ ...g, on: (c.defaultOn || []).includes(g.key) }));
+  try {
+    const saved = JSON.parse((c.remember && lsGet(c.remember)) || "null");
+    if (!Array.isArray(saved)) return fallback();
+    const byKey = new Map(saved.map((item, i) => [item.key, { i, on: !!item.on }]));
+    const out = c.groups.map((g) => ({ ...g, on: byKey.has(g.key) ? byKey.get(g.key).on : false }));
+    out.sort((a, b) => (byKey.get(a.key)?.i ?? 99) - (byKey.get(b.key)?.i ?? 99));
+    return out.some((g) => g.on) ? out : fallback();
+  } catch (e) { return fallback(); }
+}
+
 function errorText(err) {
   if (err instanceof ApiError) {
     const d = err.detail;
@@ -119,6 +138,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   let dead = false;
   let active = 0;
   let editor = null; // открытая карточка строки (правка запланированной работы)
+  let deliveryCellsBound = false; // обработчики разбора ячейки «Графика поставки» уже на #rd-body (см. paintReport)
   const canEditRows = (sec) => !!sec.rowEdit && (!!rights?.system_admin || rights?.features?.[sec.rowEdit.feature] === "write");
   // Отчёт с правкой ячейки прямо в таблице (mfr2: «Учёт по блокам: статусы») — право записи берётся из своего раздела
   // (`writeFeature`, обычно "work_progress"), НЕ из права на сам отчёт (`report_block_status`) — так же, как в V1.
@@ -139,6 +159,20 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   // «Учитывать текущий фильтр схемы» (перенос V1: reportUseFilter) — у «Статуса комплектации» включена по
   // умолчанию (см. schemeFilterDefault в screens.json), у остальных — выключена, пока человек сам не включит.
   sections.forEach((sec, i) => { if (sec.schemeFilterDefault) st[i].filterOn = true; });
+  // Запоминаемые настройки отчёта (`remember` — ключ localStorage; reports2: вид и уровни группировки «Статуса
+  // комплектации»). Ключи и формат — ТЕ ЖЕ, что у V1 (zhbi_completion_view, zhbi_completion_pivot_groups):
+  // это настройка «как я привык смотреть» одного человека в одном браузере, и V1 с V2 не должны спорить о ней.
+  sections.forEach((sec, i) => (sec.controls || []).forEach((c) => {
+    if (c.type === "select" && c.remember) {
+      const saved = lsGet(c.remember);
+      if (saved != null && (c.options || []).some((o) => String(o[c.valueKey]) === saved)) st[i].params[c.param] = saved;
+    }
+    if (c.type === "groups") {
+      st[i].groups = st[i].groups || {};
+      st[i].groups[c.param] = loadGroups(c);
+      st[i].params[c.param] = st[i].groups[c.param].filter((g) => g.on).map((g) => g.key);
+    }
+  }));
   // Параметры, которые отчёт выбирает ДО первого запроса (сохранённая группировка «Графика работ по блокам» — reports-work.js)
   sections.forEach((sec, i) => { if (sec.kind === "report") REPORT_INIT[sec.report]?.(st[i].params); });
 
@@ -184,8 +218,17 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     return base + (q ? (base.includes("?") ? "&" : "?") + q : "");
   }
 
+  // Действующее значение параметра отчёта: выбор человека, иначе значение секции по умолчанию (`body`).
+  const effParam = (sec, s, p) => s.params[p] ?? sec.body?.[p];
+  // Условие показа (`showWhen`/`searchWhen`: {параметр: значение}) — reports2: шкала, шаг и группировка «Статуса
+  // комплектации» существуют только в виде «сводная таблица», как в V1 (updateCompletionControls).
+  const whenMatches = (sec, s, when) => !when || Object.entries(when).every(([p, v]) => String(effParam(sec, s, p)) === String(v));
+
   function reportBody(sec, s) {
     const body = { object_id: objectId, source_file: null, ...(sec.body || {}), ...s.params };
+    // Параметры скрытых настроек в запрос не идут (V1 шлёт шкалу/шаг/группировку только в виде «сводная»): иначе
+    // выбор, сделанный в одном виде, молча ехал бы в запрос другого.
+    for (const c of sec.controls || []) if (!whenMatches(sec, s, c.showWhen)) delete body[c.param];
     if (sec.derive === "activity-bounds") {
       body.at_from = boundUtc(body.date_from, false); body.at_to = boundUtc(body.date_to, true);
       body.tz_offset_minutes = new Date().getTimezoneOffset();
@@ -210,12 +253,17 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     try {
       const blob = await api.download(`${sec.endpoint}.${ext}`, reportBody(sec, s));
       if (dead) return;
+      // Приписка к имени файла от выбранного значения настройки (`fileSuffix` у варианта; V1 reportFileName: сводная
+      // и перечень — разные файлы одного отчёта, одноимённые перезаписывали бы друг друга в папке загрузок).
+      const suffix = (sec.controls || []).filter((c) => c.type === "select" && whenMatches(sec, s, c.showWhen))
+        .map((c) => (c.options || []).find((o) => String(o[c.valueKey]) === String(effParam(sec, s, c.param)))?.fileSuffix || "").join("");
+      const name = `${screen.title}${suffix}.${ext}`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `${screen.title}.${ext}`;
+      a.href = url; a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      if (status) status.textContent = `Файл «${screen.title}.${ext}» сформирован (${Math.max(1, Math.round(blob.size / 1024))} КБ).`;
+      if (status) status.textContent = `Файл «${name}» сформирован (${Math.max(1, Math.round(blob.size / 1024))} КБ).`;
     } catch (err) {
       if (status && !dead) status.textContent = `Не удалось выгрузить: ${errorText(err)}`;
     } finally { s.exporting = false; if (!dead) paintExportState(false); }
@@ -295,16 +343,21 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const sec = sections[active];
     const s = st[active];
     const body = $("#rd-body");
-    searchInput.hidden = sec.kind === "record" || (sec.kind === "report" && !sec.search);
+    searchInput.hidden = sec.kind === "record" || (sec.kind === "report" && (!sec.search || !whenMatches(sec, s, sec.searchWhen)));
     $("#rd-count").hidden = sec.kind === "record" || sec.kind === "report" || sec.kind === "guide";
     refreshBtn.disabled = s.status === "loading" || s.acking;
     $("#rd-count").textContent = "";
     if (s.status === "idle" || s.status === "loading") { body.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`; return; }
     if (s.status === "no-object") { body.innerHTML = `<p class="v2-muted">Выберите объект в шапке — данные этого экрана относятся к объекту.</p>`; return; }
     if (s.status === "error") {
-      body.innerHTML = `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(s.error)}${s.ackMsg ? ` ${esc(s.ackMsg)}` : ""}
+      // У отчёта настройки остаются на экране и при ошибке (reports2): отказ сервера бывает из-за самих настроек
+      // («слишком много колонок — укрупните шаг» у сводной), и без них человеку нечем было бы его исправить —
+      // «Повторить» повторял бы тот же отказ. В V1 настройки тоже не пропадают (ошибка — в строке состояния).
+      const bar = sec.kind === "report" ? controlBarHtml(sec, s) : "";
+      body.innerHTML = `${bar}<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(s.error)}${s.ackMsg ? ` ${esc(s.ackMsg)}` : ""}
         <div class="v2-callout-actions"><button type="button" class="v2-btn" id="rd-retry">Повторить</button></div></div>`;
       $("#rd-retry").addEventListener("click", () => load(active));
+      if (bar) bindControlBar(sec, s, body);
       return;
     }
     if (sec.kind === "record") { body.innerHTML = paintRecord(sec, s.data); return; }
@@ -339,8 +392,10 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     }
   }
 
-  function paintReport(sec, s, bodyEl) {
-    const controls = (sec.controls || []).map((c) => {
+  // Панель настроек отчёта (параметры + «Учитывать текущий фильтр схемы») — отдельно от тела отчёта: она же
+  // рисуется и в состоянии ошибки (см. paint), чтобы отказ из-за настроек можно было исправить ими же.
+  function controlBarHtml(sec, s) {
+    const controls = (sec.controls || []).filter((c) => whenMatches(sec, s, c.showWhen)).map((c) => {
       const cur = s.params[c.param] ?? "";
       if (c.type === "users") {
         // «Пользователь» (report-mywork): «Я» (по умолчанию сервера) — «Все» (если есть право «Чужие действия») — поимённо.
@@ -351,8 +406,17 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       }
       if (c.type === "select") {
         const opts = c.options || pick(s.data, c.optionsFrom) || [];   // options — фиксированный набор из реестра экранов (шаг, масштаб)
-        const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? c.default ?? "";
+        const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? sec.body?.[c.param] ?? c.default ?? "";
         return `<label class="v2-wire-field"><span>${esc(c.label)}</span><select data-param="${esc(c.param)}">${opts.map((o) => `<option value="${esc(o[c.valueKey])}" ${String(o[c.valueKey]) === String(val) ? "selected" : ""}>${esc(o[c.labelKey])}</option>`).join("")}</select></label>`;
+      }
+      // Уровни группировки (перенос createGroupChooser V1: фишка = галочка «включён» + стрелки порядка): порядок слева
+      // направо = сверху вниз в иерархии строк. Последний включённый уровень снять нельзя — ноль уровней сервер молча
+      // заменил бы группировкой по умолчанию, и снятая галочка вернулась бы сама (как в V1).
+      if (c.type === "groups") {
+        const list = s.groups?.[c.param] || [];
+        return `<div class="v2-wire-field v2-group-field"><span>${esc(c.label)}</span><div class="v2-group-chips" data-groups="${esc(c.param)}" role="group" aria-label="${esc(c.label)}">${list.map((g, i) =>
+          `<span class="v2-group-chip${g.on ? " on" : ""}"><label><input type="checkbox" data-group-toggle="${esc(g.key)}" ${g.on ? "checked" : ""}> ${esc(g.label)}</label><button type="button" class="v2-group-move" data-group-move="${esc(g.key)}" data-dir="-1" title="Левее (выше в иерархии)" aria-label="${esc(g.label)}: выше в иерархии" ${i === 0 ? "disabled" : ""}>◀</button><button type="button" class="v2-group-move" data-group-move="${esc(g.key)}" data-dir="1" title="Правее (ниже в иерархии)" aria-label="${esc(g.label)}: ниже в иерархии" ${i === list.length - 1 ? "disabled" : ""}>▶</button></span>`).join("")}</div>
+          <span class="v2-muted" data-groups-msg="${esc(c.param)}" role="status" aria-live="polite">${esc(s.groupsMsg || "")}</span></div>`;
       }
       // Кнопка сброса набора параметров в null (перенос «весь срок» у «Динамики», V1: dynRange = {from:null,to:null}) —
       // общий механизм, а не завязанный на конкретный отчёт: любой отчёт с периодом может перечислить свои параметры в `resets`.
@@ -362,16 +426,6 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? "";
       return `<label class="v2-wire-field"><span>${esc(c.label)}</span><input type="date" data-param="${esc(c.param)}" value="${esc(val)}"></label>`;
     }).join("");
-    const render = REPORT_RENDERERS[sec.report];
-    // ctx отчёта: правка ячейки, перезапрос с новыми параметрами (setParams), переходы к другим экранам и смена объекта
-    const ctx = { api, objectId, canWrite: canWriteReport(sec), data: s.data, rights, go, switchObject, hasObject,
-      canNotes: !!rights?.system_admin || rights?.features?.report_notes === "write",
-      setParams: (p) => { Object.assign(s.params, p); load(active); } };
-    // Печать доступна у отчёта по умолчанию (перенос кнопки «Печать» V1) — секция может явно отключить (`printable: false`),
-    // если для нужд её вёрстки печать ещё не проверена (mfr2, exchange2, 2026-09-22).
-    const printBtn = sec.printable === false ? "" : `<button type="button" class="v2-btn" id="rd-print">Печать</button>`;
-    const helpBtn = sec.helpKey ? `<button type="button" class="v2-btn" id="rd-help">Справка</button>` : "";
-    const exportsBar = `<div class="v2-bar v2-export-bar">${printBtn}${(sec.exports || []).map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}${helpBtn}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>`;
     // «Учитывать текущий фильтр схемы» (перенос V1) — снимок отбора, ПОСЛЕДНИЙ раз сделанного в рабочем месте
     // «Модель»/«Прораб» (см. scheme-filter-snapshot.js): не живая синхронизация (рабочее место — отдельный
     // экран, его кадр со схемой закрывается при уходе), поэтому рядом ВСЕГДА написано, чей это отбор, на какой
@@ -386,10 +440,77 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       filterBar = `<div class="v2-wire-row v2-report-controls"><label class="v2-wire-check"><input type="checkbox" id="rd-use-filter" ${s.filterOn && desc.available ? "checked" : ""} ${desc.available ? "" : "disabled"}> Учитывать текущий фильтр схемы</label>
         <span class="v2-muted" id="rd-filter-note">${esc(desc.text)}</span></div>`;
     }
-    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${filterBar}${exportsBar}<div id="rd-report">${render(s.data, s.rs, ctx)}</div>`;
+    return `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${filterBar}`;
+  }
+
+  function bindControlBar(sec, s, bodyEl) {
+    bodyEl.querySelector("#rd-use-filter")?.addEventListener("change", (e) => { s.filterOn = e.target.checked; load(active); });
+    bodyEl.querySelector("[data-user-select]")?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      s.userChoice = v;
+      s.params.all_users = v === "__all__";
+      s.params.user_ids = v && v !== "__all__" ? [Number(v)] : null;
+      load(active);
+    });
+    bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
+      if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
+      s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
+      const c = (sec.controls || []).find((x) => x.param === inp.dataset.param);
+      if (c?.remember) lsSet(c.remember, String(s.params[c.param]));
+      load(active);
+    }));
+    bodyEl.querySelectorAll("[data-reset]").forEach((btn) => btn.addEventListener("click", () => {
+      for (const p of btn.dataset.reset.split(",").filter(Boolean)) s.params[p] = null;
+      load(active);
+    }));
+    bodyEl.querySelectorAll("[data-groups]").forEach((box) => {
+      const param = box.dataset.groups;
+      const c = (sec.controls || []).find((x) => x.param === param);
+      const list = s.groups[param];
+      const commit = () => {
+        s.params[param] = list.filter((g) => g.on).map((g) => g.key);
+        if (c?.remember) lsSet(c.remember, JSON.stringify(list.map((g) => ({ key: g.key, on: g.on }))));
+        s.groupsMsg = "";
+        load(active);
+      };
+      box.querySelectorAll("[data-group-move]").forEach((b) => b.addEventListener("click", () => {
+        const i = list.findIndex((g) => g.key === b.dataset.groupMove);
+        const j = i + Number(b.dataset.dir);
+        if (i < 0 || j < 0 || j >= list.length) return;
+        [list[i], list[j]] = [list[j], list[i]];
+        commit();
+      }));
+      box.querySelectorAll("[data-group-toggle]").forEach((cb) => cb.addEventListener("change", () => {
+        const g = list.find((x) => x.key === cb.dataset.groupToggle);
+        if (!g) return;
+        if (g.on && list.filter((x) => x.on).length === 1) {
+          cb.checked = true;
+          s.groupsMsg = "Хотя бы один уровень группировки должен остаться";
+          const msg = bodyEl.querySelector(`[data-groups-msg="${CSS.escape(param)}"]`);
+          if (msg) msg.textContent = s.groupsMsg;
+          return;
+        }
+        g.on = cb.checked;
+        commit();
+      }));
+    });
+  }
+
+  function paintReport(sec, s, bodyEl) {
+    const render = REPORT_RENDERERS[sec.report];
+    // ctx отчёта: правка ячейки, перезапрос с новыми параметрами (setParams), переходы к другим экранам и смена объекта (аудит рабочих мест)
+    const ctx = { api, objectId, canWrite: canWriteReport(sec), data: s.data, rights, go, switchObject, hasObject,
+      canNotes: !!rights?.system_admin || rights?.features?.report_notes === "write",
+      setParams: (p) => { Object.assign(s.params, p); load(active); } };
+    // Печать доступна у отчёта по умолчанию (перенос кнопки «Печать» V1) — секция может явно отключить (`printable: false`),
+    // если для нужд её вёрстки печать ещё не проверена (mfr2, exchange2, 2026-09-22).
+    const printBtn = sec.printable === false ? "" : `<button type="button" class="v2-btn" id="rd-print">Печать</button>`;
+    const helpBtn = sec.helpKey ? `<button type="button" class="v2-btn" id="rd-help">Справка</button>` : "";
+    const exportsBar = `<div class="v2-bar v2-export-bar">${printBtn}${(sec.exports || []).map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}${helpBtn}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>`;
+    bodyEl.innerHTML = `${controlBarHtml(sec, s)}${exportsBar}<div id="rd-report">${render(s.data, s.rs, ctx)}</div>`;
+    bindControlBar(sec, s, bodyEl);
     bodyEl.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => exportReport(sec, s, b.dataset.export)));
     bodyEl.querySelector("#rd-print")?.addEventListener("click", () => printReportTable(screen.title));
-    bodyEl.querySelector("#rd-use-filter")?.addEventListener("change", (e) => { s.filterOn = e.target.checked; load(active); });
     bodyEl.querySelector("#rd-help")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget; btn.disabled = true;
       try {
@@ -400,16 +521,12 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
         await showInfoDialog(`Не удалось получить справку: ${errorText(err)}`);
       } finally { btn.disabled = false; }
     });
-    bodyEl.querySelector("[data-user-select]")?.addEventListener("change", (e) => {
-      const v = e.target.value;
-      s.userChoice = v;
-      s.params.all_users = v === "__all__";
-      s.params.user_ids = v && v !== "__all__" ? [Number(v)] : null;
-      load(active);
-    });
     // «График поставки»: разбор ячейки по маркам (POST /reports/delivery-schedule/cell) — делегирование на постоянный
-    // контейнер (таблица перерисовывается при сворачивании строк), тот же приём, что у наведения в V1.
-    if (sec.report === "delivery") {
+    // контейнер (таблица перерисовывается при сворачивании строк), тот же приём, что у наведения в V1. Вешается ОДИН раз
+    // на экран (reports2): прежде каждый показ отчёта добавлял ещё пару обработчиков на тот же #rd-body, и после смены шага
+    // один щелчок по ячейке слал два запроса разбора и открывал два окна. Состояние (s, параметры) читается в момент щелчка.
+    if (sec.report === "delivery" && !deliveryCellsBound) {
+      deliveryCellsBound = true;
       bodyEl.addEventListener("keydown", (e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-gkeys]")) { e.preventDefault(); e.target.click(); }
       });
@@ -441,15 +558,6 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       if (focusPath) bodyEl.querySelector(`[data-path="${CSS.escape(focusPath)}"]`)?.focus();
     };
     bindReport(sec.report, bodyEl, s.rs, repaint, ctx);
-    bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
-      if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
-      s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
-      load(active);
-    }));
-    bodyEl.querySelectorAll("[data-reset]").forEach((btn) => btn.addEventListener("click", () => {
-      for (const p of btn.dataset.reset.split(",").filter(Boolean)) s.params[p] = null;
-      load(active);
-    }));
   }
 
   el.querySelectorAll(".v2-read-tab").forEach((b) => b.addEventListener("click", async () => {
