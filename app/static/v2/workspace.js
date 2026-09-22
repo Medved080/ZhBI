@@ -605,7 +605,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   function mfrFiltersHtml() {
     if (!sc || !sc.loaded || !sc.mfr) return `<p class="v2-muted ws-pad">Модель загружается…</p>`;
     const m = sc.mfr;
-    const head = `<div class="ws-fhead"><span>Элементов: ${m.elements}</span><button type="button" class="v2-btn" data-act="reset-filters" ${m.filtersActive ? "" : "disabled"}>Сбросить все</button></div>`;
+    const head = `<div class="ws-fhead"><span>Элементов: ${m.elements}</span><button type="button" class="v2-btn" data-act="reset-filters" ${m.filtersActive || mbp?.anyActive?.() ? "" : "disabled"}>Сбросить все</button></div>`;
     const sec = (id, title, body, note) => `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${id}" aria-expanded="${!closedGroups.has(id)}"><span>${closedGroups.has(id) ? "▸" : "▾"} ${esc(title)}</span></button>${closedGroups.has(id) ? "" : `<div class="ws-fbody">${note ? `<p class="v2-muted ws-fnote">${esc(note)}</p>` : ""}${body}</div>`}</section>`;
     return head
       + sec("levels", "Этаж", m.levels.length ? pills(m.levels, "level") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все этажи.")
@@ -654,7 +654,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const a = b.dataset.act;
       if (a === "clear-all") send("clearSelection");
       else if (a === "locate" && sc?.selected) send("locate", { id: sc.selected.id });
-      else if (a === "reset-filters") send("resetFilters");
+      else if (a === "reset-filters") { if (mfr) mbp?.resetAll?.(); send("resetFilters"); }
     }));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
     body.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => send("setView", { mode: b.dataset.view })));
