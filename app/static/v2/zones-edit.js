@@ -50,7 +50,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   // камера ставится один раз на открытие формы, холст переносится при перерисовке формы; при закрытии — освобождается WebGL.
   let previewMode = "2d", p3d = null;
   const drop3d = () => { p3d?.dispose(); p3d = null; };
-  const st = { category: "Захватка", includeRetired: false, rows: null, error: "", q: "", editing: null, lastEdit: null };
+  const st = { category: "Захватка", includeRetired: false, rows: null, error: "", q: "", editing: null, lastEdit: null, notice: "" };
 
   el.innerHTML = `
     <div class="v2-container v2-screen">
@@ -89,7 +89,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     box.innerHTML = tabs + `
       <div class="v2-bar"><input type="search" id="ze-search" class="v2-search" placeholder="Поиск" aria-label="Поиск" value="${esc(st.q)}">
         <label class="v2-role-check"><input type="checkbox" id="ze-retired" ${st.includeRetired ? "checked" : ""}><span>Показывать зоны, которых нет в актуальном чертеже</span></label>
-        <span class="v2-muted" id="ze-count" role="status" aria-live="polite">Найдено ${rows.length} из ${st.rows.length}</span>
+        <span class="v2-muted" id="ze-count" role="status" aria-live="polite">${esc(st.notice || `Найдено ${rows.length} из ${st.rows.length}`)}</span>
         <button type="button" class="v2-btn" id="ze-refresh">Обновить</button>
         ${st.lastEdit ? `<button type="button" class="v2-btn" id="ze-undo">Отменить последнюю правку (зона «${esc(st.lastEdit.name)}»)</button>` : ""}</div>
       ${rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>№</th><th>Название</th>${st.category === "Стоянка" ? "<th>Кран</th>" : ""}<th>Ярусы</th><th class="num">Изделий</th><th>В чертеже</th>${canEdit || canDelete ? "<th></th>" : ""}</tr></thead><tbody>
@@ -101,9 +101,9 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
           ${canEdit || canDelete ? `<td>${canEdit ? `<button type="button" class="v2-btn" data-open="${r.id}">Править</button>` : ""} ${canDelete ? `<button type="button" class="v2-btn v2-danger" data-del="${r.id}" aria-label="Удалить зону ${esc(r.name || "")}">Удалить</button>` : ""}</td>` : ""}
         </tr>`).join("")}</tbody></table></div>` : `<p class="v2-muted">${q ? "Ничего не найдено по запросу." : `Зон категории «${esc(st.category)}» нет.`}</p>`}`;
     wireTabs();
-    $("#ze-search")?.addEventListener("input", (e) => { st.q = e.target.value; paintList(); });
-    $("#ze-retired")?.addEventListener("change", (e) => { st.includeRetired = e.target.checked; loadList(); });
-    $("#ze-refresh")?.addEventListener("click", loadList);
+    $("#ze-search")?.addEventListener("input", (e) => { st.q = e.target.value; st.notice = ""; paintList(); const n = $("#ze-search"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
+    $("#ze-retired")?.addEventListener("change", (e) => { st.includeRetired = e.target.checked; st.notice = ""; loadList(); });
+    $("#ze-refresh")?.addEventListener("click", () => { st.notice = ""; loadList(); });
     $("#ze-undo")?.addEventListener("click", undoLast);
     box.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openEditor(Number(b.dataset.open))));
     box.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => deleteZone(Number(b.dataset.del))));
@@ -112,7 +112,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => {
       if (busy) return;
       if (st.category === b.dataset.cat) return;
-      st.category = b.dataset.cat; st.rows = null; st.q = ""; loadList();
+      st.category = b.dataset.cat; st.rows = null; st.q = ""; st.notice = ""; loadList();
     }));
   }
 
@@ -347,9 +347,12 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       paint();
     }
   }
+  // Итог операции — на месте счётчика списка и в состоянии экрана: переживает перерисовку (раньше сообщение об удалении стиралось
+  // перерисовкой сразу после показа); снимается следующим действием со списком (вкладка, поиск, обновление).
   function setStatusAfterList(text) {
+    st.notice = text;
     const n = $("#ze-count");
-    if (n) n.textContent = text; // краткое сообщение поверх счётчика на время видимости списка
+    if (n) n.textContent = text;
   }
 
   async function guardEditorLeave() {
