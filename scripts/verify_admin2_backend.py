@@ -193,12 +193,14 @@ def group_zones():
     row = q1("SELECT name FROM zones WHERE id=?", (zid,))
     check("SQL: имя зоны изменилось", row and row["name"] == "QA-Z-" + str(zid))
 
-    st, d = user2.patch(f"/zones/{zid}", body)
-    check("PATCH /zones user2 (нет write у zones на объекте 2?) — см. вручную", True)
+    st, d = user4.patch(f"/zones/{zid}", body)
+    check("PATCH /zones user4(view) → 403", st == 403, f"{st} {d}")
 
     bad_body = dict(body); bad_body["levels"] = [{"id": levels[0]["id"], "elevation_mm": levels[0]["elevation_mm"], "outline": [[0, 0], [1, 1]]}]
     st, d = admin.patch(f"/zones/{zid}", bad_body)
     check("PATCH /zones контур короче трёх точек → 400", st == 400, f"{st} {d}")
+    row = q1("SELECT name FROM zones WHERE id=?", (zid,))
+    check("SQL: отказ не изменил имя зоны", row and row["name"] == "QA-Z-" + str(zid))
 
     st, d = admin.post(f"/zones/{zid}/undo")
     check("POST /zones/{id}/undo → 200", st == 200, f"{st} {d}")
@@ -207,6 +209,23 @@ def group_zones():
 
     st, d = admin.post(f"/zones/{zid}/undo")
     check("повторный undo → 409 «нечего отменять»", st == 409, f"{st} {d}")
+
+    # удаление синтетической неиспользуемой зоны (реальные зоны чертежа не трогаем — необратимо)
+    conn = db()
+    conn.execute(
+        "INSERT INTO zones (source_file, dxf_handle, category, elevation_mm, name, outline_json, match_status, object_id, number, is_current) "
+        "VALUES ('QA-test-file', ?, 'Захватка', NULL, 'QA-DELZONE-" + TAG + "', '[[0,0],[10,0],[10,10],[0,10]]', 'matched', 1, 9998, 1)",
+        ("QA-HANDLE-" + TAG,),
+    )
+    conn.commit()
+    new_id = q1("SELECT id FROM zones WHERE name=?", ("QA-DELZONE-" + TAG,))["id"]
+    conn.close()
+    st, d = admin.get(f"/dictionaries/zone/{new_id}/delete-plan")
+    check("GET delete-plan синтетической зоны → 200, без замены", st == 200 and d.get("plan", {}).get("needs_replacement") is False, f"{st} {d}")
+    st, d = admin.post(f"/dictionaries/zone/{new_id}/delete", {"replacements": {}, "mode": "replace"})
+    check("удаление неиспользуемой зоны → 200", st == 200, f"{st} {d}")
+    gone = q1("SELECT 1 AS x FROM zones WHERE id=?", (new_id,))
+    check("SQL: синтетическая зона удалена", not gone)
 
 
 if __name__ == "__main__":
