@@ -2337,7 +2337,12 @@ SCENE_DATA_RE = re.compile(r"^(/plan-data|/changes|/source-files|/elements/chang
                            r"/objects/\{[^}]+\}/(grids|plan-images|plan-images/\{[^}]+\}\.png|blocks/geometry|blocks/planning-tracks|blocks/\{[^}]+\}/card|"
                            r"external-models|external-models/\{[^}]+\}/content))$")
 READ_POST_RE = re.compile(r"^/reports/|^/export\.|/export$|/export\.(xlsx|pdf)$|^/plan-data$|^/elements/changed$|^/schedule-versions/deviation$|"
-                          r"/chess-flat-export|^/ldap-search$|^/reports/delivery-schedule/cell$")
+                          r"/chess-flat-export|^/ldap-search$|^/reports/delivery-schedule/cell$|"
+                          # предпросмотры (считают последствия, ничего не пишут) — вызываются через api.readPost(), не через
+                          # запись, значит write-gate.js POLICY им не нужен (app/static/v2/api.js: request(), read:true пропускает
+                          # checkWrite целиком); без этой строки ANALYZE_RE ловил бы «…/preview» effect=analyze и генератор ошибочно
+                          # требовал бы строку шлюза — «в V2, но отключена шлюзом» вместо факта (2026-09-22, gaps.md)
+                          r"^/objects/\{[^}]+\}/block-works/bulk-preview$|^/objects/\{[^}]+\}/blocks/work-types-settings/preview$")
 ANALYZE_RE = re.compile(r"/analyze|/parse$|/settings/test$|/preview$|/analyze/start$")
 FILE_OUT_RE = re.compile(r"\.(pdf|xlsx|md|png)$|/download$|/content$|/sample$|/export$|^/export\.")
 V1_PATHS_IGNORE = ("/static", "/v2")
