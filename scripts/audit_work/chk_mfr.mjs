@@ -38,6 +38,7 @@ try {
   await tap(b, `[data-tool="fit"]`); await sleep(2500);
   const cv = await b.eval(`(()=>{const f=document.querySelector('iframe.ws-frame').getBoundingClientRect(); const c=${FD}.querySelector('#mfr-3d-canvas canvas').getBoundingClientRect(); return {x:f.x+c.x, y:f.y+c.y, w:c.width, h:c.height}; })()`);
   check("3D: холст WebGL построен в кадре схемы", cv.w > 200 && cv.h > 200, JSON.stringify(cv));
+  check("строка состояния показывает служебную строку V1 для 3D («3D: N элементов…»)", /3D: \d+ элемент/.test(await status(b)), await status(b));
   let n = b.requests.length;
   // центр холста; если луч прошёл мимо (камера после «вписать» может смотреть чуть в сторону) — перебор точек вокруг центра, как verify_model_ui
   const pts = [[0.5, 0.5], [0.5, 0.45], [0.5, 0.55], [0.45, 0.5], [0.55, 0.5], [0.45, 0.45], [0.55, 0.55], [0.4, 0.5], [0.6, 0.5], [0.5, 0.4], [0.5, 0.6]];
@@ -98,6 +99,23 @@ try {
   await tap(b, `#ws-panel-body [data-act="reset-filters"]`); await sleep(3000);
   const after = await b.eval(`({ dyn: document.querySelector('[data-mbp-d="on"]')?.checked, levels: document.querySelectorAll('[data-mpick="level"][aria-pressed="true"]').length, sections: document.querySelectorAll('[data-mpick="section"][aria-pressed="true"]').length })`);
   check("«Сбросить все»: этажи и секции сняты, динамика факта выключена (как V1)", after.dyn === false && after.sections === 0, JSON.stringify(after) + ` (${st0})`);
+  // легенда категорий (цвет на плане) и блокировка категорий при выключенном слое «Элементы» (как V1)
+  await tap(b, `.ws-tabs [data-tab="filters"]`); await sleep(600);
+  const sw = await b.eval(`[...document.querySelectorAll('#ws-panel-body input[data-mcat]')].map(c=>!!c.closest('label').querySelector('.ws-sw'))`);
+  check("категории с цветом на плане (легенда V1)", sw.length > 0 && sw.every(Boolean), `${sw.filter(Boolean).length}/${sw.length}`);
+  // слой «Элементы» — выключить (если включён), проверить блокировку категорий, вернуть как было
+  await tap(b, `.ws-tabs [data-tab="view"]`); await sleep(400);
+  const elOn0 = await b.eval(`document.querySelector('input[data-mlayer="elements"]').checked`);
+  if (elOn0) { await tap(b, `input[data-mlayer="elements"]`); await sleep(1500); }
+  await tap(b, `.ws-tabs [data-tab="filters"]`); await sleep(600);
+  const lock = await b.eval(`({ dis: [...document.querySelectorAll('#ws-panel-body input[data-mcat]')].every(c=>c.disabled), note: /Слой «Элементы» выключен/.test(document.querySelector('#ws-panel-body').innerText), v1: [...${FD}.querySelectorAll('#mfr-elements-categories input[data-mfr-category]')].every(c=>c.disabled) })`);
+  check("слой «Элементы» выключен — категории недоступны (как в кадре V1), объяснение показано", lock.dis && lock.note && lock.v1, JSON.stringify(lock));
+  await tap(b, `.ws-tabs [data-tab="view"]`); await sleep(400);
+  await tap(b, `input[data-mlayer="elements"]`); await sleep(1500);
+  await tap(b, `.ws-tabs [data-tab="filters"]`); await sleep(600);
+  const unlock = await b.eval(`[...document.querySelectorAll('#ws-panel-body input[data-mcat]')].every(c=>!c.disabled)`);
+  check("слой «Элементы» включён — категории снова доступны", unlock);
+  if (!elOn0) { await tap(b, `.ws-tabs [data-tab="view"]`); await sleep(400); await tap(b, `input[data-mlayer="elements"]`); await sleep(1500); }
   // «Сроки»: таблица работ по строкам (V1 block-works-dates-table) — правка строки карточкой ЗР, таблица перечитана
   await tap(b, `.ws-tabs [data-tab="props"]`); await sleep(800);
   const pt = await b.eval(`(()=>{const f=document.querySelector('iframe.ws-frame'); const d=f.contentDocument; const fr=f.getBoundingClientRect(); const id=${one};

@@ -611,7 +611,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       + sec("levels", "Этаж", m.levels.length ? pills(m.levels, "level") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все этажи.")
       + sec("sections", "Секция", m.sections.length ? pills(m.sections, "section") : `<p class="v2-muted">Нет данных</p>`, "Ничего не выбрано — показаны все секции.")
       + sec("categories", "Категории элементов", m.categories.length
-        ? m.categories.map((c) => `<label class="ws-check"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""}> <span>${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
+        // цвет категории на плане — легенда V1 (revit-plan-legend); при выключенном слое «Элементы» категории недоступны (как V1)
+        ? (m.categories.some((c) => c.disabled) ? `<p class="v2-muted ws-fnote">Слой «Элементы» выключен (вкладка «Вид») — отбор категорий не действует.</p>` : "")
+          + m.categories.map((c) => `<label class="ws-check${c.disabled ? " ws-dim" : ""}"><input type="checkbox" data-mcat="${esc(c.category)}" ${c.on ? "checked" : ""} ${c.disabled ? "disabled" : ""}> <span>${c.color ? `<i class="ws-sw" style="background:${esc(c.color)}"></i>` : ""}${esc(c.label)}</span><em>${c.count}</em></label>`).join("")
+          + `<p class="v2-muted ws-fnote">Пунктиром на плане — габаритный контур.</p>`
         : `<p class="v2-muted">Нет данных</p>`)
       + (mbp ? mbp.filtersHtml() : "");
   }
@@ -765,7 +768,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const m = sc.mfr;
       const n = m.selectedBlocks?.length || 0;
       const selT = n > 1 ? `Выбрано блоков: ${n}` : m.selected ? (m.selected.kind === "block" ? "Выбран блок" : "Выбран элемент") : "Ничего не выбрано";
-      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${mfrStatusExtra()}${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
+      s.innerHTML = `<span>Элементов <b>${m.elements}</b>${m.blocks ? `, блоков <b>${m.blocks}</b>` : ""}${m.truncated ? ` <b class="ws-warn">— список обрезан, сузьте отбор</b>` : ""}</span><span>${esc(selT)}</span><span>${m.filtersActive ? "Отбор задан" : "Отбор не задан"}</span><span>Режим: ${esc((views.find((v) => v[0] === sc.view) || [])[1] || "")}</span>${m.status && !/^Показано \d+ элементов$/.test(m.status) ? `<span class="ws-notice" title="${esc(m.status)}">${esc(m.status)}</span>` : ""}${mfrStatusExtra()}${capsChip()}${notice ? `<span class="ws-notice" title="${esc(notice)}">${esc(notice)}</span>` : ""}`;
       return;
     }
     const sel = sc.multi?.count > 1 ? `Выбрано: ${sc.multi.count}` : sc.selected ? `Выбран: ${sc.selected.mark || sc.selected.element_type}` : "Ничего не выбрано";

@@ -150,7 +150,9 @@
     const hasData = !!st.data && st.objectId === state.objectId;
     const cats = Array.from(document.querySelectorAll("#mfr-elements-categories input[data-mfr-category]")).map((cb) => {
       const sp = cb.parentElement.querySelector("span");
-      return { category: cb.dataset.mfrCategory, label: cb.dataset.mfrCategory || "(без категории)", count: sp ? num(sp.textContent) : 0, on: cb.checked };
+      // disabled — «Элементы» выключены (V1 syncMfrElementCategoriesDisabled); color — цвет категории на плане (легенда V1 revit-plan-legend)
+      const color = typeof revitFill === "function" ? revitFill(cb.dataset.mfrCategory) : null;
+      return { category: cb.dataset.mfrCategory, label: cb.dataset.mfrCategory || "(без категории)", count: sp ? num(sp.textContent) : 0, on: cb.checked, disabled: cb.disabled, color: /^#[0-9a-fA-F]{3,8}$|^rgb|^hsl/.test(String(color || "")) ? String(color) : null };
     });
     const layers = Object.entries(MFR_LAYERS).map(([key, id]) => {
       const cb = byId(id);
