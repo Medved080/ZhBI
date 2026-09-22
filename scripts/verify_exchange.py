@@ -26,7 +26,7 @@ import openpyxl  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -195,6 +195,139 @@ def section_contracting():
         check(True, f"файл 201 МБ: приём оборван сервером ({type(e).__name__})")
     check(snap() == before, "файл 201 МБ: БД не изменена")
 
+
+def upj(s, path, content, name="settings.json", data=None):
+    return s.post(BASE + path, files={"file": (name, content, "application/json")}, data=data or {}, timeout=60)
+
+
+def section_settings():
+    print("== экспорт/импорт настроек")
+    admin = login("admin")
+
+    # ---- экспорт: права и форма файла ----
+    r = admin.get(BASE + "/settings/export")
+    check(r.status_code == 200, f"export: 200 (получен {r.status_code})")
+    exported = r.json()
+    check({"users", "status_colors", "label_visibility", "label_dates_visibility"} <= set(exported), "export: файл содержит все разделы")
+    check(any(u.get("password_hash") for u in exported["users"]), "export: файл несёт хэши паролей (как и в V1)")
+    for user in ("user2", "user4"):
+        r2 = login(user).get(BASE + "/settings/export")
+        check(r2.status_code == 403, f"export: {user} получает 403 (получен {r2.status_code})")
+
+    # ---- готовим файл: новый пользователь (create) + изменённый цвет статуса; существующих не трогаем ----
+    cur_colors = dict(exported["status_colors"])
+    some_status = next(iter(cur_colors))
+    new_color = "#00ff00" if cur_colors[some_status] != "#00ff00" else "#00ff01"
+    login_tag = "v2settest" + str(int(__import__("time").time()) % 100000)
+    payload = {
+        "users": [{"domain_login": login_tag, "last_name": "Проверка", "first_name": "V2", "role": "view", "auth_method": "local"}],
+        "status_colors": {**cur_colors, some_status: new_color},
+        "label_visibility": {}, "label_dates_visibility": {},
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    # ---- analyze: права, форма файла, содержимое сверки ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r2 = upj(login(user), "/settings/import/analyze", body)
+        check(r2.status_code == 403 and snap() == before, f"analyze: {user} → {r2.status_code}, БД не изменена")
+    for name, content, what in (("e.json", b"", "пустой"), ("n.json", b"not json", "не JSON"), ("a.json", b"[1,2]", "не объект")):
+        before = snap()
+        r2 = upj(admin, "/settings/import/analyze", content, name=name)
+        check(400 <= r2.status_code < 500 and snap() == before, f"analyze: {what} файл → {r2.status_code}, БД не изменена")
+    before = snap()
+    r = upj(admin, "/settings/import/analyze", body)
+    check(r.status_code == 200, f"analyze: 200 (получен {r.status_code}: {r.text[:150]})")
+    a = r.json()
+    check(snap() == before, "analyze: ничего не пишет (снимок БД совпал)")
+    check(a["has_changes"] is True, "analyze: has_changes=true")
+    check(any(u["kind"] == "create" and u["login"] == login_tag for u in a["users"]), "analyze: новый пользователь показан как create")
+    check(not any(u.get("password_set") for u in a["users"] if u["login"] == login_tag), "analyze: без пароля в файле — password_set=false")
+    check(any(c["status"] == some_status and c["now"] == new_color for c in a["status_colors"]), "analyze: изменённый цвет статуса показан")
+    check("password_hash" not in json.dumps(a), "analyze: хэши паролей в сверке не раскрываются")
+    digest = a["digest"]
+
+    # ---- apply: права ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r2 = login(user).post(BASE + "/settings/import/apply", files={"file": ("s.json", body, "application/json")}, data={"digest": digest})
+        check(r2.status_code == 403 and snap() == before, f"apply: {user} → {r2.status_code}, БД не изменена")
+
+    # ---- устаревшая сверка: база меняется между analyze и apply (другой администратор поправил цвет напрямую) ----
+    other_status = next(s for s in cur_colors if s != some_status)
+    c = sqlite3.connect(DB, timeout=30)
+    c.execute("UPDATE status_colors SET color = ? WHERE status = ?", ("#123123", other_status))
+    c.commit(); c.close()
+    before = snap()
+    r = admin.post(BASE + "/settings/import/apply", files={"file": ("s.json", body, "application/json")}, data={"digest": digest})
+    check(r.status_code == 409, f"apply: устаревшая сверка → {r.status_code} (получен {r.text[:150]})")
+    check(snap() == before, "apply: устаревшая сверка — БД не изменена")
+
+    # актуальный digest после прямого изменения базы
+    r = upj(admin, "/settings/import/analyze", body)
+    digest = r.json()["digest"]
+
+    # ---- откат: сбой посреди применения (несколько таблиц в одной операции) ----
+    payload_fault = {
+        "users": [{"domain_login": login_tag, "last_name": "Проверка", "first_name": "V2", "role": "view", "auth_method": "local"}],
+        "status_colors": {**cur_colors, some_status: new_color, "v2_fault_probe": "#abcdef"},
+        "label_visibility": {}, "label_dates_visibility": {},
+    }
+    body_fault = json.dumps(payload_fault, ensure_ascii=False).encode("utf-8")
+    r = upj(admin, "/settings/import/analyze", body_fault)
+    check(r.status_code == 200, f"analyze (с провокацией сбоя): 200 (получен {r.status_code})")
+    digest_fault = r.json()["digest"]
+    j0 = journal_max()
+    before = snap()
+    with Fault("CREATE TRIGGER v2_fault BEFORE INSERT ON status_colors WHEN NEW.status = 'v2_fault_probe' "
+              "BEGIN SELECT RAISE(ABORT, 'v2 test fault'); END"):
+        r = admin.post(BASE + "/settings/import/apply", files={"file": ("s.json", body_fault, "application/json")}, data={"digest": digest_fault})
+        check(r.status_code >= 400, f"apply: сбой внутри операции → {r.status_code}")
+    after = snap()
+    check(after == before, "apply: откат — снимок БД совпал (ни пользователь, ни цвет не остались)")
+    check(not journal_since(j0, "settings_import"), "apply: откат — событий settings_import в журнале нет")
+    check(not rows("SELECT 1 FROM users WHERE domain_login = ?", login_tag), "apply: откат — новый пользователь не создан")
+
+    # ---- успех: применяем по-настоящему (тот же файл без провокации, digest актуальный) ----
+    r = upj(admin, "/settings/import/analyze", body)
+    digest = r.json()["digest"]
+    j0 = journal_max()
+    r = admin.post(BASE + "/settings/import/apply", files={"file": ("s.json", body, "application/json")}, data={"digest": digest})
+    check(r.status_code == 200, f"apply: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["users_upserted"] == 1, f"apply: users_upserted=1 (получено {res.get('users_upserted')})")
+    new_user = rows("SELECT * FROM users WHERE domain_login = ?", login_tag)
+    check(len(new_user) == 1 and new_user[0]["role"] == "view" and not new_user[0]["password_hash"], "apply: пользователь создан без пароля, роль view")
+    color_row = rows("SELECT color FROM status_colors WHERE status = ?", some_status)
+    check(color_row and color_row[0]["color"] == new_color, "apply: цвет статуса применён")
+    ev = journal_since(j0, "settings_import")
+    check(len(ev) == 1, f"apply: одно событие settings_import в журнале (найдено {len(ev)})")
+    check("password_hash" not in (ev[0].get("details") or "") and "password_hash" not in (ev[0].get("new_value") or ""), "apply: журнал не содержит хэш пароля")
+
+    # ---- повторное применение того же файла: пользователь уже есть — update, а не create; изменений в цвете нет ----
+    r = upj(admin, "/settings/import/analyze", body)
+    a2 = r.json()
+    check(not any(u["login"] == login_tag for u in a2["users"]), "повторная сверка: пользователь уже как в файле — без правок")
+    check(not any(c["status"] == some_status for c in a2["status_colors"]), "повторная сверка: цвет уже как в файле — без правок")
+
+    # ---- одношаговый V1-эндпоинт (/settings/import): совместимость после рефакторинга общей логики ----
+    v1_status = next(s for s in cur_colors if s not in (some_status, "v2_fault_probe"))
+    v1_color = "#654321"
+    v1_payload = {"users": [], "status_colors": {**cur_colors, some_status: new_color, v1_status: v1_color},
+                 "label_visibility": {}, "label_dates_visibility": {}}
+    j0 = journal_max()
+    r = upj(admin, "/settings/import", json.dumps(v1_payload, ensure_ascii=False).encode("utf-8"))
+    check(r.status_code == 200, f"V1 /settings/import: 200 (получен {r.status_code}: {r.text[:150]})")
+    check(rows("SELECT color FROM status_colors WHERE status = ?", v1_status)[0]["color"] == v1_color, "V1 /settings/import: цвет применён")
+    check(len(journal_since(j0, "settings_import")) == 1, "V1 /settings/import: событие в журнале")
+    # V1-эндпоинт тоже атомарен теперь (begin_write): сбой посреди — откат без частичных изменений
+    before = snap()
+    j0 = journal_max()
+    bad_v1 = {"users": [], "status_colors": {some_status: "not-a-color"}, "label_visibility": {}, "label_dates_visibility": {}}
+    r = upj(admin, "/settings/import", json.dumps(bad_v1, ensure_ascii=False).encode("utf-8"))
+    check(r.status_code == 422, f"V1 /settings/import: неверный цвет → {r.status_code}")
+    check(snap() == before, "V1 /settings/import: неверный цвет — БД не изменена")
+    check(not journal_since(j0, "settings_import"), "V1 /settings/import: неверный цвет — журнала нет")
 
 
 # ---------------------------------------------------------------- вспомогательное: внесение сбоя в копию БД
@@ -795,10 +928,10 @@ def section_revit():
         TABLES = saved_tables
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit}
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")

@@ -69,6 +69,7 @@ from app.dict_delete import router as dict_delete_router
 from app.marks import router as marks_router
 from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
+from app import settings_import
 from app.db import (
     DB_PATH,
     begin_write,
@@ -7767,125 +7768,90 @@ def export_settings(admin: sqlite3.Row = Depends(require_service_feature("settin
 
 @app.post("/settings/import")
 def import_settings(file: UploadFile = File(...), admin: sqlite3.Row = Depends(require_service_feature("settings_io", "write"))):
+    raw = read_upload_limited(file.file)
     try:
-        payload = json.loads(read_upload_limited(file.file))
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=422, detail="Файл повреждён или не является корректным JSON")
+        payload = settings_import.parse_payload(raw)
+    except settings_import.SettingsImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
     backup_before_import(f"настройки из {file.filename or 'файла'}",
                          audit_display_name(admin), admin["id"])
     conn = get_connection()
     try:
-        users_upserted = 0
-        for u in payload.get("users", []):
-            existing = conn.execute(
-                "SELECT id FROM users WHERE domain_login = ?", (u.get("domain_login"),)
-            ).fetchone()
-            fields = {
-                "last_name": u.get("last_name", ""),
-                "first_name": u.get("first_name", ""),
-                "patronymic": u.get("patronymic"),
-                "position": u.get("position"),
-                "department": u.get("department"),
-                "domain_login": u.get("domain_login"),
-                "role": u.get("role", "view"),
-                "password_hash": u.get("password_hash"),
-                "password_salt": u.get("password_salt"),
-                # Способ входа переносится вместе с пользователем: файл
-                # настроек нужен для переезда на другой сервер, а учётная
-                # запись, приехавшая туда с 'local' вместо 'domain', ждала
-                # бы пароля, которого у неё нет. Старый файл (до 2026-08-03)
-                # этого поля не содержит — там 'local', как и было.
-                "auth_method": "domain" if u.get("auth_method") == "domain" else "local",
-            }
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE users SET last_name=:last_name, first_name=:first_name,
-                        patronymic=:patronymic, position=:position, department=:department,
-                        role=:role, password_hash=:password_hash, password_salt=:password_salt,
-                        auth_method=:auth_method, updated_at=datetime('now')
-                    WHERE domain_login=:domain_login
-                    """,
-                    fields,
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO users (last_name, first_name, patronymic, position, department,
-                        domain_login, role, password_hash, password_salt, auth_method)
-                    VALUES (:last_name, :first_name, :patronymic, :position, :department,
-                        :domain_login, :role, :password_hash, :password_salt, :auth_method)
-                    """,
-                    fields,
-                )
-            users_upserted += 1
-
-        # Файл настроек — такой же непроверенный ввод, как и форма: его
-        # приносят с другого сервера, и по дороге он редактируется руками.
-        for status, color in payload.get("status_colors", {}).items():
-            try:
-                color = validate_color(color, "Цвет статуса")
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-            conn.execute(
-                "INSERT INTO status_colors (status, color) VALUES (?, ?) "
-                "ON CONFLICT(status) DO UPDATE SET color = excluded.color",
-                (status, color),
-            )
-
-        # Видимость подписей — по объектам, ключ файла это ИМЯ объекта (см.
-        # export_settings). Объект, которого на этом сервере нет, ПРОПУСКАЕТСЯ
-        # и попадает в счётчик пропущенных: завести объект по одному имени из
-        # файла настроек нельзя — у объекта есть проект, адрес и чертежи,
-        # ничего этого в файле нет, а молча приписать настройки чужому объекту
-        # хуже, чем не применить их вовсе.
-        object_ids_by_name = {
-            r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM objects")
-        }
-        applied = {"label_visibility": 0, "label_dates_visibility": 0}
-        skipped_objects = set()
-
-        for key, column in (("label_visibility", "visible"),
-                            ("label_dates_visibility", "dates_visible")):
-            for object_name, types in (payload.get(key) or {}).items():
-                # Старый формат файла — {тип: bool} без объекта. Применить
-                # его можно, только если объект на сервере ровно один:
-                # иначе неизвестно, к какой стройке эти настройки относились.
-                if isinstance(types, bool):
-                    if len(object_ids_by_name) != 1:
-                        skipped_objects.add("(файл старого формата, без объекта)")
-                        continue
-                    object_id, types = next(iter(object_ids_by_name.values())), {object_name: types}
-                elif object_name in object_ids_by_name:
-                    object_id = object_ids_by_name[object_name]
-                else:
-                    skipped_objects.add(object_name)
-                    continue
-                for element_type, visible in types.items():
-                    conn.execute(
-                        f"INSERT INTO label_visibility (object_id, element_type, {column}) "
-                        f"VALUES (?, ?, ?) ON CONFLICT(object_id, element_type) "
-                        f"DO UPDATE SET {column} = excluded.{column}",
-                        (object_id, element_type, int(visible)),
-                    )
-                    applied[key] += 1
-
+        begin_write(conn)   # блокировка записи ДО чтения и записи (app/db.py) — импорт учётных записей атомарен целиком
+        try:
+            итог = settings_import.apply_payload(conn, payload)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         conn.commit()
     finally:
         conn.close()
 
-    итог = {
-        "users_upserted": users_upserted,
-        "status_colors": len(payload.get("status_colors", {})),
-        "label_visibility": applied["label_visibility"],
-        "label_dates_visibility": applied["label_dates_visibility"],
-        "skipped_objects": sorted(skipped_objects),
-    }
     activity.log("settings_import", user=admin,
-                 new_value=f"{file.filename or 'файл'}: пользователей {users_upserted}, "
+                 new_value=f"{file.filename or 'файл'}: пользователей {итог['users_upserted']}, "
                            f"цветов статусов {итог['status_colors']}, "
-                           f"видимость подписей {applied['label_visibility']}",
+                           f"видимость подписей {итог['label_visibility']}",
+                 details=итог)
+    return итог
+
+
+@app.post("/settings/import/analyze")
+def analyze_settings_import(file: UploadFile = File(...),
+                            admin: sqlite3.Row = Depends(require_service_feature("settings_io", "write"))):
+    """Экран V2 «Экспорт/импорт настроек»: сверка ДО применения — что изменится, ничего не пишет
+    (см. `app/settings_import.py`). `digest` результата сверяется заново на `/settings/import/apply` —
+    файл нужно прислать туда ТЕМ ЖЕ, целиком, чтобы применение читало пароли/соли из самого файла, а
+    не из диффа, который мог быть показан человеку с посторонними полями."""
+    raw = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        try:
+            return settings_import.analyze(conn, raw)
+        except settings_import.SettingsImportError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+    finally:
+        conn.close()
+
+
+@app.post("/settings/import/apply")
+def apply_settings_import(file: UploadFile = File(...), digest: str = Form(...),
+                          admin: sqlite3.Row = Depends(require_service_feature("settings_io", "write"))):
+    """Фаза 2: применяет файл, если сверка (тот же `digest`, что вернул `/analyze`) ещё не устарела.
+    Файл читается заново — фаза 1 ничего не хранит между запросами."""
+    raw = read_upload_limited(file.file)
+    conn = get_connection()
+    try:
+        try:
+            fresh = settings_import.analyze(conn, raw)
+        except settings_import.SettingsImportError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
+        if fresh["digest"] != digest:
+            raise HTTPException(
+                status_code=409,
+                detail="Сверка устарела: файл или данные на сервере изменились с момента проверки. "
+                       "Ничего не применено — сверьте заново.",
+            )
+        payload = settings_import.parse_payload(raw)
+    finally:
+        conn.close()
+
+    backup_before_import(f"настройки из {file.filename or 'файла'}",
+                         audit_display_name(admin), admin["id"])
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        try:
+            итог = settings_import.apply_payload(conn, payload)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        conn.commit()
+    finally:
+        conn.close()
+
+    activity.log("settings_import", user=admin,
+                 new_value=f"{file.filename or 'файл'}: пользователей {итог['users_upserted']}, "
+                           f"цветов статусов {итог['status_colors']}, "
+                           f"видимость подписей {итог['label_visibility']}",
                  details=итог)
     return итог
 

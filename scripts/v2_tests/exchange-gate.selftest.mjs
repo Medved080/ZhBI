@@ -1,5 +1,5 @@
 // Самопроверка строк шлюза записи области «exchange»: форма multipart-запроса и JSON-тел (node scripts/v2_tests/exchange-gate.selftest.mjs).
-// Каждая изменяющая операция обмена данными разрешена ТОЛЬКО с проверенной формой запроса; всё прочее (одношаговый DXF, PDF, перенос базы, настройки) остаётся отключённым.
+// Каждая изменяющая операция обмена данными разрешена ТОЛЬКО с проверенной формой запроса; всё прочее (одношаговый DXF, PDF, перенос базы, одношаговый settings/import V1) остаётся отключённым.
 import { checkWrite } from "../../app/static/v2/write-gate.js";
 let ok = 0, bad = [];
 const t = (cond, msg) => { if (cond) ok++; else bad.push(msg); };
@@ -55,8 +55,17 @@ t(!A("POST", "/import-revit/apply", { token: tok, x: 1 }), "revit: лишнее 
 t(A("POST", "/admin/import-input", { object_id: 3 }), "input: запуск");
 t(!A("POST", "/admin/import-input", { object_id: null }), "input: без объекта");
 t(!A("POST", "/admin/import-input", {}), "input: пустое тело");
+// настройки (экспорт/импорт): сверка и применение по digest — обе через multipart .json
+const dg = "a".repeat(64);
+t(A("POST", "/settings/import/analyze", fd({}, "s.json")), "settings: сверка");
+t(!A("POST", "/settings/import/analyze", fd({}, "s.xlsx")), "settings: расширение");
+t(!A("POST", "/settings/import/analyze", fd({ extra: "1" }, "s.json")), "settings: лишнее поле формы");
+t(A("POST", "/settings/import/apply", fd({ digest: dg }, "s.json")), "settings: применение по digest");
+t(!A("POST", "/settings/import/apply", fd({}, "s.json")), "settings: без digest");
+t(!A("POST", "/settings/import/apply", fd({ digest: "abc" }, "s.json")), "settings: digest не похож на sha256");
+t(!A("POST", "/settings/import/apply", fd({ digest: dg }, "s.xlsx")), "settings: применение — расширение");
 // прочее по-прежнему отключено
-t(!A("POST", "/settings/import", fd({}, "s.json")), "settings/import отключён");
+t(!A("POST", "/settings/import", fd({}, "s.json")), "settings/import (одношаговый V1-эндпоинт) в V2 отключён — только analyze/apply");
 t(!A("POST", "/import-pdf/apply", { token: tok }), "pdf apply отключён");
 t(!A("POST", "/admin/db-transfer/apply", {}), "перенос базы отключён");
 console.log(`проверок пройдено: ${ok}, не пройдено: ${bad.length}`); bad.forEach((b) => console.log("НЕ ПРОЙДЕНО:", b));
