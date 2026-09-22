@@ -120,7 +120,12 @@ export function mountVisibilityEdit(el, { screen, structure, objectId, api, grou
     try {
       const [visible, dates] = await Promise.all([api.get(path("/label-visibility")), api.get(path("/label-dates-visibility"))]);
       st.base = Object.fromEntries(st.types.map((t) => [t, { visible: visible[t] !== false, dates: dates[t] !== false }]));
-      for (const t of Object.keys(st.draft)) { if (!Object.keys(st.draft[t]).length) delete st.draft[t]; }
+      // Правка, совпавшая с тем, что теперь хранит сервер, больше не правка (иначе после успешного сохранения экран оставался
+      // «изменённым» и уход с него спрашивал о несохранённом). Не применившееся (неизвестный исход, сервер не записал) — остаётся.
+      for (const t of Object.keys(st.draft)) {
+        for (const f of Object.keys(st.draft[t])) { if (st.draft[t][f] === st.base[t]?.[f]) delete st.draft[t][f]; }
+        if (!Object.keys(st.draft[t]).length) delete st.draft[t];
+      }
       setStatus(allOk ? `Сохранено: ${Object.keys(cv).length + Object.keys(cd).length}.` : `Сохранено частично; не применилось: ${errText(lastErr)}.`);
     } catch (e) { setStatus(allOk ? "Сохранено, но перечитать не удалось — нажмите «Обновить»." : `Неизвестно, применена ли часть правок (${errText(lastErr)}). Обновите список.`); }
     st.busyVisible = false; st.busyDates = false; paint();

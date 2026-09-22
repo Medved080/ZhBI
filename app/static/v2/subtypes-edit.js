@@ -6,8 +6,8 @@
 // `/dictionaries/mark/…` с планом последствий.
 //
 // Барьер: объект из контекста (смена объекта проходит сторож несохранённого), повтор существующего подтипа/марки
-// не отправляется (сервер молча проигнорировал бы его как «успех»), подтип/марка с изделиями здесь не удаляются
-// (нужна замена — план последствий с выбором записи-замены, тот же поток, что у справочников контрактации);
+// не отправляется (сервер молча проигнорировал бы его как «успех»), подтип/марка с изделиями удаляются только с заменой
+// (план последствий с выбором записи-замены — тот же поток, что у справочников контрактации и в V1);
 // переименование марки — ТОЛЬКО после показа числа затронутых изделий и позиций контрактов (уже в ответе списка)
 // и подтверждения человеком: сервер двигает текст молча, и без этого шага решение принято не глядя; одна запись
 // за раз, ввод не теряется при ошибке, успех — после повторного чтения, неизвестный исход не повторяется.
@@ -127,16 +127,26 @@ export function mountSubtypesEdit(el, { screen, structure, objectId, api, groupT
       }
     });
   }
+  // Удаление подтипа, как в V1 (openDictDelete): неиспользуемый — подтверждение с названием; используемый изделиями — общий поток
+  // плана последствий (delete-plan.js) с выбором подтипа-замены того же типа: ссылки изделий переносит сервер в той же транзакции,
+  // что и удаление, план перечитывается перед отправкой.
   async function del(type, subtype) {
     await write(async () => {
       setStatus("Проверяем, где подтип используется…");
       const key = `${objectId}|${type}|${subtype}`;
       let plan;
-      try { plan = (await api.get(`/dictionaries/subtype/${encodeURIComponent(key)}/delete-plan`)).plan; }
+      try { plan = await api.get(`/dictionaries/subtype/${encodeURIComponent(key)}/delete-plan`); }
       catch (e) { setStatus(`Не удалось получить план удаления: ${errText(e)}`); return; }
       setStatus("");
-      if (plan.blockers?.length || plan.needs_replacement || (plan.refs || []).some((r) => r.count > 0)) {
-        await showInfoDialog(`Подтип «${subtype}» используется: ${(plan.refs || []).map((r) => `${r.label} — ${r.count}`).join("; ") || "другими данными"}.\nУдаление с заменой выполняется в текущем интерфейсе — здесь оно недоступно, чтобы изделия не остались с несуществующим подтипом.`);
+      const used = plan.plan.needs_replacement || (plan.plan.refs || []).some((r) => r.count > 0);
+      if (used || plan.blockers?.length) {
+        const result = await runDeleteFlow({ api, kind: "subtype", id: encodeURIComponent(key) });
+        if (result === "cancelled") return;
+        const ok = await load();
+        const gone = ok && !(st.data[type] || []).includes(subtype);
+        if (result === "deleted") setStatus(gone ? `Удалено: «${subtype}», изделия переведены на замену.` : ok ? "Сервер вернул подтип после удаления — проверьте." : "Удалено, но список обновить не удалось — обновите страницу.");
+        else if (result === "exists") setStatus(`Подтип «${subtype}» остался на месте (ответ сервера не дошёл) — повторите удаление вручную.`);
+        else if (result === "unknown") setStatus(gone ? "Подтип удалён, хотя ответ не дошёл." : `Неизвестно, удалён ли подтип «${subtype}» — проверьте список.`);
         return;
       }
       if (!(await showConfirmDialog(`Удалить подтип «${subtype}» у типа «${type}»? Изделий с ним нет.`, { confirmLabel: "Удалить", danger: true }))) return;
@@ -207,7 +217,8 @@ export function mountSubtypesEdit(el, { screen, structure, objectId, api, groupT
   async function delMark(mark) {
     await write(async () => {
       const result = await runDeleteFlow({ api, kind: "mark", id: mark.id });
-      if (result === "deleted" || result === "exists") { const ok = await load(); setStatus(ok ? `Удалено: «${mark.name}».` : "Удалено, но список обновить не удалось — обновите страницу."); }
+      if (result === "deleted") { const ok = await load(); setStatus(ok ? `Удалено: «${mark.name}».` : "Удалено, но список обновить не удалось — обновите страницу."); }
+      else if (result === "exists") setStatus(`Марка «${mark.name}» осталась на месте (ответ сервера не дошёл) — повторите удаление вручную.`);
       else if (result === "unknown") setStatus(`Неизвестно, удалена ли марка «${mark.name}» — проверьте список.`);
     });
   }
