@@ -201,14 +201,22 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
     roNote: "У вас нет права изменять заметки отчётов." });
   const path = `${spec.endpoint}?object_id=${objectId}`;
   let dead = false;
-  // revisions — последнее подтверждённое чтение; sel — дата открытой редакции (null — новая); draft — форма
-  const st = { revisions: null, sel: null, draft: { date: "", events: "", tasks: "", questions: "" }, busy: false, error: "", seq: 0 };
+  // revisions — последнее подтверждённое чтение; sel — дата открытой редакции (null — новая); draft — форма.
+  // Как в V1: новая редакция — на сегодняшнюю дату; при открытии экрана выбрана самая свежая редакция (с ней работают чаще всего);
+  // дата, переданная отчётом «Динамика» (одноразовый ключ sessionStorage «v2.reportNotes.date»), открывает её редакцию или
+  // новую на эту дату (V1: кнопка правки заметок в отчёте, openReportNotes(дата отчёта)).
+  const todayIso = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  const emptyDraft = (date) => ({ date, events: "", tasks: "", questions: "" });
+  let prefill = null;
+  try { prefill = sessionStorage.getItem("v2.reportNotes.date"); sessionStorage.removeItem("v2.reportNotes.date"); } catch (e) { /* хранилище недоступно */ }
+  if (!isRealDate(prefill)) prefill = null;
+  const st = { revisions: null, sel: null, newDate: prefill || todayIso(), draft: emptyDraft(prefill || todayIso()), busy: false, error: "", seq: 0, first: true };
   const rev = (date) => st.revisions?.find((r) => r.effective_date === date);
   const draftOfRev = (r) => ({ date: r.effective_date, events: (r.key_events || []).join("\n"), tasks: (r.key_tasks || []).join("\n"), questions: (r.open_questions || []).join("\n") });
   const listsOf = (d) => [linesToList(d.events), linesToList(d.tasks), linesToList(d.questions)];
   const dirty = () => {
     if (st.revisions === null) return false;
-    if (st.sel === null) return st.draft.date !== "" || st.draft.events.trim() !== "" || st.draft.tasks.trim() !== "" || st.draft.questions.trim() !== "";
+    if (st.sel === null) return st.draft.date !== st.newDate || st.draft.events.trim() !== "" || st.draft.tasks.trim() !== "" || st.draft.questions.trim() !== "";
     const r = rev(st.sel);
     return !!r && JSON.stringify(listsOf(st.draft)) !== JSON.stringify([r.key_events || [], r.key_tasks || [], r.open_questions || []]);
   };
@@ -228,7 +236,7 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
     body.innerHTML = `<div class="v2-cols">
       <aside class="v2-rn-list"><div class="v2-bar"><strong>Редакции</strong>${canWrite ? `<button type="button" class="v2-btn" id="rn-new">+ Новая редакция</button>` : ""}</div>
         ${st.revisions.length ? `<ul class="v2-card-list">${st.revisions.map((r) => `<li><button type="button" class="v2-btn ${st.sel === r.effective_date ? "v2-primary" : ""}" data-rev="${esc(r.effective_date)}" aria-pressed="${st.sel === r.effective_date}">${esc(dateRu(r.effective_date))}</button>
-          <span class="v2-muted">${esc(r.updated_by || "")}</span></li>`).join("")}</ul>` : `<p class="v2-muted">Редакций нет.</p>`}</aside>
+          <span class="v2-muted">пунктов: ${(r.key_events || []).length + (r.key_tasks || []).length + (r.open_questions || []).length}${r.updated_by ? ` · ${esc(r.updated_by)}` : ""}</span></li>`).join("")}</ul>` : `<p class="v2-muted">Редакций нет.</p>`}</aside>
       <section><form id="rn-form" autocomplete="off">
         <label class="v2-wire-field"><span>Действует с даты</span><input type="date" id="rn-date" value="${esc(st.draft.date)}" ${isNew && canWrite ? "" : "disabled"}></label>
         ${!isNew ? `<p class="v2-muted">Дата существующей редакции не меняется: чтобы сдвинуть её, заведите новую и удалите эту.</p>` : ""}
@@ -269,7 +277,8 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
     if (date === st.sel && date !== null) return;
     if (!(await guarded())) return;
     st.sel = date;
-    st.draft = date === null ? { date: "", events: "", tasks: "", questions: "" } : draftOfRev(rev(date));
+    if (date === null) st.newDate = todayIso();
+    st.draft = date === null ? emptyDraft(st.newDate) : draftOfRev(rev(date));
     ui.setStatus(""); paint();
   }
 
@@ -280,7 +289,13 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
       const data = await api.get(path);
       if (dead || seq !== st.seq) return false;
       st.revisions = data.revisions || []; st.error = "";
-      if (keepSel && st.sel !== null && !rev(st.sel)) { st.sel = null; st.draft = { date: "", events: "", tasks: "", questions: "" }; ui.setStatus("Открытой редакции больше нет (её удалили) — форма очищена."); }
+      if (st.first) {
+        st.first = false;
+        if (st.sel === null && !dirty()) {
+          const want = prefill && rev(prefill) ? prefill : !prefill && st.revisions[0] ? st.revisions[0].effective_date : null;
+          if (want) { st.sel = want; st.draft = draftOfRev(rev(want)); }
+        }
+      } else if (keepSel && st.sel !== null && !rev(st.sel)) { st.sel = null; st.newDate = todayIso(); st.draft = emptyDraft(st.newDate); ui.setStatus("Открытой редакции больше нет (её удалили) — форма очищена."); }
       else if (st.sel !== null && !dirty()) st.draft = draftOfRev(rev(st.sel));
       paint(); return true;
     } catch (e) {
@@ -351,7 +366,7 @@ export function mountReportNotesEdit(el, { screen, structure, objectId, api, gro
           if (st.revisions?.some((x) => x.effective_date === date)) { ui.setStatus(`Неизвестно, удалена ли редакция (${errText(e)}). Проверьте список.`); return; }
         } else { ui.setStatus(errText(e)); return; }
       }
-      st.sel = null; st.draft = { date: "", events: "", tasks: "", questions: "" };
+      st.sel = null; st.newDate = todayIso(); st.draft = emptyDraft(st.newDate);
       st.busy = false;
       const ok = await load(false);
       ui.setStatus(ok && !rev(date) ? `Редакция от ${dateRu(date)} удалена.` : ok ? "Сервер вернул редакцию после удаления — проверьте." : `Удалено, но список обновить не удалось — нажмите «Обновить».`);
