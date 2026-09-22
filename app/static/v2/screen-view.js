@@ -6,7 +6,6 @@
 // текстом сказано: функция работает только в текущем интерфейсе, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
 import { STATUS_LABEL, v1Href } from "./registry.js";
-import { hasAllowedWrites } from "./write-gate.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -114,6 +113,19 @@ export function mountScreenView(el, { screen, structure, objectId, rights, group
   return { hasUnsavedChanges: () => false, guardLeave: async () => true };
 }
 
+// Раздел, который V2 не строит сам, а показывает описанием с переходом в V1 (`mountScreenView`), — только такие помечаются «в V1».
+const inV1Only = (s) => s.impl === "v1" || (s.status || 0) <= 2;
+
+// Пометка — по статусу реестра, а не по типу реализации: прежняя проверка по префиксу `impl` помечала «в V1» два десятка разделов,
+// давно работающих в V2 (рабочие места, карта, контракты, документы контрактации, график СМР, служебные экраны).
+function homeChip(s) {
+  if (inV1Only(s)) return `<span class="v2-chip" title="Функции раздела пока работают в текущем интерфейсе">в V1</span>`;
+  if (s.status >= 6) return `<span class="v2-chip v2-chip-warn" title="${esc(STATUS_LABEL[s.status] || "")}">заблокирован</span>`;
+  if (s.status >= 5) return `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[5])}">в V2</span>`;
+  const gap = s.limits ? ` Чего пока нет: ${s.limits}` : "";
+  return `<span class="v2-chip v2-chip-warn" title="${esc(`${STATUS_LABEL[s.status] || ""}.${gap}`)}">в V2 · не всё</span>`;
+}
+
 export function mountHome(el, { registry, allowed, hiddenCount, go }) {
   el.className = "v2-page";
   const groups = registry.groups.filter((g) => g.id !== "home");
@@ -123,16 +135,17 @@ export function mountHome(el, { registry, allowed, hiddenCount, go }) {
     return `<section class="v2-card">
       <h3>${esc(g.title)} <span class="v2-muted">· ${items.length}</span></h3>
       <ul class="v2-card-list">${items.map((s) => `<li><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
-        ${s.impl.startsWith("module:") ? `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[s.status])}">в V2</span>` : s.impl === "export-form" ? `<span class="v2-chip v2-chip-ok" title="Выгрузка файла в новом интерфейсе">экспорт</span>` : s.impl === "exchange" ? `<span class="v2-chip v2-chip-ok" title="Загрузка и выгрузка файлов выполняются в новом интерфейсе">обмен</span>` : s.impl.endsWith("-edit") && hasAllowedWrites(s.id) ? `<span class="v2-chip v2-chip-ok" title="Правится в новом интерфейсе">правка</span>` : s.impl.endsWith("-edit") ? `<span class="v2-chip" title="Просмотр в новом интерфейсе, изменение — в текущем">просмотр</span>` : s.impl === "read" ? `<span class="v2-chip" title="Просмотр в новом интерфейсе, изменение — в текущем">просмотр</span>` : `<span class="v2-chip" title="Функции работают в текущем интерфейсе">в V1</span>`}</li>`).join("")}</ul>
+        ${homeChip(s)}</li>`).join("")}</ul>
     </section>`;
   }).join("");
-  const total = registry.screens.filter((s) => allowed(s)).length;
-  const inV2 = registry.screens.filter((s) => allowed(s) && s.impl.startsWith("module:")).length;
+  const mine = registry.screens.filter((s) => allowed(s) && s.group !== "home");
+  const inV2 = mine.filter((s) => !inV1Only(s)).length;
+  const full = mine.filter((s) => !inV1Only(s) && s.status === 5).length;
   el.innerHTML = `<div class="v2-container">
     <h2 class="v2-home-title">Новый интерфейс — экспериментальный</h2>
-    <p class="v2-muted">Все разделы сервиса доступны отсюда. Разделы с пометкой «в V2» открываются в новом интерфейсе (часть операций в них отключена — это указано в самом разделе);
-      остальные показывают состав экрана и открывают нужную форму в текущем интерфейсе (пометка «в V1»).
-      Доступно вам: ${total} разделов, из них в новом интерфейсе — ${inV2}.${hiddenCount ? ` Скрыто по правам: ${hiddenCount}.` : ""}</p>
+    <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. «в V2» — раздел работает в новом интерфейсе и проверен;
+      «в V2 · не всё» — работает, но часть возможностей V1 пока не перенесена (наведите на пометку — что именно); «в V1» — раздел пока открывается в текущем интерфейсе.
+      Доступно вам: ${mine.length} разделов, в новом интерфейсе работают ${inV2}, из них полностью — ${full}.${hiddenCount ? ` Скрыто по правам: ${hiddenCount}.` : ""}</p>
     <div class="v2-cards">${cards}</div>
   </div>`;
   el.querySelectorAll("[data-screen-link]").forEach((a) => a.addEventListener("click", (e) => {
