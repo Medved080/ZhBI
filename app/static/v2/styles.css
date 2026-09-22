@@ -924,3 +924,21 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ex [hidden] { display: none !important; }
 /* Групповая выдача доступа («Права пользователей», admin, 2026-09-21): список людей с прокруткой внутри панели, без прокрутки страницы. */
 .v2-bulk-people { max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 16px; }
+
+/* Печать отчёта (mfr2, read-screen.js printReportTable): постоянный скрытый узел, показывается только в @media print — тот же
+   приём (visibility, не display), что у бланка обхода плоской шахматки (app/static/chess-flat.js). */
+#v2-print-area { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  #v2-print-area, #v2-print-area * { visibility: visible; }
+  #v2-print-area { display: block; position: absolute; inset: 0; background: #fff; color: #000; padding: 12mm; }
+  #v2-print-area table { border-collapse: collapse; width: 100%; font-size: 9pt; }
+  #v2-print-area th, #v2-print-area td { border: 0.2mm solid #777; padding: 2px 5px; }
+}
+
+/* Матрица «Учёт по блокам: статусы» с правкой ячейки (reports.js blockStatusReport, mfr2) */
+.v2-matrix-off { background: var(--surface); color: var(--muted); text-align: center; }
+.v2-matrix-input { width: 56px; text-align: right; padding: 2px 5px; }
+.v2-matrix-cycle { border: 1px solid var(--line); background: none; border-radius: 5px; padding: 2px 8px; font-size: 12px; white-space: nowrap; }
+.v2-matrix-in_progress { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.v2-matrix-done { background: color-mix(in srgb, var(--good) 16%, transparent); }

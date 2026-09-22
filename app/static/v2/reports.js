@@ -152,36 +152,66 @@ function blockScheduleReport(data) {
 }
 
 
-// ---- «Учёт по блокам: статусы»: матрица «операция WBS × блок (секция/этаж)» с процентом на дату
-function blockStatusReport(data, state) {
+// ---- «Учёт по блокам: статусы»: матрица «операция WBS × блок (секция/этаж)/секция целиком/объект» с процентом или статусом на дату.
+// Правка ячейки (mfr2, перенос из V1): «эт/сек» — число (PUT .../blocks/{id}/work-progress-cell, попадает в документ факта на дату,
+// тот же механизм, что «Факт» в панели блока); «сек»/«компл» — клик крутит План → В работе → Выполнено → План
+// (PUT /work-progress/cell). Доступно только при праве «Учёт по блокам: изменение» (work_progress); правами отчёта самого по себе
+// (report_block_status) запись не даётся — так же, как в V1.
+function bsColumns(data) {
+  const blocks = data.blocks || [];
+  const groups = [];
+  for (const b of blocks) { const g = groups[groups.length - 1]; if (g && g.code === b.section_code) g.n++; else groups.push({ code: b.section_code, n: 1 }); }
+  const sectionCols = (data.sections || []).map((s) => ({ kind: "section", id: s.id, label: `${s.code} целиком` }));
+  return { groups, sectionCols };
+}
+function blockStatusReport(data, state, ctx) {
   const blocks = data.blocks || [];
   const leaves = [];
   const walk = (n) => { if (n.children?.length) n.children.forEach(walk); else leaves.push(n); };
   (data.tree || []).forEach(walk);
   const rows = state.all ? leaves : leaves.filter((l) => l.cells && Object.keys(l.cells).length);
-  // шапка: секции (colspan) и уровни; блоки уже отсортированы сервером по секции и этажу
-  const groups = [];
-  for (const b of blocks) { const g = groups[groups.length - 1]; if (g && g.code === b.section_code) g.n++; else groups.push({ code: b.section_code, n: 1 }); }
-  const cell = (c) => {
+  const { groups, sectionCols } = bsColumns(data);
+  const canEdit = !!ctx?.canWrite;
+  const cellRead = (c) => {
     if (c == null) return "";
     if (typeof c === "string") return esc(BW_STATUS[c] || c);
     const label = `${BW_STATUS[c.status] || c.status || ""}${c.deadline_label ? `, ${c.deadline_label}` : ""}`;
     return `<span title="${esc(label)}">${esc(num(c.percent))}</span>`;
   };
+  // «эт/сек»: числовое поле, значение сохраняется по blur/Enter — как у процента в форме факта.
+  const blockCell = (l, b) => {
+    const c = l.cells?.[String(b.id)];
+    if (!l.addressable || (l.unit !== "эт/сек" && l.unit !== "кв.эт/сек")) return `<td class="v2-matrix-off"></td>`;
+    if (!c) return `<td class="v2-matrix-off" title="Операция не выбрана для этого блока">·</td>`;
+    if (!canEdit) return `<td class="num v2-matrix-${esc(c.status)}">${cellRead(c)}</td>`;
+    return `<td class="num v2-matrix-${esc(c.status)}"><input type="number" class="v2-matrix-input" min="0" max="100" step="1" value="${esc(c.percent)}" data-wt="${l.id}" data-block="${b.id}" aria-label="Процент: ${esc(l.name)}, ${esc(b.section_code)} ${esc(b.level_floor ?? b.level_name ?? "")}"></td>`;
+  };
+  // «сек»/«компл»: статус, клик крутит план → в работе → выполнено → план.
+  // `expectUnit` — колонка «Объект» кликабельна ТОЛЬКО у строк «компл» (объект целиком), колонка секции — ТОЛЬКО у строк «сек»
+  // (секция целиком): у обеих единиц `work_progress.matrix` кладёт в `cells` значение на КАЖДУЙ ключ своей колонки (со статусом
+  // «план» по умолчанию), поэтому проверка одного `l.unit` без проверки, та ли это колонка, включала кнопку не в той графе.
+  const cycleCell = (l, key, label, expectUnit) => {
+    if (!l.addressable || l.unit !== expectUnit) return `<td class="v2-matrix-off"></td>`;
+    const status = l.cells?.[key] || "plan";
+    if (!canEdit) return `<td class="v2-matrix-${esc(status)}">${cellRead(status)}</td>`;
+    return `<td class="v2-matrix-${esc(status)}"><button type="button" class="v2-matrix-cycle" data-wt="${l.id}" data-sec="${key === "объект" ? "" : key}" aria-label="${esc(label)}: ${esc(BW_STATUS[status])} — щелчок переключит статус">${esc(BW_STATUS[status])}</button></td>`;
+  };
   const shown = rows.slice(0, 400);
-  return `<p class="v2-muted" role="status">Блоков: ${blocks.length} · операций WBS: ${leaves.length}, с данными: ${leaves.filter((l) => l.cells && Object.keys(l.cells).length).length} · на ${esc(dateRu(data.report_date))}</p>
+  return `<p class="v2-muted" role="status">Блоков: ${blocks.length} · операций WBS: ${leaves.length}, с данными: ${leaves.filter((l) => l.cells && Object.keys(l.cells).length).length} · на ${esc(dateRu(data.report_date))}${canEdit ? "" : " · только просмотр"}</p>
     <label class="v2-wire-check"><input type="checkbox" id="bs-all" ${state.all ? "checked" : ""}> Показать все операции WBS (по умолчанию — только с данными)</label>
+    <p id="bs-cell-msg" class="v2-muted" role="status" aria-live="polite">${esc(state.cellMsg || "")}</p>
     ${rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl v2-matrix"><thead>
-      <tr><th rowspan="2">Код</th><th rowspan="2">Работа</th><th rowspan="2">Объект</th>${groups.map((g) => `<th colspan="${g.n}">${esc(g.code)}</th>`).join("")}</tr>
+      <tr><th rowspan="2">Код</th><th rowspan="2">Работа</th>${groups.map((g) => `<th colspan="${g.n}">${esc(g.code)}</th>`).join("")}${sectionCols.map((s) => `<th rowspan="2">${esc(s.label)}</th>`).join("")}<th rowspan="2">Объект</th></tr>
       <tr>${blocks.map((b) => `<th title="${esc(b.level_name)}">${esc(String(b.level_name).slice(0, 12))}</th>`).join("")}</tr></thead>
-      <tbody>${shown.map((l) => `<tr><td>${esc(l.code || "")}</td><td>${esc(l.name)}</td><td class="num">${cell(l.cells?.["объект"])}</td>${blocks.map((b) => `<td class="num">${cell(l.cells?.[String(b.id)])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <tbody>${shown.map((l) => `<tr><td>${esc(l.code || "")}</td><td>${esc(l.name)}</td>${blocks.map((b) => blockCell(l, b)).join("")}${sectionCols.map((s) => cycleCell(l, String(s.id), s.label, "сек")).join("")}${cycleCell(l, "объект", "Объект", "компл")}</tr>`).join("")}</tbody></table></div>
       ${rows.length > shown.length ? `<p class="v2-muted">Показаны первые ${shown.length} из ${rows.length}.</p>` : ""}` : `<p class="v2-muted">Операций с данными нет.</p>`}`;
 }
 
 export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, analytics: analyticsReport, dynamics: dynamicsReport, mywork: myworkReport, linear: linearTrackReport, blocksched: blockScheduleReport, blockstatus: blockStatusReport, ...EXCHANGE_REPORT_RENDERERS };
 
-// Взаимодействие: сворачивание узлов дерева, страницы перечня. Возвращает true, если надо перерисовать.
-export function bindReport(name, root, state, repaint) {
+// Взаимодействие: сворачивание узлов дерева, страницы перечня. Возвращает true, если надо перерисовать. `ctx` (mfr2) — {api, objectId,
+// canWrite, data} для отчётов с правкой ячейки прямо в таблице (только «blockstatus» сейчас).
+export function bindReport(name, root, state, repaint, ctx) {
   bindExchangeReport(name, root, state, repaint);   // «График поставки» и «График контрактации и поставки» (reports-exchange.js)
   if (name === "status") {
     root.querySelectorAll(".v2-tree-toggle").forEach((b) => b.addEventListener("click", () => {
@@ -192,6 +222,7 @@ export function bindReport(name, root, state, repaint) {
   }
   if (name === "blockstatus") {
     root.querySelector("#bs-all")?.addEventListener("change", (e) => { state.all = e.target.checked; repaint(); });
+    if (ctx?.canWrite) bindBlockStatusEdits(root, state, repaint, ctx);
   }
   if (name === "completion") {
     root.querySelectorAll("[data-page]").forEach((b) => b.addEventListener("click", () => {
@@ -199,4 +230,43 @@ export function bindReport(name, root, state, repaint) {
       repaint();
     }));
   }
+}
+
+function bsCellMsg(state, root, text) { state.cellMsg = text; const n = root.querySelector("#bs-cell-msg"); if (n) n.textContent = text; }
+function bindBlockStatusEdits(root, state, repaint, { api, objectId, data }) {
+  root.querySelectorAll(".v2-matrix-input").forEach((inp) => {
+    const commit = async () => {
+      const percent = Math.max(0, Math.min(100, Math.round(Number(inp.value) || 0)));
+      inp.value = percent;
+      const wt = Number(inp.dataset.wt), block = Number(inp.dataset.block);
+      inp.disabled = true;
+      try {
+        await api.put(`/objects/${objectId}/blocks/${block}/work-progress-cell`, { work_type_id: wt, percent, report_date: data.report_date });
+        bsCellMsg(state, root, "");
+        repaint();
+      } catch (err) {
+        bsCellMsg(state, root, `Не удалось сохранить: ${err?.detail || err?.message || ""}`);
+        inp.disabled = false;
+      }
+    };
+    inp.addEventListener("change", commit);
+    inp.addEventListener("click", (e) => e.stopPropagation());
+  });
+  root.querySelectorAll(".v2-matrix-cycle").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const wt = Number(btn.dataset.wt), secRaw = btn.dataset.sec;
+      const sectionId = secRaw ? Number(secRaw) : null;
+      const cur = btn.parentElement.className.match(/v2-matrix-(\w+)/)?.[1] || "plan";
+      const next = cur === "plan" ? "in_progress" : cur === "in_progress" ? "done" : null;
+      btn.disabled = true;
+      try {
+        await api.put(`/objects/${objectId}/work-progress/cell`, { work_type_id: wt, block_id: null, section_id: sectionId, status: next });
+        bsCellMsg(state, root, "");
+        repaint();
+      } catch (err) {
+        bsCellMsg(state, root, `Не удалось сохранить: ${err?.detail || err?.message || ""}`);
+        btn.disabled = false;
+      }
+    });
+  });
 }

@@ -144,7 +144,51 @@
 .mfr-wp-node { font-size: 12px; font-weight: 600; color: var(--muted); padding: 6px 0 2px; }
 .mfr-wp .ws-fgroup { margin-bottom: 6px; }
 
+/* «Блоки»: секции, этажи, матрица, геометрия (mfr-structure.js) */
+.mfr-struct-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+.mfr-struct-cols h4 { margin: 0 0 6px; font-size: 14px; }
+.mfr-inline { width: 100%; border: 1px solid transparent; background: none; border-radius: 6px; padding: 3px 6px; }
+.mfr-inline:hover, .mfr-inline:focus { border-color: var(--line); background: var(--surface); }
+#mfr-struct-matrix { border-collapse: collapse; }
+#mfr-struct-matrix th, #mfr-struct-matrix td { border: 1px solid var(--line); padding: 4px 8px; text-align: center; font-size: 12px; }
+.mfr-struct-rowname { text-align: left !important; cursor: pointer; white-space: nowrap; }
+.mfr-struct-rowname:hover { background: var(--surface); }
+.mfr-struct-cell { min-width: 54px; }
+.mfr-struct-cell.on { background: var(--sel); }
+.mfr-struct-geo { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.mfr-struct-boxrow { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+.mfr-struct-boxrow input { width: 90px; }
+
+/* бланк обхода плоской шахматки: предпросмотр в окне + содержимое печати (mfr2, перенос из V1 app/static/chess-flat.js) */
+.mfr-cf-p-preview { overflow: auto; max-height: 60vh; padding: 8px 0; }
+.mfr-cf-paper, #v2-print-area .mfr-cf-paper { width: 210mm; min-width: 210mm; min-height: 297mm; padding: 6mm; margin: 0 auto 10mm; border: 0; box-shadow: 0 0 0 1px var(--line); color: #171717; background: #fff; line-height: 1.15; font-size: 9pt; }
+.mfr-cf-paper.a3 { width: 297mm; min-width: 297mm; min-height: 420mm; }
+.mfr-cf-p-head { height: 12mm; font: 9pt/1.1 Arial, sans-serif; }
+.mfr-cf-p-head > div { display: flex; align-items: center; justify-content: space-between; gap: 3mm; height: 3.7mm; white-space: nowrap; }
+.mfr-cf-p-head strong { font-size: 11pt; font-weight: 500; }
+.mfr-cf-p-matrix { border-collapse: collapse; width: 100%; table-layout: fixed; font: 9pt/1.1 Arial, sans-serif; color: #171717; }
+.mfr-cf-p-matrix th, .mfr-cf-p-matrix td { border: .2mm solid #777; padding: 0 1mm; overflow: hidden; font-weight: 400; }
+.mfr-cf-p-matrix thead th { height: 4.5mm; white-space: normal; overflow: visible; line-height: 1.05; background: #f2f2f2; text-align: center; }
+.mfr-cf-p-matrix tbody tr, .mfr-cf-p-matrix td { height: 6mm; }
+.mfr-cf-p-floor { vertical-align: middle; text-align: center; font-weight: 500; font-size: 10pt; }
+.mfr-cf-row-start > * { border-top: .4mm solid #333; }
+.mfr-cf-p-opname { white-space: normal; overflow: visible; word-break: break-word; vertical-align: middle; line-height: 1.15; }
+.mfr-cf-p-pct { text-align: center; font-weight: 500; vertical-align: middle; white-space: nowrap; }
+.mfr-cf-p-new { text-align: center; } .mfr-cf-p-absent { background: #fafafa; }
+.mfr-cf-p-foot { height: 8mm; padding-top: 1mm; font: 9pt/1.15 Arial, sans-serif; }
+.mfr-cf-p-foot > div { display: flex; justify-content: space-between; gap: 2mm; white-space: nowrap; margin-bottom: .5mm; }
+@media print {
+  @page cfa4 { size: 210mm 297mm; margin: 0; }
+  @page cfa3 { size: 297mm 420mm; margin: 0; }
+  #v2-print-area .mfr-cf-paper { page: cfa4; margin: 0; box-shadow: none; break-after: page; }
+  #v2-print-area .mfr-cf-paper.a3 { page: cfa3; }
+  #v2-print-area .mfr-cf-paper:last-child { break-after: auto; }
+  #v2-print-area .mfr-cf-p-matrix tbody tr { break-inside: avoid; }
+  #v2-print-area .mfr-cf-p-matrix thead { display: table-header-group; }
+}
+
 @media (max-width: 1200px) {
+  .mfr-struct-cols { grid-template-columns: 1fr; }
   .mfr-two { grid-template-columns: 260px minmax(0, 1fr); gap: 10px; }
   .mfr-head { padding: 8px 12px 6px; }
   .mfr-body { padding: 8px 12px; }

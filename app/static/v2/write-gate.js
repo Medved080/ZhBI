@@ -94,6 +94,58 @@ export function strictApplyProblem(b) {
   return b.changes.every((c) => isObj(c) && Number.isInteger(c.bw_id) && BULK_FIELDS.includes(c.field) && "was" in c && "now" in c) ? null : "строка изменения";
 }
 
+// ---- формы тел операций «Секции, этажи, блоки» и геометрия блока (перенос из V1, mfr2) ----
+// Удаление секции/этажа/блока: тело пустое, единственный необязательный параметр запроса — `force=true`
+// (повтор после показа плана последствий, тот же приём, что в V1 `deleteBlkEntity`).
+function deleteWithForceProblem(b, q) {
+  if (b !== undefined && !(isObj(b) && Object.keys(b).length === 0)) return "лишние поля";
+  if (q !== "" && q !== "force=true") return "лишний параметр запроса";
+  return null;
+}
+function noBodyProblem(b) { return isObj(b) && Object.keys(b).length === 0 ? null : "лишние поля"; }
+export function sectionCreateProblem(b) {
+  if (!isObj(b) || typeof b.code !== "string" || !b.code.trim() || b.code.length > 50) return "код секции";
+  return b.name === null || b.name === undefined || (typeof b.name === "string" && b.name.length <= 200) ? null : "подпись секции";
+}
+// Привязка к осям НЕ редактируется в V2 (её тут нет) — форма всегда пересылает то, что сервер отдал при чтении, иначе PATCH стёр бы уже заданную привязку (`app/blocks.py::update_section` перезаписывает обе оси при каждом вызове).
+export function sectionRenameProblem(b) {
+  if (!isObj(b) || typeof b.name !== "string" || !b.name.trim() || b.name.length > 200) return "подпись секции";
+  if (!(b.axis_from === null || typeof b.axis_from === "string")) return "ось «от»";
+  return b.axis_to === null || typeof b.axis_to === "string" ? null : "ось «до»";
+}
+const LEVEL_KINDS = ["этаж", "подземный", "кровля"];
+export function levelCreateProblem(b) {
+  if (!isObj(b) || !LEVEL_KINDS.includes(b.kind)) return "вид этажа";
+  if (!(b.name === null || b.name === undefined || (typeof b.name === "string" && b.name.length <= 200))) return "подпись этажа";
+  if (!(b.elevation_mm === null || b.elevation_mm === undefined || (typeof b.elevation_mm === "number" && Number.isFinite(b.elevation_mm)))) return "отметка этажа";
+  if (b.kind === "кровля") return Array.isArray(b.section_codes) && b.section_codes.length > 0 && b.section_codes.length <= 100 && b.section_codes.every((x) => typeof x === "string") ? null : "секции кровли";
+  return Number.isInteger(b.floor) ? null : "номер этажа";
+}
+export function levelEditProblem(b) {
+  if (!isObj(b)) return "форма правки этажа";
+  if ("name" in b && !(b.name === null || (typeof b.name === "string" && b.name.length <= 200))) return "подпись этажа";
+  if ("elevation_mm" in b && !(b.elevation_mm === null || (typeof b.elevation_mm === "number" && Number.isFinite(b.elevation_mm)))) return "отметка этажа";
+  return "height_mm" in b && !(b.height_mm === null || (typeof b.height_mm === "number" && b.height_mm > 0)) ? "высота этажа" : null;
+}
+export function blockCreateProblem(b) {
+  return isObj(b) && Number.isInteger(b.section_id) && b.section_id > 0 && Number.isInteger(b.level_id) && b.level_id > 0 ? null : "секция или этаж блока";
+}
+export function blockBoxesProblem(b) {
+  if (!isObj(b) || !Array.isArray(b.boxes) || b.boxes.length > 500) return "форма геометрии блока";
+  return b.boxes.every((x) => isObj(x) && Object.keys(x).length === 4 && ["x0", "x1", "y0", "y1"].every((k) => typeof x[k] === "number" && Number.isFinite(x[k]))) ? null : "форма прямоугольника";
+}
+export function workProgressCellProblem(b) {
+  if (!isObj(b) || !Number.isInteger(b.work_type_id) || b.work_type_id <= 0) return "вид работ";
+  if (!(b.block_id === null || (Number.isInteger(b.block_id) && b.block_id > 0))) return "блок";
+  if (!(b.section_id === null || (Number.isInteger(b.section_id) && b.section_id > 0))) return "секция";
+  return b.status === null || b.status === "in_progress" || b.status === "done" ? null : "статус";
+}
+export function blockPercentCellProblem(b) {
+  if (!isObj(b) || !Number.isInteger(b.work_type_id) || b.work_type_id <= 0) return "вид работ";
+  if (!Number.isInteger(b.percent) || b.percent < 0 || b.percent > 100) return "процент";
+  return realDate(b.report_date) ? null : "дата отчёта";
+}
+
 // allowed: true — операция разрешена (пройден барьер безопасности и есть проверка на настоящем backend);
 // allowed: false — отключена, `why` — коротко почему; `onlyKeys` — разрешены только эти поля тела (остальные — отказ).
 // risk: «личная» — своя настройка пользователя; «общая» — настройка, видимая всем пользователям (V1 тоже); «данные» — рабочие
@@ -150,6 +202,21 @@ export const POLICY = [
   { id: "chess.batch", screen: "chess-flat", action: "Шахматка: пакетный ввод факта по нескольким блокам (одна транзакция, ключ идемпотентности, сверка «ожидалось»)", method: "POST", path: re(`/objects/\\d+/blocks/chess-flat-batch`), onlyKeys: ["report_date", "track_code", "idempotency_key", "items"], check: chessBatchProblem, risk: "данные факта, групповая операция", allowed: true, proof: "HTTP и браузер: пакет целиком, повтор с тем же ключом, 409 при чужой правке, два пакета одновременно, откат целиком" },
   { id: "bulk-edit.analyze", screen: "blk-bulk", action: "Excel-правка ЗР: сверка загруженного файла с базой (ничего не пишет)", method: "POST", path: re(`/objects/\\d+/block-works/bulk-edit/analyze`), risk: "чтение (загрузка файла для сверки)", allowed: true, proof: "HTTP и браузер: сверка на копии, БД до/после не изменилась" },
   { id: "bulk-edit.apply", screen: "blk-bulk", action: "Excel-правка ЗР: применить отмеченное — «всё или ничего», по сверке, с проверкой изменившегося после сверки", method: "POST", path: re(`/objects/\\d+/block-works/bulk-edit/apply-strict`), onlyKeys: ["changes"], check: strictApplyProblem, risk: "данные, групповая операция, версии прогноза необратимы", allowed: true, proof: "HTTP и браузер: применение → SQL; 409 при изменении после сверки; откат целиком при отказе внутри пачки; два вызова одновременно" },
+  // -- Секции, этажи, блоки: создание/правка/удаление (по плану последствий — 409 с числами, повтор с force=true), геометрия блока, «Обновить принадлежность» (mfr2, перенос из V1) --
+  { id: "section.create", screen: "blocks", action: "Секции: добавить (код, необязательная подпись)", method: "POST", path: re(`/objects/\\d+/sections`), onlyKeys: ["code", "name"], check: sectionCreateProblem, risk: "структура объекта (учёт по блокам)", allowed: true, proof: "браузер и HTTP на настоящем backend: успех → SQL, дубль кода — отказ, 403" },
+  { id: "section.rename", screen: "blocks", action: "Секции: переименовать (привязка к осям в V2 не редактируется — форма пересылает как есть)", method: "PATCH", path: re(`/objects/\\d+/sections/\\d+`), onlyKeys: ["name", "axis_from", "axis_to"], check: sectionRenameProblem, risk: "структура объекта", allowed: true, proof: "браузер и HTTP: правка → SQL, 403, ось не меняется" },
+  { id: "section.delete", screen: "blocks", action: "Секции: удалить по плану последствий (что удалится каскадом — блоки со сроками/фактом, что потеряет привязку — элементы модели/помещения), подтверждение; занятая секция — только повтором с force после показа точных чисел", method: "DELETE", path: re(`/objects/\\d+/sections/\\d+`), check: deleteWithForceProblem, risk: "структура объекта, необратимо (каскад блоков, ЗР, факта)", allowed: true, proof: "браузер и HTTP: неиспользуемая удаляется сразу, используемая — 409 с числами → подтверждение → force=true, 403" },
+  { id: "level.create", screen: "blocks", action: "Этажи: добавить (вид, номер/секции кровли, подпись, отметка)", method: "POST", path: re(`/objects/\\d+/levels`), onlyKeys: ["kind", "floor", "name", "elevation_mm", "section_codes"], check: levelCreateProblem, risk: "структура объекта", allowed: true, proof: "браузер и HTTP: успех → SQL, дубль ключа — отказ, 403" },
+  { id: "level.edit", screen: "blocks", action: "Этажи: подпись, отметка, высота", method: "PATCH", path: re(`/objects/\\d+/levels/\\d+`), onlyKeys: ["name", "elevation_mm", "height_mm"], check: levelEditProblem, risk: "структура объекта", allowed: true, proof: "браузер и HTTP: правка → SQL, 403" },
+  { id: "level.delete", screen: "blocks", action: "Этажи: удалить по плану последствий, подтверждение; занятый — только повтором с force", method: "DELETE", path: re(`/objects/\\d+/levels/\\d+`), check: deleteWithForceProblem, risk: "структура объекта, необратимо (каскад блоков, ЗР, факта)", allowed: true, proof: "браузер и HTTP: неиспользуемый удаляется сразу, используемый — 409 → force=true, 403" },
+  { id: "block.create", screen: "blocks", action: "Блоки: создать клетку матрицы (секция × этаж)", method: "POST", path: re(`/objects/\\d+/blocks`), onlyKeys: ["section_id", "level_id"], check: blockCreateProblem, risk: "структура объекта", allowed: true, proof: "браузер и HTTP: успех → SQL, повтор — та же запись (идемпотентно), 403" },
+  { id: "block.delete", screen: "blocks", action: "Блоки: удалить клетку матрицы по плану последствий (ЗР со сроками и фактом, записи статусов), подтверждение; занятая — только повтором с force", method: "DELETE", path: re(`/objects/\\d+/blocks/\\d+`), check: deleteWithForceProblem, risk: "структура объекта, необратимо (каскад ЗР и факта)", allowed: true, proof: "браузер и HTTP: пустая удаляется сразу, занятая — 409 с числами → force=true, 403" },
+  { id: "block.recalc", screen: "blocks", action: "«Обновить принадлежность»: пересчитать секцию/этаж элементов модели по геометрии блоков", method: "POST", path: re(`/objects/\\d+/blocks/recalc-membership`), check: noBodyProblem, risk: "данные модели (секция/этаж элементов)", allowed: true, proof: "браузер и HTTP: счётчики в ответе = SQL до/после, 403" },
+  { id: "block.boxes", screen: "blocks", action: "Геометрия блока: набор прямоугольников руками (полный набор разом), с предпросмотром на плане", method: "PUT", path: re(`/objects/\\d+/blocks/\\d+/boxes`), onlyKeys: ["boxes"], check: blockBoxesProblem, risk: "геометрия объекта, влияет на автоматическое определение секции элементов", allowed: true, proof: "браузер и HTTP: запись → SQL (block_boxes), предупреждение о пересечении не блокирует сохранение, 403" },
+  { id: "worktypes.analyze", screen: "blocks", action: "Справочник видов работ: сверка загруженного xlsx с базой (ничего не пишет)", method: "POST", path: re(`/objects/\\d+/work-types/analyze`), check: uploadCheck({ ext: ["xlsx"] }), risk: "чтение (сверка)", allowed: true, proof: "браузер и HTTP: сверка на копии, БД до/после не изменилась, 403" },
+  { id: "worktypes.apply", screen: "blocks", action: "Справочник видов работ: применить показанную сверку по токену (добавить/вернуть списанные/списать пропавшие из файла)", method: "POST", path: re(`/objects/\\d+/work-types/apply`), onlyKeys: ["token"], check: tokenOnlyProblem, risk: "справочник видов работ объекта (списание — мягкое, история сохраняется)", allowed: true, proof: "браузер и HTTP: применение по токену → SQL, повтор токена — отказ, 403" },
+  { id: "work-progress.cell", screen: "report-block-status", action: "Отчёт «Учёт по блокам: статусы»: клик по ячейке «сек»/«компл» — План → В работе → Выполнено → План", method: "PUT", path: re(`/objects/\\d+/work-progress/cell`), onlyKeys: ["work_type_id", "block_id", "section_id", "status"], check: workProgressCellProblem, risk: "данные учёта по блокам", allowed: true, proof: "браузер и HTTP: клик → SQL, 403" },
+  { id: "block-progress-cell", screen: "report-block-status", action: "Отчёт «Учёт по блокам: статусы»: правка процента в ячейке «эт/сек» на дату отчёта (тот же документ факта, что «Факт» в панели блока)", method: "PUT", path: re(`/objects/\\d+/blocks/\\d+/work-progress-cell`), onlyKeys: ["work_type_id", "percent", "report_date"], check: blockPercentCellProblem, risk: "данные факта (документ на дату)", allowed: true, proof: "браузер и HTTP: правка → SQL (work_fact_reports/items), 403" },
   // ==== область: picker (комплектовщик, контрагенты, договоры, спецификации, контракты, замена поставщика) ====
   // Контрактация: у каждой операции своя строка и жёсткая форма тела (picker-gate.js). Серверные права — как в V1 (require_contracting /
   // assert_object_feature); правка записи целиком проверяет версию, которую видел человек (`expected_version`, app/record_version.py).
