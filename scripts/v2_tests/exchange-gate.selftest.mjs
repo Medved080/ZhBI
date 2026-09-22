@@ -89,5 +89,17 @@ t(A("POST", "/objects/3/clear-import-data", { source: "pdf", elements: true, str
 t(!A("POST", "/objects/3/clear-import-data", { source: "pdf", elements: false, structure: false, work: false }), "pdf: очистка без отмеченной группы");
 t(!A("POST", "/objects/3/clear-import-data", { source: "xlsx", elements: true, structure: false, work: false }), "pdf: очистка — неизвестный источник");
 t(!A("POST", "/admin/db-transfer/apply", {}), "перенос базы отключён");
+// внешние 3D-модели (FBX): загрузка (метаданные — JSON-строка формы), правка размещения (со сверкой версии), перецентровка, удаление
+const emMeta = (o = {}) => JSON.stringify({ kind: "ground", source_anchor_mm: { x: 0, y: 0, z: 0 }, ...o });
+t(A("POST", "/objects/1/external-models", fd({ meta: emMeta() }, "m.fbx")), "external-models: загрузка");
+t(!A("POST", "/objects/1/external-models", fd({ meta: emMeta() }, "m.obj")), "external-models: расширение");
+t(!A("POST", "/objects/1/external-models", fd({ meta: emMeta({ kind: "roof" }) }, "m.fbx")), "external-models: неизвестный вид");
+t(!A("POST", "/objects/1/external-models", fd({ meta: "not json" }, "m.fbx")), "external-models: метаданные не JSON");
+t(A("PATCH", "/objects/1/external-models/5", { expected_revision: 3, offset_x_mm: 100, rotation_deg: 10 }), "external-models: правка размещения");
+t(!A("PATCH", "/objects/1/external-models/5", { offset_x_mm: 100 }), "external-models: правка без версии для сверки");
+t(!A("PATCH", "/objects/1/external-models/5", { expected_revision: 3, auto_placement_status: "confident" }), "external-models: авто-совмещение (только V1) не разрешено");
+t(A("POST", "/objects/1/external-models/5/recenter", { expected_revision: 3 }), "external-models: перецентровка");
+t(!A("POST", "/objects/1/external-models/5/recenter", {}), "external-models: перецентровка без версии");
+t(A("DELETE", "/objects/1/external-models/5", undefined), "external-models: удаление");
 console.log(`проверок пройдено: ${ok}, не пройдено: ${bad.length}`); bad.forEach((b) => console.log("НЕ ПРОЙДЕНО:", b));
 process.exit(bad.length ? 1 : 0);

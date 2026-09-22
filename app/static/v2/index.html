@@ -7,6 +7,18 @@
 <link rel="icon" href="/static/favicon-32.png">
 <link rel="stylesheet" href="/static/v2/styles.css">
 <link rel="stylesheet" href="/static/v2/mfr.css">
+<!-- Тот же importmap, что в V1 (index.html) — вендоренный Three.js по bare specifier "three", которого требует
+     FBXLoader.js (import ... from 'three'). Подгружается лениво (динамический import()) только экраном «Загрузить
+     из FBX» (exchange-external-models.js), а не на каждой загрузке страницы. ВАЖНО: при изменении текста этого
+     блока пересчитать sha256 в _CSP (app/main.py) — иначе разбор FBX молча перестанет резолвить "three" (см.
+     стоячую инструкцию в CLAUDE.md; для V1 это уже один раз ломалось при выносе инлайнового JS). -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three/three.module.min.js"
+  }
+}
+</script>
 </head>
 <body>
 <div id="v2-root" class="v2-loading">Загрузка…</div>

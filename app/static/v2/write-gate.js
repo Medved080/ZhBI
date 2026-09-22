@@ -242,6 +242,10 @@ export const POLICY = [
   { id: "pdf.facade.analyze", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: синхронный разбор макета блоков (в базу не пишет)", method: "POST", path: re("/import-pdf-facade/analyze"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF, отказ 403 у не-админа, 4xx на неверный/битый файл" },
   { id: "pdf.facade.apply", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: применить показанный макет блоков по токену", method: "POST", path: re("/import-pdf-facade/apply"), check: tokenOnlyProblem, risk: "секции/этажи/блоки модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
   { id: "pdf.clear", screen: "pdf-import", action: "Загрузка из PDF: отладочная очистка справочников объекта перед повторной загрузкой (применяется сразу, без сводки)", method: "POST", path: re(`/objects/\\d+/clear-import-data`), check: clearImportDataProblem, risk: "необратимо через интерфейс (помещения из PDF и/или секции/этажи и/или виды работ блоков); копия базы перед очисткой", allowed: true, proof: "настоящий backend: очистка по отмеченным группам, счётчики в ответе, отказ 403, журнал" },
+  { id: "em.upload", screen: "external-models", action: "Внешние 3D-модели: загрузка FBX (метаданные — anchor/габарит/оси — посчитаны клиентом при разборе файла, сервер проверяет независимо)", method: "POST", path: re(`/objects/\\d+/external-models`), check: uploadFbxProblem, risk: "новая модель объекта; файл на диске сервера", allowed: true, proof: "настоящий backend: загрузка синтетического FBX, отказ 403, отказ сервера на неподдерживаемый профиль осей" },
+  { id: "em.patch", screen: "external-models", action: "Внешние 3D-модели: правка размещения числовыми полями (смещение/поворот/масштаб/название) со сверкой версии записи", method: "PATCH", path: re(`/objects/\\d+/external-models/\\d+`), check: emPatchProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: правка → SQL, 409 при чужой правке, отказ 403" },
+  { id: "em.recenter", screen: "external-models", action: "Внешние 3D-модели: перецентровать (привязать заново к текущим границам объекта) со сверкой версии записи", method: "POST", path: re(`/objects/\\d+/external-models/\\d+/recenter`), check: emRecenterProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: перецентровка → SQL, 409 при чужой правке, отказ 403" },
+  { id: "em.delete", screen: "external-models", action: "Внешние 3D-модели: удалить (файл и запись, необратимо)", method: "DELETE", path: re(`/objects/\\d+/external-models/\\d+`), risk: "необратимо — файл и запись модели удаляются", allowed: true, proof: "настоящий backend: удаление → SQL и файл, отказ 403" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
   { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: контракт по умолчанию по типу изделия, свёртка дублей справочников (режим переноса подчинённых), прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
@@ -419,6 +423,50 @@ function clearImportDataProblem(body) {
   if (!["revit", "pdf"].includes(body.source)) return "источник должен быть revit или pdf";
   if (typeof body.elements !== "boolean" || typeof body.structure !== "boolean" || typeof body.work !== "boolean") return "флаги групп должны быть да/нет";
   if (!(body.elements || body.structure || body.work)) return "не отмечена ни одна группа для очистки";
+  return null;
+}
+
+// Загрузка внешней 3D-модели (FBX): файл + поле формы «meta» — JSON-СТРОКА (не вложенный объект: FormData несёт только
+// строки/файлы), посчитанная клиентом при разборе файла (anchor/габарит/оси). Сервер проверяет её независимо.
+function uploadFbxProblem(body) {
+  if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
+  const keys = new Set(body.keys());
+  if ([...keys].some((k) => !["file", "meta"].includes(k))) return "лишние поля формы";
+  const files = body.getAll("file");
+  if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
+  const f = files[0];
+  if ((f.name.split(".").pop() || "").toLowerCase() !== "fbx") return "неверное расширение файла";
+  if (!(f.size > 0)) return "файл пуст";
+  if (f.size > 50 * 1024 * 1024) return "файл больше лимита сервера (50 МБ)";
+  const metaVals = body.getAll("meta");
+  if (metaVals.length !== 1 || typeof metaVals[0] !== "string") return "нет метаданных разбора";
+  let meta;
+  try { meta = JSON.parse(metaVals[0]); } catch (e) { return "метаданные — не JSON"; }
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return "метаданные — не объект";
+  if (!["ground", "facade"].includes(meta.kind)) return "вид модели должен быть ground или facade";
+  const a = meta.source_anchor_mm;
+  if (!a || typeof a !== "object" || !["x", "y", "z"].every((k) => typeof a[k] === "number" && Number.isFinite(a[k]))) return "source_anchor_mm неверен";
+  return null;
+}
+
+// Правка размещения внешней 3D-модели: только числовые поля, которые показывает форма V2 (без auto_placement_* — это
+// часть 3D-автосовмещения V1, сюда не перенесена), плюс обязательный expected_revision (оптимистичная блокировка).
+function emPatchProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  const allowed = ["name", "offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z", "expected_revision"];
+  if (Object.keys(body).some((k) => !allowed.includes(k))) return "лишние поля";
+  if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) return "нет версии записи для сверки";
+  for (const k of ["offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z"]) {
+    if (body[k] !== undefined && typeof body[k] !== "number") return `поле «${k}» должно быть числом`;
+  }
+  if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim() || body.name.length > 255)) return "название пустое или слишком длинное";
+  return null;
+}
+
+function emRecenterProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "expected_revision")) return "лишние поля";
+  if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) return "нет версии записи для сверки";
   return null;
 }
 

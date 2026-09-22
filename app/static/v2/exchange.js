@@ -8,10 +8,12 @@ import { mountRevitImport } from "./exchange-revit.js";
 import { mountSettingsIo } from "./exchange-settings.js";
 import { mountShaftPanels } from "./exchange-shaft-panels.js";
 import { mountPdfImport } from "./exchange-pdf.js";
+import { mountExternalModels } from "./exchange-external-models.js";
 
 const OPS = {
   ...IMPORT_OPS, "bulk-edit": mountBulkEdit, "upload-drawing": mountDrawingUpload, "revit-import": mountRevitImport,
   "settings-io": mountSettingsIo, "shaft-panels": mountShaftPanels, "pdf-import": mountPdfImport,
+  "external-models": mountExternalModels,
 };
 
 export function hasExchangeOp(key) { return Object.prototype.hasOwnProperty.call(OPS, key); }

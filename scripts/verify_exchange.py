@@ -31,7 +31,7 @@ import gen_synthetic_shaft_dxf as shaftgen  # noqa: E402
 
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -562,6 +562,96 @@ def section_pdf():
     for user in ("user2", "user4"):
         r = login(user).post(BASE + f"/objects/{OBJ}/clear-import-data", json={"source": "pdf", "elements": True, "structure": False, "work": False})
         check(r.status_code == 403, f"clear-import-data: {user} → {r.status_code}")
+
+
+def seed_external_model(object_id, name="Проверка V2"):
+    """Заводит тестовую запись object_external_models НАПРЯМУЮ в копии БД (как Fault — временная правка копии для
+    проверки), без реальной загрузки FBX: GET/PATCH/recenter/DELETE не читают файл с диска (delete_file() не падает
+    на отсутствующий файл, app/external_model_storage.py), а upload проверяется отдельно синтетическим файлом."""
+    c = sqlite3.connect(DB, timeout=30)
+    c.execute(
+        "INSERT INTO object_external_models (object_id, name, kind, original_name, stored_name, sha256, size_bytes, "
+        "format_version, placement_mode, metadata_json, source_anchor_x_mm, source_anchor_y_mm, source_anchor_z_mm, "
+        "object_anchor_x_mm, object_anchor_y_mm, centering_revision, offset_x_mm, offset_y_mm, offset_z_mm, "
+        "rotation_deg, scale_x, scale_y, scale_z, revision) VALUES "
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (object_id, name, "ground", "seed.fbx", f"seed-{object_id}-{name}.fbx", "0" * 64, 1000, 7400,
+         "unreferenced", "{}", 0.0, 0.0, 0.0, 0.0, 0.0, "seed-rev", 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1),
+    )
+    c.commit()
+    model_id = c.execute("SELECT id FROM object_external_models WHERE stored_name = ?", (f"seed-{object_id}-{name}.fbx",)).fetchone()[0]
+    c.close()
+    return model_id
+
+
+def section_external_models():
+    print("== внешние 3D-модели объекта (FBX)")
+    admin = login("admin")
+    OBJ = 1
+
+    # ---- список: права, форма ----
+    r = admin.get(BASE + f"/objects/{OBJ}/external-models")
+    check(r.status_code == 200, f"список: 200 (получен {r.status_code})")
+    for user in ("user2", "user4"):
+        r = login(user).get(BASE + f"/objects/{OBJ}/external-models")
+        check(r.status_code in (200, 403), f"список: {user} → {r.status_code} (403 без доступа к объекту, 200 с доступом на чтение)")
+
+    mid = seed_external_model(OBJ, "Тест-внешняя-модель")
+    r = admin.get(BASE + f"/objects/{OBJ}/external-models")
+    check(r.status_code == 200 and any(m["id"] == mid for m in r.json()["models"]), "список: заведённая модель видна")
+    row = next(m for m in r.json()["models"] if m["id"] == mid)
+    rev = row["revision"]
+
+    # ---- PATCH: права, форма, сверка версии, успех ----
+    for user in ("user2", "user4"):
+        r = login(user).patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev, "offset_x_mm": 100})
+        check(r.status_code == 403, f"patch: {user} → {r.status_code}")
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev + 1, "offset_x_mm": 100})
+    check(r.status_code == 409, f"patch: устаревшая версия → {r.status_code} (получен {r.status_code})")
+    j0 = journal_max()
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={
+        "expected_revision": rev, "offset_x_mm": 150.5, "offset_y_mm": -20, "offset_z_mm": 0,
+        "rotation_deg": 45, "scale_x": 1.02, "scale_y": 1.02, "scale_z": 1.0, "name": "Правка V2",
+    })
+    check(r.status_code == 200, f"patch: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["name"] == "Правка V2" and res["offset_mm"]["x"] == 150.5 and res["rotation_deg"] == 45 and res["revision"] == rev + 1,
+          f"patch: значения применены, версия выросла ({res.get('name')}, {res.get('offset_mm')}, rev={res.get('revision')})")
+    check(len(journal_since(j0, "external_model_update")) == 1, "журнал: одно событие external_model_update")
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev, "offset_x_mm": 1})
+    check(r.status_code == 409, f"patch: повтор со старой версией после чужого изменения → {r.status_code}")
+    # scale вне (0,100] отклоняется
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev + 1, "scale_x": 0})
+    check(r.status_code == 422, f"patch: scale=0 отклонён ({r.status_code})")
+
+    # ---- recenter: права, сверка версии, успех ----
+    rev2 = rev + 1
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + f"/objects/{OBJ}/external-models/{mid}/recenter", json={"expected_revision": rev2})
+        check(r.status_code == 403, f"recenter: {user} → {r.status_code}")
+    r = admin.post(BASE + f"/objects/{OBJ}/external-models/{mid}/recenter", json={"expected_revision": rev2 + 1})
+    check(r.status_code == 409, f"recenter: устаревшая версия → {r.status_code}")
+    j0 = journal_max()
+    r = admin.post(BASE + f"/objects/{OBJ}/external-models/{mid}/recenter", json={"expected_revision": rev2})
+    check(r.status_code == 200, f"recenter: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["offset_mm"]["x"] == 0 and res["offset_mm"]["y"] == 0 and res["revision"] == rev2 + 1, f"recenter: смещение сброшено, версия выросла ({res.get('offset_mm')}, rev={res.get('revision')})")
+    check(len(journal_since(j0, "external_model_recenter")) == 1, "журнал: одно событие external_model_recenter")
+
+    # ---- удаление: права, успех, повторное 404 ----
+    for user in ("user2", "user4"):
+        r = login(user).delete(BASE + f"/objects/{OBJ}/external-models/{mid}")
+        check(r.status_code == 403, f"delete: {user} → {r.status_code}")
+    j0 = journal_max()
+    r = admin.delete(BASE + f"/objects/{OBJ}/external-models/{mid}")
+    check(r.status_code == 200, f"delete: успех → {r.status_code}")
+    check(len(journal_since(j0, "external_model_delete")) == 1, "журнал: одно событие external_model_delete")
+    r = admin.get(BASE + f"/objects/{OBJ}/external-models")
+    check(not any(m["id"] == mid for m in r.json()["models"]), "delete: модель пропала из списка")
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": 1})
+    check(r.status_code == 404, f"patch удалённой модели → {r.status_code}")
+    r = admin.delete(BASE + f"/objects/{OBJ}/external-models/{mid}")
+    check(r.status_code == 404, f"повторное удаление → {r.status_code}")
 
 
 # ---------------------------------------------------------------- вспомогательное: внесение сбоя в копию БД
@@ -1162,10 +1252,10 @@ def section_revit():
         TABLES = saved_tables
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft, "pdf": section_pdf}
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft, "pdf": section_pdf, "external_models": section_external_models}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")
