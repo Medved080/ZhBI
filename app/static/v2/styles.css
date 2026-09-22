@@ -928,6 +928,7 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-check span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ws-check em { font-style: normal; color: var(--muted); font-size: 12px; }
 .ws-check.ws-dim span, .ws-check.ws-dim em { opacity: .5; }
+.ws-check.ws-check-sub { padding-left: 22px; font-size: 12px; }
 .ws-tree-row { display: flex; align-items: center; }
 .ws-tree-row .ws-check { flex: 1; min-width: 0; }
 .ws-exp { flex: none; width: 20px; height: 20px; border: 0; background: none; padding: 0; color: var(--muted); }
