@@ -1,7 +1,7 @@
 # Аудит V2 ↔ V1: настройки, справочники, служебные экраны (audit-set)
 
 Ветка `feature/v2-audit-set`, worktree `/Users/max/zhbi-w-audit-set`. Даты работы: 2026-09-22…23.
-Стенд — `scripts/real_auth_server.py` (НАСТОЯЩИЙ `app.main:app`, временная копия обезличенной БД в каталоге scratchpad, порты 8360 и 8361),
+Стенд — `scripts/real_auth_server.py` (НАСТОЯЩИЙ `app.main:app`, временная копия обезличенной БД в каталоге scratchpad, порты 8360–8362),
 вход настоящей формой V2 (`admin`, `user2` — роль user на объекте 1, `user3` — второй администратор, `user4` — просмотр). Браузер — только
 `scripts/cdp.mjs` (headless Chrome, настоящие события мыши и клавиатуры; программный WebGL swiftshader для 3D). В `/Users/max/zhbi-tool`, боевую БД,
 порты 8000/8010/8020 и корпоративный сервер ничего не писалось. Проверки — `scripts/audit_set/*.mjs`, общий прогон
