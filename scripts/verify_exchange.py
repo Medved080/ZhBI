@@ -16,17 +16,22 @@
 import hashlib
 import io
 import json
+import os
 import sqlite3
 import sys
+import tempfile
 import warnings
 
 warnings.filterwarnings("ignore")
 import requests  # noqa: E402
 import openpyxl  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gen_synthetic_shaft_dxf as shaftgen  # noqa: E402
+
 PORT = int(sys.argv[1])
 DB = sys.argv[2]
-SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit"}
+SECTIONS = set(sys.argv[3:]) or {"contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models", "misc"}
 BASE = f"http://127.0.0.1:{PORT}"
 PW = "Test-Pass-1234!"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -195,6 +200,567 @@ def section_contracting():
         check(True, f"файл 201 МБ: приём оборван сервером ({type(e).__name__})")
     check(snap() == before, "файл 201 МБ: БД не изменена")
 
+
+def upj(s, path, content, name="settings.json", data=None):
+    return s.post(BASE + path, files={"file": (name, content, "application/json")}, data=data or {}, timeout=60)
+
+
+def section_settings():
+    print("== экспорт/импорт настроек")
+    admin = login("admin")
+
+    # ---- экспорт: права и форма файла ----
+    r = admin.get(BASE + "/settings/export")
+    check(r.status_code == 200, f"export: 200 (получен {r.status_code})")
+    exported = r.json()
+    check({"users", "status_colors", "label_visibility", "label_dates_visibility"} <= set(exported), "export: файл содержит все разделы")
+    check(any(u.get("password_hash") for u in exported["users"]), "export: файл несёт хэши паролей (как и в V1)")
+    for user in ("user2", "user4"):
+        r2 = login(user).get(BASE + "/settings/export")
+        check(r2.status_code == 403, f"export: {user} получает 403 (получен {r2.status_code})")
+
+    # ---- готовим файл: новый пользователь (create) + изменённый цвет статуса; существующих не трогаем ----
+    cur_colors = dict(exported["status_colors"])
+    some_status = next(iter(cur_colors))
+    new_color = "#00ff00" if cur_colors[some_status] != "#00ff00" else "#00ff01"
+    login_tag = "v2settest" + str(int(__import__("time").time()) % 100000)
+    payload = {
+        "users": [{"domain_login": login_tag, "last_name": "Проверка", "first_name": "V2", "role": "view", "auth_method": "local"}],
+        "status_colors": {**cur_colors, some_status: new_color},
+        "label_visibility": {}, "label_dates_visibility": {},
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    # ---- analyze: права, форма файла, содержимое сверки ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r2 = upj(login(user), "/settings/import/analyze", body)
+        check(r2.status_code == 403 and snap() == before, f"analyze: {user} → {r2.status_code}, БД не изменена")
+    for name, content, what in (("e.json", b"", "пустой"), ("n.json", b"not json", "не JSON"), ("a.json", b"[1,2]", "не объект")):
+        before = snap()
+        r2 = upj(admin, "/settings/import/analyze", content, name=name)
+        check(400 <= r2.status_code < 500 and snap() == before, f"analyze: {what} файл → {r2.status_code}, БД не изменена")
+    before = snap()
+    r = upj(admin, "/settings/import/analyze", body)
+    check(r.status_code == 200, f"analyze: 200 (получен {r.status_code}: {r.text[:150]})")
+    a = r.json()
+    check(snap() == before, "analyze: ничего не пишет (снимок БД совпал)")
+    check(a["has_changes"] is True, "analyze: has_changes=true")
+    check(any(u["kind"] == "create" and u["login"] == login_tag for u in a["users"]), "analyze: новый пользователь показан как create")
+    check(not any(u.get("password_set") for u in a["users"] if u["login"] == login_tag), "analyze: без пароля в файле — password_set=false")
+    check(any(c["status"] == some_status and c["now"] == new_color for c in a["status_colors"]), "analyze: изменённый цвет статуса показан")
+    check("password_hash" not in json.dumps(a), "analyze: хэши паролей в сверке не раскрываются")
+    digest = a["digest"]
+
+    # ---- apply: права ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r2 = login(user).post(BASE + "/settings/import/apply", files={"file": ("s.json", body, "application/json")}, data={"digest": digest})
+        check(r2.status_code == 403 and snap() == before, f"apply: {user} → {r2.status_code}, БД не изменена")
+
+    # ---- устаревшая сверка: база меняется между analyze и apply (другой администратор поправил цвет напрямую) ----
+    other_status = next(s for s in cur_colors if s != some_status)
+    c = sqlite3.connect(DB, timeout=30)
+    c.execute("UPDATE status_colors SET color = ? WHERE status = ?", ("#123123", other_status))
+    c.commit(); c.close()
+    before = snap()
+    r = admin.post(BASE + "/settings/import/apply", files={"file": ("s.json", body, "application/json")}, data={"digest": digest})
+    check(r.status_code == 409, f"apply: устаревшая сверка → {r.status_code} (получен {r.text[:150]})")
+    check(snap() == before, "apply: устаревшая сверка — БД не изменена")
+
+    # актуальный digest после прямого изменения базы
+    r = upj(admin, "/settings/import/analyze", body)
+    digest = r.json()["digest"]
+
+    # ---- откат: сбой посреди применения (несколько таблиц в одной операции) ----
+    payload_fault = {
+        "users": [{"domain_login": login_tag, "last_name": "Проверка", "first_name": "V2", "role": "view", "auth_method": "local"}],
+        "status_colors": {**cur_colors, some_status: new_color, "v2_fault_probe": "#abcdef"},
+        "label_visibility": {}, "label_dates_visibility": {},
+    }
+    body_fault = json.dumps(payload_fault, ensure_ascii=False).encode("utf-8")
+    r = upj(admin, "/settings/import/analyze", body_fault)
+    check(r.status_code == 200, f"analyze (с провокацией сбоя): 200 (получен {r.status_code})")
+    digest_fault = r.json()["digest"]
+    j0 = journal_max()
+    before = snap()
+    with Fault("CREATE TRIGGER v2_fault BEFORE INSERT ON status_colors WHEN NEW.status = 'v2_fault_probe' "
+              "BEGIN SELECT RAISE(ABORT, 'v2 test fault'); END"):
+        r = admin.post(BASE + "/settings/import/apply", files={"file": ("s.json", body_fault, "application/json")}, data={"digest": digest_fault})
+        check(r.status_code >= 400, f"apply: сбой внутри операции → {r.status_code}")
+    after = snap()
+    check(after == before, "apply: откат — снимок БД совпал (ни пользователь, ни цвет не остались)")
+    check(not journal_since(j0, "settings_import"), "apply: откат — событий settings_import в журнале нет")
+    check(not rows("SELECT 1 FROM users WHERE domain_login = ?", login_tag), "apply: откат — новый пользователь не создан")
+
+    # ---- успех: применяем по-настоящему (тот же файл без провокации, digest актуальный) ----
+    r = upj(admin, "/settings/import/analyze", body)
+    digest = r.json()["digest"]
+    j0 = journal_max()
+    r = admin.post(BASE + "/settings/import/apply", files={"file": ("s.json", body, "application/json")}, data={"digest": digest})
+    check(r.status_code == 200, f"apply: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["users_upserted"] == 1, f"apply: users_upserted=1 (получено {res.get('users_upserted')})")
+    new_user = rows("SELECT * FROM users WHERE domain_login = ?", login_tag)
+    check(len(new_user) == 1 and new_user[0]["role"] == "view" and not new_user[0]["password_hash"], "apply: пользователь создан без пароля, роль view")
+    color_row = rows("SELECT color FROM status_colors WHERE status = ?", some_status)
+    check(color_row and color_row[0]["color"] == new_color, "apply: цвет статуса применён")
+    ev = journal_since(j0, "settings_import")
+    check(len(ev) == 1, f"apply: одно событие settings_import в журнале (найдено {len(ev)})")
+    check("password_hash" not in (ev[0].get("details") or "") and "password_hash" not in (ev[0].get("new_value") or ""), "apply: журнал не содержит хэш пароля")
+
+    # ---- повторное применение того же файла: пользователь уже есть — update, а не create; изменений в цвете нет ----
+    r = upj(admin, "/settings/import/analyze", body)
+    a2 = r.json()
+    check(not any(u["login"] == login_tag for u in a2["users"]), "повторная сверка: пользователь уже как в файле — без правок")
+    check(not any(c["status"] == some_status for c in a2["status_colors"]), "повторная сверка: цвет уже как в файле — без правок")
+
+    # ---- одношаговый V1-эндпоинт (/settings/import): совместимость после рефакторинга общей логики ----
+    v1_status = next(s for s in cur_colors if s not in (some_status, "v2_fault_probe"))
+    v1_color = "#654321"
+    v1_payload = {"users": [], "status_colors": {**cur_colors, some_status: new_color, v1_status: v1_color},
+                 "label_visibility": {}, "label_dates_visibility": {}}
+    j0 = journal_max()
+    r = upj(admin, "/settings/import", json.dumps(v1_payload, ensure_ascii=False).encode("utf-8"))
+    check(r.status_code == 200, f"V1 /settings/import: 200 (получен {r.status_code}: {r.text[:150]})")
+    check(rows("SELECT color FROM status_colors WHERE status = ?", v1_status)[0]["color"] == v1_color, "V1 /settings/import: цвет применён")
+    check(len(journal_since(j0, "settings_import")) == 1, "V1 /settings/import: событие в журнале")
+    # V1-эндпоинт тоже атомарен теперь (begin_write): сбой посреди — откат без частичных изменений
+    before = snap()
+    j0 = journal_max()
+    bad_v1 = {"users": [], "status_colors": {some_status: "not-a-color"}, "label_visibility": {}, "label_dates_visibility": {}}
+    r = upj(admin, "/settings/import", json.dumps(bad_v1, ensure_ascii=False).encode("utf-8"))
+    check(r.status_code == 422, f"V1 /settings/import: неверный цвет → {r.status_code}")
+    check(snap() == before, "V1 /settings/import: неверный цвет — БД не изменена")
+    check(not journal_since(j0, "settings_import"), "V1 /settings/import: неверный цвет — журнала нет")
+
+
+def _shaft_dxf(variant):
+    doc = shaftgen.build(variant)
+    buf = io.BytesIO()
+    with tempfile.NamedTemporaryFile(suffix=".dxf") as tmp:
+        doc.saveas(tmp.name)
+        tmp.seek(0)
+        buf.write(tmp.read())
+    return buf.getvalue()
+
+
+def dxfup(s, path, content, name="p.dxf", data=None):
+    return s.post(BASE + path, files={"file": (name, content, "application/dxf")}, data=data or {}, timeout=60)
+
+
+def section_shaft():
+    print("== панели облицовки шахты")
+    admin = login("admin")
+    OBJ = 1  # объект копии, у чертежей которого уже есть зарегистрированная сетка осей 5/7/Е/Ж (реальные оси анонимной копии)
+    ok = _shaft_dxf("ok")
+
+    # ---- права: 403 у user2/user4 (нет «Чертежи» на этом объекте в тестовой копии), 200 у второго админа ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r = dxfup(login(user), "/shaft-panels/analyze", ok, data={"object_id": str(OBJ)})
+        check(r.status_code == 403 and snap() == before, f"analyze: {user} → {r.status_code}, БД не изменена")
+
+    # ---- без объекта / без файла / неверное расширение ----
+    r = admin.post(BASE + "/shaft-panels/analyze", data={"object_id": str(OBJ)})
+    check(r.status_code == 422, f"analyze: без файла → {r.status_code}")
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", b"not a dxf", name="p.dxf", data={"object_id": str(OBJ)})
+    check(400 <= r.status_code < 500 and snap() == before, f"analyze: битый DXF → {r.status_code}, БД не изменена")
+
+    # ---- профиль: без осей / без марки / перекрытие / несогласованные отметки — 4xx, БД не меняется ----
+    for variant, needle in (("no_axes", "оси"), ("missing_mark", "марк"), ("overlap", "ерекр"), ("bad_level", "масштаб")):
+        before = snap()
+        r = dxfup(admin, "/shaft-panels/analyze", _shaft_dxf(variant), data={"object_id": str(OBJ), "thickness_mm": "300"})
+        check(r.status_code == 422 and needle.lower() in r.text.lower() and snap() == before,
+              f"analyze: вариант {variant} отклонён понятным текстом ({r.status_code}: {r.text[:100]}), БД не изменена")
+
+    # ---- разбор без толщины: панели видны, объёмы (analysis) не считаются ----
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", ok, data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"analyze без толщины: 200 (получен {r.status_code})")
+    d = r.json()
+    check(d["analysis"] is None and len(d["drawing"]["panels"]) == 14, f"analyze без толщины: панелей 14, сводки для применения нет (получено panels={len(d['drawing']['panels'])}, analysis={d['analysis']})")
+    check(snap() == before, "analyze без толщины: ничего не пишет")
+    token_nothick = d["token"]
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": token_nothick, "acknowledged_warnings": [w["code"] for w in d["drawing"]["warnings"]], "retire_missing": False})
+    check(r.status_code >= 400, f"apply без толщины (нет сводки): отказ ({r.status_code})")
+    check(snap() == before, "apply без толщины: БД не изменена")
+
+    # ---- разбор с толщиной: сводка для применения, конфликтов нет ----
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", ok, data={"object_id": str(OBJ), "thickness_mm": "300"})
+    check(r.status_code == 200, f"analyze с толщиной: 200 (получен {r.status_code})")
+    d = r.json()
+    check(d["analysis"] and d["analysis"]["counts"]["new"] == 14 and not d["analysis"]["conflicts"], f"analyze с толщиной: 14 новых, конфликтов нет ({d['analysis']['counts'] if d['analysis'] else None})")
+    check(snap() == before, "analyze с толщиной: ничего не пишет")
+
+    # ---- применение без подтверждения замечаний — отказ ----
+    before = snap()
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": d["token"], "acknowledged_warnings": [], "retire_missing": False})
+    check(r.status_code >= 400, f"apply: без подтверждения замечаний → отказ ({r.status_code})")
+    check(snap() == before, "apply: без подтверждения замечаний — БД не изменена")
+
+    # ---- успешное применение (retire_missing=False: реальные панели объекта, загруженные ранее в ту же область, не трогаем) ----
+    j0 = journal_max()
+    warn_codes = [w["code"] for w in d["drawing"]["warnings"]]
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": d["token"], "acknowledged_warnings": warn_codes, "retire_missing": False})
+    check(r.status_code == 200, f"apply: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["new"] == 14 and res.get("retired", 0) == 0, f"apply: добавлено 14, ничего не списано (получено {res})")
+    after = snap()
+    check("elements" in changed(before, after) and "status_history" in changed(before, after), f"в БД появились новые изделия и записи истории: {changed(before, after)}")
+    check(rows(f"select count(*) n from elements where object_id={OBJ} and element_type='Панель облицовки шахты' and is_current=1 and mark like 'ПП%'")[0]["n"] >= 14,
+          "в БД не меньше 14 текущих панелей марки ПП*")
+    ev = journal_since(j0, "import_dxf")
+    def _details(e):
+        v = e.get("details")
+        return json.loads(v) if isinstance(v, str) else (v or {})
+    check(any(_details(e).get("kind") == "shaft_panels" for e in ev), f"в журнале событие import_dxf с kind=shaft_panels (найдено {len(ev)} событий import_dxf)")
+    # повторное применение того же (уже использованного) токена — отклонено (истёк/потрачен)
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": d["token"], "acknowledged_warnings": warn_codes, "retire_missing": False})
+    check(r.status_code >= 400, f"apply: повтор потраченного токена → отказ ({r.status_code})")
+
+    # ---- повторный разбор того же файла: без изменений (идемпотентность) ----
+    before = snap()
+    r = dxfup(admin, "/shaft-panels/analyze", ok, data={"object_id": str(OBJ), "thickness_mm": "300"})
+    d2 = r.json()
+    check(d2["analysis"]["counts"]["new"] == 0 and d2["analysis"]["counts"]["unchanged"] == 14, f"повторный разбор: новых 0, без изменений 14 (получено {d2['analysis']['counts']})")
+    check(snap() == before, "повторный разбор: ничего не пишет")
+
+    # ---- отмена незавершённого анализа (DELETE /shaft-panels/pending/{token}) ----
+    token2 = d2["token"]
+    r = admin.delete(BASE + f"/shaft-panels/pending/{token2}")
+    check(r.status_code == 200, f"отмена анализа: 200 (получен {r.status_code})")
+    r = admin.post(BASE + "/shaft-panels/apply", json={"token": token2, "acknowledged_warnings": warn_codes, "retire_missing": False})
+    check(r.status_code >= 400, f"apply отменённым токеном → отказ ({r.status_code})")
+    # чужой токен: user3 не может применить/отменить чужой (использует общий пароль стенда, но токен принадлежит своему user_id)
+    r3 = dxfup(login("user3"), "/shaft-panels/analyze", ok, data={"object_id": str(OBJ), "thickness_mm": "300"})
+    other_token = r3.json()["token"]
+    r = admin.delete(BASE + f"/shaft-panels/pending/{other_token}")
+    check(r.status_code == 403, f"отмена чужого токена → 403 (получен {r.status_code})")
+    login("user3").delete(BASE + f"/shaft-panels/pending/{other_token}")  # прибраться за собой
+
+
+import gen_synthetic_pdf_set as pdfgen  # noqa: E402
+
+
+def _pdf(variant):
+    return pdfgen.build(variant).write()
+
+
+def pdfup(s, path, content, name="p.pdf", data=None, timeout=90):
+    return s.post(BASE + path, files={"file": (name, content, "application/pdf")}, data=data or {}, timeout=timeout)
+
+
+def poll_pdf_job(s, job_id, timeout=60):
+    import time
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        r = s.get(BASE + f"/import-pdf/analyze/progress/{job_id}")
+        if r.status_code != 200:
+            return r  # ошибка — вызывающий код проверит status_code/detail
+        body = r.json()
+        if body.get("status") == "done":
+            return r
+        time.sleep(0.3)
+    raise TimeoutError("фоновый разбор PDF не завершился за отведённое время")
+
+
+def section_pdf():
+    print("== загрузка из PDF (детально и «только фасады»)")
+    admin = login("admin")
+    OBJ = 3  # объект МФР копии без данных раздела PDF (revit_elements.section_code='PDF' пуст — есть только АР/КР из Revit)
+    small = _pdf("small")
+
+    # ---- права: 403 у user2/user4 на обеих ветках ----
+    for user in ("user2", "user4"):
+        before = snap()
+        r = pdfup(login(user), "/import-pdf/analyze/start", small, data={"object_id": str(OBJ)})
+        check(r.status_code == 403 and snap() == before, f"analyze/start: {user} → {r.status_code}, БД не изменена")
+        r = pdfup(login(user), "/import-pdf-facade/analyze", small, data={"object_id": str(OBJ)})
+        check(r.status_code == 403 and snap() == before, f"facade/analyze: {user} → {r.status_code}, БД не изменена")
+
+    # ---- валидация: без файла / не PDF / пустой ----
+    r = admin.post(BASE + "/import-pdf/analyze/start", data={"object_id": str(OBJ)})
+    check(r.status_code == 422, f"analyze/start: без файла → {r.status_code}")
+    before = snap()
+    r = pdfup(admin, "/import-pdf/analyze/start", b"not a pdf", data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"analyze/start: битый файл запускает задачу (ошибка увидится в progress) → {r.status_code}")
+    job = r.json().get("job_id")
+    pr = poll_pdf_job(admin, job)
+    check(pr.status_code >= 400, f"progress: битый PDF → ошибка задачи ({pr.status_code}: {pr.text[:100]})")
+    check(snap() == before, "битый PDF: БД не изменена")
+
+    # ---- файл без слоя помещений: понятная ошибка ----
+    before = snap()
+    r = pdfup(admin, "/import-pdf/analyze/start", _pdf("no_rooms"), data={"object_id": str(OBJ)})
+    job = r.json()["job_id"]
+    pr = poll_pdf_job(admin, job)
+    check(pr.status_code == 422 and "помещени" in pr.text.lower(), f"no_rooms: понятная ошибка ({pr.status_code}: {pr.text[:120]})")
+    check(snap() == before, "no_rooms: БД не изменена")
+
+    # ---- детальный разбор: фоновая задача → сводка (в БД не пишет) ----
+    before = snap()
+    r = pdfup(admin, "/import-pdf/analyze/start", small, data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"analyze/start: 200 (получен {r.status_code})")
+    job = r.json()["job_id"]
+    pr = poll_pdf_job(admin, job)
+    check(pr.status_code == 200, f"progress: успешное завершение ({pr.status_code})")
+    result = pr.json()["result"]
+    check(result["total_rooms"] > 0 and result["new"] > 0, f"analyze: разобраны помещения (total_rooms={result['total_rooms']}, new={result['new']})")
+    check(snap() == before, "analyze/start: ничего не пишет (снимок БД совпал)")
+    token = result["token"]
+
+    # ---- применение: права, затем успех ----
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + "/import-pdf/apply", json={"token": token})
+        check(r.status_code == 403, f"apply: {user} → {r.status_code}")
+    j0 = journal_max()
+    r = admin.post(BASE + "/import-pdf/apply", json={"token": token})
+    check(r.status_code == 200, f"apply: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["rooms_written"] == result["total_rooms"], f"apply: rooms_written совпадает с разбором ({res['rooms_written']} vs {result['total_rooms']})")
+    check(rows(f"select count(*) n from revit_elements where object_id={OBJ} and section_code='PDF' and category='Помещение' and is_current=1")[0]["n"] == result["total_rooms"],
+          "в БД появились текущие помещения раздела PDF")
+    ev = journal_since(j0, "import_pdf")
+    check(len(ev) == 1, f"журнал: одно событие import_pdf (найдено {len(ev)})")
+    # повторное применение того же токена — отклонено (использован/забыт)
+    r = admin.post(BASE + "/import-pdf/apply", json={"token": token})
+    check(r.status_code >= 400, f"apply: повтор токена → отказ ({r.status_code})")
+
+    # ---- повторный разбор того же файла: идемпотентно (0 новых, все без изменений) ----
+    r = pdfup(admin, "/import-pdf/analyze/start", small, data={"object_id": str(OBJ)})
+    job2 = r.json()["job_id"]
+    result2 = poll_pdf_job(admin, job2).json()["result"]
+    # unchanged считает ВСЕ категории элементов раздела PDF (помещения+стены/окна+плиты), а не только помещения — тот же набор, что дал "new" на первом разборе.
+    check(result2["new"] == 0 and result2["unchanged"] == result["new"], f"повторный разбор: new=0, unchanged={result2['unchanged']} (ожидалось {result['new']})")
+
+    # ---- «только фасады»: синхронный разбор + применение ----
+    before = snap()
+    r = pdfup(admin, "/import-pdf-facade/analyze", small, data={"object_id": str(OBJ)})
+    check(r.status_code == 200, f"facade/analyze: 200 (получен {r.status_code}: {r.text[:120]})")
+    fr = r.json()
+    check(fr["total_blocks"] > 0, f"facade/analyze: блоков {fr['total_blocks']}")
+    check(snap() == before, "facade/analyze: ничего не пишет")
+    j0 = journal_max()
+    r = admin.post(BASE + "/import-pdf-facade/apply", json={"token": fr["token"]})
+    check(r.status_code == 200, f"facade/apply: успех → {r.status_code} ({r.text[:150]})")
+    fres = r.json()
+    check(fres["blocks_written"] == fr["total_blocks"], f"facade/apply: blocks_written совпадает ({fres['blocks_written']} vs {fr['total_blocks']})")
+    check(len(journal_since(j0, "import_pdf_facade")) == 1, "журнал: одно событие import_pdf_facade")
+
+    # ---- очистка справочников (отладка): только помещения раздела PDF ----
+    before_rooms = rows(f"select count(*) n from revit_elements where object_id={OBJ} and section_code='PDF' and category='Помещение' and is_current=1")[0]["n"]
+    check(before_rooms > 0, "перед очисткой в БД есть текущие помещения PDF")
+    j0 = journal_max()
+    r = admin.post(BASE + f"/objects/{OBJ}/clear-import-data", json={"source": "pdf", "elements": True, "structure": False, "work": False})
+    check(r.status_code == 200, f"clear-import-data: 200 (получен {r.status_code}: {r.text[:120]})")
+    after_rooms = rows(f"select count(*) n from revit_elements where object_id={OBJ} and section_code='PDF' and category='Помещение' and is_current=1")[0]["n"]
+    check(after_rooms == 0, f"clear-import-data: помещений PDF не осталось текущими (найдено {after_rooms})")
+    check(len(journal_since(j0, "clear_import_data")) == 1, "журнал: одно событие clear_import_data")
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + f"/objects/{OBJ}/clear-import-data", json={"source": "pdf", "elements": True, "structure": False, "work": False})
+        check(r.status_code == 403, f"clear-import-data: {user} → {r.status_code}")
+
+
+def seed_external_model(object_id, name="Проверка V2"):
+    """Заводит тестовую запись object_external_models НАПРЯМУЮ в копии БД (как Fault — временная правка копии для
+    проверки), без реальной загрузки FBX: GET/PATCH/recenter/DELETE не читают файл с диска (delete_file() не падает
+    на отсутствующий файл, app/external_model_storage.py), а upload проверяется отдельно синтетическим файлом."""
+    c = sqlite3.connect(DB, timeout=30)
+    c.execute(
+        "INSERT INTO object_external_models (object_id, name, kind, original_name, stored_name, sha256, size_bytes, "
+        "format_version, placement_mode, metadata_json, source_anchor_x_mm, source_anchor_y_mm, source_anchor_z_mm, "
+        "object_anchor_x_mm, object_anchor_y_mm, centering_revision, offset_x_mm, offset_y_mm, offset_z_mm, "
+        "rotation_deg, scale_x, scale_y, scale_z, revision) VALUES "
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (object_id, name, "ground", "seed.fbx", f"seed-{object_id}-{name}.fbx", "0" * 64, 1000, 7400,
+         "unreferenced", "{}", 0.0, 0.0, 0.0, 0.0, 0.0, "seed-rev", 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1),
+    )
+    c.commit()
+    model_id = c.execute("SELECT id FROM object_external_models WHERE stored_name = ?", (f"seed-{object_id}-{name}.fbx",)).fetchone()[0]
+    c.close()
+    return model_id
+
+
+import gen_synthetic_fbx as fbxgen  # noqa: E402
+
+
+def fbxup(s, path, content, name="m.fbx", meta=None, data=None, timeout=60):
+    payload = dict(data or {})
+    payload["meta"] = json.dumps(meta or {"kind": "ground", "source_anchor_mm": {"x": 0, "y": 0, "z": 0}}, ensure_ascii=False)
+    return s.post(BASE + path, files={"file": (name, content, "application/octet-stream")}, data=payload, timeout=timeout)
+
+
+def section_external_models():
+    print("== внешние 3D-модели объекта (FBX)")
+    admin = login("admin")
+    OBJ = 1
+
+    # ---- загрузка: синтетический бинарный FBX (реальный меш, scripts/gen_synthetic_fbx.py) ----
+    ok_fbx = fbxgen.generate("ok")
+    good_meta = {"kind": "ground", "source_anchor_mm": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "bbox_size_mm": {"x": 1000.0, "y": 1000.0, "z": 1000.0}, "mesh_count": 1, "triangle_count": 1,
+                "texture_count": 0, "warnings": []}
+    for user in ("user2", "user4"):
+        before = snap()
+        r = fbxup(login(user), f"/objects/{OBJ}/external-models", ok_fbx, meta=good_meta)
+        check(r.status_code == 403 and snap() == before, f"upload: {user} → {r.status_code}, БД не изменена")
+    for variant, needle in (("bad_axis", "профиль"), ("bad_unit", "unitscalefactor")):
+        before = snap()
+        r = fbxup(admin, f"/objects/{OBJ}/external-models", fbxgen.generate(variant), meta=good_meta)
+        check(r.status_code == 422 and needle.lower() in r.text.lower() and snap() == before,
+              f"upload: {variant} отклонён понятным текстом ({r.status_code}: {r.text[:100]}), БД не изменена")
+    r = fbxup(admin, f"/objects/{OBJ}/external-models", ok_fbx, name="m.obj", meta=good_meta)
+    check(400 <= r.status_code < 500, f"upload: неверное расширение → {r.status_code}")
+    j0 = journal_max()
+    r = fbxup(admin, f"/objects/{OBJ}/external-models", ok_fbx, meta={**good_meta, "name": "Загруженная модель"})
+    check(r.status_code == 200, f"upload: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    up_id = res["id"]
+    check(res["name"] == "Загруженная модель" and res["kind"] == "ground" and res["scale"]["x"] == 1.0, f"upload: поля модели верны ({res.get('name')}, {res.get('kind')}, scale={res.get('scale')})")
+    check(rows(f"select count(*) n from object_external_models where id={up_id} and object_id={OBJ}")[0]["n"] == 1, "upload: запись в БД")
+    check(len(journal_since(j0, "external_model_upload")) == 1, "журнал: одно событие external_model_upload")
+    r = admin.delete(BASE + f"/objects/{OBJ}/external-models/{up_id}")
+    check(r.status_code == 200, "upload: подчистили за собой (удаление)")
+
+    # ---- список: права, форма ----
+    r = admin.get(BASE + f"/objects/{OBJ}/external-models")
+    check(r.status_code == 200, f"список: 200 (получен {r.status_code})")
+    for user in ("user2", "user4"):
+        r = login(user).get(BASE + f"/objects/{OBJ}/external-models")
+        check(r.status_code in (200, 403), f"список: {user} → {r.status_code} (403 без доступа к объекту, 200 с доступом на чтение)")
+
+    mid = seed_external_model(OBJ, "Тест-внешняя-модель")
+    r = admin.get(BASE + f"/objects/{OBJ}/external-models")
+    check(r.status_code == 200 and any(m["id"] == mid for m in r.json()["models"]), "список: заведённая модель видна")
+    row = next(m for m in r.json()["models"] if m["id"] == mid)
+    rev = row["revision"]
+
+    # ---- PATCH: права, форма, сверка версии, успех ----
+    for user in ("user2", "user4"):
+        r = login(user).patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev, "offset_x_mm": 100})
+        check(r.status_code == 403, f"patch: {user} → {r.status_code}")
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev + 1, "offset_x_mm": 100})
+    check(r.status_code == 409, f"patch: устаревшая версия → {r.status_code} (получен {r.status_code})")
+    j0 = journal_max()
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={
+        "expected_revision": rev, "offset_x_mm": 150.5, "offset_y_mm": -20, "offset_z_mm": 0,
+        "rotation_deg": 45, "scale_x": 1.02, "scale_y": 1.02, "scale_z": 1.0, "name": "Правка V2",
+    })
+    check(r.status_code == 200, f"patch: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["name"] == "Правка V2" and res["offset_mm"]["x"] == 150.5 and res["rotation_deg"] == 45 and res["revision"] == rev + 1,
+          f"patch: значения применены, версия выросла ({res.get('name')}, {res.get('offset_mm')}, rev={res.get('revision')})")
+    check(len(journal_since(j0, "external_model_update")) == 1, "журнал: одно событие external_model_update")
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev, "offset_x_mm": 1})
+    check(r.status_code == 409, f"patch: повтор со старой версией после чужого изменения → {r.status_code}")
+    # scale вне (0,100] отклоняется
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": rev + 1, "scale_x": 0})
+    check(r.status_code == 422, f"patch: scale=0 отклонён ({r.status_code})")
+
+    # ---- recenter: права, сверка версии, успех ----
+    rev2 = rev + 1
+    for user in ("user2", "user4"):
+        r = login(user).post(BASE + f"/objects/{OBJ}/external-models/{mid}/recenter", json={"expected_revision": rev2})
+        check(r.status_code == 403, f"recenter: {user} → {r.status_code}")
+    r = admin.post(BASE + f"/objects/{OBJ}/external-models/{mid}/recenter", json={"expected_revision": rev2 + 1})
+    check(r.status_code == 409, f"recenter: устаревшая версия → {r.status_code}")
+    j0 = journal_max()
+    r = admin.post(BASE + f"/objects/{OBJ}/external-models/{mid}/recenter", json={"expected_revision": rev2})
+    check(r.status_code == 200, f"recenter: успех → {r.status_code} ({r.text[:150]})")
+    res = r.json()
+    check(res["offset_mm"]["x"] == 0 and res["offset_mm"]["y"] == 0 and res["revision"] == rev2 + 1, f"recenter: смещение сброшено, версия выросла ({res.get('offset_mm')}, rev={res.get('revision')})")
+    check(len(journal_since(j0, "external_model_recenter")) == 1, "журнал: одно событие external_model_recenter")
+
+    # ---- удаление: права, успех, повторное 404 ----
+    for user in ("user2", "user4"):
+        r = login(user).delete(BASE + f"/objects/{OBJ}/external-models/{mid}")
+        check(r.status_code == 403, f"delete: {user} → {r.status_code}")
+    j0 = journal_max()
+    r = admin.delete(BASE + f"/objects/{OBJ}/external-models/{mid}")
+    check(r.status_code == 200, f"delete: успех → {r.status_code}")
+    check(len(journal_since(j0, "external_model_delete")) == 1, "журнал: одно событие external_model_delete")
+    r = admin.get(BASE + f"/objects/{OBJ}/external-models")
+    check(not any(m["id"] == mid for m in r.json()["models"]), "delete: модель пропала из списка")
+    r = admin.patch(BASE + f"/objects/{OBJ}/external-models/{mid}", json={"expected_revision": 1})
+    check(r.status_code == 404, f"patch удалённой модели → {r.status_code}")
+    r = admin.delete(BASE + f"/objects/{OBJ}/external-models/{mid}")
+    check(r.status_code == 404, f"повторное удаление → {r.status_code}")
+
+
+def section_misc():
+    print("== остальные операции обмена (образцы, версии чертежа, активность, справка, ячейка Графика поставки)")
+    admin = login("admin")
+    OBJ_ZHBI = 1
+
+    # ---- образец файла импорта (используется во всех формах загрузки — mountTemplates, exchange-common.js) ----
+    r = admin.get(BASE + "/import-templates")
+    check(r.status_code == 200 and r.json()["templates"], f"образцы: список форматов доступен ({r.status_code})")
+    key = r.json()["templates"][0]["key"]
+    r = admin.get(BASE + f"/import-templates/{key}/sample")
+    check(r.status_code == 200 and len(r.content) > 0, f"образец «{key}»: скачивается ({r.status_code}, {len(r.content)} байт)")
+    r = admin.get(BASE + "/import-templates/несуществующий/sample")
+    check(r.status_code == 404, f"образец неизвестного ключа → {r.status_code}")
+
+    # ---- список версий чертежа объекта ----
+    r = admin.get(BASE + f"/objects/{OBJ_ZHBI}/drawings")
+    check(r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0, f"версии чертежа: список получен ({r.status_code}, {len(r.json()) if r.status_code == 200 else '?'} версий)")
+    check(any(d["is_current"] for d in r.json()), "версии чертежа: хотя бы одна текущая")
+    r = admin.get(BASE + "/objects/999999/drawings")
+    check(r.status_code == 404, f"версии чертежа несуществующего объекта → {r.status_code}")
+
+    # ---- справка отчёта (любой вошедший) ----
+    for k in ("status", "mywork", "delivery", "completion"):
+        r = admin.get(BASE + f"/report-help/{k}")
+        check(r.status_code == 200 and r.json().get("sections"), f"справка «{k}»: получена ({r.status_code})")
+    r = admin.get(BASE + "/report-help/несуществующий")
+    check(r.status_code == 200, f"справка неизвестного ключа: не падает, отдаёт заглушку ({r.status_code})")
+    r = login("user4").get(BASE + "/report-help/status")
+    check(r.status_code == 200, f"справка: доступна и роли view ({r.status_code})")
+
+    # ---- активность (кого показывать в «Моей работе») ----
+    r = admin.get(BASE + f"/objects/{OBJ_ZHBI}/activity-users")
+    check(r.status_code == 200 and r.json()["can_choose"] is True, f"активность: администратору можно выбирать ({r.status_code}, can_choose={r.json().get('can_choose')})")
+    check(len(r.json()["users"]) >= 1, "активность: список пользователей не пуст")
+    r = login("user4").get(BASE + f"/objects/{OBJ_ZHBI}/activity-users")
+    check(r.status_code in (200, 403), f"активность: user4 → {r.status_code}")
+    if r.status_code == 200:
+        check(r.json()["can_choose"] is False and len(r.json()["users"]) == 1, f"активность: обычному пользователю — только он сам ({r.json()})")
+
+    # ---- разбор ячейки «Графика поставки» ----
+    rpt = admin.post(BASE + "/reports/delivery-schedule", json={"object_id": OBJ_ZHBI})
+    check(rpt.status_code == 200, f"график поставки: 200 (получен {rpt.status_code})")
+    data = rpt.json()
+    date_from, date_to, step = data.get("date_from"), data.get("date_to"), data.get("step")
+
+    def first_leaf_path(nodes, path):
+        for n in nodes:
+            p = path + [n["gkey"]]
+            if n.get("children"):
+                found = first_leaf_path(n["children"], p)
+                if found:
+                    return found
+            else:
+                return p
+        return None
+    leaf_path = first_leaf_path(data.get("rows", []), [])
+    check(leaf_path is not None, "график поставки: есть хотя бы одна конечная строка для разбора ячейки")
+    if leaf_path is not None:
+        cols = [c["key"] for c in data.get("columns", [])]
+        for col in cols:
+            r = admin.post(BASE + "/reports/delivery-schedule/cell", json={
+                "object_id": OBJ_ZHBI, "date_from": date_from, "date_to": date_to, "step": step,
+                "path": leaf_path, "column": col,
+            })
+            if r.status_code == 200 and r.json().get("marks"):
+                break
+        check(r.status_code == 200, f"разбор ячейки: 200 (получен {r.status_code}: {r.text[:150]})")
+        cell = r.json()
+        check("column_label" in cell and "marks" in cell, f"разбор ячейки: форма ответа верна ({list(cell.keys())})")
+        r = admin.post(BASE + "/reports/delivery-schedule/cell", json={"object_id": OBJ_ZHBI, "path": leaf_path, "column": cols[0] if cols else "before"})
+        check(r.status_code == 400, f"разбор ячейки: без периода → {r.status_code} (сервер не подставляет период сам)")
 
 
 # ---------------------------------------------------------------- вспомогательное: внесение сбоя в копию БД
@@ -795,10 +1361,10 @@ def section_revit():
         TABLES = saved_tables
 
 
-SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit}
+SECTION_FUNCS = {"contracting": section_contracting, "history": section_history, "schedule": section_schedule, "objects": section_objects, "bulk": section_bulk, "drawing": section_drawing, "input": section_input, "revit": section_revit, "settings": section_settings, "shaft": section_shaft, "pdf": section_pdf, "external_models": section_external_models, "misc": section_misc}
 
 if __name__ == "__main__":
-    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit"):
+    for name in ("contracting", "history", "schedule", "objects", "bulk", "drawing", "input", "revit", "settings", "shaft", "pdf", "external_models", "misc"):
         if name in SECTIONS and name in SECTION_FUNCS:
             SECTION_FUNCS[name]()
     print(f"\nПроверок пройдено: {OK}, не пройдено: {len(FAILS)}")

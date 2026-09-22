@@ -25,6 +25,20 @@ from typing import Optional
 from app.db import parse_zone_number
 
 
+class ZoneSyncConflict(Exception):
+    """Полигон зоны с уже занятым `dxf_handle` не опознался как правка существующей записи справочника —
+    обычно потому, что подпись зоны на этом полигоне вне допуска распознавания (см. докстроку модуля и
+    Docs/v2-progress/exchange.md, «Найденное, но не исправленное»). Ловится в app/dxf_import.py и
+    превращается в понятный отказ вместо необработанного IntegrityError (UNIQUE(source_file, dxf_handle)):
+    что именно делать со смыслом зоны в этом случае — решение пользователя, здесь только чистый отказ без
+    падения сервера. Этап изделий к этому моменту уже мог быть записан (та же семантика, что у DXF/Revit
+    в целом — сбой посреди загрузки оставляет завершённые этапы, повтор тем же токеном продолжит)."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
 def _zone_key(category: str, number: Optional[int], name: Optional[str]) -> tuple:
     """Номер — основа ключа; имя добавляется только когда номера нет вовсе
     (зона без числа в подписи). Иначе «Стоянка 1» и «Стоянка 01» из двух
@@ -204,13 +218,27 @@ def sync_zones(
                  record.parent_match_status, parent_zone_id, zone_id),
             )
         else:
-            conn.execute(
-                "INSERT INTO zones (object_id, source_file, dxf_handle, category, elevation_mm, "
-                "name, outline_json, match_status, parent_match_status, parent_zone_id, number, is_current) "
-                "VALUES (?, ?, ?, ?, NULL, ?, '', ?, ?, ?, ?, 1)",
-                (object_id, source_file, record.handle, record.category, record.name,
-                 record.match_status, record.parent_match_status, parent_zone_id, number),
-            )
+            # Полигон с этим dxf_handle уже есть в справочнике (тот же чертёж грузили раньше), но не опознался как
+            # правка существующей записи — обычно подпись зоны на этом полигоне сейчас вне допуска распознавания
+            # (была «Стоянка 01», разбор больше не видит номер). INSERT упёрся бы в UNIQUE(source_file, dxf_handle)
+            # необработанным IntegrityError — вместо этого чистый отказ с точным указанием полигона (ZoneSyncConflict).
+            try:
+                conn.execute(
+                    "INSERT INTO zones (object_id, source_file, dxf_handle, category, elevation_mm, "
+                    "name, outline_json, match_status, parent_match_status, parent_zone_id, number, is_current) "
+                    "VALUES (?, ?, ?, ?, NULL, ?, '', ?, ?, ?, ?, 1)",
+                    (object_id, source_file, record.handle, record.category, record.name,
+                     record.match_status, record.parent_match_status, parent_zone_id, number),
+                )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                raise ZoneSyncConflict(
+                    f"Полигон зоны (чертёж «{source_file}», handle {record.handle}, категория «{record.category}»"
+                    f"{f', подпись «{record.name}»' if record.name else ', без распознанной подписи'}) уже есть в "
+                    "справочнике под другим именем/номером — опознание не сработало. Разбор чертежа и зон завершён "
+                    "не полностью; повторите применение после того, как подпись зоны на этом полигоне будет "
+                    "опознаваться так же, как при первой загрузке."
+                )
             zone_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
             catalog[key] = conn.execute("SELECT * FROM zones WHERE id = ?", (zone_id,)).fetchone()
 

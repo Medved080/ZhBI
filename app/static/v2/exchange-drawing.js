@@ -55,6 +55,7 @@ export function mountDrawingUpload(el, ctx) {
         <label class="v2-wire-field v2-field-wide"><span>Объект</span>
           <select id="dr-object" aria-label="Объект">${objectById.has(objectId) ? "" : `<option value="" selected>— выберите объект —</option>`}${objectOptions(objects, objectId)}</select></label>
         <p class="v2-muted v2-ex-hint">Объект выбирается явно: чертёж заменяет геометрию и привязки изделий ЭТОГО объекта. Подставлен объект из шапки.</p>
+        <details class="v2-collapsible" id="dr-versions-details"><summary>Версии чертежа объекта</summary><div id="dr-versions"><p class="v2-muted" role="status">Загрузка…</p></div></details>
         <label class="v2-wire-field v2-field-wide"><span>Файл чертежа (.dxf)</span><input type="file" id="dr-file" accept=".dxf"></label>
         <div class="v2-bar"><button type="submit" class="v2-btn v2-primary" id="dr-analyze">Разобрать чертёж</button></div>
       </form>
@@ -200,6 +201,26 @@ export function mountDrawingUpload(el, ctx) {
       if (!dead) { $("#dr-analyze").disabled = false; $("#dr-apply")?.removeAttribute("disabled"); $("#dr-cancel")?.removeAttribute("disabled"); }
     }
   }
+
+  // ---- версии чертежа объекта (GET /objects/{id}/drawings) — только справочно, для контекста перед загрузкой новой версии
+  async function loadVersions() {
+    const oid = Number($("#dr-object").value) || null;
+    const box = $("#dr-versions");
+    if (!oid) { box.innerHTML = `<p class="v2-muted">Сначала выберите объект.</p>`; return; }
+    box.innerHTML = `<p class="v2-muted" role="status">Загрузка…</p>`;
+    try {
+      const list = await api.get(`/objects/${oid}/drawings`);
+      if (dead) return;
+      if (!list.length) { box.innerHTML = `<p class="v2-muted">У объекта ещё нет загруженного чертежа.</p>`; return; }
+      box.innerHTML = `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Файл</th><th>Загружен</th><th>Изделий</th><th></th></tr></thead>
+        <tbody>${list.map((d) => `<tr><td>${esc(d.source_file)}${d.is_current ? ' <span class="v2-chip v2-chip-ok">текущий</span>' : ""}</td><td>${esc(String(d.imported_at || "").slice(0, 16).replace("T", " "))}</td><td class="num">${esc(d.elements)}</td></tr>`).join("")}</tbody></table></div>`;
+    } catch (err) {
+      if (dead) return;
+      box.innerHTML = `<p class="v2-bad-text">Не удалось прочитать версии: ${esc(errText(err))}</p>`;
+    }
+  }
+  $("#dr-object").addEventListener("change", loadVersions);
+  loadVersions();
 
   $("#dr-form").addEventListener("submit", (e) => { e.preventDefault(); analyze(); });
   return {

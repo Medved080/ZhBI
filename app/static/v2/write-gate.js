@@ -28,6 +28,8 @@ export const EXPERIMENTAL_NOTICE =
   "Экспериментальный интерфейс. Часть функций ещё дорабатывается. Непроверенные операции выполняйте в текущем интерфейсе";
 
 const ID = "[^/]+";
+// secrets.token_urlsafe(32) (Python) — base64 URL-safe без паддинга, для 32 случайных байт обычно 43 символа; допуск с запасом.
+const TOKEN_URLSAFE = "[A-Za-z0-9_-]{20,64}";
 const re = (s) => new RegExp("^" + s + "$");
 
 // Распределение изделий на контракт (`POST /contracts/{id}/allocations`, одна серверная операция на пачку): включается ТОЛЬКО вместе с версией backend,
@@ -379,6 +381,20 @@ export const POLICY = [
   { id: "revit.analyze", screen: "revit-import", action: "Загрузка из Revit: разбор пакетов выгрузки по выбранному объекту и сводка (в базу не пишет)", method: "POST", path: re("/import-revit/analyze"), check: uploadCheck({ ext: ["gz", "json"], fileField: "files", maxFiles: 12, fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического пакета КР, отказ 403 у не-админа, 4xx на битый пакет и на дубль раздела" },
   { id: "revit.apply", screen: "revit-import", action: "Загрузка из Revit: применить показанную сводку (секции, этажи, элементы и помещения модели объекта)", method: "POST", path: re("/import-revit/apply"), check: tokenOnlyProblem, risk: "справочники и элементы модели МФР объекта; этапами (как в V1), копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, списание исчезнувших внутри раздела" },
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
+  { id: "settings.analyze", screen: "settings-io", action: "Экспорт/импорт настроек: сверка файла (копии учётных записей) с базой — ничего не пишет", method: "POST", path: re("/settings/import/analyze"), check: uploadCheck({ ext: ["json"] }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения по пользователям/цветам/видимости подписей, 422 на неверный JSON, отказ 403 у не-админа" },
+  { id: "settings.apply", screen: "settings-io", action: "Экспорт/импорт настроек: применить файл (копию учётных записей) по сверенному digest", method: "POST", path: re("/settings/import/apply"), check: uploadCheck({ ext: ["json"], fields: { digest: isHexDigest } }), risk: "пользователи (пароли, роли), цвета статусов, видимость подписей; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по сверенному digest, устаревшая сверка (409) при подмене файла/базы, отказ 403 у не-админа, журнал после сохранения" },
+  { id: "shaft.analyze", screen: "shaft-panels", action: "Панели облицовки шахты: разбор DXF по объекту (толщина панели — необязательное поле), сводка расхождений (в базу не пишет)", method: "POST", path: re("/shaft-panels/analyze"), check: shaftAnalyzeProblem, risk: "чтение (разбор), данные не меняются; файл — во временной папке сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF профиля ГП1/ГП2, отказ 403 у не-админа, 4xx на неверный профиль/оси/марки/перекрытие" },
+  { id: "shaft.apply", screen: "shaft-panels", action: "Панели облицовки шахты: применить показанную сводку по токену (подтверждённые замечания, снятие актуальности отсутствующих)", method: "POST", path: re("/shaft-panels/apply"), check: shaftApplyProblem, risk: "изделия объекта (тип «Панель облицовки шахты»), сетка осей чертежа; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, конфликты блокируют применение, отказ 403 у не-админа, журнал после сохранения" },
+  { id: "shaft.cancel", screen: "shaft-panels", action: "Панели облицовки шахты: отменить незавершённый анализ (освобождает токен)", method: "DELETE", path: re(`/shaft-panels/pending/${TOKEN_URLSAFE}`), risk: "ничего не меняет — снимает временную запись разбора своего же токена", allowed: true, proof: "настоящий backend: отмена своего токена, чужой токен и неизвестный токен отклоняются сервером" },
+  { id: "pdf.analyze.start", screen: "pdf-import", action: "Загрузка из PDF: запуск фонового разбора помещений (в базу не пишет)", method: "POST", path: re("/import-pdf/analyze/start"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор в фоновом потоке), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF (детально и «только фасады»), отказ 403 у не-админа, 4xx на неверный/битый файл" },
+  { id: "pdf.apply", screen: "pdf-import", action: "Загрузка из PDF: применить показанную сводку помещений по токену", method: "POST", path: re("/import-pdf/apply"), check: tokenOnlyProblem, risk: "секции/этажи/помещения модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
+  { id: "pdf.facade.analyze", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: синхронный разбор макета блоков (в базу не пишет)", method: "POST", path: re("/import-pdf-facade/analyze"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF, отказ 403 у не-админа, 4xx на неверный/битый файл" },
+  { id: "pdf.facade.apply", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: применить показанный макет блоков по токену", method: "POST", path: re("/import-pdf-facade/apply"), check: tokenOnlyProblem, risk: "секции/этажи/блоки модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
+  { id: "pdf.clear", screen: "pdf-import", action: "Загрузка из PDF: отладочная очистка справочников объекта перед повторной загрузкой (применяется сразу, без сводки)", method: "POST", path: re(`/objects/\\d+/clear-import-data`), check: clearImportDataProblem, risk: "необратимо через интерфейс (помещения из PDF и/или секции/этажи и/или виды работ блоков); копия базы перед очисткой", allowed: true, proof: "настоящий backend: очистка по отмеченным группам, счётчики в ответе, отказ 403, журнал" },
+  { id: "em.upload", screen: "external-models", action: "Внешние 3D-модели: загрузка FBX (метаданные — anchor/габарит/оси — посчитаны клиентом при разборе файла, сервер проверяет независимо)", method: "POST", path: re(`/objects/\\d+/external-models`), check: uploadFbxProblem, risk: "новая модель объекта; файл на диске сервера", allowed: true, proof: "настоящий backend: загрузка синтетического FBX, отказ 403, отказ сервера на неподдерживаемый профиль осей" },
+  { id: "em.patch", screen: "external-models", action: "Внешние 3D-модели: правка размещения числовыми полями (смещение/поворот/масштаб/название) со сверкой версии записи", method: "PATCH", path: re(`/objects/\\d+/external-models/\\d+`), check: emPatchProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: правка → SQL, 409 при чужой правке, отказ 403" },
+  { id: "em.recenter", screen: "external-models", action: "Внешние 3D-модели: перецентровать (привязать заново к текущим границам объекта) со сверкой версии записи", method: "POST", path: re(`/objects/\\d+/external-models/\\d+/recenter`), check: emRecenterProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: перецентровка → SQL, 409 при чужой правке, отказ 403" },
+  { id: "em.delete", screen: "external-models", action: "Внешние 3D-модели: удалить (файл и запись, необратимо)", method: "DELETE", path: re(`/objects/\\d+/external-models/\\d+`), risk: "необратимо — файл и запись модели удаляются", allowed: true, proof: "настоящий backend: удаление → SQL и файл, отказ 403" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
   // Контракт по умолчанию (PUT /contracts/default-map), свёртка дублей справочника (POST /dictionaries/{counterparty|agreement|specification}/{id}/delete,
@@ -445,6 +461,7 @@ export function announceBlocked(result, method, path) {
 function isIntStr(v) { return typeof v === "string" && /^[1-9][0-9]{0,9}$/.test(v); }
 function isNonEmpty(v) { return typeof v === "string" && v.trim() !== "" && v.length <= 500; }
 function isOneOf(list) { return (v) => typeof v === "string" && list.includes(v); }
+function isHexDigest(v) { return typeof v === "string" && /^[0-9a-f]{64}$/.test(v); }
 
 // Проверка формы загрузки: ровно один непустой файл разрешённого расширения (не больше лимита сервера), только перечисленные поля формы
 // и параметры адреса (все обязательны). Возвращает функцию (body, query, pathWithQuery) → текст проблемы или null (в проверке — «проблема ⇒ отказ»).
@@ -524,5 +541,93 @@ function tokenOnlyProblem(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
   if (Object.keys(body).some((k) => k !== "token")) return "лишние поля";
   if (typeof body.token !== "string" || !/^[0-9a-f]{16,64}$/.test(body.token)) return "нет токена разбора";
+  return null;
+}
+
+// Разбор DXF панелей облицовки шахты: объект обязателен, толщина панели — НЕОБЯЗАТЕЛЬНОЕ поле формы (первый проход без
+// неё показывает только лицевые поверхности; uploadCheck() не умеет необязательные поля, поэтому проверка своя).
+function shaftAnalyzeProblem(body) {
+  if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
+  const keys = new Set(body.keys());
+  if ([...keys].some((k) => !["file", "object_id", "thickness_mm"].includes(k))) return "лишние поля формы";
+  const files = body.getAll("file");
+  if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
+  const f = files[0];
+  if ((f.name.split(".").pop() || "").toLowerCase() !== "dxf") return "неверное расширение файла";
+  if (!(f.size > 0)) return "файл пуст";
+  if (f.size > 30 * 1024 * 1024) return "файл больше лимита сервера (30 МБ)";
+  const oid = body.getAll("object_id");
+  if (oid.length !== 1 || !isIntStr(oid[0])) return "не указан объект";
+  const th = body.getAll("thickness_mm");
+  if (th.length > 1) return "толщина указана дважды";
+  if (th.length === 1) {
+    const v = Number(th[0]);
+    if (!Number.isFinite(v) || v <= 0 || v > 500) return "толщина должна быть числом больше 0 и не больше 500 мм";
+  }
+  return null;
+}
+
+// Отладочная очистка справочников объекта перед повторной загрузкой (Revit/PDF): источник и хотя бы одна из трёх групп.
+function clearImportDataProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["source", "elements", "structure", "work"].includes(k))) return "лишние поля";
+  if (!["revit", "pdf"].includes(body.source)) return "источник должен быть revit или pdf";
+  if (typeof body.elements !== "boolean" || typeof body.structure !== "boolean" || typeof body.work !== "boolean") return "флаги групп должны быть да/нет";
+  if (!(body.elements || body.structure || body.work)) return "не отмечена ни одна группа для очистки";
+  return null;
+}
+
+// Загрузка внешней 3D-модели (FBX): файл + поле формы «meta» — JSON-СТРОКА (не вложенный объект: FormData несёт только
+// строки/файлы), посчитанная клиентом при разборе файла (anchor/габарит/оси). Сервер проверяет её независимо.
+function uploadFbxProblem(body) {
+  if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
+  const keys = new Set(body.keys());
+  if ([...keys].some((k) => !["file", "meta"].includes(k))) return "лишние поля формы";
+  const files = body.getAll("file");
+  if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
+  const f = files[0];
+  if ((f.name.split(".").pop() || "").toLowerCase() !== "fbx") return "неверное расширение файла";
+  if (!(f.size > 0)) return "файл пуст";
+  if (f.size > 50 * 1024 * 1024) return "файл больше лимита сервера (50 МБ)";
+  const metaVals = body.getAll("meta");
+  if (metaVals.length !== 1 || typeof metaVals[0] !== "string") return "нет метаданных разбора";
+  let meta;
+  try { meta = JSON.parse(metaVals[0]); } catch (e) { return "метаданные — не JSON"; }
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return "метаданные — не объект";
+  if (!["ground", "facade"].includes(meta.kind)) return "вид модели должен быть ground или facade";
+  const a = meta.source_anchor_mm;
+  if (!a || typeof a !== "object" || !["x", "y", "z"].every((k) => typeof a[k] === "number" && Number.isFinite(a[k]))) return "source_anchor_mm неверен";
+  return null;
+}
+
+// Правка размещения внешней 3D-модели: только числовые поля, которые показывает форма V2 (без auto_placement_* — это
+// часть 3D-автосовмещения V1, сюда не перенесена), плюс обязательный expected_revision (оптимистичная блокировка).
+function emPatchProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  const allowed = ["name", "offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z", "expected_revision"];
+  if (Object.keys(body).some((k) => !allowed.includes(k))) return "лишние поля";
+  if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) return "нет версии записи для сверки";
+  for (const k of ["offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z"]) {
+    if (body[k] !== undefined && typeof body[k] !== "number") return `поле «${k}» должно быть числом`;
+  }
+  if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim() || body.name.length > 255)) return "название пустое или слишком длинное";
+  return null;
+}
+
+function emRecenterProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => k !== "expected_revision")) return "лишние поля";
+  if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) return "нет версии записи для сверки";
+  return null;
+}
+
+// Применение сводки панелей облицовки шахты по токену: подтверждённые замечания (коды строками) и решение о снятии
+// актуальности отсутствующих панелей.
+function shaftApplyProblem(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["token", "acknowledged_warnings", "retire_missing"].includes(k))) return "лишние поля";
+  if (typeof body.token !== "string" || body.token.length < 20 || body.token.length > 64) return "нет токена разбора";
+  if (!Array.isArray(body.acknowledged_warnings) || body.acknowledged_warnings.some((w) => typeof w !== "string")) return "список подтверждённых замечаний неверен";
+  if (typeof body.retire_missing !== "boolean") return "решение о снятии актуальности не задано";
   return null;
 }

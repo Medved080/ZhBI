@@ -424,10 +424,16 @@ def apply_drawing(
             # Зоны — в справочник (app/zone_sync), а не полным DELETE+INSERT,
             # как раньше: на записи справочника ссылаются элементы, снести и
             # создать заново означало бы потерять эти ссылки (этап 2).
-            zone_handle_to_id = zone_sync.sync_zones(
-                conn, object_id, parsed.source_file, parsed.zones,
-                create_new_zone_ids=set(create_new_zone_ids or ()),
-            )
+            try:
+                zone_handle_to_id = zone_sync.sync_zones(
+                    conn, object_id, parsed.source_file, parsed.zones,
+                    create_new_zone_ids=set(create_new_zone_ids or ()),
+                )
+            except zone_sync.ZoneSyncConflict as e:
+                # Этап изделий (apply_import выше) уже мог зафиксироваться — та же семантика, что у остальных
+                # этапов применения (см. докстрок модуля): чистый отказ вместо необработанного IntegrityError,
+                # повтор применения с тем же токеном продолжит с того же места.
+                raise DxfProcessingError(409, e.message)
             # Цвета кранов раньше назначались внутри upsert_zones — вызываем
             # ту же функцию явно, чтобы новая цветовая схема не пропала вместе
             # с заменой записи зон (ключ у цветов свой: объект + имя крана,

@@ -10,6 +10,7 @@ import { esc, linkList } from "./screen-view.js";
 import { REPORT_RENDERERS, bindReport } from "./reports.js";
 import { mountBlockWorkForm } from "./block-work-form.js";
 import { printHtml } from "./print.js";
+import { showInfoDialog } from "./dialogs.js";
 
 const RENDER_LIMIT = 500;
 
@@ -217,7 +218,21 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
         : await api.get(urlFor(sec, s));
       if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
       s.data = data;
-      if (sec.kind === "report") { s.rs = { search: s.rs.search || "" }; s.status = "ok"; if (i === active) paint(); return; }
+      if (sec.kind === "report") {
+        s.rs = { search: s.rs.search || "" }; s.status = "ok";
+        // «Пользователь» (report-mywork): список — GET /objects/{id}/activity-users, отдельно от тела отчёта; грузится
+        // один раз на объект, не блокирует показ самого отчёта.
+        if ((sec.controls || []).some((c) => c.type === "users") && objectId && s.userObjectId !== objectId) {
+          s.userObjectId = objectId;
+          api.get(`/objects/${objectId}/activity-users`).then((u) => {
+            if (dead || s.userObjectId !== objectId) return;
+            s.userOptions = u.users || []; s.canChooseUsers = !!u.can_choose;
+            if (i === active) paint();
+          }).catch(() => { /* список выбора не критичен — отчёт уже показан для «себя» по умолчанию сервера */ });
+        }
+        if (i === active) paint();
+        return;
+      }
       let rows = sec.rowsPath ? pick(data, sec.rowsPath) : data;
       if (sec.asEntries && rows && typeof rows === "object") rows = Object.entries(rows).map(([key, value]) => ({ key, value }));
       s.rows = Array.isArray(rows) ? rows : [];
@@ -309,6 +324,13 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   function paintReport(sec, s, bodyEl) {
     const controls = (sec.controls || []).map((c) => {
       const cur = s.params[c.param] ?? "";
+      if (c.type === "users") {
+        // «Пользователь» (report-mywork): «Я» (по умолчанию сервера) — «Все» (если есть право «Чужие действия») — поимённо.
+        if (!s.canChooseUsers) return "";   // обычному пользователю выбирать не из чего — форма как у V1 в этом случае
+        const val = s.userChoice ?? "";
+        const names = (s.userOptions || []).map((u) => `<option value="${u.id}" ${String(u.id) === val ? "selected" : ""}>${esc(u.display_name)}</option>`).join("");
+        return `<label class="v2-wire-field"><span>${esc(c.label)}</span><select data-user-select="1"><option value="" ${val === "" ? "selected" : ""}>Я</option><option value="__all__" ${val === "__all__" ? "selected" : ""}>Все</option>${names}</select></label>`;
+      }
       if (c.type === "select") {
         const opts = c.options || pick(s.data, c.optionsFrom) || [];   // options — фиксированный набор из реестра экранов (шаг, масштаб)
         const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? c.default ?? "";
@@ -319,11 +341,58 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     }).join("");
     const render = REPORT_RENDERERS[sec.report];
     const ctx = { api, objectId, canWrite: canWriteReport(sec), data: s.data };
-    const printBtn = sec.printable ? `<button type="button" class="v2-btn" id="rd-print">Печать</button>` : "";
-    const exportsBar = ((sec.exports || []).length || printBtn) ? `<div class="v2-bar v2-export-bar">${printBtn}${(sec.exports || []).map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>` : "";
+    // Печать доступна у отчёта по умолчанию (перенос кнопки «Печать» V1) — секция может явно отключить (`printable: false`),
+    // если для нужд её вёрстки печать ещё не проверена (mfr2, exchange2, 2026-09-22).
+    const printBtn = sec.printable === false ? "" : `<button type="button" class="v2-btn" id="rd-print">Печать</button>`;
+    const helpBtn = sec.helpKey ? `<button type="button" class="v2-btn" id="rd-help">Справка</button>` : "";
+    const exportsBar = `<div class="v2-bar v2-export-bar">${printBtn}${(sec.exports || []).map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}${helpBtn}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>`;
     bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${exportsBar}<div id="rd-report">${render(s.data, s.rs, ctx)}</div>`;
     bodyEl.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => exportReport(sec, s, b.dataset.export)));
     bodyEl.querySelector("#rd-print")?.addEventListener("click", () => printReportTable(screen.title));
+    bodyEl.querySelector("#rd-help")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      try {
+        const help = await api.get(`/report-help/${encodeURIComponent(sec.helpKey)}`);
+        const body = (help.sections || []).map(([heading, paragraphs]) => `${heading}:\n${(paragraphs || []).join("\n")}`).join("\n\n");
+        await showInfoDialog(`${help.title || sec.title}\n\n${body || "Справка для этого отчёта не заполнена."}`);
+      } catch (err) {
+        await showInfoDialog(`Не удалось получить справку: ${errorText(err)}`);
+      } finally { btn.disabled = false; }
+    });
+    bodyEl.querySelector("[data-user-select]")?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      s.userChoice = v;
+      s.params.all_users = v === "__all__";
+      s.params.user_ids = v && v !== "__all__" ? [Number(v)] : null;
+      load(active);
+    });
+    // «График поставки»: разбор ячейки по маркам (POST /reports/delivery-schedule/cell) — делегирование на постоянный
+    // контейнер (таблица перерисовывается при сворачивании строк), тот же приём, что у наведения в V1.
+    if (sec.report === "delivery") {
+      bodyEl.addEventListener("keydown", (e) => {
+        if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-gkeys]")) { e.preventDefault(); e.target.click(); }
+      });
+      bodyEl.addEventListener("click", async (e) => {
+        const cell = e.target.closest("[data-gkeys]");
+        if (!cell) return;
+        const gkeys = JSON.parse(cell.dataset.gkeys);
+        const column = cell.dataset.col;
+        cell.setAttribute("aria-busy", "true");
+        try {
+          // разбор ячейки требует ТЕ ЖЕ даты/шаг, что уже построили показанный отчёт — сервер их не подставляет сам
+          // (в отличие от самого отчёта): берём применённые сервером значения (s.data), если человек их не менял (s.params).
+          const cellBody = { ...reportBody(sec, s), date_from: s.params.date_from ?? s.data?.date_from, date_to: s.params.date_to ?? s.data?.date_to, step: s.params.step ?? s.data?.step, path: gkeys, column };
+          const detail = await api.readPost(`${sec.endpoint}/cell`, cellBody);
+          const rows = (detail.marks || []).map((r) => {
+            const src = (r.sources || []).map((so) => `${so.where}: ${so.count}${so.urgent ? " (спешно — свой срок не позже этой даты)" : ""}`).join("; ");
+            return `${r.mark}: нужно ${r.need}, план ${r.plan}, факт ${r.fact}${r.deficit ? `, НЕ ПЕРЕКРЫТО ${r.deficit} (всего к дате нужно ${r.total_need})` : ""}${src ? `\n  можно взять: ${src}` : (r.deficit ? "\n  взять негде — нет доставленных, не смонтированных изделий этой марки" : "")}`;
+          });
+          await showInfoDialog(`Разбор ячейки «${detail.column_label || column}» по маркам\n\n${rows.length ? rows.join("\n\n") : "По этой ячейке нечего показать."}`);
+        } catch (err) {
+          await showInfoDialog(`Не удалось разобрать ячейку: ${errorText(err)}`);
+        } finally { cell.removeAttribute("aria-busy"); }
+      });
+    }
     const repaint = (focusPath) => {
       ctx.data = s.data;
       bodyEl.querySelector("#rd-report").innerHTML = render(s.data, s.rs, ctx);

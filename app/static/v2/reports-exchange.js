@@ -5,20 +5,24 @@ import { esc } from "./screen-view.js";
 const num = (v) => (v == null ? "" : typeof v === "number" ? v.toLocaleString("ru-RU") : String(v));
 
 // ---- «График поставки»: дерево «группировка → контракт → тип», в ячейке «потребность / план / факт»; розовым — потребность не перекрыта
-function deliveryCell(v, gap, cls = "") {
-  if (!v || (!v[0] && !v[1] && !v[2])) return `<td class="num ${cls}"></td>`;
-  return `<td class="num ${cls} ${gap ? "v2-ds-gap" : ""}" title="потребность ${v[0]} / план ${v[1]} / факт ${v[2]}">${v[0] || 0}/${v[1] || 0}/${v[2] || 0}</td>`;
+// Ячейка кликабельна (разбор по маркам — POST /reports/delivery-schedule/cell, как наведение в V1): data-gkeys несёт
+// СЫРЫЕ значения уровней группировки от корня до строки (JSON-массив), data-col — ключ колонки календаря.
+function deliveryCell(v, gap, gkeys, col, cls = "") {
+  const attrs = col != null ? ` data-gkeys='${esc(JSON.stringify(gkeys))}' data-col="${esc(col)}" tabindex="0" role="button" aria-label="Разбор ячейки по маркам"` : "";
+  if (!v || (!v[0] && !v[1] && !v[2])) return `<td class="num ${cls}"${col != null ? attrs : ""}></td>`;
+  return `<td class="num ${cls} ${gap ? "v2-ds-gap" : ""} ${col != null ? "v2-ds-clickable" : ""}" title="потребность ${v[0]} / план ${v[1]} / факт ${v[2]}"${attrs}>${v[0] || 0}/${v[1] || 0}/${v[2] || 0}</td>`;
 }
 
-function deliveryRows(nodes, path, columns, collapsed, out) {
+function deliveryRows(nodes, path, gkeys, columns, collapsed, out) {
   for (const n of nodes) {
     const p = path ? `${path}/${n.label}` : n.label;
+    const gk = [...gkeys, n.gkey];
     const kids = n.children && n.children.length;
     const isCollapsed = collapsed.has(p);
     out.push(`<tr class="lvl-${n.level}"><td style="padding-left:${12 + n.level * 16}px">
       ${kids ? `<button type="button" class="v2-tree-toggle" data-path="${esc(p)}" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Развернуть" : "Свернуть"} ${esc(n.label)}">${isCollapsed ? "▸" : "▾"}</button>` : `<span class="v2-tree-toggle-gap"></span>`}${esc(n.label)}</td>
-      ${columns.map((c) => deliveryCell(n.values?.[c.key], (n.gaps || {})[c.key])).join("")}${deliveryCell(n.total, n.gap_total, "v2-ds-sum")}</tr>`);
-    if (kids && !isCollapsed) deliveryRows(n.children, p, columns, collapsed, out);
+      ${columns.map((c) => deliveryCell(n.values?.[c.key], (n.gaps || {})[c.key], gk, kids ? null : c.key)).join("")}${deliveryCell(n.total, n.gap_total, gk, null, "v2-ds-sum")}</tr>`);
+    if (kids && !isCollapsed) deliveryRows(n.children, p, gk, columns, collapsed, out);
   }
 }
 
@@ -34,16 +38,16 @@ function deliveryReport(data, state) {
   const collapsed = state.collapsed || (state.collapsed = deliveryDefaultCollapsed(data));
   const cols = data.columns;
   const out = [];
-  deliveryRows(data.rows || [], "", cols, collapsed, out);
+  deliveryRows(data.rows || [], "", [], cols, collapsed, out);
   const t = data.total || {};
   const legend = (data.scales || []).map((s) => `${esc(s.label.toLowerCase())} — ${esc(s.hint)}`).join(" · ");
   return `${data.in_development_note ? `<div class="v2-callout v2-callout-bad" role="note"><strong>Отчёт в разработке.</strong> ${esc(data.in_development_note)}</div>` : ""}
     <p class="v2-muted">${esc(data.subtitle || "")}</p>
-    <p class="v2-muted">В ячейке: потребность / план / факт (${legend}). <span class="v2-ds-gap-legend">Розовым</span> — потребность не перекрыта (всего ${num(t.gap_total || 0)} изд.).</p>
+    <p class="v2-muted">В ячейке: потребность / план / факт (${legend}). <span class="v2-ds-gap-legend">Розовым</span> — потребность не перекрыта (всего ${num(t.gap_total || 0)} изд.). Строку без раскрытия можно разобрать по маркам — щелчок по ячейке.</p>
     ${data.warning ? `<div class="v2-callout" role="note">${esc(data.warning)}</div>` : ""}
     <div class="v2-read-table v2-ds-wrap"><table class="v2-read-tbl v2-tree-tbl v2-ds-tbl"><thead><tr><th>${esc(data.root_label || "")}</th>
       ${cols.map((c) => `<th class="num" ${c.title ? `title="${esc(c.title)}"` : ""}>${esc(c.label)}</th>`).join("")}<th class="num">${esc(data.total_label || "Итого")}</th></tr></thead>
-      <tbody>${out.join("")}<tr class="lvl-total"><td><strong>${esc(t.label || "Итого")}</strong></td>${cols.map((c) => deliveryCell(t.values?.[c.key], (t.gaps || {})[c.key])).join("")}${deliveryCell(t.total, t.gap_total, "v2-ds-sum")}</tr></tbody></table></div>`;
+      <tbody>${out.join("")}<tr class="lvl-total"><td><strong>${esc(t.label || "Итого")}</strong></td>${cols.map((c) => deliveryCell(t.values?.[c.key], (t.gaps || {})[c.key], null, null)).join("")}${deliveryCell(t.total, t.gap_total, null, null, "v2-ds-sum")}</tr></tbody></table></div>`;
 }
 
 // ---- «График контрактации и поставки»: по маркам — потребность, законтрактовано, дефицит и приращения по периодам
