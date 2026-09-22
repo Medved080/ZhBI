@@ -55,6 +55,30 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "Docs"
 MD_NAME = "v2-operations-matrix.md"
 JSON_NAME = "v2-operations-matrix.json"
+BLOCKERS_PATH = ROOT / "Docs" / "v2-progress" / "blockers.json"
+
+
+def load_blockers():
+    """Вручную-курируемый словарь {"МЕТОД путь": причина} — известные блокеры операций (внешняя система/данные
+    недоступны в тестовой среде, нужно решение пользователя), собранные из разделов «НЕ сделано»/«Вопросы»
+    `Docs/v2-progress/*.md` в `Docs/v2-progress/blockers.json` (читается напрямую с диска, не по `--ref`: список
+    открытых вопросов актуален независимо от анализируемой ревизии кода)."""
+    if not BLOCKERS_PATH.is_file():
+        return {}
+    doc = json.loads(BLOCKERS_PATH.read_text(encoding="utf-8"))
+    return {k: v for k, v in doc.items() if not k.startswith("_")}
+
+
+def apply_blocker(op, blockers):
+    """Если у операции есть известный блокер и она ещё не реализована (не published/branch/unused/tech) — состояние
+    «заблокирована внешним условием» вместо голого «нет в V2»/«только переход в V1»/«отключена шлюзом»: это НЕ
+    отсутствие работы, а известное препятствие (см. Docs/v2-progress/blockers.json)."""
+    reason = blockers.get(op["id"])
+    if not reason or op["v2"]["state"] not in ("only_v1", "none", "gate_disabled"):
+        return
+    op["blocked_reason"] = reason
+    op["v2"]["state"] = "blocked_external"
+    op["action"] = f"заблокирована: {reason}"
 
 HTTP = ("get", "post", "patch", "put", "delete", "head", "options")
 
@@ -619,9 +643,32 @@ def _expr_end(toks, a):
     return min(len(toks) - 1, a + 400)
 
 
+def _parse_params(toks, po, pc):
+    """Имена параметров верхнего уровня в `(...)` [po, pc] (индексы скобок): по положению (первый идентификатор
+    верхнего уровня до следующей запятой) — умолчания (`x = 1`) берут имя `x`; деструктуризация/rest — `None`
+    (позиция сохраняется, чтобы не сбить нумерацию, резолвер её просто не свяжет)."""
+    params, cur, complex_, depth = [], None, False, 0
+    for i in range(po + 1, pc):
+        k, v, _ = toks[i]
+        if k == "p" and v in ("(", "[", "{"):
+            if depth == 0 and v in ("[", "{"):
+                complex_ = True
+            depth += 1
+        elif k == "p" and v in (")", "]", "}"):
+            depth -= 1
+        elif depth == 0:
+            if k == "id" and cur is None and not complex_:
+                cur = v
+            elif k == "p" and v == ",":
+                params.append(None if complex_ else cur)
+                cur, complex_ = None, False
+    params.append(None if complex_ else cur)
+    return params
+
+
 def js_functions(toks):
     """Именованные функции файла с телом в фигурных скобках: `function f(`, `f = function(`, `f = (…) => {`, `f = async x => {`.
-    Возвращает список [имя, начало, конец, индекс токена-имени]; вложенные функции — отдельными записями."""
+    Возвращает список [имя, начало, конец, индекс токена-имени, параметры]; вложенные функции — отдельными записями."""
     out = []
     n = len(toks)
     for i, (k, v, ln) in enumerate(toks):
@@ -639,7 +686,7 @@ def js_functions(toks):
             if name and _t(toks, j)[1] == "(":
                 e = inv.match_paren(toks, j)
                 if _t(toks, e + 1)[1] == "{":
-                    out.append([name, e + 1, inv.match_brace(toks, e + 1), i])
+                    out.append([name, e + 1, inv.match_brace(toks, e + 1), i, _parse_params(toks, j, e)])
         elif k == "id" and _t(toks, i + 1)[1] == "=" and v not in ("const", "let", "var"):
             j = i + 2
             if _t(toks, j)[1] == "async":
@@ -647,15 +694,17 @@ def js_functions(toks):
             if _t(toks, j)[1] == "(":
                 e = inv.match_paren(toks, j)
                 if _t(toks, e + 1)[1] == "=>":
+                    params = _parse_params(toks, j, e)
                     if _t(toks, e + 2)[1] == "{":
-                        out.append([v, e + 2, inv.match_brace(toks, e + 2), i])
+                        out.append([v, e + 2, inv.match_brace(toks, e + 2), i, params])
                     else:
-                        out.append([v, e + 2, _expr_end(toks, e + 2), i])
+                        out.append([v, e + 2, _expr_end(toks, e + 2), i, params])
             elif _t(toks, j)[0] == "id" and _t(toks, j + 1)[1] == "=>":
+                params = [toks[j][1]]
                 if _t(toks, j + 2)[1] == "{":
-                    out.append([v, j + 2, inv.match_brace(toks, j + 2), i])
+                    out.append([v, j + 2, inv.match_brace(toks, j + 2), i, params])
                 else:
-                    out.append([v, j + 2, _expr_end(toks, j + 2), i])
+                    out.append([v, j + 2, _expr_end(toks, j + 2), i, params])
     return out
 
 
@@ -873,7 +922,7 @@ def scan_js_paths(text, fname, kind="v1"):
 # V2: вызовы api.* и раскрытие путей, заданных настройками экрана
 # ======================================================================================================================
 V2_API = {"get": "GET", "post": "POST", "patch": "PATCH", "put": "PUT", "delete": "DELETE", "upload": "POST",
-          "readPost": "POST", "download": "POST"}
+          "readPost": "POST", "download": "POST", "fetchFile": "GET"}
 
 # Модуль V2, читающий «настройки экрана» из screens.json → какие ключи спецификации и какие поля дают пути (`spec.endpoint`).
 SPEC_MODULES = {
@@ -925,9 +974,93 @@ def _stmt_tokens(toks, a):
     return toks[a:e]
 
 
+def scan_object_props(toks):
+    """Индекс «имя свойства → [(vstart, vend)]» по ВСЕМ `{...}` файла: `ключ: значение,` на верхнем уровне фигурных
+    скобок. Не различает объектный литерал и обычный блок кода (`if (...) { a: ... }` — в JS такое означало бы метку,
+    редкость) — это ЗАПАСНОЙ способ раскрыть `объект.свойство(...)`, когда `объект» не резолвится напрямую (параметр
+    функции-обёртки, например `cfg.path(v)` в конфигурациях загрузки exchange-import.js: `cfg` передаётся вызовом
+    `mountUploadOp(el, ctx, contractingCfg(ctx))`, а `contractingCfg = (ctx) => ({ path: (v) => `/import-...`, ... })` —
+    без разбора параметров функций и мест их вызова проще и надёжнее взять ВСЕ объектные литералы файла со свойством
+    таким именем: ложные срабатывания отсеивает самопроверка «обращения V2 к путям, которых нет в backend»."""
+    idx = defaultdict(list)
+    n = len(toks)
+    for i in range(n):
+        if toks[i][1] != "{":
+            continue
+        rb = inv.match_brace(toks, i)
+        depth, j, key, vstart = 0, i + 1, None, None
+        while j < rb:
+            k, v, _ = toks[j]
+            if k == "p" and v in ("{", "[", "("):
+                depth += 1
+            elif k == "p" and v in ("}", "]", ")"):
+                depth -= 1
+            if depth == 0:
+                if key is None and k in ("id", "str") and _t(toks, j + 1)[1] == ":" and _t(toks, j - 1)[1] != ".":
+                    key, vstart = v, j + 2
+                    j = vstart
+                    continue
+                if key is not None and k == "p" and v == ",":
+                    idx[key].append((vstart, j - 1))
+                    key, vstart = None, None
+            j += 1
+        if key is not None and vstart is not None and vstart <= rb - 1:
+            idx[key].append((vstart, rb - 1))
+    return idx
+
+
+def _arrow_value_alts(resolver, vstart, vend, depth):
+    """Значение свойства объектного литерала → альтернативы пути: разворачивает стрелочную функцию `(парам) => ВЫРАЖЕНИЕ`
+    / `парам => ВЫРАЖЕНИЕ` / `(парам) => { … return ВЫРАЖЕНИЕ … }`, иначе разбирает значение как выражение целиком."""
+    toks = resolver.toks
+    i = vstart
+    if _t(toks, i)[1] == "async":
+        i += 1
+    body0 = None
+    if _t(toks, i)[1] == "(":
+        e = inv.match_paren(toks, i)
+        if e <= vend and _t(toks, e + 1)[1] == "=>":
+            body0 = e + 2
+    elif toks[i][0] == "id" and i + 1 <= vend and toks[i + 1][1] == "=>":
+        body0 = i + 2
+    if body0 is not None and body0 <= vend:
+        if _t(toks, body0)[1] == "{":
+            rb = inv.match_brace(toks, body0)
+            alts = []
+            for k in range(body0, min(rb, vend + 1)):
+                if toks[k][0] == "id" and toks[k][1] == "return":
+                    alts += resolver.expr_alts(_stmt_tokens(toks, k + 1), k, depth + 1) or []
+            return alts
+        return resolver.expr_alts(toks[body0:vend + 1], body0, depth + 1)
+    return resolver.expr_alts(toks[vstart:vend + 1], vstart, depth + 1)
+
+
 class V2Resolver:
     def __init__(self, fname, toks, funs, owner, holes):
         self.f, self.toks, self.funs, self.owner, self.holes = fname, toks, funs, owner, holes
+        self._obj_index = None
+
+    def obj_index(self):
+        if self._obj_index is None:
+            self._obj_index = scan_object_props(self.toks)
+        return self._obj_index
+
+    def chain_call_alts(self, chain, depth):
+        """`объект.свойство(...)`, где `объект` не резолвится напрямую (параметр функции-обёртки, а не локальная
+        переменная): запасной раскрыв по имени последнего звена цепочки — см. `scan_object_props`."""
+        if depth > 4:
+            return None
+        prop = chain[-1]
+        cands = self.obj_index().get(prop, [])
+        alts = []
+        for (vs, ve) in cands:
+            alts += _arrow_value_alts(self, vs, ve, depth) or []
+        seen, out = set(), []
+        for a in alts:
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+        return out or None
 
     def var_alts(self, name, at, depth):
         toks = self.toks
@@ -946,6 +1079,60 @@ class V2Resolver:
         if best is None:
             return None
         return self.expr_alts(_stmt_tokens(toks, best + 2), best, depth + 1)
+
+    def param_alts(self, name, at, depth):
+        """Значение переменной — не найдено локальным присваиванием (`var_alts`): возможно, это ПАРАМЕТР функции-
+        обёртки (`function patchChecked(kind, id, path, body, current) { … api.patch(path, …) … }`, путь передаёт
+        КАЖДЫЙ вызывающий литералом — `patchChecked("counterparty", id, \\`/counterparties/${id}\\`, body)`).
+        Находит охватывающую именованную функцию, где `name` — параметр, ищет её вызовы ПО ИМЕНИ в том же файле и
+        раскрывает аргумент на той же позиции в каждом найденном вызове."""
+        if depth > 4:
+            return None
+        toks = self.toks
+        fi = self.owner[at]
+        seen_fi = set()
+        params = fname = ntok = None
+        while fi is not None and fi >= 0 and fi not in seen_fi:
+            seen_fi.add(fi)
+            cand_name, _fs, _fe, cand_ntok, cand_params = self.funs[fi]
+            if name in cand_params:
+                fname, ntok, params = cand_name, cand_ntok, cand_params
+                break
+            # не параметр этой функции — возможно, замыкание над параметром ОХВАТЫВАЮЩЕЙ (`const send = (v) => api.patch(path, …)`
+            # внутри `patchChecked(..., path, ...)`): подняться к владельцу токена-имени этой функции (её объявление лежит
+            # СНАРУЖИ её собственного тела, поэтому `owner` в этой точке — уже родитель, а не сама функция)
+            parent = self.owner[cand_ntok] if 0 <= cand_ntok < len(self.owner) else -1
+            fi = parent if parent != fi else -1
+        if params is None:
+            return None
+        idx = params.index(name)
+        alts = []
+        for i, (k, v, _ln) in enumerate(toks):
+            if not (k == "id" and v == fname and i != ntok and _t(toks, i + 1)[1] == "(" and _t(toks, i - 1)[1] != "."):
+                continue
+            co = i + 1
+            cc = inv.match_paren(toks, co)
+            args, cur, d = [], [], 0
+            for j in range(co + 1, cc):
+                t = toks[j]
+                if t[0] == "p" and t[1] in ("(", "[", "{"):
+                    d += 1
+                elif t[0] == "p" and t[1] in (")", "]", "}"):
+                    d -= 1
+                if d == 0 and t[0] == "p" and t[1] == ",":
+                    args.append(cur)
+                    cur = []
+                else:
+                    cur.append(t)
+            args.append(cur)
+            if idx < len(args) and args[idx]:
+                alts += self.expr_alts(args[idx], co, depth + 1) or []
+        seen, out = set(), []
+        for a in alts:
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+        return out or None
 
     def func_return_alts(self, name, depth):
         out = []
@@ -995,7 +1182,7 @@ class V2Resolver:
                         chain.append(part[j + 1][1])
                         j += 2
                     if _t(part, j)[1] == "(":     # вызов функции: вернуть значение её return
-                        alts2 = self.func_return_alts(chain[-1], depth) if len(chain) == 1 else None
+                        alts2 = self.func_return_alts(chain[-1], depth) if len(chain) == 1 else self.chain_call_alts(chain, depth)
                         depth_p = 0
                         while j < len(part):
                             if part[j][1] == "(":
@@ -1010,7 +1197,7 @@ class V2Resolver:
                         else:
                             cur = [c + "{}" for c in cur]
                     elif len(chain) == 1:
-                        alts2 = self.var_alts(v, at, depth)
+                        alts2 = self.var_alts(v, at, depth) or self.param_alts(v, at, depth)
                         if alts2:
                             cur = [c + a for c in cur for a in alts2]
                         else:
@@ -1055,6 +1242,51 @@ class V2Resolver:
         return [c + "".join(lit) for c in out]
 
 
+V2_CALL_RE = re.compile(r"\bapi\s*\.\s*(get|post|patch|put|delete|upload|readPost|download|fetchFile)\s*\(|(?<![.\w])fetch\s*\(")
+
+
+def v2_call_count_by_regex(text):
+    """Независимый подсчёт вызовов V2 (не токенизатором `inv.tokenize`, а обычным regex по тексту файла) — сколько раз
+    встречается `api.<метод>(` (из `V2_API`) или отдельно стоящий `fetch(`; сверяется с числом вызовов, которое находит
+    структурный разбор `scan_v2_file` (по тем же признакам, но токенами) — как для backend `ast` vs `tokenize`."""
+    return len(V2_CALL_RE.findall(text))
+
+
+V2_CALL_LITERAL_RE = re.compile(
+    r"\bapi\s*\.\s*(get|post|patch|put|delete|upload|readPost|download|fetchFile)\s*\(\s*(`[^`]*`|\"[^\"]*\"|'[^']*')")
+
+
+def v2_calls_regex_fallback(fname, text):
+    """Резервный проход РЕГУЛЯРКОЙ по литеральным вызовам `api.<метод>(литерал)` — НЕ основной способ разбора (основной
+    — токенизатор `inv.tokenize`/`scan_v2_file`, он и остаётся источником для всего остального: методов, `screens.json`,
+    экспорта дырок и т.д.), а СТРАХОВКА от подтверждённого дефекта самого токенизатора на сложных ВЛОЖЕННЫХ шаблонных
+    литералах (например, `app/static/v2/users-access.js`: длинный HTML-шаблон формы роли обрывает отслеживание глубины
+    `${…}`/обратных кавычек на несколько сотен строк раньше настоящего конца, из-за чего реальный код — в том числе
+    `api.patch(\\`/roles/${role.key}\\`, …)` — целиком выпадает из токенов; воспроизведено и НЕ устранено здесь: файл
+    `scripts/inventory_v1_ui.py` вне списка файлов, которые может менять этот исполнитель, — заведён отдельный блокер).
+    Ловит только простые вызовы с ОДНИМ прямым литералом первым аргументом (шаблон без вложенных вызовов в дырке —
+    `_template_to_path` даёт «{}» на месте `${…}`); используется в `load_side` ТОЛЬКО как добавка для (метод, путь),
+    которых структурный разбор во ВСЁМ файле не нашёл вовсе — не подменяет и не дублирует то, что уже нашли токены."""
+    out = []
+    for m in V2_CALL_LITERAL_RE.finditer(text):
+        api_name, raw = m.group(1), m.group(2)
+        lit = raw[1:-1]
+        path = _template_to_path(lit) if raw[0] == "`" else lit
+        path = strip_query_hole(re.split(r"\?", path)[0])
+        if not path.startswith("/") or path == "/" or path.startswith("/static/"):
+            continue
+        ln = text.count("\n", 0, m.start()) + 1
+        method = V2_API.get(api_name, "GET")
+        if api_name in ("download", "fetchFile", "fetch"):
+            mm = re.search(r'method\s*:\s*"(GET|POST|PUT|PATCH|DELETE)"', text[m.end():m.end() + 200])
+            if mm:
+                method = mm.group(1)
+        out.append({"file": fname, "line": ln, "api": api_name, "method": method,
+                    "alts": [(path, None)], "func": None,
+                    "raw_arg": f"{raw} (регэксп-страховка — токенизатор пропустил этот вызов целиком)"})
+    return out
+
+
 def scan_v2_file(fname, text, holes):
     """Вызовы API в модуле V2: [{file, line, api, method, alts: [(путь, экран|None)], func}]."""
     toks = inv.tokenize(text)
@@ -1086,7 +1318,7 @@ def scan_v2_file(fname, text, holes):
         if api_name == "download":
             verbs = method_in_options(toks, po, pc)
             method = verbs[0] if verbs else "POST"
-        elif api_name == "fetch":
+        elif api_name in ("fetch", "fetchFile"):
             verbs = method_in_options(toks, po, pc)
             method = verbs[0] if verbs else "GET"
         alts = []
@@ -1289,11 +1521,32 @@ process.stdout.write(JSON.stringify({ rows, flags: { ALLOCATION_ENABLED: mod.ALL
 """
 
 
+def gate_row_areas(text):
+    """{id строки POLICY: область} — по заголовкам `// ==== область: ИМЯ (...) ====`, которыми BRIEF требует размечать
+    блоки шлюза («Строки — ТОЛЬКО в блоке своей области»): это авторитетный источник области для ЗАПИСЫВАЮЩИХ операций,
+    точнее эвристики по пути (`RULES`) — путь бывает общим у операций разных исполнителей (например
+    `/objects/{id}/block-works/bulk-edit/…` относится к пути «Импорт и экспорт», но строки `bulk-edit.analyze`/
+    `bulk-edit.apply` описаны в блоке области mfr, как и остальной учёт по блокам). НЕ разбор вызовов — построчный
+    просмотр организационных заголовков-комментариев, отдельно от токенизации JS-выражений."""
+    out = {}
+    area = None
+    for line in text.splitlines():
+        m = re.search(r"====\s*область:\s*([a-zA-Zа-яА-Я]+)", line)
+        if m:
+            area = m.group(1)
+            continue
+        m = re.search(r'\bid:\s*"([^"]+)"', line)
+        if m and area:
+            out[m.group(1)] = area
+    return out
+
+
 def eval_gate(src):
     """Таблица POLICY из `write-gate.js` выбранной ревизии (модуль вычисляется `node`). None — файла или node нет."""
     text = src.read("app/static/v2/write-gate.js")
     if text is None:
         return None
+    row_areas = gate_row_areas(text)
     with tempfile.TemporaryDirectory() as d:
         gp = Path(d) / "write-gate.mjs"
         gp.write_text(text, encoding="utf-8")
@@ -1320,6 +1573,7 @@ def eval_gate(src):
     for row in data["rows"]:
         row["path_re"] = re.compile("^" + row["path_source"] + "$")
         row["methods"] = [m.strip() for m in row["method"].split("/")]
+        row["area"] = row_areas.get(row["id"])
     return data
 
 
@@ -1439,6 +1693,7 @@ RULES = [
     (r"^/elements$", None, S_WS, "model", "ws-model"),
     (r"^/elements/bulk-edit/", None, S_IO, "exchange", "bulk-edit"),
     (r"^/elements/bulk-(status|planned-delivery-date)$", None, S_WS, "model", "element-ops"),
+    (r"^/element-ops/", None, S_WS, "model", "element-ops"),
     (rf"^/elements/{_ID}/(status|comment|contract|planned-delivery-date|fields|history)", None, S_WS, "model", "element-ops"),
     (rf"^/elements/{_ID}(/context|/activity)?$", None, S_WS, "model", "ws-model"),
     (rf"^/contracts/{_ID}/allocations$", None, S_WS, "picker", "ws-picker"),
@@ -1486,6 +1741,7 @@ RULES = [
     (r"^/users|^/roles", None, S_USR, "admin", "users-access"),
     (r"^/ldap", None, S_USR, "admin", "ldap"),
     (r"^/me/change-password$", None, S_USR, "admin", "change-password"),
+    (r"^/password-policy$", None, S_USR, "admin", "change-password"),
     (r"^/me", None, S_SVC, "admin", "shell-context"),
     (r"^/map/config$|^/map/online-tiles$|^/map/tiles/upload$", None, S_PRJ, "admin", "map-admin"),
     (r"^/map/", None, S_PRJ, "admin", "map"),
@@ -1502,7 +1758,7 @@ RULES = [
     (r"^/admin/db-status", None, S_SVC, "admin", "db-status"),
     (r"^/admin/db-transfer", None, S_SVC, "admin", None),
     (r"^/admin/fill-empty-scope", None, S_SVC, "admin", "fill-scope"),
-    (r"^/admin/reset-status-history$", None, S_SVC, "admin", "reset-history"),
+    (r"^/admin/reset-status-history(/preview)?$", None, S_SVC, "admin", "reset-history"),
     (r"^/activity", None, S_SVC, "admin", "activity"),
     (r"^/admin-guide", None, S_SVC, "admin", "admin-guide"),
     (r"^/training", None, S_SVC, "admin", "training"),
@@ -1652,13 +1908,29 @@ def load_side(src, kinds_needed=True):
     v2_names = [f.split("/")[-1] for f in v2_files]
     calls = []
     file_lits = {}
+    file_texts = {}
+    v2_call_indep_total = 0
     for rel in v2_files:
         name = rel.split("/")[-1]
         if name == "api.js":
             continue
         text = src.read(rel)
+        file_texts[name] = text
         calls += scan_v2_file(name, text, holes)
+        v2_call_indep_total += v2_call_count_by_regex(text)
         file_lits[name] = {t[1] for t in inv.tokenize(text) if t[0] == "str"}
+    v2_call_struct_total = len(calls)     # ДО read_screen_usage/shared/fallback — те не из структурного разбора этих файлов
+    # резервный проход регэкспом (см. `v2_calls_regex_fallback`): добавляет (метод, путь), которых структурный разбор
+    # НЕ нашёл вовсе НИ ОДНИМ вызовом во всём файле — страховка от дефекта токенизатора на сложных вложенных шаблонах
+    known_route_keys = {(c["method"], strip_query_hole(re.split(r"\?", p)[0])) for c in calls for (p, _s) in c["alts"]}
+    fallback_calls = []
+    for name, text in file_texts.items():
+        for fb in v2_calls_regex_fallback(name, text):
+            key = (fb["method"], fb["alts"][0][0])
+            if key not in known_route_keys:
+                known_route_keys.add(key)
+                fallback_calls.append(fb)
+    calls += fallback_calls
     calls += read_screen_usage(screens)
     mscreens = module_screens(screens, v2_names)
     # V2 использует общие с V1 модули адреса и карты (`import("/static/address.js")`), их запросы идут от имени V2
@@ -1687,7 +1959,8 @@ def load_side(src, kinds_needed=True):
     gate = eval_gate(src)
     return {"src": src, "be": be, "routes": routes, "kinds": kinds, "screens": screens, "screens_doc": screens_doc, "gate": gate,
             "v2_calls": calls, "v2_usages": usages, "v2_by_route": by_route, "v2_unmatched": unmatched, "module_screens": mscreens,
-            "unresolved_calls": [c for c in calls if not c["alts"]]}
+            "unresolved_calls": [c for c in calls if not c["alts"]],
+            "v2_call_struct_total": v2_call_struct_total, "v2_call_indep_total": v2_call_indep_total, "v2_fallback_calls": fallback_calls}
 
 
 def expand_kind_holes(path, kinds, file_strs, screens_of_module=None):
@@ -1970,6 +2243,50 @@ def check_level(text):
     return "не проверено"
 
 
+VERIFY_PY_GLOB_PREFIX = "verify_"
+
+
+def verify_sources(src):
+    """{путь файла: текст} — проверочные наборы, которые МОГУТ доказывать работоспособность операции (по коду, а не по
+    самоотчёту `proof` строки шлюза — «наличие разрешения в шлюзе не является доказательством работоспособности»):
+    `scripts/verify_*.py`, `scripts/verify_*.mjs`, `scripts/picker_verify/*.mjs`, `scripts/v2_tests/exchange/chk_*.mjs`
+    (в т.ч. `scripts/verify_mfr_browser_*.mjs` — подпадает под `verify_*.mjs`)."""
+    out = {}
+    for rel in src.files("scripts", ".py"):
+        if rel.split("/")[-1].startswith(VERIFY_PY_GLOB_PREFIX):
+            out[rel] = src.read(rel) or ""
+    for rel in src.files("scripts", ".mjs"):
+        name = rel.split("/")[-1]
+        if name.startswith("verify_") or rel.startswith("scripts/picker_verify/") or rel.startswith("scripts/v2_tests/exchange/chk_"):
+            out[rel] = src.read(rel) or ""
+    return out
+
+
+def route_signature_re(path):
+    """Регэксп по СЕГМЕНТАМ маршрута (параметр `{...}` → любой непустой сегмент без «/»); совпадению должна
+    предшествовать кавычка/обратная кавычка/начало текста — иначе короткие пути (`/users`) ложно совпадали бы внутри
+    прозы комментария. Используется, чтобы найти, ссылается ли КОД проверочного набора на этот путь — не текстовый
+    пересказ («живая проверка») из `proof` строки шлюза, а факт наличия набора, который его вызывает."""
+    segs = _segs(path)
+    if not segs:
+        return None
+    parts = [r"[^/\s\"'`]+" if s.startswith("{") else re.escape(s) for s in segs]
+    body = "/" + "/".join(parts)
+    return re.compile(r"(?:^|[\"'`])" + body)
+
+
+def proof_for_op(path, verify_idx, scr):
+    """Источники, чей код (проверочный скрипт) или `screens.json.checks` экрана ссылаются на путь операции — «наличие
+    проверочного набора», не факт разрешения шлюза. Пустой список → «не проверена»."""
+    rx = route_signature_re(path)
+    if rx is None:
+        return []
+    hits = sorted(name for name, text in verify_idx.items() if rx.search(text))
+    if scr and scr.get("checks") and rx.search(scr["checks"]):
+        hits.append(f"screens.json:{scr['id']}")
+    return hits
+
+
 def shorten(text, n=220):
     t = " ".join((text or "").split())
     return t if len(t) <= n else t[:n - 1].rstrip() + "…"
@@ -1979,6 +2296,7 @@ def build_matrix(cur_ref, pub_ref):
     cur, pub = Source(cur_ref), Source(pub_ref)
     C = load_side(cur)
     P = load_side(pub)
+    verify_idx = verify_sources(cur)
     screens = {s["id"]: s for s in C["screens"]}
     pub_screens = {s["id"]: s for s in P["screens"]}
     v1 = load_v1(cur, C["screens"])
@@ -2030,6 +2348,14 @@ def build_matrix(cur_ref, pub_ref):
         allowed, disabled = gate_for(C["gate"], r["method"], sample) if eff in ("write", "analyze") else ([], [])
         pallowed, _pd = gate_for(P["gate"], r["method"], sample) if eff in ("write", "analyze") else ([], [])
         restricted = any(a["onlyKeys"] or a["hasCheck"] for a in allowed)
+        # область по блоку шлюза (`// ==== область: ИМЯ ====`) точнее правила по пути: путь у операций разных
+        # исполнителей бывает общим (например, у учёта по блокам и обмена данными), а блок шлюза — объявление
+        # исполнителя, чья это строка (BRIEF: «строки — ТОЛЬКО в блоке своей области»)
+        gate_areas = {a["area"] for a in (allowed + disabled) if a.get("area")}
+        if len(gate_areas) == 1:
+            (ga,) = gate_areas
+            if ga in AREAS and ga != area:
+                area = ga
         # экраны V2, где операция реализована
         v2_screens = []
         for row in allowed:                       # у строки шлюза известен свой экран (ws-model / ws-picker …)
@@ -2103,14 +2429,19 @@ def build_matrix(cur_ref, pub_ref):
                 state = "unused"
             else:
                 state = "only_v1" if scr else "none"
-        # проверки
-        proof = "; ".join(dict.fromkeys(a["proof"] for a in allowed if a["proof"]))
+        # проверки — доказательство работоспособности: НЕ факт разрешения шлюза (строка `proof` — самоотчёт исполнителя
+        # внутри той же строки, что и `allowed`), а наличие проверочного набора, чей код ссылается на этот путь
         if state in ("only_v1", "none", "tech", "unused"):
-            chk_level, chk_note = "—", ""
+            chk_level, chk_note, verify_hits = "—", "", []
         else:
-            src_txt = proof or (scr.get("checks") if scr else "") or ""
-            chk_level = check_level(src_txt)
-            chk_note = shorten(src_txt, 240)
+            verify_hits = proof_for_op(r["path"], verify_idx, scr)
+            if verify_hits:
+                screens_hit = next((h for h in verify_hits if h.startswith("screens.json:")), None)
+                chk_level = check_level(scr["checks"]) if screens_hit and scr else "проверена"
+                scripts_hit = [h for h in verify_hits if not h.startswith("screens.json:")]
+                chk_note = ("; ".join(scripts_hit) + (" · и " if scripts_hit and screens_hit else "") + (shorten(scr["checks"], 200) if screens_hit and scr else "")).strip(" ·")
+            else:
+                chk_level, chk_note = "не проверена", ""
         status = scr["status"] if scr else None
         # права
         ptxt = r["perm_text"] or ("без входа" if not r["perms"] else "")
@@ -2132,7 +2463,7 @@ def build_matrix(cur_ref, pub_ref):
             "gate": {"applies": eff in ("write", "analyze"), "restricted": restricted,
                      "allowed_rows": [{"id": a["id"], "onlyKeys": a["onlyKeys"], "check": a["checkName"], "proof": a["proof"]} for a in allowed],
                      "disabled_rows": [{"id": d["id"], "why": d["why"], "screen": d["screen"], "action": d["action"]} for d in disabled]},
-            "checks": {"level": chk_level, "note": chk_note},
+            "checks": {"level": chk_level, "note": chk_note, "sources": verify_hits},
             "published": state == "published",
             "hint_screen": hint,
         }
@@ -2160,7 +2491,7 @@ def build_matrix(cur_ref, pub_ref):
               "v2": {"state": "none", "impl": False, "scene": False, "calls": [], "modules": [], "screens": [], "screen": hint,
                      "screen_title": scr["title"] if scr else None, "screen_impl": scr.get("impl") if scr else None,
                      "screen_status": scr["status"] if scr else None},
-              "gate": {"applies": False, "allowed_rows": [], "disabled_rows": []}, "checks": {"level": "—", "note": ""}, "published": False,
+              "gate": {"applies": False, "allowed_rows": [], "disabled_rows": []}, "checks": {"level": "—", "note": "", "sources": []}, "published": False,
               "hint_screen": hint}
         op["v2"]["state"] = "only_v1" if scr else "none"
         op["action"] = derive_action(op, scr, C)
@@ -2179,17 +2510,23 @@ def build_matrix(cur_ref, pub_ref):
             "v1": {"used": True, "entries": [], "calls": [f"{f}: {n} мест" for f, n in st1.items()], "generic_entry": False},
             "v2": {"state": "tech", "impl": bool(st2), "scene": False, "calls": [f"{f}: {n} мест" for f, n in st2.items()], "modules": sorted(st2),
                    "screens": [], "screen": None, "screen_title": None, "screen_impl": None, "screen_status": None},
-            "gate": {"applies": False, "restricted": False, "allowed_rows": [], "disabled_rows": []}, "checks": {"level": "—", "note": ""},
+            "gate": {"applies": False, "restricted": False, "allowed_rows": [], "disabled_rows": []}, "checks": {"level": "—", "note": "", "sources": []},
             "published": False, "hint_screen": None,
             "action": (f"сводная строка, в счёт не входит: в V1 {sum(st1.values())} мест записи настроек вида, в V2 {sum(st2.values())} (собственные); "
                        "совпадение набора не проверялось — при переносе экрана сверить, какие настройки вида пользователь ожидает сохранить"),
             "priority": -99,
         })
+    blockers = load_blockers()
+    for o in ops:
+        apply_blocker(o, blockers)
+    used_blockers = {o["id"] for o in ops if o.get("blocked_reason")}
+    stale_blockers = sorted(set(blockers) - used_blockers)
     ops.sort(key=lambda o: (SECTIONS.index(o["section"]) if o["section"] in SECTIONS else 99, o["path"], o["method"]))
     for i, o in enumerate(ops, 1):
         o["n"] = i
     return {"ops": ops, "C": C, "P": P, "v1": v1, "v1_by_route": v1_by_route, "v1_unmatched": v1_unmatched,
-            "cur": cur, "pub": pub, "screens": screens, "pub_screens": pub_screens, "scene_keys": scene_keys}
+            "cur": cur, "pub": pub, "screens": screens, "pub_screens": pub_screens, "scene_keys": scene_keys,
+            "stale_blockers": stale_blockers}
 
 
 ACTION_RU = {
@@ -2435,8 +2772,14 @@ def self_checks(M):
     checks["info"]["index.html_атрибутов_on*"] = sc.on_attrs
     checks["info"]["обращений_V1_найдено"] = len(M["v1"]["usages"])
     checks["info"]["обращений_V2_найдено"] = len(C["v2_usages"])
+    checks["info"]["вызовов_V2_структурный_разбор"] = C["v2_call_struct_total"]
+    checks["info"]["вызовов_V2_независимый_подсчёт_regex"] = C["v2_call_indep_total"]
     if be["ast_total"] != be["indep_total"]:
         pr.append(f"число маршрутов: ast {be['ast_total']} ≠ независимый подсчёт декораторов {be['indep_total']}")
+    if C["v2_call_struct_total"] != C["v2_call_indep_total"]:
+        pr.append(f"число вызовов V2: структурный разбор {C['v2_call_struct_total']} ≠ независимый подсчёт regex {C['v2_call_indep_total']} "
+                  "(известная причина — дефект токенизатора inventory_v1_ui.py на сложных вложенных шаблонных литералах, "
+                  "см. список ниже и Docs/v2-progress/matrix.md)")
     if be["unincluded"]:
         pr.append("роутеры, объявленные, но не подключённые к приложению (их маршруты не живые): " + ", ".join(be["unincluded"]))
     dead = [r for r in be["routes"] if not r["live"]]
@@ -2444,6 +2787,8 @@ def self_checks(M):
         pr.append(f"маршрутов вне подключённых роутеров: {len(dead)}")
     route_ops = [o for o in ops if o["kind"] == "route"]
     checks["lists"] = {}
+    checks["lists"]["вызовы V2, найденные ТОЛЬКО регэксп-страховкой (структурный разбор пропустил файл целиком в этом месте — дефект токенизатора вложенных шаблонов, inventory_v1_ui.py, вне файлов этого исполнителя)"] = \
+        sorted(f"{c['file']}:{c['line']} api.{c['api']}({c['raw_arg']})" for c in C.get("v2_fallback_calls", []))
     unmapped = [o["id"] for o in route_ops if not o["area_rule_found"]]
     checks["lists"]["маршруты, не отнесённые к области/разделу правилами"] = unmapped
     v1_no_screen = [o["id"] for o in route_ops if o["v1"]["used"] and not o["v2"]["screen"] and not o["tech"]]
@@ -2477,6 +2822,10 @@ def self_checks(M):
         pr.append("разделы без операций: " + ", ".join(empty))
     if unmapped:
         pr.append(f"маршрутов без правила области/раздела: {len(unmapped)}")
+    stale_blockers = M.get("stale_blockers") or []
+    checks["lists"]["blockers.json: записи без операции в матрице или для уже реализованной/опубликованной операции (проверить, не устарели ли)"] = stale_blockers
+    if stale_blockers:
+        pr.append(f"blockers.json: устаревших записей {len(stale_blockers)}")
     for k, v in checks["lists"].items():
         if v and k.startswith(("обращения V1 к путям", "обращения V2 к путям")):
             pr.append(f"{k}: {len(v)}")
@@ -2487,14 +2836,15 @@ def self_checks(M):
 # Вывод
 # ======================================================================================================================
 STATE_LABEL = {
-    "published": "реализована в V2 и опубликована",
-    "branch": "в V2 (в ветке), не опубликована",
+    "published": "реализована и опубликована на 8000",
+    "branch": "реализована в ветке, не опубликована/не проверена",
     "gate_disabled": "в V2, но отключена шлюзом",
     "only_v1": "только переход в V1",
-    "none": "нет в V2",
+    "blocked_external": "заблокирована внешним условием",
+    "none": "отсутствует",
     "unused": "не вызывается интерфейсами (нет в V1 и V2)",
 }
-STATE_ORDER = ["published", "branch", "gate_disabled", "only_v1", "none", "unused"]
+STATE_ORDER = ["published", "branch", "gate_disabled", "only_v1", "blocked_external", "none", "unused"]
 EFFECT_LABEL = {"read": "чтение", "read-post": "чтение (POST)", "analyze": "разбор файла", "write": "запись", "client": "клиентская"}
 
 
@@ -2687,9 +3037,11 @@ def render_md(M, checks, cur_ref, pub_ref):
     w("")
     w("Столбцы: **Операция** (метод и путь backend); **Сценарий** (докстринг маршрута, при его отсутствии — по адресу); **Права** (проверки backend: раздел прав и уровень, «условно» — ветвление по праву); "
       "**V1** (точка входа в интерфейсе — по графу вызовов, приближённо — и место вызова в `app.js`); **V2** (где вызывается интерфейсом V2); "
-      "**Вид · проверка** (чтение/запись и чем подтверждено — по `screens.json` и строке шлюза); **Шлюз** (строки `write-gate.js`); **Опубл.** (в `" + pub_ref + "`); **Что осталось**.")
+      "**Вид · проверка** (чтение/запись; «доказательство работоспособности» — НЕ факт разрешения шлюза и НЕ текст `proof` строки шлюза (это самоотчёт внутри той же строки), "
+      "а наличие проверочного набора, чей код ссылается на путь операции: `scripts/verify_*.py`, `scripts/verify_*.mjs`, `scripts/picker_verify/*.mjs`, `scripts/v2_tests/exchange/chk_*.mjs` "
+      "или текст `screens.json.checks` экрана; «не проверена» — набора не нашлось); **Шлюз** (строки `write-gate.js`); **Опубл.** (в `" + pub_ref + "`); **Что осталось**.")
     w("")
-    todo_states = ("gate_disabled", "only_v1", "none", "branch")
+    todo_states = ("gate_disabled", "only_v1", "none", "branch", "blocked_external")
     for a in AREAS:
         rows = [o for o in ops if o["area"] == a]
         if not rows:
