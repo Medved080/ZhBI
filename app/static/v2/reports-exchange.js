@@ -78,7 +78,7 @@ function contractingReport(data, state) {
     ${data.warning ? `<div class="v2-callout" role="note">${esc(data.warning)}</div>` : ""}
     <label class="v2-wire-check"><input type="checkbox" id="cs-deficit" ${state.onlyDeficit ? "checked" : ""}> Только марки с дефицитом</label>
     <div class="v2-read-table v2-ds-wrap"><table class="v2-read-tbl v2-cs-tbl"><thead><tr><th>Тип</th><th>Марка</th><th class="num">Потребность</th><th class="num">Законтрактовано</th><th class="num">Дефицит</th>${P.map((p) => `<th class="num">${esc(p.label)}</th>`).join("")}</tr></thead>
-      <tbody>${body}<tr class="lvl-total"><td colspan="2"><strong>Итого по объекту</strong></td><td class="num"><strong>${num(t.need)}</strong></td><td class="num"><strong>${num(t.contracted)}</strong></td><td class="num"><strong>${num(t.deficit)}</strong></td>${P.map((_, i) => periodCell(t.deltas, i)).join("")}</tr></tbody></table></div>
+      <tbody>${body}<tr class="lvl-total"><td colspan="2"><strong>${data.element_filter ? "Итого по отбору" : "Итого по объекту"}</strong></td><td class="num"><strong>${num(t.need)}</strong></td><td class="num"><strong>${num(t.contracted)}</strong></td><td class="num"><strong>${num(t.deficit)}</strong></td>${P.map((_, i) => periodCell(t.deltas, i)).join("")}</tr></tbody></table></div>
     ${rows.length > shown.length ? `<div class="v2-bar"><span class="v2-muted">Показаны первые ${shown.length} из ${rows.length}.</span><button type="button" class="v2-btn" id="cs-more">Показать ещё</button></div>` : ""}`;
 }
 

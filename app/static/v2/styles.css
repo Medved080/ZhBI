@@ -1067,6 +1067,18 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ds-clickable:hover, .v2-ds-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .v2-cs-s0 { color: var(--ink); } .v2-cs-s1 { color: var(--accent); } .v2-cs-s2 { color: var(--muted); } .v2-cs-s3 { color: var(--bad); }
 .v2-cs-child td { background: var(--surface); font-size: 12px; }
+/* «Статус комплектации», сводная таблица (reports2): выходные и служебная колонка «Без даты» — как ds-weekend/ds-edge
+   в V1; фишки уровней группировки — галочка «включён» и стрелки порядка (перенос createGroupChooser). */
+.v2-cmp-pivot .v2-cmp-weekend { background: color-mix(in srgb, var(--line) 35%, transparent); }
+.v2-cmp-pivot .v2-cmp-edge, .v2-cmp-pivot .v2-cmp-sum { border-left: 2px solid var(--line); }
+.v2-cmp-pivot td.v2-cmp-sum { font-weight: 600; }
+.v2-group-field { min-width: 0; }
+.v2-group-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.v2-group-chip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 8px; font-size: 12px; color: var(--muted); }
+.v2-group-chip.on { color: var(--ink); border-color: var(--accent); background: var(--sel); }
+.v2-group-chip label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.v2-group-move { border: 0; background: none; padding: 0 3px; font-size: 10px; color: var(--muted); cursor: pointer; }
+.v2-group-move:disabled { opacity: .3; cursor: default; }
 .v2-ex-preview { width: 100%; max-height: 340px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .v2-ex-filelist { margin: 4px 0 10px; font-size: 13px; }
 .v2-ex [hidden] { display: none !important; }
@@ -1082,6 +1094,10 @@ button.ws-tile:hover { background: var(--surface); }
   #v2-print-area { display: block; position: absolute; inset: 0; background: #fff; color: #000; padding: 12mm; }
   #v2-print-area table { border-collapse: collapse; width: 100%; font-size: 9pt; }
   #v2-print-area th, #v2-print-area td { border: 0.2mm solid #777; padding: 2px 5px; }
+  /* Таблица печатается целиком (reports2; V1: `.ds-wrap { overflow: visible }` в печати): экранные области с
+     собственной прокруткой и липкой шапкой на бумаге обрезали бы отчёт по высоте окна. */
+  #v2-print-area .v2-read-table, #v2-print-area .v2-ds-wrap { max-height: none; overflow: visible; }
+  #v2-print-area .v2-read-tbl th { position: static; }
 }
 
 /* Матрица «Учёт по блокам: статусы» с правкой ячейки (reports.js blockStatusReport, mfr2) */

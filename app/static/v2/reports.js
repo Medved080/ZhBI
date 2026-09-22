@@ -285,9 +285,41 @@ function statusReport(data, state) {
     <tbody>${out.join("")}${total ? `<tr class="lvl-total"><td><strong>${esc(total.label)}</strong></td>${(data.columns || []).map((c) => `<td class="num" data-col-type="num"><strong>${esc(num(total.values?.[c.key]))}</strong></td>`).join("")}</tr>` : ""}</tbody></table></div>`;
 }
 
+// ---- «Статус комплектации», вид «сводная таблица» (reports2, перенос renderCompletionPivot из V1): дерево уровней
+// группировки против календаря выбранной даты, в ячейке — количество изделий. Всё считает СЕРВЕР
+// (app/report_pivot.py, тот же `POST /reports/completion` с view=pivot, что у V1) — здесь только вёрстка. Ноль не
+// рисуется (на календаре из десятков колонок нули — шум), свёрнуто всё, кроме первой ветки (как в V1).
+function completionPivotReport(data, state) {
+  const t = data.total || {};
+  if (!t.total) return `<p class="v2-muted" role="status">Изделий: 0</p><p class="v2-muted">Под текущий отбор не попало ни одного изделия.</p>`;
+  const collapsed = state.collapsed || (state.collapsed = defaultCollapsed(data));
+  const cols = data.columns || [];
+  const colCls = (c) => (c.kind === "edge" ? "v2-cmp-edge" : c.weekend ? "v2-cmp-weekend" : "");
+  const cell = (v, cls = "") => `<td class="num ${cls}">${v ? esc(num(v)) : ""}</td>`;
+  const out = [];
+  const walk = (n, path) => {
+    const kids = n.children && n.children.length;
+    const isCollapsed = collapsed.has(path);
+    out.push(`<tr class="lvl-${n.level}"><td style="padding-left:${12 + n.level * 16}px" title="${esc(n.label)}">
+      ${kids ? `<button type="button" class="v2-tree-toggle" data-path="${esc(path)}" aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? "Развернуть" : "Свернуть"} ${esc(n.label)}">${isCollapsed ? "▸" : "▾"}</button>` : `<span class="v2-tree-toggle-gap"></span>`}${esc(n.label)}</td>
+      ${cols.map((c) => cell(n.values?.[c.key], colCls(c))).join("")}${cell(n.total, "v2-cmp-sum")}</tr>`);
+    if (kids && !isCollapsed) n.children.forEach((ch) => walk(ch, `${path}/${ch.label}`));
+  };
+  (data.rows || []).forEach((r) => walk(r, r.label));
+  return `<p class="v2-muted" role="status">Изделий: ${esc(num(t.total))}</p>
+    <p class="v2-muted">${esc(data.subtitle || "")}</p>
+    ${data.warning ? `<div class="v2-callout" role="note">${esc(data.warning)}</div>` : ""}
+    <div class="v2-read-table v2-ds-wrap"><table class="v2-read-tbl v2-tree-tbl v2-ds-tbl v2-cmp-pivot"><thead><tr><th>${esc(data.root_label || "")}</th>
+      ${cols.map((c) => `<th class="num ${colCls(c)}"${c.title ? ` title="${esc(c.title)}"` : ""}>${esc(c.label)}</th>`).join("")}<th class="num v2-cmp-sum">${esc(data.total_label || "Итого")}</th></tr></thead>
+      <tbody>${out.join("")}<tr class="lvl-total"><td><strong>${esc(t.label || "Итого")}</strong></td>${cols.map((c) => cell(t.values?.[c.key], colCls(c))).join("")}${cell(t.total, "v2-cmp-sum")}</tr></tbody></table></div>`;
+}
+
 // ---- «Статус комплектации» (перечень): плоская таблица, поиск и страницы на клиенте.
+// Какой вид рисовать, решает ПРИШЕДШИЙ отчёт (V1 renderCompletionView), а не выбор в форме: между запросом и
+// ответом вид могли переключить, и разметка спорила бы с числами.
 const PAGE = 200;
 function completionReport(data, state) {
+  if (data?.view === "pivot") return completionPivotReport(data, state);
   const q = (state.search || "").trim().toLowerCase();
   const rows = q ? data.rows.filter((r) => Object.values(r).some((v) => v != null && String(v).toLowerCase().includes(q))) : data.rows;
   const offset = Math.min(state.page || 0, Math.max(0, Math.ceil(rows.length / PAGE) - 1)) * PAGE;
@@ -468,6 +500,12 @@ export function bindReport(name, root, state, repaint, ctx) {
     root.querySelectorAll("[data-page]").forEach((b) => b.addEventListener("click", () => {
       state.page = Math.max(0, (state.page || 0) + (b.dataset.page === "next" ? 1 : -1));
       repaint();
+    }));
+    // сводная таблица: свернуть/развернуть уровень (только перерисовка, без запроса — как в V1)
+    root.querySelectorAll("#rd-report .v2-tree-toggle[data-path]").forEach((b) => b.addEventListener("click", () => {
+      const p = b.dataset.path;
+      if (state.collapsed.has(p)) state.collapsed.delete(p); else state.collapsed.add(p);
+      repaint(p);
     }));
   }
 }
