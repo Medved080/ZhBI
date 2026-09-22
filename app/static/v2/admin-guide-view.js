@@ -32,7 +32,8 @@ export function mountAdminGuideView(el, { screen, structure, objectId, api, grou
         <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note"><strong>Просмотр в новом интерфейсе.</strong> Текст подставлен под этот сервер; команды копируются в буфер обмена.
-        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}<button type="button" class="v2-btn" id="ag-download">Скачать .md</button><button type="button" class="v2-btn" id="ag-copy-all">Копировать всю памятку</button></div></div>
+        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}<button type="button" class="v2-btn" id="ag-download">Скачать .md</button><button type="button" class="v2-btn" id="ag-copy-all">Копировать всю памятку</button></div>
+        <p class="v2-muted" id="ag-status" role="status" aria-live="polite" style="margin:6px 0 0"></p></div>
       <div id="ag-body"></div>
     </div>`;
   const $ = (s) => el.querySelector(s);
@@ -69,7 +70,10 @@ export function mountAdminGuideView(el, { screen, structure, objectId, api, grou
     catch (e) { if (!dead) { st.data = null; st.error = errText(e); } }
     paint();
   }
+  // Итог скачивания — сообщением, как в V1 (showToast «Памятка сохранена в загрузки» / «Не удалось скачать памятку: …»)
+  const agStatus = (t) => { const n = $("#ag-status"); if (n) n.textContent = t; };
   $("#ag-download").addEventListener("click", async () => {
+    agStatus("");
     try {
       const res = await fetch("/admin-guide.md", { credentials: "same-origin" });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -79,7 +83,8 @@ export function mountAdminGuideView(el, { screen, structure, objectId, api, grou
       a.href = url; a.download = "Памятка администратора ЖБИ.md";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e) { /* второстепенно — кнопку можно нажать ещё раз */ }
+      if (!dead) agStatus("Памятка сохранена в загрузки.");
+    } catch (e) { if (!dead) agStatus(`Не удалось скачать памятку: ${errText(e)}`); }
   });
   $("#ag-copy-all").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
