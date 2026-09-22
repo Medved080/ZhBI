@@ -639,6 +639,74 @@ def set_menu_prefs(
         conn.close()
 
 
+class SetShellPrefsIn(BaseModel):
+    # Личные настройки оболочки V2 (2026-09-22, задача «shell»): закреплённые объекты выбора объекта в шапке и
+    # состояние левой навигации. Содержимое НЕ сверяется со списком реальных объектов/групп меню — закреплённый
+    # объект, который стал недоступен или удалён, просто не находится в дереве при отрисовке и не показывается
+    # (см. app/static/v2/shell-object-picker.js); неизвестный id группы в nav_group_state так же безвреден.
+    pinned_objects: list[int] = []
+    nav_pinned: bool = False
+    nav_width: Optional[float] = None
+    # {"<id группы меню>": True|False} — раскрыта/свёрнута ЯВНО пользователем; группа без записи здесь раскрыта
+    # по умолчанию, только если это группа текущего экрана (см. shell-nav.js::isGroupOpen).
+    nav_group_state: dict[str, bool] = {}
+
+
+# Границы личной ширины навигации: рабочий диапазон клиента — 220..380px (плюс временное сужение под ширину
+# окна, которое НЕ сохраняется); здесь — только защита от заведомого мусора в записи.
+_SHELL_NAV_WIDTH_MIN, _SHELL_NAV_WIDTH_MAX = 160.0, 600.0
+# Тот же потолок размера, что у menu_prefs рядом — поле личное и пишется без подтверждения.
+_SHELL_PREFS_LIMIT = 200
+
+
+@router.patch("/{user_id}/v2-shell-prefs", response_model=UserOut)
+def set_v2_shell_prefs(
+    user_id: int, body: SetShellPrefsIn, current: sqlite3.Row = Depends(get_current_user)
+):
+    """Личные настройки оболочки V2. Тот же guard самообслуживания, что у set_ui_theme/set_menu_prefs —
+    менять можно только себе, если ты не администратор сервиса.
+
+    Столбец `users.recent_objects` переиспользован СОЗНАТЕЛЬНО: раньше в нём должен был собираться список
+    «недавних объектов» тулбара V1 (функция убрана 2026-09-08, столбец не читался и не писался ни одной живой
+    строкой кода — db_schema_doc.py прямо называл его неиспользуемым). Формат несовместим (там был бы плоский
+    список id, здесь — объект с несколькими полями), но это не проблема: старое пустое значение читается как
+    настройки по умолчанию, а новый формат никто, кроме этого эндпоинта и v2_shell_prefs_of(), не разбирает."""
+    if current["role"] != "admin" and current["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Можно менять только свои настройки оболочки")
+    if len(body.pinned_objects) > _SHELL_PREFS_LIMIT:
+        raise HTTPException(status_code=400, detail="Слишком много закреплённых объектов")
+    if any(not isinstance(x, int) or x <= 0 for x in body.pinned_objects):
+        raise HTTPException(status_code=400, detail="Неверный идентификатор объекта")
+    if body.nav_width is not None and not (_SHELL_NAV_WIDTH_MIN <= body.nav_width <= _SHELL_NAV_WIDTH_MAX):
+        raise HTTPException(status_code=400, detail="Ширина панели вне диапазона")
+    if len(body.nav_group_state) > _SHELL_PREFS_LIMIT:
+        raise HTTPException(status_code=400, detail="Слишком много групп меню")
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден")
+        # Порядок закреплённых важен (человек сам решает, что видит первым) — сохраняем как прислали, только
+        # убираем повторы, оставляя первое вхождение (двойной клик/гонка вкладок не должны плодить дубли).
+        закреплённые = list(dict.fromkeys(body.pinned_objects))
+        payload = {
+            "pinned_objects": закреплённые,
+            "nav_pinned": body.nav_pinned,
+            "nav_width": body.nav_width,
+            "nav_group_state": body.nav_group_state,
+        }
+        conn.execute(
+            "UPDATE users SET recent_objects = ?, updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False), user_id),
+        )
+        conn.commit()
+        activity.log("user_v2_shell_prefs", user=current, entity_type="user", entity_id=user_id,
+                     new_value=f"закреплено объектов: {len(закреплённые)}, "
+                               f"навигация: {'закреплена' if body.nav_pinned else 'временная'}")
+        return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
 class SetView3dIn(BaseModel):
     """Начальный ракурс 3D (2026-08-03, живой запрос).
 
