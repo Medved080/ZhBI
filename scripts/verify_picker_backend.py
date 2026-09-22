@@ -209,9 +209,17 @@ def run():
     a = pos["contract_id"]
     b = c.execute("SELECT co.id FROM contracts co JOIN specifications s ON s.id = co.specification_id JOIN agreements ag ON ag.id = s.agreement_id "
                   "WHERE ag.object_id = 1 AND co.is_archived = 0 AND co.id != ? ORDER BY co.id LIMIT 1", (a,)).fetchone()["id"]
-    for cid_, qty in ((a, 3), (b, 3)):
+    # Количество — ПОВЕРХ уже привязанного на a/b под эту (тип, марка) факта, а не абсолютная тройка: в накопленных
+    # данных копии на a/b уже может быть что-то привязано под ту же позицию, и абсолютное число тогда создавало бы
+    # фиктивное превышение остатка ещё ДО теста (нашлось 2026-09-22 при добавлении стража в unpost_supplier_change —
+    # с абсолютной тройкой «отмена проведения» из раздела 3 стабильно получала 409 на позиции с большим накопленным
+    # фактом; те же 3 добавляемых изделия, но качество площадки СЧИТАЕТСЯ от факта, как в make_room других сценариев).
+    for cid_, extra in ((a, 3), (b, 3)):
+        fact = c.execute(
+            "SELECT COUNT(*) n FROM elements WHERE contract_id = ? AND element_type = ? AND mark = ? AND current_status != 'planned'",
+            (cid_, pos["element_type"], pos["mark"])).fetchone()["n"]
         c.execute("DELETE FROM contract_lines WHERE contract_id = ? AND element_type = ? AND mark = ?", (cid_, pos["element_type"], pos["mark"]))
-        c.execute("INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)", (cid_, pos["element_type"], pos["mark"], qty))
+        c.execute("INSERT INTO contract_lines (contract_id, element_type, mark, quantity) VALUES (?, ?, ?, ?)", (cid_, pos["element_type"], pos["mark"], fact + extra))
     for e in ids[:3]:
         c.execute("UPDATE elements SET contract_id = ?, current_status = 'contracting' WHERE id = ?", (a, e))
         c.execute("INSERT INTO status_history (element_id, status, changed_by, contract_id) VALUES (?, 'contracting', 'тест', ?)", (e, a))
