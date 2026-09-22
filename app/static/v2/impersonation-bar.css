@@ -1,0 +1,18 @@
+/* Полоса режима «Зайти под пользователем» (main.js: applyImpersonationBar) — отдельный файл: styles.css общий
+   (параллельно правит другой исполнитель — «tables»), трогать напрямую нельзя. Цвет НЕ из гаммы, а жёстко
+   красно-оранжевый — тот же приём и те же значения, что у V1 (app/static/index.html): это не элемент
+   оформления, а предупреждение, и на всех шести гаммах оно обязано выглядеть одинаково тревожно. Первый элемент
+   страницы (перед шапкой) — вкладка обязана выглядеть как чужая уже на первый взгляд. */
+.v2-impersonation-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #8a1c1c; color: #fff; padding: 6px 14px; font-size: 13px; font-weight: 600;
+}
+.v2-impersonation-bar[hidden] { display: none; }
+.v2-impersonation-bar span { flex: 1 1 auto; min-width: 0; }
+.v2-impersonation-bar .v2-btn {
+  flex: none; background: rgba(255,255,255,0.15); color: #fff; border: 1px solid rgba(255,255,255,0.5);
+}
+.v2-impersonation-bar .v2-btn:hover { background: rgba(255,255,255,0.28); }
+/* компактная шапка, пока открыто рабочее место — та же логика, что у соседних полос (styles.css:
+   .v2-exp-banner/.v2-gate-note в режиме v2-ws-mode) */
+#v2-root.v2-ws-mode .v2-impersonation-bar { padding: 3px 14px; font-size: 12px; }

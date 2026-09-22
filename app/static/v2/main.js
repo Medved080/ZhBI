@@ -2,7 +2,8 @@
 // (реестр `screens.json`, Docs/v2-interface-coverage.md). Перенесены целиком «Пользователи и доступ», «Проекты и
 // объекты» и «Контрагенты»; остальные экраны показывают состав формы V1 и открывают её в текущем интерфейсе
 // с контекстом объекта (screen-view.js), пока их операции не подключены.
-import { api, ApiError } from "./api.js";
+import { api, ApiError, getImpersonationToken, setImpersonationToken } from "./api.js";
+import { showInfoDialog } from "./dialogs.js";
 import { renderLogin, renderChangePassword } from "./login.js";
 import { mountUsersAccess } from "./users-access.js";
 import { mountProjectsObjects } from "./projects-objects.js";
@@ -52,6 +53,14 @@ const root = document.getElementById("v2-root");
   if (document.querySelector("link[data-disk-note-css]")) return;
   const l = document.createElement("link");
   l.rel = "stylesheet"; l.href = "/static/v2/disk-note.css"; l.setAttribute("data-disk-note-css", "1");
+  document.head.appendChild(l);
+})();
+
+// Стиль полосы режима «Зайти под пользователем» — тем же приёмом (own файл, не styles.css).
+(() => {
+  if (document.querySelector("link[data-impersonation-bar-css]")) return;
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = "/static/v2/impersonation-bar.css"; l.setAttribute("data-impersonation-bar-css", "1");
   document.head.appendChild(l);
 })();
 
@@ -255,6 +264,13 @@ async function renderShell(user, permissions) {
   const prefsStore = createShellPrefsStore({ api, user });
 
   root.innerHTML = `
+    <!-- Полоса режима «Зайти под пользователем» (2026-09-22). Первым элементом и на всю ширину — та же
+         причина, что у V1 (app/static/index.html): вкладка обязана выглядеть как чужая, и спутать её со своей
+         нельзя. Показывается только когда /me вернул impersonated_by (см. applyImpersonationBar ниже). -->
+    <div class="v2-impersonation-bar" id="v2-impersonation-bar" hidden>
+      <span id="v2-impersonation-text"></span>
+      <button type="button" class="v2-btn" id="v2-impersonation-exit">Вернуться к своей учётной записи</button>
+    </div>
     <header class="v2-head">
       <div class="v2-head-title">
         <strong>ЖБИ</strong>
@@ -338,6 +354,43 @@ async function renderShell(user, permissions) {
     }).catch(() => { /* фоновое уведомление — тихий отказ, не должен мешать работе */ });
   }
   warnAboutDiskSpace();
+
+  // Полоса режима «Зайти под пользователем» (2026-09-22): признак приходит С СЕРВЕРА (/me), а не берётся из
+  // наличия токена в sessionStorage — та же причина, что у V1 (app/static/app.js: applyImpersonationBar):
+  // токен мог протухнуть (режим живёт часы, IMPERSONATION_TTL_HOURS), и тогда вкладка молча стала бы обычной
+  // вкладкой администратора; полоса, нарисованная по локальному признаку, врала бы ровно там, где цена вранья
+  // максимальна. Кнопка выхода переиспользует существующий маршрут завершения режима: POST /logout с
+  // заголовком «от имени» (его подставляет обёртка fetch в api.js) гасит ТОЛЬКО отладочный сеанс, не трогая
+  // cookie-сеанс администратора (app/auth.py: logout).
+  const impBar = document.getElementById("v2-impersonation-bar");
+  function applyImpersonationBar() {
+    const active = !!user.impersonated_by;
+    impBar.hidden = !active;
+    if (!active) {
+      if (getImpersonationToken()) {
+        setImpersonationToken(null);
+        showInfoDialog("Режим «от имени» истёк — вкладка снова работает от вашего имени.");
+      }
+      return;
+    }
+    document.getElementById("v2-impersonation-text").textContent =
+      `Режим отладки: вы (${user.impersonated_by}) работаете от имени пользователя «${user.display_name}». `
+      + "Все изменения записываются в журнал на ваше имя.";
+  }
+  applyImpersonationBar();
+  document.getElementById("v2-impersonation-exit").addEventListener("click", async () => {
+    if (navBusy || api.hasPendingWrites()) return;
+    navBusy = true;
+    try {
+      if (activeModule && !(await activeModule.guardLeave())) return;
+      try { await api.post("/logout", {}); } catch (err) { /* отладочный сеанс мог уже истечь — выходим всё равно */ }
+      setImpersonationToken(null);
+      activeModule = null;
+      location.hash = "";
+      location.reload();
+    } finally { navBusy = false; }
+  });
+
   const objectBtn = document.getElementById("v2-object-btn");
   const headSection = document.getElementById("v2-head-section");
   const content = document.getElementById("v2-content");
