@@ -147,6 +147,54 @@ export function blockPercentCellProblem(b) {
   return realDate(b.report_date) ? null : "дата отчёта";
 }
 
+// ---- формы тел операций справочников «Марки» и «Зоны» ----
+function markBodyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["object_id", "element_type", "name"].includes(k))) return "лишние поля";
+  if (!Number.isInteger(b.object_id) || b.object_id <= 0) return "не указан объект";
+  if (typeof b.element_type !== "string" || !b.element_type) return "не указан тип элемента";
+  if (typeof b.name !== "string" || !b.name.trim() || b.name.length > 200) return "название марки пусто или слишком длинно";
+  return null;
+}
+const isTransferToken = (v) => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
+function dbTransferApplyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["token", "confirm"].includes(k))) return "лишние поля";
+  if (!isTransferToken(b.token)) return "нет идентификатора загруженного снимка";
+  if (typeof b.confirm !== "string" || !b.confirm.trim() || b.confirm.length > 50) return "не введено кодовое слово";
+  return null;
+}
+function dbTransferForgetProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => k !== "token")) return "лишние поля";
+  return isTransferToken(b.token) ? null : "нет идентификатора загруженного снимка";
+}
+function fillScopeApplyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["project_id", "object_id", "keys"].includes(k))) return "лишние поля";
+  if (!(b.project_id === null || (Number.isInteger(b.project_id) && b.project_id > 0))) return "неверный проект";
+  if (!(b.object_id === null || (Number.isInteger(b.object_id) && b.object_id > 0))) return "неверный объект";
+  if (!Array.isArray(b.keys) || !b.keys.length || !b.keys.every((k) => typeof k === "string" && k)) return "не выбрано ни одного справочника";
+  return null;
+}
+function boolMapProblem(b) {
+  if (!isObj(b)) return "тело не объект";
+  if (!Object.keys(b).length) return "нет изменённых строк";
+  if (!Object.values(b).every((v) => typeof v === "boolean")) return "значение не да/нет";
+  return null;
+}
+function zoneBodyProblem(b) {
+  if (!isObj(b) || Object.keys(b).some((k) => !["number", "name", "parent_zone_id", "levels"].includes(k))) return "лишние поля";
+  if (!(b.number === null || b.number === undefined || Number.isInteger(b.number))) return "номер не целое число";
+  if (!(b.name === null || b.name === undefined || typeof b.name === "string")) return "неверное наименование";
+  if (!(b.parent_zone_id === null || b.parent_zone_id === undefined || (Number.isInteger(b.parent_zone_id) && b.parent_zone_id > 0))) return "неверный кран-владелец";
+  if (!Array.isArray(b.levels) || !b.levels.length) return "у зоны должен быть хотя бы один ярус";
+  for (const l of b.levels) {
+    if (!isObj(l) || !("id" in l) || !("elevation_mm" in l) || !("outline" in l)) return "ярус неверной формы";
+    if (!(l.id === null || Number.isInteger(l.id))) return "ярус: неверный идентификатор";
+    if (!(l.elevation_mm === null || Number.isInteger(l.elevation_mm))) return "ярус: неверная отметка";
+    if (!Array.isArray(l.outline) || l.outline.length < 3) return "ярус: контур короче трёх точек";
+    if (!l.outline.every((p) => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === "number" && Number.isFinite(n)))) return "ярус: точка контура не пара чисел";
+  }
+  return null;
+}
+
 // allowed: true — операция разрешена (пройден барьер безопасности и есть проверка на настоящем backend);
 // allowed: false — отключена, `why` — коротко почему; `onlyKeys` — разрешены только эти поля тела (остальные — отказ).
 // risk: «личная» — своя настройка пользователя; «общая» — настройка, видимая всем пользователям (V1 тоже); «данные» — рабочие
@@ -157,6 +205,10 @@ export const POLICY = [
   { id: "auth.login", screen: "(вход)", action: "Вход в V2 тем же логином и паролем, что в V1", method: "POST", path: re("/login"), risk: "аутентификация, данные не меняет", allowed: true, proof: "тот же эндпоинт, что у V1 (пароль вводит человек)" },
   { id: "appearance.theme", screen: "appearance", action: "Смена личной цветовой гаммы", method: "PATCH", path: re(`/users/\\d+/ui-theme`), risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "живая проверка: запись → SQL → возврат" },
   { id: "label-color.set", screen: "label-color", action: "Личный цвет подписей марок (сброс — null)", method: "PATCH", path: re(`/users/\\d+/label-color`), risk: "личная (V1 и V2)", allowed: true, proof: "живая проверка: запись → SQL → сброс" },
+  { id: "min-label-px.set", screen: "appearance", action: "Личный минимальный размер подписей на схеме", method: "PATCH", path: re(`/users/\\d+/min-label-px`), onlyKeys: ["min_label_px"], risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, отказ вне диапазона 400, 403 на чужого пользователя" },
+  { id: "view3d.set", screen: "appearance", action: "Личный начальный ракурс 3D (подъём и поворот камеры)", method: "PATCH", path: re(`/users/\\d+/view3d`), onlyKeys: ["view3d_pitch_deg", "view3d_yaw_deg"], risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, отказ вне диапазона 400, поворот приводится к ±180°, 403 на чужого пользователя" },
+  { id: "label-visibility.set", screen: "label-visibility", action: "Видимость подписей марок по типу — настройка объекта по умолчанию (только изменённые строки)", method: "PUT", path: re("/label-visibility"), check: boolMapProblem, risk: "общая для объекта (видна и в V1)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, 403 без права" },
+  { id: "label-dates-visibility.set", screen: "label-visibility", action: "Видимость дат в допстроке подписи по типу — настройка объекта по умолчанию (только изменённые строки)", method: "PUT", path: re("/label-dates-visibility"), check: boolMapProblem, risk: "общая для объекта (видна и в V1)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат, 403 без права" },
   { id: "changelog.ack", screen: "changelog", action: "Отметка «Ознакомился» в «Что нового»", method: "POST", path: re("/changelog/ack"), risk: "личная", allowed: true, proof: "живая проверка: запись → SQL" },
   { id: "smu.create", screen: "dict-smu", action: "СМУ: добавить запись", method: "POST", path: re("/smu"), risk: "общая (справочник)", allowed: true, proof: "живая проверка на синтетической записи" },
   { id: "smu.rename", screen: "dict-smu", action: "СМУ: переименовать", method: "PATCH", path: re(`/smu/\\d+`), risk: "общая (справочник)", allowed: true, proof: "живая проверка на синтетической записи" },
@@ -256,6 +308,13 @@ export const POLICY = [
   { id: "individuals.create", screen: "dict-individuals", action: "Физлица: добавить запись", method: "POST", path: re("/individuals"), onlyKeys: ["name"], risk: "общая (справочник, персональные данные)", allowed: true, proof: "HTTP+браузер: успех, дубль 409, пустое 400, 403 без права, журнал" },
   { id: "individuals.rename", screen: "dict-individuals", action: "Физлица: переименовать", method: "PATCH", path: re(`/individuals/\\d+`), onlyKeys: ["name"], risk: "общая (справочник, персональные данные)", allowed: true, proof: "HTTP+браузер: успех, дубль 409, 404, 403" },
   { id: "individuals.delete", screen: "dict-individuals", action: "Физлица: удалить НЕиспользуемую запись (по плану; с зависимостями — отказ, замена в V1)", method: "POST", path: re(`/dictionaries/individual/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "общая, необратимо", allowed: true, proof: "HTTP+браузер: удаление неиспользуемой, отказ для используемой, повтор 404" },
+  // -- справочники «Марки», «Зоны» (2026-09-22; проверено на настоящем backend, scripts/verify_admin2_backend.py + браузер) --
+  { id: "mark.create", screen: "subtypes", action: "Марки: создание", method: "POST", path: re("/marks"), onlyKeys: ["object_id", "element_type", "name"], check: markBodyProblem, risk: "общая (справочник объекта)", allowed: true, proof: "HTTP+браузер: успех, дубль 409, пустое 422, 403" },
+  { id: "mark.rename", screen: "subtypes", action: "Марки: переименование — текст марки переносится у изделий и в позициях контрактов (план последствий и подтверждение — в интерфейсе, перед отправкой)", method: "PATCH", path: re(`/marks/\\d+`), onlyKeys: ["object_id", "element_type", "name"], check: markBodyProblem, risk: "общая (справочник объекта), рабочие данные (текст марки у изделий и позиций контрактов)", allowed: true, proof: "HTTP+браузер: успех и перенос текста у изделий/позиций, дубль 409, 404, 403" },
+  { id: "mark.delete", screen: "subtypes", action: "Марки: удаление записи с заменой ссылок (по плану последствий)", method: "POST", path: re(`/dictionaries/mark/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "общая, необратимо, рабочие данные (переносит ссылки у изделий и позиций контрактов)", allowed: true, proof: "HTTP+браузер: план, замена, откат при отказе, отказ без выбранной замены, 403" },
+  { id: "zone.update", screen: "zones", action: "Зоны: правка (номер, наименование, кран-владелец, геометрия ярусов; пересчёт привязки элементов — автоматически на сервере)", method: "PATCH", path: re(`/zones/\\d+`), check: zoneBodyProblem, risk: "рабочие данные (геометрия зоны и привязка изделий к зонам)", allowed: true, proof: "HTTP+браузер: успех и пересчёт привязки, отказ валидации (самопересечение, дубль номера), 403" },
+  { id: "zone.undo", screen: "zones", action: "Зоны: откат последней правки целиком (реквизиты, геометрия, привязки изделий, которые задел пересчёт)", method: "POST", path: re(`/zones/\\d+/undo`), risk: "рабочие данные, необратимо после следующей правки", allowed: true, proof: "HTTP+браузер: откат и восстановление привязок, отказ «нечего отменять» 409, 403" },
+  { id: "zone.delete", screen: "zones", action: "Зоны: удаление записи с заменой ссылок (по плану последствий)", method: "POST", path: re(`/dictionaries/zone/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "общая, необратимо, рабочие данные (переносит привязку изделий)", allowed: true, proof: "HTTP+браузер: план, замена, откат при отказе, 403" },
   { id: "projects.create", screen: "projects-objects", action: "Проекты: создание", method: "POST", path: re("/projects"), onlyKeys: ["name", "status", "description", "address", "address_note", "address_code", "address_source", "address_region", "address_parts", "postal_code", "lat", "lon"], risk: "данные иерархии", allowed: true, proof: "HTTP+браузер: успех и перезагрузка, пустое/дубль, 403, журнал" },
   { id: "projects.update", screen: "projects-objects", action: "Проекты: правка (с проверкой «запись устарела»)", method: "PATCH", path: re(`/projects/\\d+`), onlyKeys: ["name", "status", "description", "address", "address_note", "address_code", "address_source", "address_region", "address_parts", "postal_code", "lat", "lon", "expected_version"], check: (b) => (typeof b?.expected_version === "string" ? null : "нет версии записи"), risk: "данные иерархии", allowed: true, proof: "HTTP+браузер: успех, устаревшая версия 409 без записи, архивация проекта с активными объектами отказ, 403" },
   { id: "projects.delete", screen: "projects-objects", action: "Проекты: удаление ПУСТОГО проекта (план последствий, подтверждение вводом названия)", method: "POST", path: re(`/dictionaries/project/\\d+/delete`), onlyKeys: ["replacements", "mode"], risk: "данные иерархии, необратимо", allowed: true, proof: "HTTP+браузер: удаление пустого, отказ для проекта с объектами (без изменений), повтор 404, обрыв ответа, 403" },
@@ -277,8 +336,16 @@ export const POLICY = [
   { id: "training.answer", screen: "training", action: "Обучение: ответить на вопрос теста (ответ не меняется)", method: "POST", path: re(`/training/attempts/\\d+/answer`), onlyKeys: ["question_key", "option"], risk: "личные данные обучения", allowed: true, proof: "HTTP+браузер: верный/неверный ответ и разбор, повтор 409, чужая попытка 404, 401" },
   { id: "map.online", screen: "map-admin", action: "Карта: включить/выключить онлайн-подложку", method: "PUT", path: re("/map/online-tiles"), onlyKeys: ["enabled"], risk: "внешние запросы браузеров", allowed: true, proof: "HTTP+браузер: успех, SQL, перезагрузка, 403" },
   { id: "map.upload", screen: "map-admin", action: "Карта: загрузить файл подложки PMTiles", method: "POST", path: re("/map/tiles/upload"), risk: "файлы на сервере", allowed: true, proof: "HTTP+браузер: успех, не-PMTiles отказ без следа на диске, 403" },
+  { id: "address.upload", screen: "address-classifier", action: "Адресный классификатор: загрузить файл (.7z/.zip/.dbf) со своего компьютера", method: "POST", path: re("/address/upload"), check: uploadCheck({ ext: ["7z", "zip", "dbf"] }), risk: "файлы на сервере (сотни МБ)", allowed: true, proof: "HTTP+браузер на синтетическом мини-классификаторе: загрузка .dbf, отказ на неверном расширении, 403" },
+  { id: "address.unpack", screen: "address-classifier", action: "Адресный классификатор: распаковать архив в каталоге сервера", method: "POST", path: re(`/address/unpack`), check: (b, q) => (new URLSearchParams(q || "").get("name") ? null : "нет имени файла"), risk: "файлы на сервере, минуты работы", allowed: true, proof: "HTTP+браузер на синтетическом мини-классификаторе: распаковка .zip, 403" },
+  { id: "address.load", screen: "address-classifier", action: "Адресный классификатор: загрузить отмеченные регионы (фоновая задача сервера)", method: "POST", path: re("/address/load"), check: (b) => (isObj(b) && Array.isArray(b.regions) && b.regions.length && b.regions.every((r) => typeof r === "string") && typeof b.houses === "boolean" ? null : "нет списка регионов"), risk: "данные классификатора (минуты фоновой работы)", allowed: true, proof: "HTTP+браузер на синтетическом мини-классификаторе: загрузка региона, повтор без 409 (задача успела завершиться), 403" },
+  { id: "address.fetch", screen: "address-classifier", action: "Адресный классификатор: скачать с сайта ФНС или распаковать уже загруженный архив (фоновая задача; download=false — без обращения в сеть)", method: "POST", path: re("/address/fetch"), check: (b, q) => { const p = new URLSearchParams(q || ""); return p.get("houses") && p.get("download") ? null : "нет параметров houses/download"; }, risk: "внешний запрос браузера сервера при download=true; файлы на сервере", allowed: true, proof: "HTTP: download=false на синтетическом архиве — распаковка без сети; download=true с сайтом ФНС не проверялось (нет доступа в интернет из тестовой среды — точный блокер в Docs/v2-progress/admin2.md), 403" },
   { id: "activity.cleanup", screen: "activity", action: "Журнал действий: очистить записи раньше даты (счёт заранее, подтверждение датой)", method: "POST", path: re("/activity/cleanup"), risk: "журнал, необратимо", allowed: true, proof: "HTTP+браузер: счёт, очистка, факт очистки в журнале, 403" },
   { id: "release.run", screen: "changelog", action: "Что нового: повторить обработку данных обновления (копия базы снимается сервером)", method: "POST", path: re(`/release-tasks/[^/]+/run`), risk: "данные, служебное", allowed: true, proof: "HTTP+браузер: повтор выполненной обработки идемпотентен, 404, 403" },
+  { id: "fill-scope.apply", screen: "fill-scope", action: "Заполнить пустые «Объект» и «Проект» у отмеченных справочников (временная необратимая обработка, предпросмотр и подтверждение словом — в интерфейсе)", method: "POST", path: re("/admin/fill-empty-scope/apply"), check: fillScopeApplyProblem, risk: "данные иерархии нескольких справочников, необратимо через интерфейс, служебное (администратор сервиса)", allowed: true, proof: "HTTP+браузер: применение отмеченного → SQL (пустых полей стало меньше), 403 у не-администратора, конфликт объекта/проекта из разных строк — отказ без изменений" },
+  { id: "db-transfer.stage", screen: "bulk-edit", action: "Перенос базы: принять снимок (.zip) и сверить с текущей базой — ничего не меняет", method: "POST", path: re("/admin/db-transfer/stage"), check: uploadCheck({ ext: ["zip"] }), risk: "чтение (сверка), файл лежит в очереди на диске до применения или отмены", allowed: true, proof: "HTTP+браузер: сверка своим же снимком, числа таблиц совпадают, предупреждения по несовпадению версии/таблиц, 403 у не-администратора" },
+  { id: "db-transfer.apply", screen: "bulk-edit", action: "Перенос базы: ПОЛНАЯ ЗАМЕНА текущей базы и вложений содержимым сверенного снимка (кодовое слово проверяет сервер; служебная копия текущего состояния снимается перед заменой)", method: "POST", path: re("/admin/db-transfer/apply"), onlyKeys: ["token", "confirm"], check: dbTransferApplyProblem, risk: "ВСЯ база и вложения, необратимо интерфейсом (только из служебной копии)", allowed: true, proof: "HTTP+браузер на копии БД: применение своим же снимком → служебная копия создана, счётчики совпали, неверное слово отклонено без изменений, 403 у не-администратора" },
+  { id: "db-transfer.forget", screen: "bulk-edit", action: "Перенос базы: убрать снимок из очереди, не применяя", method: "POST", path: re("/admin/db-transfer/forget"), onlyKeys: ["token"], check: dbTransferForgetProblem, risk: "служебное (файл снимка на диске)", allowed: true, proof: "HTTP+браузер: повторное применение забытого токена → 404" },
   { id: "users.create", screen: "users-access", action: "Пользователи: создание учётной записи", method: "POST", path: re("/users"), onlyKeys: ["last_name", "first_name", "domain_login", "role"], risk: "права и учётные записи", allowed: true, proof: "HTTP+браузер: успех и БД, 403 у user2/user4, дубль логина 409, пустые поля 422, журнал" },
   { id: "users.update", screen: "users-access", action: "Пользователи: правка карточки (с проверкой «запись устарела»)", method: "PATCH", path: re(`/users/\\d+`), onlyKeys: ["last_name", "first_name", "patronymic", "position", "department", "domain_login", "role", "auth_method", "must_change_password", "expected_version"], check: (b) => (typeof b?.expected_version === "string" ? null : "нет версии записи"), risk: "права и учётные записи", allowed: true, proof: "HTTP+браузер: успех, устаревшая версия 409 без записи, снятие своей роли администратора 409, 403" },
   { id: "users.password", screen: "users-access", action: "Пароль пользователя: задать или заблокировать вход (пустой пароль — только чужому)", method: "POST", path: re(`/users/\\d+/set-password`), onlyKeys: ["password", "must_change_password"], check: (b) => (typeof b?.password === "string" ? null : "нет пароля"), risk: "пароли (значение вводит человек; в журнал не попадает)", allowed: true, proof: "HTTP+браузер на тестовых пользователях копии: политика 422, 403 у не-админов, блокировка, вход настоящей формой, сеансы завершаются, журнал без паролей и хэшей" },
@@ -314,9 +381,9 @@ export const POLICY = [
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
 
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
-  // Контракт по умолчанию (PUT /contracts/default-map) и свёртка дублей справочника (POST /dictionaries/{counterparty|agreement|specification}/{id}/delete,
-  // mode:merge) — РАЗРЕШЕНЫ выше отдельными строками (свои путь/метод/форма побеждают этот общий отказ раньше, чем до него доходит проверка).
-  { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: групповая плановая дата поставки, прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
+  // Контракт по умолчанию (PUT /contracts/default-map), свёртка дублей справочника (POST /dictionaries/{counterparty|agreement|specification}/{id}/delete,
+  // mode:merge), «Марки» и «Зоны» (POST /dictionaries/{mark|zone}/{key}/delete) — РАЗРЕШЕНЫ выше отдельными строками (свои путь/метод/форма побеждают этот общий отказ раньше, чем до него доходит проверка).
+  { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: групповая плановая дата поставки, прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/|mark/|zone/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
 ];
 
 // ---- проверка ----

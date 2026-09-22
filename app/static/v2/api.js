@@ -156,7 +156,7 @@ export const api = {
   async fetchFile(path, { method = "GET", body } = {}) {
     const p = String(path).split("?")[0];
     const ok = (method === "GET" && (/^\/import-templates\/[a-z_]+\/sample$/.test(p) || p === "/settings/export"))
-      || (method === "POST" && (p === "/elements/bulk-edit/export"));
+      || (method === "POST" && (p === "/elements/bulk-edit/export" || p === "/admin/db-transfer/export"));
     if (!ok) throw new Error(`fetchFile: «${path}» — не выгрузка файла`);
     let res;
     try {
