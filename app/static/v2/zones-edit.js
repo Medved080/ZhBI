@@ -18,6 +18,7 @@ import { esc, linkList } from "./screen-view.js";
 import { STATUS_LABEL } from "./registry.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { runDeleteFlow } from "./delete-plan.js";
+import { createZonePreview3d } from "./zone-preview-3d.js";
 
 const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
 const unknownOutcome = (e) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
@@ -45,6 +46,10 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   const canEdit = !!rights?.system_admin || rights?.features?.zones === "write";
   const canDelete = !!rights?.system_admin || rights?.features?.dict_delete === "write";
   let dead = false, busy = false, seq = 0;
+  // 3D-предпросмотр (как в V1: переключатель 2D/3D у предпросмотра). Контроллер живёт, пока открыта форма одной зоны:
+  // камера ставится один раз на открытие формы, холст переносится при перерисовке формы; при закрытии — освобождается WebGL.
+  let previewMode = "2d", p3d = null;
+  const drop3d = () => { p3d?.dispose(); p3d = null; };
   const st = { category: "Захватка", includeRetired: false, rows: null, error: "", q: "", editing: null, lastEdit: null };
 
   el.innerHTML = `
@@ -131,6 +136,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     return levels.map((l) => ({ id: l.id, elevation_mm: l.elevation_mm, outline: l.outline.map((p) => [Math.round(p[0]), Math.round(p[1])]) }));
   }
   async function openEditor(zoneId) {
+    drop3d(); previewMode = "2d";   // как в V1: каждое открытие формы — с 2D и заново выставленной камерой 3D
     st.editing = { zoneId, loaded: false, error: "", busy: false, activeLevel: 0, activePoint: null };
     paint();
     try {
@@ -151,7 +157,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       paint();
     }
   }
-  function closeEditor() { st.editing = null; paint(); }
+  function closeEditor() { drop3d(); st.editing = null; paint(); }
 
   function paintEditor() {
     const ed = st.editing;
@@ -172,15 +178,18 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
         <label class="v2-field">Наименование<input type="text" id="ze-name" value="${esc(ed.name)}" maxlength="200" ${ed.busy ? "disabled" : ""}></label>
         ${isStance ? `<label class="v2-field">Кран-владелец<select id="ze-crane" ${ed.busy ? "disabled" : ""}><option value="">не определён</option>${ed.cranes.map((c) => `<option value="${c.id}" ${String(ed.parentZoneId) === String(c.id) ? "selected" : ""}>${esc(c.name || "Кран " + c.number)}</option>`).join("")}</select></label>` : ""}
       </div>
-      <div class="v2-inline" style="margin-top:12px">
+      <!-- Предпросмотр прилипает к верху прокрутки (как в V1: при длинном списке ярусов и точек картинка не уезжает) -->
+      <div class="v2-inline" style="margin-top:12px;align-items:flex-start">
         <div style="flex:1;min-width:280px">
           <h4 style="margin:0 0 6px">Ярусы</h4>
           <div id="ze-levels"></div>
           <button type="button" class="v2-btn" id="ze-add-level" ${ed.busy ? "disabled" : ""}>+ Ярус</button>
         </div>
-        <div style="width:400px;flex:none">
-          <h4 style="margin:0 0 6px">Предпросмотр</h4>
-          <svg id="ze-preview" viewBox="0 0 400 300" style="width:100%;border:1px solid var(--v2-border,#3332);background:var(--v2-surface,transparent)"></svg>
+        <div style="width:400px;flex:none;position:sticky;top:0;align-self:flex-start;background:var(--bg)">
+          <div class="v2-inline" style="margin:0 0 6px;align-items:center"><h4 style="margin:0">Предпросмотр</h4><span style="flex:1"></span>
+            <span role="group" aria-label="Вид предпросмотра" class="v2-inline" style="gap:4px">${[["2d", "2D"], ["3d", "3D"]].map(([m, t]) => `<button type="button" class="v2-btn${previewMode === m ? " v2-primary" : ""}" data-pmode="${m}" aria-pressed="${previewMode === m}">${t}</button>`).join("")}</span></div>
+          <svg id="ze-preview" viewBox="0 0 400 300" style="width:100%;border:1px solid var(--v2-border,#3332);background:var(--v2-surface,transparent)${previewMode === "3d" ? ";display:none" : ""}"></svg>
+          <div id="ze-preview3d" style="width:400px;height:300px;border:1px solid var(--line);background:var(--surface)${previewMode === "3d" ? "" : ";display:none"}"></div>
           <p class="v2-muted" id="ze-preview-hint" style="font-size:12px"></p>
         </div>
       </div>
@@ -206,8 +215,34 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       ed.activeLevel = ed.levels.length - 1;
       paint();
     });
+    el.querySelectorAll("[data-pmode]").forEach((b) => b.addEventListener("click", () => setPreviewMode(b.dataset.pmode)));
     paintLevels();
     paintPreview();
+  }
+
+  function preview3dData() {
+    const ed = st.editing;
+    return { bbox: ed.context.bbox, siblings: ed.context.siblings, parent: ed.context.parent, levels: ed.levels, activeLevel: ed.activeLevel, activePoint: ed.activePoint };
+  }
+  function note3d(host) { const i = p3d?.info(); if (host && i) host.dataset.info = JSON.stringify(i); }
+  async function setPreviewMode(mode) {
+    if (mode === previewMode || !st.editing?.loaded) return;
+    previewMode = mode;
+    paint();   // перерисовка формы: кнопки, видимость SVG и контейнера 3D; сам холст 3D строит paintPreview
+  }
+  async function paint3d() {
+    const host = $("#ze-preview3d");
+    if (!host || !st.editing?.loaded) return;
+    if (!p3d) p3d = createZonePreview3d();
+    const mine = p3d;
+    try {
+      const shown = await mine.show(host, preview3dData());
+      if (dead || mine !== p3d) return;
+      if (shown) note3d(host);
+    } catch (e) {
+      if (dead || mine !== p3d) return;
+      host.textContent = `3D-предпросмотр не загрузился: ${errText(e)}`;
+    }
   }
 
   function paintLevels() {
@@ -230,7 +265,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       inp.addEventListener("input", () => { const v = Number(inp.value); if (!Number.isFinite(v)) return; st.editing.levels[li].outline[pi][ax] = v; st.editing.activeLevel = li; st.editing.activePoint = pi; paintPreview(); });
       inp.addEventListener("focus", () => { st.editing.activeLevel = li; st.editing.activePoint = pi; paintPreview(); });
     });
-    box.querySelectorAll("input[data-elev]").forEach((inp) => inp.addEventListener("input", () => { const li = Number(inp.dataset.elev); st.editing.levels[li].elevation_mm = inp.value === "" ? null : Number(inp.value); }));
+    box.querySelectorAll("input[data-elev]").forEach((inp) => inp.addEventListener("input", () => { const li = Number(inp.dataset.elev); st.editing.levels[li].elevation_mm = inp.value === "" ? null : Number(inp.value); if (previewMode === "3d") paintPreview(); }));
     box.querySelectorAll("[data-del-pt]").forEach((b) => b.addEventListener("click", () => { const [li, pi] = b.dataset.delPt.split(":").map(Number); st.editing.levels[li].outline.splice(pi, 1); paintLevels(); paintPreview(); }));
     box.querySelectorAll("[data-add-pt]").forEach((b) => b.addEventListener("click", () => {
       const li = Number(b.dataset.addPt), outline = st.editing.levels[li].outline, last = outline[outline.length - 1], first = outline[0];
@@ -242,6 +277,13 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
 
   function paintPreview() {
     const ed = st.editing;
+    if (previewMode === "3d") {
+      const level = ed.levels[ed.activeLevel];
+      const hint = $("#ze-preview-hint");
+      if (hint) hint.textContent = `Ярус ${ed.activeLevel + 1}${level && level.elevation_mm != null ? ` (отм. +${level.elevation_mm})` : " (без отметки)"}. Объём яруса — от его отметки до следующего; красным — кран-владелец, серым — соседние зоны той же категории. Вращение — перетаскивание мышью, масштаб — колесо.`;
+      paint3d();
+      return;
+    }
     const svg = $("#ze-preview");
     if (!svg) return;
     const bbox = ed.context.bbox;
@@ -293,6 +335,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     try {
       const r = await api.patch(`/zones/${ed.zoneId}`, body);
       st.lastEdit = { zoneId: ed.zoneId, name: r.name || ed.name };
+      drop3d();
       st.editing = null;
       await loadList();
       setStatusAfterList(r.recalc_refused
@@ -355,6 +398,6 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   return {
     hasUnsavedChanges: () => dirty(),
     async guardLeave() { return guardEditorLeave(); },
-    destroy() { dead = true; },
+    destroy() { dead = true; drop3d(); },
   };
 }
