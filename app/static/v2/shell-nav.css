@@ -1,0 +1,16 @@
+/* Личная настройка левой навигации V2 (2026-09-22): порядок пунктов внутри группы и избранное. Отдельный файл —
+   styles.css общий (параллельно правит другой исполнитель, трогать напрямую нельзя); подключается self-inject'ом
+   из shell-nav.js, тем же приёмом, что element-ops.css у element-ops.js. Использует переменные общего файла
+   (--line, --sel, --ink, --muted) — своих цветов не заводит. */
+.v2-shellnav-row { display: flex; align-items: center; gap: 2px; }
+.v2-shellnav-row .v2-shellnav-item { flex: 1; min-width: 0; }
+.v2-shellnav-tools { display: flex; align-items: center; gap: 0; flex: none; padding-right: 2px; }
+.v2-shellnav-fav, .v2-shellnav-move-btn {
+  border: 0; background: none; padding: 4px 5px; border-radius: 5px; color: var(--muted); font-size: 12px;
+  line-height: 1; cursor: pointer;
+}
+.v2-shellnav-fav:hover, .v2-shellnav-move-btn:hover:not(:disabled) { background: var(--sel); color: var(--ink); }
+.v2-shellnav-fav[aria-pressed="true"] { color: #d68910; }
+.v2-shellnav-move-btn:disabled { opacity: .3; cursor: default; }
+/* Блок избранного вверху списка группы — отделён тонкой чертой (п.4 задания: отдельным блоком, не вперемешку). */
+.v2-shellnav-fav-block { display: flex; flex-direction: column; gap: 1px; padding-bottom: 4px; margin-bottom: 4px; border-bottom: 1px dashed var(--line); }

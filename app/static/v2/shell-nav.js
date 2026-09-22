@@ -14,6 +14,14 @@ import { svgIcon, pinFilledSvg } from "./icons.js";
 import { hasExchangeOp } from "./exchange.js";
 import { hasAdminScreen } from "./admin-screens.js";
 
+// Стиль модуля — отдельным файлом (styles.css общий, правит параллельно другой исполнитель — не трогаем).
+(() => {
+  if (document.querySelector("link[data-shellnav-css]")) return;
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = "/static/v2/shell-nav.css"; l.setAttribute("data-shellnav-css", "1");
+  document.head.appendChild(l);
+})();
+
 export const NAV_WIDTH_MIN = 220;
 export const NAV_WIDTH_MAX = 380;
 export const NAV_WIDTH_DEFAULT = 260;
@@ -123,6 +131,59 @@ export function mountShellNav(el, {
     </button>`;
   }
 
+  // ---- порядок и избранное пунктов ВНУТРИ группы (личная настройка, 2026-09-22, задача «пункт 4»). СВОИ данные
+  // (`v2-shell-prefs`: item_order/favorites) — НЕ путать с `menuPrefs` V1 (панель «Действия», другой столбец, другой
+  // формат). Порядок неполный — заведомо ЗАДАЁТ последовательность только известных ей пунктов (см. app/users.py:
+  // set_v2_shell_prefs); пункты, которых в сохранённом порядке нет (новые в этой версии), остаются на исходном
+  // месте — перед переставленными (тот же смысл, что у applyMenuPrefs() в V1, реализация своя).
+  function applyOrder(items, order) {
+    if (!order || !order.length) return items;
+    const byId = new Map(items.map((s) => [s.id, s]));
+    const known = order.filter((id) => byId.has(id));
+    const listed = new Set(known);
+    const rest = items.filter((s) => !listed.has(s.id));
+    return [...rest, ...known.map((id) => byId.get(id))];
+  }
+  function groupItemsOf(groupId) {
+    return registry.screens.filter((s) => s.group === groupId && allowedScreen(s));
+  }
+  // Избранные — отдельным блоком СВЕРХУ списка группы (п.4 задания); relative-порядок внутри каждого из двух
+  // блоков (избранное/остальное) берётся из ОДНОГО общего `order` — блоки лишь РАЗДВИГАЮТ уже упорядоченный список.
+  function splitFavorites(items) {
+    const favSet = new Set(prefsStore.get().favorites);
+    return { favs: items.filter((s) => favSet.has(s.id)), rest: items.filter((s) => !favSet.has(s.id)) };
+  }
+  function favBtnHtml(s) {
+    const fav = prefsStore.isFavorite(s.id);
+    return `<button type="button" class="v2-shellnav-fav" data-fav="${esc(s.id)}" aria-pressed="${fav}"
+      title="${fav ? "Убрать из избранного" : "Добавить в избранное"}"
+      aria-label="${fav ? `Убрать «${esc(s.title)}» из избранного` : `Добавить «${esc(s.title)}» в избранное`}">${fav ? "★" : "☆"}</button>`;
+  }
+  function moveBtnsHtml(groupId, s, isFirst, isLast) {
+    return `<button type="button" class="v2-shellnav-move-btn" data-move="up" data-group="${esc(groupId)}" data-item="${esc(s.id)}"
+        ${isFirst ? "disabled" : ""} title="Выше" aria-label="Переместить «${esc(s.title)}» выше">▲</button>
+      <button type="button" class="v2-shellnav-move-btn" data-move="down" data-group="${esc(groupId)}" data-item="${esc(s.id)}"
+        ${isLast ? "disabled" : ""} title="Ниже" aria-label="Переместить «${esc(s.title)}» ниже">▼</button>`;
+  }
+  // Строка пункта + инструменты (звёздочка, стрелки) — ОТДЕЛЬНЫЕ кнопки рядом с кнопкой перехода (не внутри нее:
+  // кнопка в кнопке недопустима в HTML и ломает доступность). Только вне поиска — во время поиска список неполный
+  // и переставлять/закреплять по нему было бы непонятно (см. render()).
+  function itemRowHtml(s, currentKey, groupId, isFirst, isLast) {
+    return `<div class="v2-shellnav-row">${itemHtml(s, currentKey)}<span class="v2-shellnav-tools">${favBtnHtml(s)}${moveBtnsHtml(groupId, s, isFirst, isLast)}</span></div>`;
+  }
+  function moveItem(groupId, itemId, dir) {
+    const ordered = applyOrder(groupItemsOf(groupId), prefsStore.getItemOrder(groupId));
+    const { favs, rest } = splitFavorites(ordered);
+    const favSet = new Set(prefsStore.get().favorites);
+    const arr = favSet.has(itemId) ? favs : rest;
+    const idx = arr.findIndex((s) => s.id === itemId);
+    const swapWith = dir === "up" ? idx - 1 : idx + 1;
+    if (idx < 0 || swapWith < 0 || swapWith >= arr.length) return;
+    [arr[idx], arr[swapWith]] = [arr[swapWith], arr[idx]];
+    const newFull = favSet.has(itemId) ? [...arr, ...rest] : [...favs, ...arr];
+    prefsStore.setItemOrder(groupId, newFull.map((s) => s.id));
+  }
+
   function render() {
     const q = searchText.trim().toLowerCase();
     const currentKey = getCurrentKey();
@@ -147,15 +208,26 @@ export function mountShellNav(el, {
       || bottomGroups.some((g) => visibleItems(byGroup.get(g.id), g.title).length));
 
     const groupHtml = (g) => {
-      const items = visibleItems(byGroup.get(g.id), g.title);
+      // Порядок и избранное — только ВНЕ поиска: список результатов поиска и так неполный, переставлять его
+      // по личной настройке было бы непонятно, а звёздочка/стрелки среди случайных совпадений — лишний шум.
+      const ordered = q ? byGroup.get(g.id) : applyOrder(byGroup.get(g.id), prefsStore.getItemOrder(g.id));
+      const items = visibleItems(ordered, g.title);
       if (q && !items.length) return "";
       const hasCurrent = byGroup.get(g.id).some((s) => s.id === currentKey);
       const open = !!q || isGroupOpen(g.id, hasCurrent);
+      let body;
+      if (q) {
+        body = items.map((s) => itemHtml(s, currentKey)).join("");
+      } else {
+        const { favs, rest } = splitFavorites(items);
+        const favBlock = favs.length ? `<div class="v2-shellnav-fav-block">${favs.map((s, i) => itemRowHtml(s, currentKey, g.id, i === 0, i === favs.length - 1)).join("")}</div>` : "";
+        body = favBlock + rest.map((s, i) => itemRowHtml(s, currentKey, g.id, i === 0, i === rest.length - 1)).join("");
+      }
       return `<div class="v2-shellnav-group">
         <button type="button" class="v2-shellnav-group-head" data-group="${esc(g.id)}" aria-expanded="${open}">
           <span class="v2-shellnav-chevron" aria-hidden="true">${open ? "▾" : "▸"}</span>${esc(g.title)}
         </button>
-        ${open ? `<div class="v2-shellnav-group-body">${items.map((s) => itemHtml(s, currentKey)).join("")}</div>` : ""}
+        ${open ? `<div class="v2-shellnav-group-body">${body}</div>` : ""}
       </div>`;
     };
 
@@ -251,6 +323,28 @@ export function mountShellNav(el, {
       prefsStore.setGroupOpen(id, !open);
       render();
       el.querySelector(`[data-group="${id}"]`)?.focus();
+    }));
+    el.querySelectorAll("[data-fav]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = b.dataset.fav;
+      prefsStore.toggleFavorite(id);
+      render();
+      // Тот же приём, что у поиска/разделителя ширины ниже: render() пересобирает разметку через innerHTML,
+      // старый узел кнопки отсоединяется — фокус возвращаем на СВЕЖИЙ узел того же пункта, иначе повторное
+      // Tab-перемещение звёздочками подряд требовало бы каждый раз заново перетабляться от начала списка.
+      el.querySelector(`[data-fav="${CSS.escape(id)}"]`)?.focus();
+    }));
+    el.querySelectorAll("[data-move]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const { group, item, move } = b.dataset;
+      moveItem(group, item, move);
+      render();
+      // Кнопка того же направления могла стать disabled (пункт дошёл до края своего блока) — в этом случае
+      // фокус уходит на противоположную стрелку ТОГО ЖЕ пункта (она гарантированно осталась включённой, если
+      // в блоке больше одного пункта), а не теряется молча.
+      let btn = el.querySelector(`[data-move="${move}"][data-group="${CSS.escape(group)}"][data-item="${CSS.escape(item)}"]`);
+      if (!btn || btn.disabled) btn = el.querySelector(`[data-move="${move === "up" ? "down" : "up"}"][data-group="${CSS.escape(group)}"][data-item="${CSS.escape(item)}"]`);
+      btn?.focus();
     }));
     const search = el.querySelector("#v2-shellnav-search");
     if (search) {

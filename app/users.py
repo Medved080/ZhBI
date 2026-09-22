@@ -650,6 +650,12 @@ class SetShellPrefsIn(BaseModel):
     # {"<id группы меню>": True|False} — раскрыта/свёрнута ЯВНО пользователем; группа без записи здесь раскрыта
     # по умолчанию, только если это группа текущего экрана (см. shell-nav.js::isGroupOpen).
     nav_group_state: dict[str, bool] = {}
+    # Порядок и избранное пунктов НАВИГАЦИИ V2 (2026-09-22) — СВОИ данные, не путать с `menu_prefs` (личная
+    # настройка панели «Действия» V1, другой столбец, другой формат). {"<id группы>": ["<id экрана>", …]} — порядок
+    # только внутри своей группы, задаёт ЖЕЛАЕМУЮ последовательность известных пунктов (см. set_v2_shell_prefs).
+    item_order: dict[str, list[str]] = {}
+    # Плоский список id экранов-избранных (across групп — каждый показывается своей группой отдельным блоком сверху).
+    favorites: list[str] = []
 
 
 # Границы личной ширины навигации: рабочий диапазон клиента — 220..380px (плюс временное сужение под ширину
@@ -681,6 +687,12 @@ def set_v2_shell_prefs(
         raise HTTPException(status_code=400, detail="Ширина панели вне диапазона")
     if len(body.nav_group_state) > _SHELL_PREFS_LIMIT:
         raise HTTPException(status_code=400, detail="Слишком много групп меню")
+    if len(body.item_order) > _SHELL_PREFS_LIMIT:
+        raise HTTPException(status_code=400, detail="Слишком много групп в порядке пунктов")
+    if any(len(order) > _SHELL_PREFS_LIMIT for order in body.item_order.values()):
+        raise HTTPException(status_code=400, detail="Слишком длинный порядок пунктов в группе")
+    if len(body.favorites) > _SHELL_PREFS_LIMIT:
+        raise HTTPException(status_code=400, detail="Слишком много избранных пунктов")
     conn = get_connection()
     try:
         if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
@@ -688,11 +700,14 @@ def set_v2_shell_prefs(
         # Порядок закреплённых важен (человек сам решает, что видит первым) — сохраняем как прислали, только
         # убираем повторы, оставляя первое вхождение (двойной клик/гонка вкладок не должны плодить дубли).
         закреплённые = list(dict.fromkeys(body.pinned_objects))
+        избранные_пункты = list(dict.fromkeys(body.favorites))
         payload = {
             "pinned_objects": закреплённые,
             "nav_pinned": body.nav_pinned,
             "nav_width": body.nav_width,
             "nav_group_state": body.nav_group_state,
+            "item_order": body.item_order,
+            "favorites": избранные_пункты,
         }
         conn.execute(
             "UPDATE users SET recent_objects = ?, updated_at = datetime('now') WHERE id = ?",
@@ -701,7 +716,8 @@ def set_v2_shell_prefs(
         conn.commit()
         activity.log("user_v2_shell_prefs", user=current, entity_type="user", entity_id=user_id,
                      new_value=f"закреплено объектов: {len(закреплённые)}, "
-                               f"навигация: {'закреплена' if body.nav_pinned else 'временная'}")
+                               f"навигация: {'закреплена' if body.nav_pinned else 'временная'}, "
+                               f"избранных пунктов: {len(избранные_пункты)}")
         return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
     finally:
         conn.close()

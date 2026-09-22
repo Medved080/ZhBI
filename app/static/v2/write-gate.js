@@ -203,13 +203,21 @@ function lastObjectBodyProblem(b) {
   return b.object_id === null || (Number.isInteger(b.object_id) && b.object_id > 0) ? null : "неверный идентификатор объекта";
 }
 
-// ---- форма тела личных настроек оболочки V2 (закреплённые объекты шапки, состояние левой навигации) ----
+// ---- форма тела личных настроек оболочки V2 (закреплённые объекты шапки, состояние левой навигации, порядок и избранное
+// пунктов навигации — СВОИ данные, 2026-09-22, не путать с menu_prefs V1) ----
 function shellPrefsBodyProblem(b) {
-  if (!isObj(b) || Object.keys(b).some((k) => !["pinned_objects", "nav_pinned", "nav_width", "nav_group_state"].includes(k))) return "лишние поля";
+  if (!isObj(b) || Object.keys(b).some((k) => !["pinned_objects", "nav_pinned", "nav_width", "nav_group_state", "item_order", "favorites"].includes(k))) return "лишние поля";
   if (!Array.isArray(b.pinned_objects) || b.pinned_objects.length > 200 || !b.pinned_objects.every((x) => Number.isInteger(x) && x > 0)) return "список закреплённых объектов";
   if (typeof b.nav_pinned !== "boolean") return "состояние закрепления панели";
   if (!(b.nav_width === null || b.nav_width === undefined || (typeof b.nav_width === "number" && Number.isFinite(b.nav_width) && b.nav_width >= 160 && b.nav_width <= 600))) return "ширина панели";
   if (!isObj(b.nav_group_state) || Object.keys(b.nav_group_state).length > 200 || !Object.values(b.nav_group_state).every((v) => typeof v === "boolean")) return "состояние групп меню";
+  if (b.item_order !== undefined) {
+    if (!isObj(b.item_order) || Object.keys(b.item_order).length > 200) return "порядок пунктов меню";
+    if (!Object.values(b.item_order).every((arr) => Array.isArray(arr) && arr.length <= 200 && arr.every((x) => typeof x === "string" && x.length > 0 && x.length <= 100))) return "порядок пунктов меню";
+  }
+  if (b.favorites !== undefined) {
+    if (!Array.isArray(b.favorites) || b.favorites.length > 200 || !b.favorites.every((x) => typeof x === "string" && x.length > 0 && x.length <= 100)) return "список избранных пунктов";
+  }
   return null;
 }
 
@@ -247,7 +255,7 @@ export const POLICY = [
 
   // ==== разрешённые операции по областям переноса: каждая область дописывает строки ТОЛЬКО в свой блок (меньше конфликтов слияния) ====
   // ==== область: shell (оболочка — выбор объекта в шапке, левая навигация) ====
-  { id: "shell.prefs.set", screen: "shell", action: "Личные настройки оболочки: закреплённые объекты выбора объекта в шапке, состояние левой навигации (закреплена/нет, ширина, раскрытые группы)", method: "PATCH", path: re(`/users/\\d+/v2-shell-prefs`), check: shellPrefsBodyProblem, risk: "личная (только V2 — у V1 своего представления этих настроек нет)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат после перезагрузки, отказ формы (лишние поля/диапазон), 403 на чужого пользователя (scripts/v2_tests/shell)" },
+  { id: "shell.prefs.set", screen: "shell", action: "Личные настройки оболочки: закреплённые объекты выбора объекта в шапке, состояние левой навигации (закреплена/нет, ширина, раскрытые группы, порядок пунктов внутри группы, избранные пункты)", method: "PATCH", path: re(`/users/\\d+/v2-shell-prefs`), check: shellPrefsBodyProblem, risk: "личная (только V2 — у V1 своего представления этих настроек нет)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат после перезагрузки, отказ формы (лишние поля/диапазон), 403 на чужого пользователя (scripts/v2_tests/shell, scripts/verify_gaps2_shell_nav.mjs)" },
   { id: "shell.last-object.set", screen: "shell", action: "Запомнить последний выбранный объект за пользователем — ТОТ ЖЕ эндпоинт, что у V1 (своего в V2 не заводили)", method: "PUT", path: re("/me/last-object"), check: lastObjectBodyProblem, risk: "личная, общий эндпоинт с V1", allowed: true, proof: "живая проверка: смена объекта → SQL users.last_object_id → тот же объект после перезагрузки (scripts/shell_verify)" },
 
   // ==== область: model (прораб, модель ЖБИ, операции над элементами) ====
@@ -413,7 +421,7 @@ export const POLICY = [
   { id: "pdf.facade.apply", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: применить показанный макет блоков по токену", method: "POST", path: re("/import-pdf-facade/apply"), check: tokenOnlyProblem, risk: "секции/этажи/блоки модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
   { id: "pdf.clear", screen: "pdf-import", action: "Загрузка из PDF: отладочная очистка справочников объекта перед повторной загрузкой (применяется сразу, без сводки)", method: "POST", path: re(`/objects/\\d+/clear-import-data`), check: clearImportDataProblem, risk: "необратимо через интерфейс (помещения из PDF и/или секции/этажи и/или виды работ блоков); копия базы перед очисткой", allowed: true, proof: "настоящий backend: очистка по отмеченным группам, счётчики в ответе, отказ 403, журнал" },
   { id: "em.upload", screen: "external-models", action: "Внешние 3D-модели: загрузка FBX (метаданные — anchor/габарит/оси — посчитаны клиентом при разборе файла, сервер проверяет независимо)", method: "POST", path: re(`/objects/\\d+/external-models`), check: uploadFbxProblem, risk: "новая модель объекта; файл на диске сервера", allowed: true, proof: "настоящий backend: загрузка синтетического FBX, отказ 403, отказ сервера на неподдерживаемый профиль осей" },
-  { id: "em.patch", screen: "external-models", action: "Внешние 3D-модели: правка размещения числовыми полями (смещение/поворот/масштаб/название) со сверкой версии записи", method: "PATCH", path: re(`/objects/\\d+/external-models/\\d+`), check: emPatchProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: правка → SQL, 409 при чужой правке, отказ 403" },
+  { id: "em.patch", screen: "external-models", action: "Внешние 3D-модели: правка размещения числовыми полями (смещение/поворот/масштаб/название) со сверкой версии записи, включая результат «Совместить автоматически» (фасад)", method: "PATCH", path: re(`/objects/\\d+/external-models/\\d+`), check: emPatchProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: правка → SQL, 409 при чужой правке, отказ 403; автосовмещение — scripts/verify_gaps2_auto_align.mjs (синтетический FBX+геометрия, статус confident/ambiguous/insufficient, запись offset/rotation_deg и auto_placement_status одним PATCH)" },
   { id: "em.recenter", screen: "external-models", action: "Внешние 3D-модели: перецентровать (привязать заново к текущим границам объекта) со сверкой версии записи", method: "POST", path: re(`/objects/\\d+/external-models/\\d+/recenter`), check: emRecenterProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: перецентровка → SQL, 409 при чужой правке, отказ 403" },
   { id: "em.delete", screen: "external-models", action: "Внешние 3D-модели: удалить (файл и запись, необратимо)", method: "DELETE", path: re(`/objects/\\d+/external-models/\\d+`), risk: "необратимо — файл и запись модели удаляются", allowed: true, proof: "настоящий backend: удаление → SQL и файл, отказ 403" },
 
@@ -621,17 +629,22 @@ function uploadFbxProblem(body) {
   return null;
 }
 
-// Правка размещения внешней 3D-модели: только числовые поля, которые показывает форма V2 (без auto_placement_* — это
-// часть 3D-автосовмещения V1, сюда не перенесена), плюс обязательный expected_revision (оптимистичная блокировка).
+// Правка размещения внешней 3D-модели: числовые поля формы V2, ПЛЮС auto_placement_status/auto_placement_diagnostics
+// (2026-09-22, «Совместить автоматически» для фасада — app/static/v2/exchange-external-models.js: пересчитаны ЦЕЛИКОМ
+// на клиенте чистой математикой app/static/external-models/auto-align.js, теми же функциями, что у V1, без своей 3D-сцены
+// — offset/rotation_deg и статус попытки пишутся ОДНИМ PATCH, как того требует контракт backend, см. app/external_models.py:
+// PatchIn), плюс обязательный expected_revision (оптимистичная блокировка).
 function emPatchProblem(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
-  const allowed = ["name", "offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z", "expected_revision"];
+  const allowed = ["name", "offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z", "auto_placement_status", "auto_placement_diagnostics", "expected_revision"];
   if (Object.keys(body).some((k) => !allowed.includes(k))) return "лишние поля";
   if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) return "нет версии записи для сверки";
   for (const k of ["offset_x_mm", "offset_y_mm", "offset_z_mm", "rotation_deg", "scale_x", "scale_y", "scale_z"]) {
     if (body[k] !== undefined && typeof body[k] !== "number") return `поле «${k}» должно быть числом`;
   }
   if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim() || body.name.length > 255)) return "название пустое или слишком длинное";
+  if (body.auto_placement_status !== undefined && !["confident", "ambiguous", "insufficient", "low_confidence"].includes(body.auto_placement_status)) return "недопустимый статус автосовмещения";
+  if (body.auto_placement_diagnostics !== undefined && (typeof body.auto_placement_diagnostics !== "object" || body.auto_placement_diagnostics === null || Array.isArray(body.auto_placement_diagnostics))) return "диагностика автосовмещения — не объект";
   return null;
 }
 
