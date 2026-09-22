@@ -1,0 +1,23 @@
+/* «Элементы» (element-catalog.js): таблица справочника слева, карточка изделия справа; прокрутка — внутри областей,
+   страница целиком не прокручивается на 1920×1080 и 1366×768. */
+.ec-bar { align-items: flex-end; flex-wrap: wrap; gap: 10px 14px; }
+.ec-search { min-width: 280px; }
+.ec-search input { width: 100%; }
+.ec-split { display: flex; gap: 12px; align-items: stretch; height: calc(100vh - 330px); min-height: 260px; }
+.ec-table-wrap { flex: 1 1 auto; min-width: 0; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.ec-card { flex: 0 0 420px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.ec-table { width: max-content; min-width: 100%; font-size: 12px; }
+.ec-table th, .ec-table td { padding: 5px 8px; max-width: 260px; }
+.ec-table thead tr:first-child th { top: 0; }
+.ec-table thead tr.ec-filters td { position: sticky; top: 34px; z-index: 1; background: var(--surface); padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.ec-table thead tr.ec-filters select, .ec-table thead tr.ec-filters input { font-size: 11px; max-width: 150px; display: block; }
+.ec-table thead tr.ec-filters input { margin-top: 2px; }
+.ec-sort { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--ink); white-space: nowrap; cursor: pointer; }
+.ec-table tbody tr { cursor: pointer; }
+.ec-table tbody tr:hover td { background: var(--sel); }
+.ec-table tbody tr.ec-active td { background: var(--sel); box-shadow: inset 0 -1px 0 var(--accent); }
+.ec-attach { text-align: center; width: 28px; }
+.ec-comment { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ec-nowrap { white-space: nowrap; }
+.ec-pager { justify-content: flex-start; gap: 10px; }
+@media (max-width: 1500px) { .ec-card { flex-basis: 360px; } }

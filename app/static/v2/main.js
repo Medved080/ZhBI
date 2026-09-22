@@ -707,6 +707,14 @@ async function renderShell(user, permissions) {
         activeModule = mountMfr(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
+      } else if (target.impl === "element-catalog") {
+        // «Элементы»: справочник изделий с отбором по колонкам и карточкой изделия (та же, что на схеме — element-ops.js)
+        document.title = `${target.title} — ЖБИ`;
+        const { mountElementCatalog } = await import("./element-catalog.js");
+        activeModule = mountElementCatalog(content, {
+          screen: target, objectId, api, rights, groupTitle: groupTitle(target.group),
+          go: (k) => openSection(k), switchObject: changeObject, hasObject: (id) => activeObjects.some((o) => o.id === id),
+        });
       } else if (target.impl === "read" && target.read) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountReadScreen(content, {

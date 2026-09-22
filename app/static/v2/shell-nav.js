@@ -64,7 +64,7 @@ export function screenOpensInV1(s) {
   if (s.impl === "shape-edit") return !s.shape;
   if (s.impl === "subtypes-edit") return !s.subtypes;
   if (s.impl.endsWith("-edit")) return false; // zones-edit/visibility-edit/fill-scope-edit/sessions-edit/…, blocks-edit/fact-journal-edit/… (МФР) — без сопутствующего поля, своё монтирование безусловно
-  if (["db-transfer", "address-classifier"].includes(s.impl)) return false;
+  if (["db-transfer", "address-classifier", "element-catalog"].includes(s.impl)) return false;
   if (s.impl === "read") return !s.read;
   if (["db-status-view", "admin-guide-view"].includes(s.impl)) return false;
   return true;
