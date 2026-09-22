@@ -11,6 +11,7 @@ import { REPORT_RENDERERS, bindReport, colDataType } from "./reports.js";
 import { mountBlockWorkForm } from "./block-work-form.js";
 import { printHtml } from "./print.js";
 import { showInfoDialog } from "./dialogs.js";
+import { filterSnapshotFor, describeFilterSnapshot } from "./scheme-filter-snapshot.js";
 
 const RENDER_LIMIT = 500;
 
@@ -132,9 +133,12 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, "0")}`;
   };
-  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {}, acking: false, ackMsg: "" }));
+  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {}, acking: false, ackMsg: "", filterOn: false }));
 
   sections.forEach((sec, i) => (sec.controls || []).forEach((c) => { if (c.default === "today") st[i].params[c.param] = todayIso(); }));
+  // «Учитывать текущий фильтр схемы» (перенос V1: reportUseFilter) — у «Статуса комплектации» включена по
+  // умолчанию (см. schemeFilterDefault в screens.json), у остальных — выключена, пока человек сам не включит.
+  sections.forEach((sec, i) => { if (sec.schemeFilterDefault) st[i].filterOn = true; });
 
   // Табличные экраны (отчёты, справочники, реестры, журналы) занимают всю доступную ширину рабочей области —
   // карточка записи («record») и инструкция («guide») читаются лучше при ограниченной ширине формы, как обычные
@@ -183,6 +187,14 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     if (sec.derive === "activity-bounds") {
       body.at_from = boundUtc(body.date_from, false); body.at_to = boundUtc(body.date_to, true);
       body.tz_offset_minutes = new Date().getTimezoneOffset();
+    }
+    // «Учитывать текущий фильтр схемы» (перенос V1) — снимок ПЕРЕЧИТЫВАЕТСЯ здесь, при каждой сборке запроса,
+    // а не кэшируется в состоянии секции: устаревший или снятый в рабочем месте отбор не должен молча повиснуть
+    // в отчёте. Снимок для ДРУГОГО объекта не подходит (filterSnapshotFor сверяет objectId) — тогда фильтр просто
+    // не применяется, как если бы галочка была снята (см. предупреждение рядом с галочкой, paintReport).
+    if (sec.schemeFilter && s.filterOn) {
+      const snap = filterSnapshotFor(objectId);
+      if (snap) body.element_ids = snap.elementIds;
     }
     return body;
   }
@@ -340,6 +352,11 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
         const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? c.default ?? "";
         return `<label class="v2-wire-field"><span>${esc(c.label)}</span><select data-param="${esc(c.param)}">${opts.map((o) => `<option value="${esc(o[c.valueKey])}" ${String(o[c.valueKey]) === String(val) ? "selected" : ""}>${esc(o[c.labelKey])}</option>`).join("")}</select></label>`;
       }
+      // Кнопка сброса набора параметров в null (перенос «весь срок» у «Динамики», V1: dynRange = {from:null,to:null}) —
+      // общий механизм, а не завязанный на конкретный отчёт: любой отчёт с периодом может перечислить свои параметры в `resets`.
+      if (c.type === "button") {
+        return `<button type="button" class="v2-btn" data-reset="${esc((c.resets || []).join(","))}">${esc(c.label)}</button>`;
+      }
       const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? "";
       return `<label class="v2-wire-field"><span>${esc(c.label)}</span><input type="date" data-param="${esc(c.param)}" value="${esc(val)}"></label>`;
     }).join("");
@@ -350,9 +367,24 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const printBtn = sec.printable === false ? "" : `<button type="button" class="v2-btn" id="rd-print">Печать</button>`;
     const helpBtn = sec.helpKey ? `<button type="button" class="v2-btn" id="rd-help">Справка</button>` : "";
     const exportsBar = `<div class="v2-bar v2-export-bar">${printBtn}${(sec.exports || []).map((x) => `<button type="button" class="v2-btn" data-export="${x}">Выгрузить в ${x.toUpperCase()}</button>`).join("")}${helpBtn}<span class="v2-muted" id="rd-export-status" role="status" aria-live="polite"></span></div>`;
-    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${exportsBar}<div id="rd-report">${render(s.data, s.rs, ctx)}</div>`;
+    // «Учитывать текущий фильтр схемы» (перенос V1) — снимок отбора, ПОСЛЕДНИЙ раз сделанного в рабочем месте
+    // «Модель»/«Прораб» (см. scheme-filter-snapshot.js): не живая синхронизация (рабочее место — отдельный
+    // экран, его кадр со схемой закрывается при уходе), поэтому рядом ВСЕГДА написано, чей это отбор, на какой
+    // объект и когда — состояние не протекает скрыто, а снимок для чужого объекта не подставляется никогда.
+    let filterBar = "";
+    if (sec.schemeFilter) {
+      const desc = describeFilterSnapshot(objectId);
+      // Показанное состояние галочки — s.filterOn (память выбора на ЭТОМ объекте) И доступность снимка разом:
+      // отмеченная, но недоступная галочка читалась бы как «фильтр применён», а он не применяется НИКОГДА, если
+      // снимок относится к другому объекту (см. reportBody выше) — s.filterOn при этом не сбрасываем, чтобы
+      // выбор вернулся сам, если человек снова окажется на своём объекте.
+      filterBar = `<div class="v2-wire-row v2-report-controls"><label class="v2-wire-check"><input type="checkbox" id="rd-use-filter" ${s.filterOn && desc.available ? "checked" : ""} ${desc.available ? "" : "disabled"}> Учитывать текущий фильтр схемы</label>
+        <span class="v2-muted" id="rd-filter-note">${esc(desc.text)}</span></div>`;
+    }
+    bodyEl.innerHTML = `${controls ? `<div class="v2-wire-row v2-report-controls">${controls}</div>` : ""}${filterBar}${exportsBar}<div id="rd-report">${render(s.data, s.rs, ctx)}</div>`;
     bodyEl.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => exportReport(sec, s, b.dataset.export)));
     bodyEl.querySelector("#rd-print")?.addEventListener("click", () => printReportTable(screen.title));
+    bodyEl.querySelector("#rd-use-filter")?.addEventListener("change", (e) => { s.filterOn = e.target.checked; load(active); });
     bodyEl.querySelector("#rd-help")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget; btn.disabled = true;
       try {
@@ -407,6 +439,10 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
       if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
       s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
+      load(active);
+    }));
+    bodyEl.querySelectorAll("[data-reset]").forEach((btn) => btn.addEventListener("click", () => {
+      for (const p of btn.dataset.reset.split(",").filter(Boolean)) s.params[p] = null;
       load(active);
     }));
   }

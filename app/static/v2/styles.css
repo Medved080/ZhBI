@@ -1108,3 +1108,35 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-gantt-lvl-crane { height: 8px; } .v2-gantt-lvl-crane.v2-gantt-fc { top: 14px; }
 .v2-gantt-lvl-stance { height: 6px; }
 .v2-gantt-pct { position: absolute; top: 12px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+/* Графики отчётов «Динамика» и «Аналитическая справка» (перенос из V1: buildDynamicsChartSvg/anChartHtml, chart-hover.js) —
+   свой SVG, растянут по ширине панели; подсказка по точке — общий плавающий узел (не внутри области печати). */
+.v2-chart-wrap { margin: 10px 0; }
+.v2-chart-wrap svg { width: 100%; height: auto; display: block; }
+#v2-chart-tooltip {
+  position: fixed; z-index: 200; display: none; pointer-events: none;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / .18); padding: 6px 9px; font-size: 12px; line-height: 1.45; max-width: 260px;
+}
+#v2-chart-tooltip b { font-weight: 600; }
+@media print {
+  /* Печать графика (mfr2, charts): подсказка по точке — экранный элемент, в печать не должна попасть, даже
+     если курсор случайно остался над графиком в момент вызова печати. */
+  #v2-chart-tooltip { display: none !important; }
+}
+
+/* График СМР: ширина колонки названий диаграммы Ганта — перетаскиваемая мышью и клавиатурой (тот же ПРИЁМ, что у
+   разделителя левой навигации — pointer capture, своя реализация в schedule.js, charts, 2026-09-22).
+   .v2-gantt-rzhost — нулевой высоты, липкий по ОБЕИМ осям (top+left) к углу прокручиваемой области .v2-gantt-wrap:
+   не занимает места в потоке, а его ручка (абсолютный потомок) рисуется на границе колонки названий и «уезжает»
+   вниз на условные 4000px — тот же приём, что уже даёт вертикальную линию «сегодня» (.v2-gantt-today), только
+   привязан к УГЛУ вьюпорта прокрутки, а не к таймлайну, поэтому остаётся на месте и при горизонтальной прокрутке. */
+.v2-gantt-rzhost { position: sticky; top: 0; left: 0; height: 0; z-index: 4; }
+.v2-gantt-resize { position: absolute; left: var(--gname); top: 0; bottom: -4000px; width: 7px; margin-left: -3px; cursor: col-resize; touch-action: none; }
+.v2-gantt-resize::after { content: ""; position: absolute; inset: 0 2px; background: transparent; }
+.v2-gantt-resize:hover::after, .v2-gantt-resize:focus-visible::after, .v2-gantt-resize.dragging::after { background: var(--accent); opacity: .4; }
+.v2-gantt-resize:focus-visible { outline: none; }
+/* Полноэкранный режим диаграммы: свой оверлей на весь экран (не Fullscreen API — жест недоступен без клика
+   пользователя и капризен в проверках), Esc или кнопка «Свернуть» закрывают. */
+.v2-gantt-fs { position: fixed; inset: 0; z-index: 60; background: var(--bg); padding: 14px 18px; display: flex; flex-direction: column; overflow: hidden; }
+.v2-gantt-fs .v2-gantt-wrap { flex: 1; max-height: none; }
