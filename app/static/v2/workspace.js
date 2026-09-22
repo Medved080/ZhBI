@@ -18,6 +18,7 @@ import { createPickerPanels } from "./picker-panels.js";
 import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
 import { createElementOps } from "./element-ops.js";
 import { anyModalDirty, guardModals } from "./mfr-common.js";
+import { writeFilterSnapshot } from "./scheme-filter-snapshot.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -132,6 +133,18 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       onScene(m.state);
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
+      // Снимок «текущего фильтра схемы» для отчётов V2 (charts, scheme-filter-snapshot.js) — запрашивается ТОЛЬКО
+      // здесь, когда сам отбор поменялся (не на каждый тик состояния), и только там, где есть эта модель фильтра
+      // (у МФР и комплектовщика — другой, с другим смыслом; их «фильтр схемы» отчётами не используется). Пустые
+      // группы — кадр ещё грузит элементы (getFilters уходит сразу по "ready", раньше самой загрузки схемы) —
+      // такой снимок не запрашиваем: он лёг бы в sessionStorage нулями раньше настоящего и его перекрыл бы только
+      // следующий отклик sendFilters на СТОРОНЕ V1 (он приходит, но лишний пустой снимок между ними вводит в
+      // заблуждение, если отчёт откроют именно в эту секунду).
+      if (!mfr && !picker && m.model.groups.length) send("getFilteredIds");
+    } else if (m.evt === "filtered-ids" && Array.isArray(m.ids)) {
+      // sc.loaded — сцена ДЕЙСТВИТЕЛЬНО показывает данные (не «идёт загрузка»): тот же счётчик total, что видит
+      // человек на панели, а не промежуточный ноль.
+      if (sc?.loaded) writeFilterSnapshot({ objectId: curObject, ws, elementIds: m.ids, shown: sc.shown, total: sc.total, excluded: sc.excluded, capturedAt: Date.now() });
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
       pk = m.model;
       if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // сцена догрузилась и состав контрактов объекта изменился — перечитать, а не показывать «нет контрактов»
