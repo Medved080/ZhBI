@@ -2,8 +2,11 @@
 // цветовая гамма (`PATCH /users/{id}/ui-theme`), минимальный размер подписей на схеме (`PATCH /users/{id}/min-label-px`),
 // начальный ракурс 3D (`PATCH /users/{id}/view3d`). Настройки личные: на данные и на других пользователей не влияют, но
 // реально видны в рабочем месте «Модель: схема 2D/3D» V2 — та же сцена V1 в кадре читает те же поля пользователя.
-// Тени 3D, направление солнца и порядок пунктов меню «Действия» остаются в V1 (у левой навигации V2 нет самого этого меню
-// — переносить настройку его порядка было бы переносом настройки несуществующего элемента интерфейса).
+// Тени 3D и направление солнца — настройка ЭТОГО КОМПЬЮТЕРА, как в V1: те же ключи localStorage (`zhbi_shadows_3d`,
+// `zhbi_sun_3d_mode`), их читает сцена V1 при загрузке — и в текущем интерфейсе, и в кадре рабочего места V2 (тот же origin).
+// Меню «Действия» V1 (вид меню и личный порядок пунктов, menu_prefs) не переносится — решение пользователя: его аналог в V2 —
+// левая навигация со своим порядком и избранным (shell-nav.js, shell-prefs.js). Внешние 3D-модели (благоустройство, фасады)
+// включаются на вкладке «Вид» рабочего места — там, где открыта сцена (в V1 эти флажки тоже действуют только до перезагрузки).
 // Барьер: одна запись за раз; успех — после ответа сервера и повторного чтения `/me` (показывается то, что хранит сервер);
 // границы значений (4–40 px; подъём камеры 1–89°, поворот замыкается по кругу) проверяет сервер, здесь — только числовой ввод.
 import { ApiError } from "./api.js";
@@ -11,6 +14,9 @@ import { esc, linkList } from "./screen-view.js";
 import { STATUS_LABEL } from "./registry.js";
 
 const MIN_LABEL_PX_MIN = 4, MIN_LABEL_PX_MAX = 40;
+const SHADOWS_KEY = "zhbi_shadows_3d", SUN_KEY = "zhbi_sun_3d_mode";   // те же ключи, что у V1 (app.js: SHADOWS_3D_KEY, SUN_3D_MODE_KEY)
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } };
 const VIEW3D_PITCH_MIN = 1, VIEW3D_PITCH_MAX = 89;
 
 const SKINS = [
@@ -34,7 +40,7 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         <span class="v2-chip v2-chip-warn" title="Статус реализации в реестре охвата">${esc(STATUS_LABEL[screen.status] || "")}</span></div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>Личные настройки.</strong> Сохраняются за вами и переезжают на другой компьютер; на данные и на других пользователей не влияют. Тени 3D, направление солнца и порядок пунктов меню «Действия» — в текущем интерфейсе (у левой навигации нового интерфейса нет самого этого меню).
+      <div class="v2-callout" role="note"><strong>Личные настройки.</strong> Гамма, порог подписей и ракурс 3D сохраняются за вами и переезжают на другой компьютер; тени и солнце в 3D — настройка этого компьютера (браузера). На данные и на других пользователей не влияют. Порядок и избранное разделов настраиваются в самой левой навигации (вместо меню «Действия» текущего интерфейса); показ внешних 3D-моделей — на вкладке «Вид» рабочего места.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <h3 class="v2-report-h">Цветовая гамма</h3>
       <div id="ap-body" class="v2-cards" role="group" aria-label="Цветовая гамма"></div>
@@ -54,6 +60,15 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
         <button type="button" class="v2-btn v2-primary" id="ap-view3d-save">Сохранить ракурс 3D</button>
       </div>
       <p id="ap-view-status" class="v2-muted" role="status" aria-live="polite"></p>
+      <h3 class="v2-report-h">Тени и солнце в 3D</h3>
+      <label class="v2-role-check"><input type="checkbox" id="ap-shadows" ${lsGet(SHADOWS_KEY) === "1" ? "checked" : ""}><span>Солнце и тени — силуэт здания на земле и затенение элементов друг другом</span></label>
+      <p class="v2-muted">В режиме «3D лёгкий» тени не включаются: он рассчитан на слабые компьютеры и удалённый рабочий стол.</p>
+      <fieldset style="border:0;padding:0;margin:8px 0 0"><legend class="v2-muted">Направление солнца</legend>
+        <label class="v2-role-check"><input type="radio" name="ap-sun" value="model" ${lsGet(SUN_KEY) === "camera" ? "" : "checked"}><span>Относительно модели — солнце стоит над стройкой, при вращении тень остаётся на своей стороне здания</span></label>
+        <label class="v2-role-check"><input type="radio" name="ap-sun" value="camera" ${lsGet(SUN_KEY) === "camera" ? "checked" : ""}><span>Относительно камеры — освещённая сторона всегда обращена к смотрящему (с тенями дороже: карта теней пересчитывается при вращении)</span></label>
+      </fieldset>
+      <p class="v2-muted">Настройка этого компьютера: хранится в браузере и не меняется у других пользователей. Применяется при открытии схемы рабочего места (и в текущем интерфейсе на этом компьютере). По умолчанию — без теней, солнце относительно модели.</p>
+      <p id="ap-light-status" class="v2-muted" role="status" aria-live="polite"></p>
     </div>`;
   const $ = (s) => el.querySelector(s);
   const setStatus = (t) => { const n = $("#ap-status"); if (n) n.textContent = t; };
@@ -132,6 +147,17 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
     } catch (e) { setViewStatus(known ? "Сохранено, но перечитать не удалось — обновите страницу." : `Неизвестно, сохранено ли (${errText(e)}).`); }
     finally { viewBusy = false; if (!dead) paint(); }
   }
+  // Тени и солнце: записываются сразу при переключении (как в V1), без запроса к серверу.
+  el.addEventListener("change", (e) => {
+    const n = $("#ap-light-status");
+    if (e.target.id === "ap-shadows") {
+      const ok = lsSet(SHADOWS_KEY, e.target.checked ? "1" : "0");
+      if (n) n.textContent = ok ? (e.target.checked ? "Тени включены на этом компьютере." : "Тени выключены на этом компьютере.") : "Браузер не дал сохранить настройку (хранилище недоступно).";
+    } else if (e.target.name === "ap-sun" && e.target.checked) {
+      const ok = lsSet(SUN_KEY, e.target.value === "camera" ? "camera" : "model");
+      if (n) n.textContent = ok ? `Солнце — относительно ${e.target.value === "camera" ? "камеры" : "модели"}.` : "Браузер не дал сохранить настройку (хранилище недоступно).";
+    }
+  });
   el.addEventListener("click", (e) => {
     const b = e.target.closest("[data-skin]"); if (b) { choose(b.dataset.skin); return; }
     if (e.target.id === "ap-minlabel-save") saveMinLabel();

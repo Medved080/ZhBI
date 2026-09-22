@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -119,8 +119,11 @@
           planned_delivery_date: e.planned_delivery_date ?? null } : null;
       }).filter(Boolean) : null,
       excluded: excludedCount(),
+      // Внешние 3D-модели объекта в сцене ЖБИ (флажки окна V1 «Внешний вид»: благоустройство, фасады из FBX)
+      external: { models: extChecked("zhbi-show-external-models"), facades: extChecked("zhbi-show-external-facades") },
     };
   }
+  function extChecked(id) { const c = document.getElementById(id); return c ? c.checked : true; }
 
   let stateTimer = null;
   function scheduleState() {
@@ -568,6 +571,15 @@
       state.zoneVisibility[a.category] = a.on;
       renderZones();
       if (typeof apply3DZoneVisibility === "function") apply3DZoneVisibility();
+      scheduleState();
+    },
+    // Показ внешних 3D-моделей объекта (благоустройство / фасады из FBX) — те же флажки документа V1 и их обработчики
+    // (как в V1: действует на эту загрузку схемы, не сохраняется).
+    setExternalVisible(a) {
+      if (!["models", "facades"].includes(a.kind) || typeof a.on !== "boolean") throw new Error("параметры внешней модели");
+      const c = document.getElementById(a.kind === "models" ? "zhbi-show-external-models" : "zhbi-show-external-facades");
+      if (!c) throw new Error("нет переключателя внешней модели");
+      if (c.checked !== a.on) { c.checked = a.on; c.dispatchEvent(new Event("change")); }
       scheduleState();
     },
     // Поиск по марке/адресу среди ПОКАЗАННЫХ на схеме элементов (те, что убрал фильтр, не ищутся); ответ — событие search-result
