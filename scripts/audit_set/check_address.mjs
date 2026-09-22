@@ -27,8 +27,12 @@ await b.waitFor("!!document.querySelector('[data-region]')", 20000);
 // «Загружать дома в базу» — снять; «С домами» остаётся включённым
 await click(b, "#ac-load-houses");
 ok("флаги независимы: «С домами» включён, «Загружать дома» снят", await b.eval("document.querySelector('#ac-houses').checked && !document.querySelector('#ac-load-houses').checked"));
-const r = await b.rect("[data-region]"); await b.click(r.cx, r.cy); await b.sleep(200);
+await b.eval("document.querySelector('[data-region]').scrollIntoView({block:'center'})"); await b.sleep(150);
+// регион, уже загруженный в addr.db прежним прогоном, приходит отмеченным — щёлкаем, только если отметки нет
+if (!(await b.eval("document.querySelector('[data-region]').checked"))) { const r = await b.rect("[data-region]"); await b.click(r.cx, r.cy); await b.sleep(200); }
+console.log("   регион отмечен:", await b.eval("document.querySelector('[data-region]').checked"), "кнопка:", await b.eval("document.querySelector('#ac-load').disabled"));
 const n0 = b.requests.length;
+await b.eval("document.querySelector('#ac-load').scrollIntoView({block:'center'})"); await b.sleep(150);
 const lb = await b.rect("#ac-load"); await b.click(lb.cx, lb.cy, { count: 2 });
 let done = false;
 for (let i = 0; i < 40 && !done; i++) { await b.sleep(400); done = /Готово/.test(await b.eval("document.querySelector('#ac-status')?.innerText||''")); }
