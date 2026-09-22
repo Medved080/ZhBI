@@ -23,6 +23,7 @@ FileResponse подходит как есть: Starlette умеет Range.
 import os
 import re
 import sqlite3
+import struct
 from typing import Optional
 
 from pathlib import Path
@@ -129,6 +130,29 @@ def _проверить_подложку(путь: str) -> Optional[str]:
     return None
 
 
+def _заголовок_подложки(путь: str) -> Optional[dict]:
+    """Границы и предельный zoom файла из заголовка PMTiles v3 — 127 байт,
+    без сторонних библиотек. Bbox нужен браузеру, чтобы понять, какой из
+    нескольких файлов подложки самый широкий (см. `стильКарты()` в
+    `map.js`) — тот и красит землю/воду, чтобы два перекрывающихся файла не
+    заливали одну территорию дважды впустую (живой отчёт 2026-09-22,
+    разобрано на паре ru+msk; главный фикс дыр в подложке — не здесь, а
+    цвет фона в `map.js`, см. комментарий у слоя «фон»). max_zoom пока не
+    используется, оставлен для будущего подбора детальности."""
+    try:
+        with open(путь, "rb") as f:
+            h = f.read(127)
+    except OSError:
+        return None
+    if len(h) < 127:
+        return None
+    запад, юг, восток, север = struct.unpack_from("<iiii", h, 102)
+    return {
+        "bbox": (запад / 1e7, юг / 1e7, восток / 1e7, север / 1e7),
+        "max_zoom": h[101],
+    }
+
+
 def basemaps() -> list:
     """Файлы подложки, лежащие на сервере. Их может быть несколько: обзорный
     на всю страну и детальные вырезки по регионам присутствия."""
@@ -144,8 +168,11 @@ def basemaps() -> list:
         if not os.path.isfile(путь):
             continue
         беда = _проверить_подложку(путь)
+        заголовок = None if беда else _заголовок_подложки(путь)
         out.append({"name": имя, "size": os.path.getsize(путь),
-                    "url": "/map/tiles/" + имя, "problem": беда})
+                    "url": "/map/tiles/" + имя, "problem": беда,
+                    "bbox": заголовок["bbox"] if заголовок else None,
+                    "max_zoom": заголовок["max_zoom"] if заголовок else None})
     return out
 
 
