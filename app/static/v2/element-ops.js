@@ -872,10 +872,11 @@ export function createElementOps(ctx) {
     const objectId = s.objectId ?? getObjectId();
     const allOrder = sc()?.statusOrder || [];
     const st = { status: "", rows: null, busy: false, error: "", prev: null, prevHtml: "" };
+    const activeRows = () => (st.rows || []).filter((r) => r.curStatus !== st.status || (r.chosen && r.contractValue !== r.expectedContract));
     const res = await openModal({ title: `Смена статуса по строкам (${all.length})`, width: 760, mount(body, m) {
       function itemsPayload() {
         const toPlanned = st.status === "planned";
-        return st.rows.map((r) => ({ element_id: r.id, expected_status: r.curStatus, expected_contract_id: r.expectedContract, contract_id: toPlanned ? null : r.contractValue }));
+        return activeRows().map((r) => ({ element_id: r.id, expected_status: r.curStatus, expected_contract_id: r.expectedContract, contract_id: toPlanned ? null : r.contractValue }));
       }
       // «Распределение по марке» (перенос V1: renderBulkFillMarks/distributeBulkMark): один контракт на все строки позиции (тип + марка),
       // у которых он ещё не выбран, — не больше доступного по позиции контракта за вычетом уже расписанного в этой пачке.
@@ -912,11 +913,12 @@ export function createElementOps(ctx) {
       function draw() {
         const toPlanned = st.status === "planned";
         const rows = st.rows || [];
-        const same = st.status ? all.length - rows.length : 0;
-        const unresolved = st.status && !toPlanned && rows.some((r) => !r.chosen);
+        const changed = st.status ? activeRows() : [];
+        const same = st.status ? all.length - changed.length : 0;
+        const unresolved = st.status && !toPlanned && changed.some((r) => !r.chosen);
         body.innerHTML = `<label class="ws-fld">Новый статус <select id="eor-status" ${st.busy ? "disabled" : ""}>
             <option value="">— выберите —</option>${allOrder.map((k) => `<option value="${esc(k)}" ${st.status === k ? "selected" : ""}>${esc(statusLabel(k))}</option>`).join("")}</select></label>
-          ${st.status ? `<p class="v2-muted">Изменится: ${nf(rows.length)} из ${nf(all.length)}${same ? `; уже «${esc(statusLabel(st.status))}»: ${nf(same)} (не изменятся)` : ""}.</p>` : ""}
+          ${st.status ? `<p class="v2-muted">Изменится: ${nf(changed.length)} из ${nf(all.length)}${same ? `; без изменений: ${nf(same)}` : ""}. Изделию с прежним статусом можно сменить контракт без смены статуса.</p>` : ""}
           ${toPlanned ? `<p class="v2-muted ws-fnote">Возврат в «Запланирован» СНИМАЕТ контракт у всех строк — выбор контракта недоступен.</p>` : ""}
           ${st.status && !toPlanned ? byMarkHtml(rows) : ""}
           ${st.status ? `<div class="v2-read-table eo-clist" style="max-height:40vh"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Тип</th><th>Было</th>${toPlanned ? "" : "<th>Контракт после</th>"}</tr></thead><tbody>
@@ -927,11 +929,11 @@ export function createElementOps(ctx) {
           ${st.prevHtml || ""}
           ${st.error ? `<p class="ws-err" role="alert">${esc(st.error)}</p>` : ""}
           <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-cancel>Отмена</button>
-            <button type="button" class="v2-btn v2-primary" data-eor="preview" ${st.busy || !st.status || !rows.length || unresolved ? "disabled" : ""}>${st.busy ? "…" : st.prev ? "Обновить предпросмотр" : "Проверить последствия"}</button>
+            <button type="button" class="v2-btn v2-primary" data-eor="preview" ${st.busy || !st.status || !changed.length || unresolved ? "disabled" : ""}>${st.busy ? "…" : st.prev ? "Обновить предпросмотр" : "Проверить последствия"}</button>
             ${st.prev ? `<button type="button" class="v2-btn v2-primary" data-eor="apply" ${st.busy ? "disabled" : ""}>Применить</button>` : ""}</div>`;
         body.querySelector("#eor-status")?.addEventListener("change", (ev) => {
           st.status = ev.target.value; st.prev = null; st.prevHtml = ""; st.error = "";
-          st.rows = st.status ? all.filter((i) => i.current_status !== st.status).map((i) => ({ id: i.id, mark: i.mark, type: i.element_type, curStatus: i.current_status,
+          st.rows = st.status ? all.map((i) => ({ id: i.id, mark: i.mark, type: i.element_type, curStatus: i.current_status,
             expectedContract: i.contract_id ?? null, contractValue: i.contract_id ?? null, chosen: i.contract_id != null })) : null;
           draw();
         });
@@ -963,7 +965,7 @@ export function createElementOps(ctx) {
       async function doApply() {
         if (!st.prev) return;
         const c = st.prev.consequences, lines = rowsConsequenceItems(c, statusLabel(st.status));
-        const msg = [`Изменить статус у ${nf(st.rows.length)} изд. на «${statusLabel(st.status)}»?`, "", ...(lines.length ? lines.map((l) => "• " + l.text) : ["• Контракты — как показано построчно."]), "",
+        const msg = [`Применить статус «${statusLabel(st.status)}» и выбранные контракты у ${nf(activeRows().length)} изд.?`, "", ...(lines.length ? lines.map((l) => "• " + l.text) : ["• Контракты — как показано построчно."]), "",
           "Пачка применяется целиком либо не применяется."].join("\n");
         const ok = await showConfirmDialog(msg, { confirmLabel: "Применить", multiline: true, danger: c.release_contracts > 0 });
         if (!ok) return;
@@ -974,7 +976,7 @@ export function createElementOps(ctx) {
             expect: { release_contracts: c.release_contracts, replace_contracts: c.replace_contracts, without_contract: c.without_contract } });
           m.close({ banner: { level: !resp.already_applied && resp.applied.length !== items.length ? "warn" : "ok",
             text: resp.already_applied ? `Уже выполнено: ${nf(resp.already.length)} изд. — повторная запись не выполнялась.`
-              : `Статус «${statusLabel(status)}» установлен у ${nf(resp.applied.length)} изд. (по ответу сервера).` },
+              : `Изменения статуса и контрактов применены к ${nf(resp.applied.length)} изд. (по ответу сервера).` },
             applied: [...(resp.applied || []), ...(resp.already || [])] });
         } catch (err) {
           if (unknownOutcome(err)) {

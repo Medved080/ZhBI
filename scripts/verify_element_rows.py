@@ -11,7 +11,8 @@
  (без «Запланирован») · R4 явная замена контракта · R5 назначение новым (без контракта → контракт) · R6 «Запланирован» снимает контракт у
  всех, contract_id в теле запрещён · R7 контракт архивный/чужого объекта — отказ без записи · R8 страж остатка — 409, ОТКАТ ВСЕЙ пачки,
  журнал не подтверждает несостоявшееся · R9 устаревшее состояние строки — 409 · R10 недопустимая пачка (нет ключа contract_id, дубли,
- пустая, лимит) · R11 права (403 view, 401 без входа) · R12 повтор и частичный повтор · R13 конкуренция за один остаток.
+ пустая, лимит) · R11 права (403 view, 401 без входа) · R12 повтор и частичный повтор · R13 конкуренция за один остаток ·
+ R14 смена контракта при прежнем статусе, предпросмотр/запись/повтор, строка без изменений отклоняется.
 
 Запуск: .venv/bin/python scripts/verify_element_rows.py <копия_БД>
 """
@@ -393,6 +394,38 @@ def main_run():
     ta.start(); tb.start(); ta.join(); tb.join()
     ok = sum(1 for r in out if r[0] == 200)
     check("ровно один из двух прошёл, второй — 409 contract_guard", ok == 1 and any(r[0] == 409 for r in out), f"{out}")
+
+    print("R14 контракт меняется при прежнем статусе (как в V1), без ложного изменения остальных строк")
+    # В копии есть исторические привязки БЕЗ позиции под марку: снять их можно, назначить обратно страж не даст.
+    # Для проверки обратного назначения берём только контракт с действительной позицией этого изделия.
+    eid = pick("current_status = 'contracting' AND contract_id IS NOT NULL AND EXISTS ("
+               "SELECT 1 FROM contract_lines cl WHERE cl.contract_id = elements.contract_id "
+               "AND cl.element_type = elements.element_type AND cl.mark IS elements.mark)", 1)[0]
+    before = el(eid); h0 = hist(eid)
+    unchanged = r_items([eid], "contracting", {eid: before["contract_id"]})
+    snap = H.checksum()
+    st, js = api("POST", "/element-ops/status-rows", rb("preview", "contracting", unchanged))
+    check("строка без изменения статуса И контракта — 409, ничего не записано", st == 409 and H.checksum() == snap, f"{st} {js}")
+    items_ = r_items([eid], "contracting", {eid: None})
+    mark_events()
+    st, js = api("POST", "/element-ops/status-rows", rb("preview", "contracting", items_))
+    cons = js.get("consequences", {})
+    check("предпросмотр: контракт снимется, статус останется", st == 200 and cons.get("release_contracts") == 1 and el(eid) == before and hist(eid) == h0, f"{st} {js}")
+    st, js = api("POST", "/element-ops/status-rows", rb("apply", "contracting", items_, expect=cons))
+    check("запись: контракт снят, статус прежний, история одна", st == 200 and el(eid)["contract_id"] is None and el(eid)["current_status"] == "contracting" and hist(eid) == h0 + 1, f"{st} {js}")
+    check("журнал: ровно одно событие", len(events("status_change", {eid})) == 1)
+    st, js = api("POST", "/element-ops/status-rows", rb("apply", "contracting", items_, expect=cons))
+    check("повтор: already_applied, история не задвоена", st == 200 and js.get("already_applied") and hist(eid) == h0 + 1, f"{st} {js}")
+    back = r_items([eid], "contracting", {eid: before["contract_id"]})
+    st, js = api("POST", "/element-ops/status-rows", rb("preview", "contracting", back))
+    cons_back = js.get("consequences", {})
+    check("предпросмотр обратного назначения при прежнем статусе", st == 200 and cons_back.get("assigned") == 1, f"{st} {js}")
+    st, js = api("POST", "/element-ops/status-rows", rb("apply", "contracting", back, expect=cons_back))
+    check("обратное назначение: прежний статус, контракт и история +1", st == 200 and el(eid)["contract_id"] == before["contract_id"]
+          and el(eid)["current_status"] == "contracting" and hist(eid) == h0 + 2, f"{st} {js}")
+    snap = H.checksum()
+    st, js = api("POST", "/element-ops/status-rows", rb("apply", "contracting", back, expect=cons_back))
+    check("повтор обратного назначения не создаёт историю", st == 200 and js.get("already_applied") and hist(eid) == h0 + 2 and H.checksum() == snap, f"{st} {js}")
 
     print("совместимость: прежний V1-маршрут /elements/bulk-status по-прежнему работает (не трогали)")
     ids = pick("current_status = 'contracting' AND contract_id IS NOT NULL", 1)

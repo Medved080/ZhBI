@@ -114,6 +114,7 @@ export function statusRowsBodyProblem(body) {
     if (it.expected_contract_id !== null && !posInt(it.expected_contract_id)) return "ожидаемый контракт";
     if (it.contract_id !== null && !posInt(it.contract_id)) return "контракт строки";
     if (body.status === "planned" && it.contract_id !== null) return "у «Запланирован» контракта не бывает";
+    if (body.status === it.expected_status && it.contract_id === it.expected_contract_id) return "у строки не меняются ни статус, ни контракт";
     if (seen.has(it.element_id)) return "изделие повторяется";
     seen.add(it.element_id);
   }

@@ -301,6 +301,31 @@ if (want("status")) await section("S. Смена статуса с контра�
   await b.sleep(400);
   ok("контракт снят именно у той строки, где выбрано «без контракта»", el(T.st2[0].id).c === null && el(T.st2[0].id).st === "shipped");
   await clearSel(b);
+
+  // V1 допускал выбор прежнего статуса с новой привязкой. V2 должен менять только явно изменённую строку, не создавать историю соседям.
+  const samePair = contr.slice(40, 42);
+  await pickMany(b, samePair);
+  const sameBefore = samePair.map((h) => el(h.id));
+  const histN = (id) => one(`select count(*) n from status_history where element_id=${id}`).n;
+  const histBefore = samePair.map((h) => histN(h.id));
+  await clickBtn(b, "#ws-panel-body", "По строкам: статус со своим контрактом");
+  await b.eval(`(()=>{const s=document.querySelector('#eor-status');s.value='contracting';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await b.sleep(250);
+  ok("при прежнем статусе обе строки видны, пока изменений нет", (await dialogText(b)).includes("Изменится: 0 из 2") && (await b.eval(`document.querySelectorAll('[data-eor-c]').length`)) === 2);
+  await b.eval(`document.querySelectorAll('[data-eor-c]')[0].click()`);
+  await b.waitFor(`!!document.querySelector('.eo-crow[data-c="none"]')`, 8000);
+  await b.eval(`document.querySelector('.eo-crow[data-c="none"]').click()`);
+  await b.sleep(250);
+  ok("предпросмотр активен для одной изменённой строки", (await dialogText(b)).includes("Изменится: 1 из 2"));
+  await clickBtn(b, ".v2-dialog", "Проверить последствия");
+  await b.waitFor(`document.querySelector('.v2-dialog')?.innerText.includes('Предпросмотр')`, 10000);
+  ok("предпросмотр сообщает о снятии контракта без смены статуса", /СНЯТ/.test(await dialogText(b)) && samePair.every((h, i) => el(h.id).c === sameBefore[i].c));
+  await clickBtn(b, ".v2-dialog", "Применить");
+  await clickConfirm(b);
+  await b.waitFor(`!document.querySelector('.eo-dialog')`, 15000);
+  ok("прежний статус сохранён, контракт сменился только у первой строки", el(samePair[0].id).st === "contracting" && el(samePair[0].id).c === null && el(samePair[1].id).c === sameBefore[1].c);
+  ok("история +1 только у изменённой строки", histN(samePair[0].id) === histBefore[0] + 1 && histN(samePair[1].id) === histBefore[1]);
+  await clearSel(b);
   await b.close();
 
   // права: user4 (view) не видит кнопку построчного режима (нет статуса:write)

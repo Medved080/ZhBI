@@ -17,7 +17,7 @@ V2 эти маршруты не использует. Ниже — те же в�
   * права проверяются на ВСЮ пачку разом; события журнала уходят в очередь только после commit (`activity.defer_*`).
 
   * `POST /element-ops/planned-date-rows` — у каждой строки своя новая плановая дата (`planned_date`) или очистка (`null`) со сверкой прежней.
-  * `POST /element-ops/status-rows` — смена статуса пачки, у каждой строки явно указан контракт ПОСЛЕ операции (`contract_id`: число — назначить или
+  * `POST /element-ops/status-rows` — смена статуса пачки или контракта при прежнем статусе, у каждой строки явно указан контракт ПОСЛЕ операции (`contract_id`: число — назначить или
     заменить, `null` — «без контракта», то же значение, что было, — оставить). Контракт меняется только там, где строка это ЯВНО просит; снятие и
     замена контракта показываются в последствиях и подтверждаются числом. Страж остатка `contract_guard` — тот же, что в V1, под той же блокировкой.
 Схема БД не меняется. Распределение изделий по позиции контракта (`POST /contracts/{id}/allocations`) эти маршруты не заменяют и не дублируют.
@@ -232,7 +232,7 @@ def status_rows(body: StatusRowsIn, user=Depends(get_current_user)):
             base = {"element_id": e["id"], "current_status": e["current_status"], "contract_id": e["contract_id"]}
             if e["object_id"] != body.object_id:
                 conflicts.append({**base, "reason": "other_object"})
-            elif item.expected_status == target:
+            elif item.expected_status == target and item.expected_contract_id == after_contract(item):
                 conflicts.append({**base, "reason": "same_status"})
             elif e["current_status"] == item.expected_status and e["contract_id"] == item.expected_contract_id:
                 todo.append(item)
