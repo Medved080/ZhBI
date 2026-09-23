@@ -30,7 +30,9 @@ export function setImpersonationToken(token) {
     else sessionStorage.removeItem(IMPERSONATION_KEY);
   } catch (e) { /* приватный режим — тогда и сам режим не переживёт эту вкладку */ }
 }
-(() => {
+// В браузере перехватываем все запросы; при импорте модуля в Node для
+// самопроверок window отсутствует, а fetch подменяет сам тестовый стенд.
+if (typeof window !== "undefined") (() => {
   const исходный = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const token = getImpersonationToken();

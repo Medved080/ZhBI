@@ -36,7 +36,7 @@ export async function launch({ width = 1920, height = 1080, dpr = 1, args = [] }
     else if (m.method === "Runtime.exceptionThrown") exceptions.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text);
     else if (m.method === "Network.requestWillBeSent") requests.push({ id: m.params.requestId, method: m.params.request.method, url: m.params.request.url, body: m.params.request.postData });
     else if (m.method === "Network.responseReceived") { const r = requests.find((x) => x.id === m.params.requestId); if (r) r.status = m.params.response.status; }
-    else if (m.method === "Network.loadingFailed") { const r = requests.find((x) => x.id === m.params.requestId); if (r) r.status = 0; }
+    else if (m.method === "Network.loadingFailed") { const r = requests.find((x) => x.id === m.params.requestId); if (r) { r.status = 0; r.error = m.params.errorText; } }
   };
   // Таймаут на отдельный вызов DevTools: изредка (природа не выяснена — вероятно, потеря ответа на стороне headless-Chrome при
   // навигации мимо готового execution-контекста) конкретный Runtime.evaluate/... не получает ответа НИКОГДА — без этого предела
