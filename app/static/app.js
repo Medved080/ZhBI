@@ -30009,6 +30009,7 @@ document.getElementById("revit-review-apply").addEventListener("click", async ()
 const revitPlanState = { objectId: null, filters: null, data: null, view: null,
                          levels: new Set(), sections: new Set(),
                          parts: new Set(), categories: new Set(), blocksData: [],
+                         elementLayerTouchedObjectId: null,
                          selectedBlocks: new Set() };
 
 const REVIT_GROUPS = ["levels", "sections", "parts", "categories"];
@@ -30051,6 +30052,7 @@ function darken(hex, k = 0.55) {
 async function openMfrWorkspace() {
   if (revitPlanState.objectId === state.objectId && revitPlanState.data) return;
   revitPlanState.objectId = state.objectId;
+  revitPlanState.elementLayerTouchedObjectId = null;
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент или блок плана.";
   document.getElementById("element-card-block").style.display = "";
@@ -30382,6 +30384,18 @@ async function loadRevitPlanElements() {
   if (!data.elements.length && revitPlanState.blocksData.some((b) => b.ok)) {
     const blocksToggle = document.getElementById("mfr-show-blocks");
     if (blocksToggle && !blocksToggle.checked) blocksToggle.checked = true;
+  }
+  // При обычной загрузке по умолчанию виден только слой «Блоки». У моделей
+  // без геометрии блоков (например, объект 3 в обезличенной базе) это давало
+  // пустую схему при сотнях показанных элементов. Включаем единственный
+  // содержательный слой, но не перебиваем ручной выбор оператора на объекте.
+  if (data.elements.length && !revitPlanState.blocksData.some((b) => b.ok)
+      && s.elementLayerTouchedObjectId !== s.objectId) {
+    const elementsToggle = document.getElementById("mfr-show-elements");
+    if (elementsToggle && !elementsToggle.checked) {
+      elementsToggle.checked = true;
+      syncMfrElementCategoriesDisabled();
+    }
   }
 
   // Сетка осей — одна на весь объект, отбором этажа/секции не сужается
@@ -32626,7 +32640,10 @@ for (const id of ["mfr-show-elements", "mfr-show-blocks", "mfr-show-axes", "mfr-
   // `mfrShowPlans`) — иначе исключение здесь обрывало бы ВСЮ дальнейшую
   // инициализацию скрипта.
   document.getElementById(id)?.addEventListener("change", () => {
-    if (id === "mfr-show-elements") syncMfrElementCategoriesDisabled();
+    if (id === "mfr-show-elements") {
+      revitPlanState.elementLayerTouchedObjectId = revitPlanState.objectId;
+      syncMfrElementCategoriesDisabled();
+    }
     if (!revitPlanState.data) return;
     drawRevitPlan(revitPlanState.data);
     mfr3d.key = null;
