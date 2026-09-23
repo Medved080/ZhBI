@@ -171,11 +171,18 @@ async function accept() {
     await openV2Map(b);
     const cfg = await b.eval(`fetch('/map/config').then(r=>r.json())`);
     ok(cfg.online && cfg.basemaps.length >= 2, "стенд: включена карта из интернета и лежат оба файла", `online=${cfg.online}, файлов ${cfg.basemaps.length}`);
-    ok((await pressed(b)) === "online", "по умолчанию — режим по настройке администратора («Из интернета»)", await pressed(b));
+    ok((await pressed(b)) === "offline", "по умолчанию — «С сервера», если есть локальные файлы", await pressed(b));
+    ok((await sourcesKind(b)) === "vector,vector", "по умолчанию в стиле только локальные векторные файлы", await sourcesKind(b));
+    await shot(b, "a01-v2-offline-default");
+
+    const nBeforeOnline = b.requests.length;
+    await b.clickSel('.zhbi-basemap-ctrl button[data-basemap="online"]');
+    await settle(b);
+    ok((await pressed(b)) === "online", "явный выбор «Из интернета» переключил режим", await pressed(b));
     ok((await sourcesKind(b)) === "raster", "в режиме «Из интернета» в стиле только растр, векторных файлов нет", await sourcesKind(b));
-    const tilesBefore = b.requests.filter((r) => /\/map\/tiles\//.test(r.url)).length;
-    ok(tilesBefore === 0, "в режиме «Из интернета» к файлам подложки не обращались", tilesBefore);
-    await shot(b, "a01-v2-online");
+    ok(b.requests.slice(nBeforeOnline).filter((r) => /\/map\/tiles\//.test(r.url)).length === 0,
+      "в режиме «Из интернета» к файлам подложки не обращались");
+    await shot(b, "a02-v2-online");
 
     const nReq = b.requests.length;
     await b.clickSel('.zhbi-basemap-ctrl button[data-basemap="offline"]');   // настоящий щелчок
@@ -188,7 +195,7 @@ async function accept() {
     ok(b.requests.slice(nReq).filter((r) => /openstreetmap/.test(r.url)).length === 0, "после переключения в OSM не ходили");
     ok((await b.eval(`localStorage.getItem('zhbi.map.basemap')`)) === "offline", "выбор запомнен в localStorage");
     ok(!(await warnShown(b)), "при работающем интернете пометки «нет связи» нет");
-    await shot(b, "a02-v2-offline");
+    await shot(b, "a03-v2-offline");
 
     console.log("Колесо и перетаскивание через южную границу детального файла (Тула)");
     const st = await mapRect(b, "#mp-stage");
