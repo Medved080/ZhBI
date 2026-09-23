@@ -58,6 +58,28 @@ try {
   await setObject(b, 2);
   await openScreen(b, "bulk-edit", `document.querySelector('#bk-scope')`, 30000);
   check("снимок схемы чужого объекта недоступен", await b.eval(`document.querySelector('input[name=bk-scope][value=filter]')?.disabled === true`));
+
+  await setObject(b, 1);
+  await openScreen(b, "export-xls", `document.querySelector('#ex-use-filter')`, 30000);
+  check("экспорт XLS предлагает снимок схемы своего объекта", await b.eval(`document.querySelector('#ex-use-filter')?.disabled === false`));
+  await b.clickSel("#ex-use-filter");
+  const e0 = b.requests.length;
+  await b.clickSel("#ex-go");
+  await b.waitFor(`document.querySelector('#ex-status')?.textContent.includes('сформирован')`, 30000);
+  const exportRequest = b.requests.slice(e0).find((r) => r.url.endsWith('/export.xlsx'));
+  const exportBody = exportRequest?.body ? JSON.parse(exportRequest.body) : null;
+  check("XLS выгружен по ID снимка и чертежу объекта", exportRequest?.status === 200 && JSON.stringify(exportBody?.element_ids) === JSON.stringify(ids) && !!exportBody?.source_file, JSON.stringify({ status: exportRequest?.status, body: exportBody }));
+  await setObject(b, 2);
+  await openScreen(b, "export-xls", `document.querySelector('#ex-use-filter')`, 30000);
+  check("XLS не подмешивает снимок другого объекта", await b.eval(`document.querySelector('#ex-use-filter')?.disabled === true`));
+  await setObject(b, 1);
+  await b.eval(`sessionStorage.setItem('v2.schemeFilterSnapshot',JSON.stringify({objectId:1,ws:'model',elementIds:[],shown:0,total:9422,excluded:9422,capturedAt:Date.now()}))`);
+  await openScreen(b, "export-xls", `document.querySelector('#ex-use-filter')`, 30000);
+  await b.clickSel("#ex-use-filter");
+  const e1 = b.requests.length;
+  await b.clickSel("#ex-go");
+  await b.waitFor(`document.querySelector('#ex-status')?.textContent.includes('нет элементов')`, 10000);
+  check("пустой снимок не превращается в выгрузку всего объекта", !b.requests.slice(e1).some((r) => r.url.endsWith('/export.xlsx')));
   check("ошибок JavaScript нет", b.exceptions.length === 0, b.exceptions.join(" | ").slice(0, 300));
 } finally {
   await b.close();

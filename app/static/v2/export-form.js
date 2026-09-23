@@ -6,6 +6,7 @@ import { ApiError } from "./api.js";
 import { esc, linkList } from "./screen-view.js";
 import { statusChip } from "./registry.js";
 import { isRealDate } from "./card-edit.js";
+import { filterSnapshotFor, describeFilterSnapshot } from "./scheme-filter-snapshot.js";
 
 const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
 
@@ -13,6 +14,7 @@ export function mountExportForm(el, { screen, structure, objectId, api, groupTit
   const kind = screen.export.kind; // "xlsx" | "pdf"
   el.className = "v2-page";
   const source = object?.source_file || null;
+  const filter = kind === "xlsx" && objectId ? filterSnapshotFor(objectId) : null;
   let dead = false, busy = false;
   const st = { mode: "history", from: "", to: "", date: "" };
 
@@ -22,7 +24,7 @@ export function mountExportForm(el, { screen, structure, objectId, api, groupTit
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>Выгрузка в новом интерфейсе.</strong> ${kind === "pdf" ? "Отчёт со всей схемой (авто-масштаб), легендой статусов и местом для подписи." : "Файл строится по чертежу выбранного объекта; отбор фильтром схемы — в текущем интерфейсе."}
+      <div class="v2-callout" role="note"><strong>Выгрузка в новом интерфейсе.</strong> ${kind === "pdf" ? "Отчёт со всей схемой (авто-масштаб), легендой статусов и местом для подписи." : "Файл строится по чертежу выбранного объекта. Можно ограничить выгрузку последним снимком отбора схемы."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <p id="ex-source" class="v2-muted">${source ? `Чертёж объекта: <strong>${esc(source)}</strong>` : ""}</p>
       ${!objectId ? `<p class="v2-muted">Выберите объект в шапке — выгрузка относится к объекту.</p>`
@@ -36,6 +38,8 @@ export function mountExportForm(el, { screen, structure, objectId, api, groupTit
             <label class="v2-wire-field"><span>по</span><input type="date" id="ex-to"></label></div>
           <div class="v2-wire-row" id="ex-snapshot" hidden><label class="v2-wire-field"><span>на дату (пусто — текущий статус)</span><input type="date" id="ex-date"></label></div>`
           : `<div class="v2-wire-row"><label class="v2-wire-field"><span>Статусы актуальны на дату (пусто — текущие)</span><input type="date" id="ex-date"></label></div>`}
+        ${kind === "xlsx" ? `<div class="v2-wire-row"><label class="v2-wire-check"><input type="checkbox" id="ex-use-filter" ${filter ? "" : "disabled"}> Учитывать последний отбор схемы</label>
+          <span class="v2-muted">${esc(describeFilterSnapshot(objectId).text)} Это снимок, не живая синхронизация.</span></div>` : ""}
         <div class="v2-bar"><button type="submit" class="v2-btn v2-primary" id="ex-go">Скачать</button></div></form>`}
       <p id="ex-status" class="v2-muted" role="status" aria-live="polite"></p>
     </div>`;
@@ -60,6 +64,12 @@ export function mountExportForm(el, { screen, structure, objectId, api, groupTit
       if (kind === "xlsx") {
         const body = { mode: st.mode, source_file: source };
         if (st.mode === "history") { if (st.from) body.date_from = st.from; if (st.to) body.date_to = st.to; } else if (st.date) body.date = st.date;
+        if ($("#ex-use-filter")?.checked) {
+          const snapshot = filterSnapshotFor(objectId);
+          if (!snapshot) throw new Error("Отбор схемы больше не относится к выбранному объекту — задайте его заново.");
+          if (!snapshot.elementIds.length) throw new Error("В отборе схемы нет элементов для выгрузки.");
+          body.element_ids = snapshot.elementIds;
+        }
         blob = await api.download("/export.xlsx", body);
         name = st.mode === "snapshot" ? `elements_snapshot${st.date ? "_" + st.date : ""}.xlsx` : "elements_history.xlsx";
       } else {
