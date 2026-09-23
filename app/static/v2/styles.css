@@ -984,6 +984,62 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-mini-kpi { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; }
 .ws-mini-kpi small { width: 100%; color: var(--muted); }
 
+/* Три отчёта правой панели: та же компактная компоновка, что в V1
+   (.side-* из index.html), с цветовыми токенами оболочки V2. */
+.ws-mini .side-report { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 10px; }
+.ws-mini .side-report:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+.ws-mini .side-section-head { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; }
+.ws-mini .side-section-head h3 { margin: 0; flex: 1; font-size: 13px; line-height: 1.3; }
+.ws-mini .side-report-open, .ws-mini .filter-expand-btn { background: none; border: 0; cursor: pointer; padding: 0 2px; color: var(--muted); }
+.ws-mini .side-report-open { font-size: 14px; line-height: 1; }
+.ws-mini .filter-expand-btn { width: 16px; font-size: 11px; line-height: 1; }
+.ws-mini .side-report-open:hover, .ws-mini .filter-expand-btn:hover { color: var(--accent); }
+.ws-mini .ws-mini-content { padding: 0; }
+.ws-mini .hint-text, .ws-mini .side-status-line { color: var(--muted); font-size: 11px; }
+.ws-mini .legend-table-wrap { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.ws-mini .side-table { border-collapse: collapse; width: 100%; font-size: 10.5px; }
+.ws-mini .side-table th, .ws-mini .side-table td { padding: 2px 4px; text-align: right; white-space: nowrap; }
+.ws-mini .ws-mini-table .side-table th, .ws-mini .ws-mini-table .side-table td { padding: 2px 4px; border-bottom: 0; }
+.ws-mini .ws-mini-table .side-table th { border-bottom: 1px solid var(--line); }
+.ws-mini .side-table th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); white-space: normal; vertical-align: bottom; }
+.ws-mini .side-table td:first-child, .ws-mini .side-table th:first-child { text-align: left; position: sticky; left: 0; z-index: 1; background: var(--bg); white-space: normal; max-width: 128px; overflow-wrap: break-word; }
+.ws-mini .side-table.side-tree th:not(:first-child) { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; text-align: left; padding: 3px 1px; font-weight: 600; }
+.ws-mini .side-tree tr.lvl-0 td:first-child { font-weight: 700; }
+.ws-mini .side-tree tr.lvl-1 td:first-child { font-weight: 600; }
+.ws-mini .side-tree tr.lvl-0 td, .ws-mini .side-tree tr.total td { background: var(--surface); }
+.ws-mini .side-tree tr.total td { border-top: 1px solid var(--line); font-weight: 700; }
+.ws-mini .report-toggle { background: none; border: 0; color: var(--muted); cursor: pointer; width: 12px; margin-right: 2px; padding: 0; font-size: 9px; }
+.ws-mini .report-toggle.empty { visibility: hidden; }
+.ws-mini .side-report-controls { margin-bottom: 8px; }
+.ws-mini .side-report-controls label { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
+.ws-mini .side-report-controls input[type="date"], .ws-mini .side-report-controls select { min-width: 0; flex: 1; width: auto; padding: 3px 4px; border-radius: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-size: 11px; }
+.ws-mini .side-report-controls select { max-width: 210px; }
+.ws-mini .side-report-controls .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font-size: 11px; cursor: pointer; }
+.ws-mini .side-report-controls .link-btn[hidden] { display: none; }
+.ws-mini .side-chart { border: 1px solid var(--line); border-radius: 4px; padding: 4px; }
+.ws-mini .side-chart svg { display: block; width: 100%; height: auto; }
+.ws-mini .side-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; color: var(--muted); font-size: 10.5px; }
+.ws-mini .side-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.ws-mini .side-chart-legend i { display: inline-block; width: 12px; height: 2px; }
+.ws-mini .side-chart-legend i.dashed { height: 0; border-top: 2px dashed currentColor; background: none !important; }
+.ws-mini .side-chart-legend i.dashdot { height: 0; border-top: 2px dotted currentColor; background: none !important; }
+.ws-mini .side-dyn-block { margin-top: 10px; }
+.ws-mini .side-dyn-block h4 { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin: 0 0 4px; font-size: 11px; font-weight: 600; }
+.ws-mini .side-table.side-dyn td, .ws-mini .side-table.side-dyn th { border: 1px solid var(--line); text-align: center; }
+.ws-mini .side-table.side-dyn td:first-child, .ws-mini .side-table.side-dyn th:first-child { text-align: left; }
+.ws-mini .dev-late, .ws-mini .side-dyn-warn { color: var(--bad); }
+.ws-mini .dev-early { color: var(--good); }
+.ws-mini .dev-ok { color: var(--muted); }
+.ws-mini .dev-late, .ws-mini .dev-early, .ws-mini .dev-ok { font-weight: 600; }
+.ws-mini .side-dyn-warn { margin: 6px 0; font-size: 10.5px; }
+.ws-mini .dyn-neg { color: var(--bad); }
+.ws-mini .side-dyn-notes { margin-top: 10px; }
+.ws-mini .side-dyn-notes details { border: 1px solid var(--line); border-radius: 4px; margin-bottom: 5px; }
+.ws-mini .side-dyn-notes summary { cursor: pointer; padding: 4px 7px; font-size: 11px; font-weight: 600; }
+.ws-mini .side-dyn-notes ul { margin: 0; padding: 2px 7px 7px 22px; font-size: 11px; }
+.ws-mini .side-dyn-notes li { margin: 2px 0; }
+.ws-mini .side-dyn-notes .dyn-empty { padding: 2px 7px 7px; color: var(--muted); font-size: 11px; }
+
 .ws-fhead { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
 .ws-fhead .v2-btn { padding: 3px 10px; font-size: 12px; }
 .ws-fgroup { border-bottom: 1px solid var(--line); }

@@ -39,8 +39,8 @@ const wsLabel = { model: "«Модель»", foreman: "«Прораб»", picker
 // Однократный переход кнопкой ⤢ из мини-отчёта: полноразмерный экран
 // открывается сразу с тем же отбором. Другой экран или объект флаг не съест.
 const OPEN_KEY = "v2.filteredReportOpen";
-export function queueFilteredReportOpen(screenId, objectId) {
-  try { sessionStorage.setItem(OPEN_KEY, JSON.stringify({ screenId, objectId, at: Date.now() })); } catch (e) { /* хранилище недоступно */ }
+export function queueFilteredReportOpen(screenId, objectId, reportDate = null) {
+  try { sessionStorage.setItem(OPEN_KEY, JSON.stringify({ screenId, objectId, reportDate, at: Date.now() })); } catch (e) { /* хранилище недоступно */ }
 }
 export function consumeFilteredReportOpen(screenId, objectId) {
   try {
@@ -50,7 +50,7 @@ export function consumeFilteredReportOpen(screenId, objectId) {
     if (Date.now() - d.at > 60000) { sessionStorage.removeItem(OPEN_KEY); return false; }
     if (d.screenId !== screenId || d.objectId !== objectId) return false;
     sessionStorage.removeItem(OPEN_KEY);
-    return true;
+    return d;
   } catch (e) { return false; }
 }
 function timeText(ts) {

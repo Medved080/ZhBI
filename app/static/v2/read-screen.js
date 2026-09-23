@@ -174,8 +174,13 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   // «Учитывать текущий фильтр схемы» (перенос V1: reportUseFilter) — у «Статуса комплектации» включена по
   // умолчанию (см. schemeFilterDefault в screens.json), у остальных — выключена, пока человек сам не включит.
   sections.forEach((sec, i) => { if (sec.schemeFilterDefault) st[i].filterOn = true; });
-  if (consumeFilteredReportOpen(screen.id, objectId)) {
-    sections.forEach((sec, i) => { if (sec.schemeFilter) st[i].filterOn = true; });
+  const openedFromWorkspace = consumeFilteredReportOpen(screen.id, objectId);
+  if (openedFromWorkspace) {
+    sections.forEach((sec, i) => {
+      if (sec.schemeFilter) st[i].filterOn = true;
+      if (sec.report === "dynamics" && /^\d{4}-\d{2}-\d{2}$/.test(openedFromWorkspace.reportDate || ""))
+        st[i].params.report_date = openedFromWorkspace.reportDate;
+    });
   }
   // Запоминаемые настройки отчёта (`remember` — ключ localStorage; reports2: вид и уровни группировки «Статуса
   // комплектации»). Ключи и формат — ТЕ ЖЕ, что у V1 (zhbi_completion_view, zhbi_completion_pivot_groups):

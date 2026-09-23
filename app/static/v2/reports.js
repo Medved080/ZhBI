@@ -90,32 +90,34 @@ function layoutChartMarks(data, weeks, x, width) {
 // График «Динамики»: план/факт/прогноз по неделям, легенда, вехи (отчётная дата, контрольные даты, завершение
 // по прогнозу), подсказка по точке — registerChartHover (chart-hover.js), тот же механизм, что у «Аналитической
 // справки». Перенос buildDynamicsChartSvg (app.js) почти без изменений — только источники esc/dateRu свои.
-export function buildDynamicsChartSvg(data, width = 1000, height = 330) {
+export function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
+  const compact = !!opts.compact;
   const weeks = data.weeks || [];
   if (!weeks.length) return `<p class="v2-muted">Нет данных для графика.</p>`;
-  const L = 52, R = 18, B = 64;
+  const L = compact ? 30 : 52, R = compact ? 6 : 18, B = compact ? 30 : 64;
   // null в ряду — «за отчётной датой факта нет»: такие точки не рисуются, кривая факта обрывается на отчётной дате.
   const seriesPoints = (key) => (data.series?.[key] || []).map((v, i) => ({ v, i })).filter((p) => p.v !== null && p.v !== undefined);
   const ряды = dynSeriesFor(data).filter((k) => seriesPoints(k).some((p) => p.v > 0));
   const maxY = niceMax(Math.max(1, ...ряды.flatMap((k) => seriesPoints(k).map((p) => p.v))));
   const x = (i) => L + (weeks.length === 1 ? 0 : (i * (width - L - R)) / (weeks.length - 1));
 
-  const layout = layoutChartMarks(data, weeks, x, width);
-  const T = 46 + Math.max(0, layout.shelves - 2) * 15;
+  const layout = compact ? { placed: [], shelves: 0 } : layoutChartMarks(data, weeks, x, width);
+  const T = compact ? 8 : 46 + Math.max(0, layout.shelves - 2) * 15;
   const y = (v) => height - B - (v / maxY) * (height - T - B);
 
   const parts = [`<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">`];
 
-  for (let i = 0; i <= 5; i++) {
-    const v = (maxY * i) / 5, yy = y(v);
+  const gridLines = compact ? 4 : 5;
+  for (let i = 0; i <= gridLines; i++) {
+    const v = (maxY * i) / gridLines, yy = y(v);
     parts.push(`<line x1="${L}" y1="${yy}" x2="${width - R}" y2="${yy}" stroke="#E5E8EC" stroke-width="1"/>`);
-    parts.push(`<text x="${L - 8}" y="${yy + 3}" font-size="11" fill="#8A94A0" text-anchor="end">${Math.round(v)}</text>`);
+    parts.push(`<text x="${L - (compact ? 4 : 8)}" y="${yy + 3}" font-size="${compact ? 8 : 11}" fill="#8A94A0" text-anchor="end">${Math.round(v)}</text>`);
   }
-  const step = weeks.length > 18 ? 2 : 1;
-  const labelY = height - B + 16;
+  const step = compact ? Math.max(1, Math.ceil(weeks.length / 5)) : weeks.length > 18 ? 2 : 1;
+  const labelY = height - B + (compact ? 12 : 16);
   weeks.forEach((w, i) => {
     if (i % step) return;
-    parts.push(`<text x="${x(i)}" y="${labelY}" font-size="10" fill="#8A94A0" text-anchor="end" transform="rotate(-45 ${x(i)} ${labelY})">${esc(shortDate(w))}</text>`);
+    parts.push(`<text x="${x(i)}" y="${labelY}" font-size="${compact ? 8 : 10}" fill="#8A94A0" text-anchor="end" transform="rotate(-45 ${x(i)} ${labelY})">${esc(shortDate(w))}</text>`);
   });
 
   for (const key of ряды) {
@@ -126,6 +128,15 @@ export function buildDynamicsChartSvg(data, width = 1000, height = 330) {
     parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${dash}/>`);
   }
 
+  if (compact) {
+    const reportWeek = mondayOf(data.report_date);
+    if (reportWeek >= weeks[0] && reportWeek <= weeks[weeks.length - 1]) {
+      let index = 0;
+      weeks.forEach((w, i) => { if (w <= data.report_date.slice(0, 10)) index = i; });
+      const px = x(index);
+      parts.push(`<line x1="${px}" y1="${T}" x2="${px}" y2="${height - B}" stroke="#C0392B" stroke-width="1" stroke-dasharray="3 3"/>`);
+    }
+  }
   layout.placed.forEach(({ m, i, px, text, anchor, shelf }) => {
     const plan = (data.series?.plan_smr || [])[i] || 0;
     const py = y(plan);
@@ -138,7 +149,7 @@ export function buildDynamicsChartSvg(data, width = 1000, height = 330) {
   });
 
   let lx = L;
-  for (const key of ряды) {
+  for (const key of compact ? [] : ряды) {
     const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
     const label = data.series_labels?.[key] || key;
     parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${dash}/>`);
@@ -152,6 +163,15 @@ export function buildDynamicsChartSvg(data, width = 1000, height = 330) {
     unit: "изд.",
     series: ряды.map((key) => ({ key, label: data.series_labels?.[key] || key, color: DYN_COLORS[key], values: data.series?.[key] || [] })),
   });
+}
+
+// Узкая панель V1 выносит легенду за пределы SVG: подписи шести рядов
+// невозможно уместить внутри графика шириной 280 px.
+export function dynamicsChartLegendHtml(data) {
+  const drawn = (key) => (data.series?.[key] || []).some((v) => v !== null && v > 0);
+  return `<div class="side-chart-legend">${dynSeriesFor(data).filter(drawn).map((key) =>
+    `<span><i style="background:${DYN_COLORS[key]};color:${DYN_COLORS[key]}"${DYN_DASHED.has(key) ? ' class="dashed"' : DYN_DASHDOT.has(key) ? ' class="dashdot"' : ""}></i>${esc(data.series_labels?.[key] || key)}</span>`
+  ).join("")}</div>`;
 }
 
 // Прогноз охватывает не все изделия — кривая, не дорастающая до полного объёма, читается как остановка работ,

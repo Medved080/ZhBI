@@ -127,12 +127,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   const mini = mfr ? null : createWorkspaceMiniReports({
     api, getObjectId: () => curObject, repaint: () => { if (tab === "status") paintPanel(); },
     requestIds: () => send("getReportIds"),
-    openFull: (kind, ids) => {
+    openFull: (kind, ids, reportDate) => {
       if (!ids?.length || !["status", "dynamics"].includes(kind)) return;
       const screenId = `report-${kind}`;
       writeFilterSnapshot({ objectId: curObject, ws, elementIds: ids, shown: ids.length,
         total: sc?.total || ids.length, excluded: ids.length < (sc?.total || ids.length), capturedAt: Date.now() });
-      queueFilteredReportOpen(screenId, curObject);
+      queueFilteredReportOpen(screenId, curObject, kind === "dynamics" ? reportDate : null);
       location.hash = `#/${screenId}`;
     },
   });
