@@ -1748,6 +1748,10 @@ async function switchObject(objectId) {
     открытаяНесохранённая.classList.remove("open");
   }
   state.objectId = objectId;
+  // Имя чертежа принадлежит прежнему объекту. До загрузки нового плана
+  // передавать его отчётам нельзя: на МФР-объекте чертежа вообще нет, а
+  // _guard_report проверит чужой source_file и законно ответит 403.
+  state.sourceFile = null;
   renderObjectSwitch();
 
   // Смена объекта — это не «перезагрузить данные». Всё, что относилось к
@@ -7052,6 +7056,7 @@ function clearWorkspace() {
   document.getElementById("elements-layer").innerHTML = "";
   document.getElementById("labels-layer").innerHTML = "";
   state.elements = [];
+  state.sourceFile = null;
   state.zones = [];
   state.zoneLabelEls = [];
   state.byId.clear();
@@ -21288,10 +21293,12 @@ function reportRequestBody() {
     return body;   // фильтр схемы справка не учитывает — она про объект целиком
   }
   if (REPORTS[currentReport].needsBlockStatusDate) {
+    body.source_file = null; // МФР-отчёт выбирает объект, а не файл чертежа ЖБИ
     body.report_date = document.getElementById("bs-date").value || null;
     return body;   // фильтр схемы неприменим — это учёт по блокам, не по изделиям
   }
   if (REPORTS[currentReport].needsBlockSchedule) {
+    body.source_file = null;
     body.group_by = blockScheduleGroupChooser.selected();
     body.view = document.getElementById("bsch-view").value;
     return body;   // фильтр схемы неприменим — та же причина, что у block_status
