@@ -11,7 +11,7 @@ import { REPORT_RENDERERS, REPORT_INIT, bindReport, colDataType } from "./report
 import { mountBlockWorkForm } from "./block-work-form.js";
 import { printHtml } from "./print.js";
 import { showInfoDialog } from "./dialogs.js";
-import { filterSnapshotFor, describeFilterSnapshot } from "./scheme-filter-snapshot.js";
+import { filterSnapshotFor, describeFilterSnapshot, consumeFilteredReportOpen } from "./scheme-filter-snapshot.js";
 
 const RENDER_LIMIT = 500;
 
@@ -159,6 +159,9 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   // «Учитывать текущий фильтр схемы» (перенос V1: reportUseFilter) — у «Статуса комплектации» включена по
   // умолчанию (см. schemeFilterDefault в screens.json), у остальных — выключена, пока человек сам не включит.
   sections.forEach((sec, i) => { if (sec.schemeFilterDefault) st[i].filterOn = true; });
+  if (consumeFilteredReportOpen(screen.id, objectId)) {
+    sections.forEach((sec, i) => { if (sec.schemeFilter) st[i].filterOn = true; });
+  }
   // Запоминаемые настройки отчёта (`remember` — ключ localStorage; reports2: вид и уровни группировки «Статуса
   // комплектации»). Ключи и формат — ТЕ ЖЕ, что у V1 (zhbi_completion_view, zhbi_completion_pivot_groups):
   // это настройка «как я привык смотреть» одного человека в одном браузере, и V1 с V2 не должны спорить о ней.

@@ -29,9 +29,17 @@ try {
   const tabs = await b.eval(`[...document.querySelectorAll('.ws-tabs button')].map(x=>x.textContent)`);
   check("вкладки АРМ: есть «Статус» (как правая панель V1)", tabs.includes("Статус"), tabs.join(","));
   const base0 = Number(((await panel(b)).match(/В срезе: ([\d\s ]+) из/) || [])[1]?.replace(/\D/g, ""));
+  // Отчёты V1/V2 строятся по основному актуальному чертежу объекта; схема
+  // дополнительно показывает панели шахт из второго файла (9580 против 9422).
+  const primary = sql1(S.db, `SELECT source_file FROM object_drawings WHERE object_id=1 AND is_current=1 AND source_file NOT IN (SELECT DISTINCT e.source_file FROM elements e JOIN shaft_panel_geometry g ON g.element_id=e.id WHERE g.object_id=1) ORDER BY imported_at ASC LIMIT 1`);
+  const primarySql = String(primary).replace(/'/g, "''");
+  const reportTotal = sql1(S.db, `SELECT COUNT(*) FROM elements WHERE object_id=1 AND is_current=1 AND source_file='${primarySql}'`);
   await tab(b, "status");
-  const st0 = await b.eval(`(()=>{const t=document.querySelector('#ws-panel-body').innerText; const m=t.match(/элементам: (\\d[\\d\\s ]*) из/); const sum=[...document.querySelectorAll('#ws-panel-body .ws-list li b')].reduce((n,x)=>n+Number(x.textContent.replace(/\\D/g,'')),0); return { shown: Number((m?.[1]||'').replace(/\\D/g,'')), sum }; })()`);
-  check("«Статус»: сумма по статусам = показанным = «В срезе»", st0.sum === st0.shown && st0.shown === base0, `${JSON.stringify(st0)} / в срезе ${base0}`);
+  await b.waitFor(`!!document.querySelector('#ws-panel-body .ws-mini-table .v2-read-tbl')`, 60000);
+  const st0 = Number(((await panel(b)).match(/Всего изделий: ([\d\s ]+)/) || [])[1]?.replace(/\D/g, ""));
+  check("«Статус»: итог мини-отчёта = SQL основного чертежа, разница со схемой пояснена",
+    st0 === reportTotal && (base0 === st0 || (await panel(b)).includes(`Отчёты учитывают ${st0.toLocaleString("ru-RU")} изделий актуального чертежа`)),
+    `${st0} / SQL ${reportTotal} / на схеме ${base0}`);
 
   // «сбросить» у блока среза — настоящим щелчком по флажку значения и по ссылке
   await tab(b, "pick");
@@ -42,8 +50,9 @@ try {
   const base1 = Number(((await panel(b)).match(/В срезе: ([\d\s ]+) из/) || [])[1]?.replace(/\D/g, ""));
   check(`отбор «Тип = ${firstType}»: в срезе = SQL, у блока появилась ссылка «сбросить (1)»`, base1 === typeN && /сбросить \(1\)/.test(await b.eval(`document.querySelector('[data-pk-clear="elementType"]').textContent`)), `${base1} / SQL ${typeN}`);
   await tab(b, "status");
-  const st1 = await b.eval(`[...document.querySelectorAll('#ws-panel-body .ws-list li b')].reduce((n,x)=>n+Number(x.textContent.replace(/\\D/g,'')),0)`);
-  const stSql = sql1(S.db, `SELECT COUNT(*) FROM elements WHERE object_id=1 AND is_current=1 AND element_type=${JSON.stringify(firstType).replace(/"/g, "'")}`);
+  await b.waitFor(`!!document.querySelector('#ws-panel-body .ws-mini-table .v2-read-tbl')`, 60000);
+  const st1 = Number(((await panel(b)).match(/Всего изделий: ([\d\s ]+)/) || [])[1]?.replace(/\D/g, ""));
+  const stSql = sql1(S.db, `SELECT COUNT(*) FROM elements WHERE object_id=1 AND is_current=1 AND source_file='${primarySql}' AND element_type=${JSON.stringify(firstType).replace(/"/g, "'")}`);
   check("«Статус» следует за срезом (сумма = изделиям типа по SQL)", st1 === stSql, `${st1} / ${stSql}`);
   // контракты: сначала контрагенты среза, черта, затем остальные (приглушённые)
   await tab(b, "contracts");

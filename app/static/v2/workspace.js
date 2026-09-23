@@ -18,7 +18,8 @@ import { createPickerPanels } from "./picker-panels.js";
 import { verifyAllocationBatch, verdictText } from "./alloc-verify.js";
 import { createElementOps } from "./element-ops.js";
 import { anyModalDirty, guardModals } from "./mfr-common.js";
-import { writeFilterSnapshot } from "./scheme-filter-snapshot.js";
+import { writeFilterSnapshot, queueFilteredReportOpen } from "./scheme-filter-snapshot.js";
+import { createWorkspaceMiniReports } from "./workspace-mini-reports.js";
 import { takeLocate } from "./locate-handoff.js";
 
 const PROTO = "zhbi-scene/1";
@@ -123,6 +124,19 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (!ready || !frame?.contentWindow) { queue.push(msg); return; }
     frame.contentWindow.postMessage(msg, location.origin);
   }
+  const mini = mfr ? null : createWorkspaceMiniReports({
+    api, getObjectId: () => curObject, repaint: () => { if (tab === "status") paintPanel(); },
+    requestIds: () => send("getReportIds"),
+    openFull: (kind, ids) => {
+      if (!ids?.length || !["status", "dynamics"].includes(kind)) return;
+      const screenId = `report-${kind}`;
+      writeFilterSnapshot({ objectId: curObject, ws, elementIds: ids, shown: ids.length,
+        total: sc?.total || ids.length, excluded: ids.length < (sc?.total || ids.length), capturedAt: Date.now() });
+      queueFilteredReportOpen(screenId, curObject);
+      location.hash = `#/${screenId}`;
+    },
+  });
+  let reportSignature = "";
 
   function onMessage(e) {
     // принимаем только сообщения от НАШЕГО кадра и с нашего origin
@@ -137,6 +151,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       onScene(m.state);
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model; paintPanel();
+      if (tab === "status" && sc?.loaded && m.model.groups.length) send("getReportIds");
       // Снимок «текущего фильтра схемы» для отчётов V2 (charts, scheme-filter-snapshot.js) — запрашивается ТОЛЬКО
       // здесь, когда сам отбор поменялся (не на каждый тик состояния), и только там, где есть эта модель фильтра
       // (у МФР и комплектовщика — другой, с другим смыслом; их «фильтр схемы» отчётами не используется). Пустые
@@ -153,6 +168,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       pk = m.model;
       if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // сцена догрузилась и состав контрактов объекта изменился — перечитать, а не показывать «нет контрактов»
       paintPanel();
+      if (tab === "status" && sc?.loaded) send("getReportIds");
+    } else if (m.evt === "report-ids" && Array.isArray(m.ids)) {
+      mini?.receive(m.ids, m.objectId);
     } else if (m.evt === "contracts" && Array.isArray(m.items)) {
       ops.setContracts(m.objectId, m.items);
     } else if (m.evt === "candidates" && Array.isArray(m.items)) {
@@ -232,6 +250,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     if (!mfr && s.loaded) { const want = takeLocate(curObject); if (want) { send("select", { id: want }); send("locate", { id: want }); } }
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
     paintAll();
+    if (!mfr && tab === "status" && s.loaded) {
+      const signature = `${s.objectId}:${s.shown}:${s.excluded}:${JSON.stringify(s.statusCounts || [])}`;
+      if (signature !== reportSignature) { reportSignature = signature; mini.refresh(); }
+    }
   }
 
   // Ключ выбора: у ЖБИ — id элемента, у МФР — «вид:id» (элемент или блок модели)
@@ -355,12 +377,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   function statusHtml() {
     if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Схема загружается…</p>`;
-    const counts = new Map(sc.statusCounts || []);
-    const order = sc.statusOrder?.length ? sc.statusOrder : Array.from(counts.keys());
-    const total = Array.from(counts.values()).reduce((a, b) => a + b, 0);
-    return `<div class="ws-pad"><h3 class="ws-h">Статусы на схеме</h3>
-      <p class="v2-muted">Считаются по показанным элементам: ${total} из ${sc.total}.</p>
-      <ul class="ws-list">${order.map((s) => `<li><span><i class="ws-sw" style="background:${esc(sw(s))}"></i>${esc(stLabel(s))}</span><b>${counts.get(s) || 0}</b></li>`).join("")}</ul></div>`;
+    return mini.html();
   }
 
   // ---- фильтры
@@ -656,6 +673,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   }
 
   function bindPanel(body) {
+    if (tab === "status") mini?.bind(body);
     body.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
       const a = b.dataset.act;
       if (a === "clear-all") send("clearSelection");
@@ -815,7 +833,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   // ------------------------------------------------------------ управление
   $("#ws-modes").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) send("setView", { mode: b.dataset.view }); });
   el.querySelector(".ws-tools").addEventListener("click", (e) => { const b = e.target.closest("[data-tool]"); if (b) tool(b.dataset.tool); });
-  el.querySelector(".ws-tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) { tab = b.dataset.tab; paintPanel(); } });
+  el.querySelector(".ws-tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (b) { tab = b.dataset.tab; paintPanel(); if (tab === "status" && sc?.loaded) mini?.refresh(); } });
 
   // Глобальная навигация сворачивается: на узком экране схеме нужна вся ширина, поэтому там по умолчанию свёрнута.
   const shellSide = () => document.getElementById("v2-side");
@@ -877,7 +895,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; ops.reset(); mbp?.reset(); canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },

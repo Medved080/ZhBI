@@ -913,6 +913,30 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-hist li { display: grid; grid-template-columns: auto 1fr; gap: 0 6px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .ws-hist small { grid-column: 2; color: var(--muted); }
 .ws-ro { margin-top: 14px; font-size: 12px; }
+.ws-mini-intro, .ws-mini-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ws-mini-intro { margin-bottom: 10px; }
+.ws-mini-intro p { margin: 0; font-size: 12px; }
+.ws-mini-section { border-top: 1px solid var(--line); }
+.ws-mini-head { min-height: 38px; }
+.ws-mini-head button { border: 0; background: none; color: var(--ink); cursor: pointer; }
+.ws-mini-head [data-mini-toggle] { flex: 1; text-align: left; font-size: 13px; font-weight: 600; }
+.ws-mini-head .ws-mini-full { font-size: 18px; color: var(--accent); }
+.ws-mini-content { padding: 0 0 14px; }
+.ws-mini-content > p { margin: 4px 0 8px; font-size: 12px; }
+.ws-mini-error { color: var(--bad); }
+.ws-mini-table { max-width: 100%; overflow-x: auto; }
+.ws-mini-table .v2-read-table { max-height: 260px; }
+.ws-mini-table .v2-read-tbl { width: max-content; min-width: 100%; }
+.ws-mini-table .v2-read-tbl th, .ws-mini-table .v2-read-tbl td { padding: 5px 7px; font-size: 11px; }
+.ws-mini-table table:not(.v2-read-tbl) { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ws-mini-table table:not(.v2-read-tbl) th, .ws-mini-table table:not(.v2-read-tbl) td { padding: 5px 4px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.ws-mini-table table:not(.v2-read-tbl) th:first-child { text-align: left; }
+.ws-mini-date { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ws-mini-date input { min-width: 0; max-width: 150px; }
+.ws-mini-chart { max-width: 100%; overflow-x: auto; }
+.ws-mini-chart svg { display: block; width: 100%; min-width: 280px; height: auto; }
+.ws-mini-kpi { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.ws-mini-kpi small { width: 100%; color: var(--muted); }
 
 .ws-fhead { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; }
 .ws-fhead .v2-btn { padding: 3px 10px; font-size: 12px; }

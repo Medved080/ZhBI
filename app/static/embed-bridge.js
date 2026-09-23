@@ -632,6 +632,20 @@
       for (const e of state.elements) { if (passesPlacementFilters(e)) { ids.push(e.id); if (ids.length >= 20000) break; } }
       post({ evt: "filtered-ids", ids, objectId: state.objectId });
     },
+    // Мини-отчёты вкладки «Статус» считают только изделия, показанные в
+    // текущем рабочем месте. У комплектовщика своя модель среза, поэтому
+    // passesPlacementFilters здесь дал бы неверные числа.
+    getReportIds() {
+      if (MFR) throw new Error("отчёты ЖБИ недоступны в рабочем месте МФР");
+      const ids = [];
+      for (const e of state.elements) {
+        if (PICKER ? pickerElementPasses(e, "__metric__") : passesPlacementFilters(e)) {
+          ids.push(e.id);
+          if (ids.length >= 20000) break;
+        }
+      }
+      post({ evt: "report-ids", ids, objectId: state.objectId });
+    },
     // После записи, выполненной оболочкой V2: заново читает ОДИН элемент с сервера (GET) и применяет его штатным
     // точечным обновлением V1 (заливка 2D/3D, счётчики, фильтры). Показывается то, что подтвердил сервер, а не то, что ввёл человек.
     async refreshElement(a) {
