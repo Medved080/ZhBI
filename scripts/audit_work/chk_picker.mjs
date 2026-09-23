@@ -85,7 +85,10 @@ try {
   await b.waitFor(`document.querySelector('.eo-dialog .eo-bymark') || document.querySelector('.eo-dialog tbody')`, 10000);
   const rowsN = await b.eval(`document.querySelectorAll('.eo-dialog tbody tr').length`);
   const changing = statuses.filter((r) => r.current_status !== target);
-  check("по строкам: строк к изменению = выбранным с другим статусом (SQL)", rowsN === changing.length, `${rowsN} / ${changing.length}`);
+  const initialCount = (await b.eval(`document.querySelector('.eo-dialog')?.innerText || ''`)).match(/Изменится:\s*([\d\s]+)\s+из\s*([\d\s]+)/);
+  const initialChanging = Number(initialCount?.[1]?.replace(/\D/g, ""));
+  check("по строкам: видны все выбранные; к изменению сначала только изделия с другим статусом (SQL)",
+    rowsN === statuses.length && initialChanging === changing.length, `${rowsN} строк / ${statuses.length} выбрано / ${initialChanging} изменится / ${changing.length} SQL`);
   // распределить по марке: у каждой позиции — сначала первый доступный контракт, если его нет — «без контракта»
   let guard = 0;
   while ((await b.eval(`!!document.querySelector('.eo-dialog [data-eor-m]:not([disabled])')`)) && guard++ < 40) {
