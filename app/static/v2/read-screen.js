@@ -153,7 +153,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, "0")}`;
   };
-  const st = sections.map(() => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {}, rs: {}, acking: false, ackMsg: "", filterOn: false }));
+  const st = sections.map((sec) => ({ status: "idle", rows: [], total: null, error: "", seq: 0, search: "", offset: 0, data: null, params: {},
+    rs: sec.report === "blockstatus" ? { all: true } : {}, acking: false, ackMsg: "", filterOn: false }));
 
   sections.forEach((sec, i) => (sec.controls || []).forEach((c) => { if (c.default === "today") st[i].params[c.param] = todayIso(); }));
   // «Учитывать текущий фильтр схемы» (перенос V1: reportUseFilter) — у «Статуса комплектации» включена по
@@ -288,7 +289,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       if (dead || seq !== s.seq) return; // запоздавший ответ: вкладку/объект уже сменили
       s.data = data;
       if (sec.kind === "report") {
-        s.rs = { search: s.rs.search || "" }; s.status = "ok";
+        s.rs = { search: s.rs.search || "", ...(sec.report === "blockstatus" ? { all: s.rs.all ?? true } : {}) }; s.status = "ok";
         // «Пользователь» (report-mywork): список — GET /objects/{id}/activity-users, отдельно от тела отчёта; грузится
         // один раз на объект, не блокирует показ самого отчёта.
         if ((sec.controls || []).some((c) => c.type === "users") && objectId && s.userObjectId !== objectId) {

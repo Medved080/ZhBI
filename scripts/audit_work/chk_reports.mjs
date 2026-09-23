@@ -75,7 +75,8 @@ try {
   check("линейный трек: колонки V1 (WBS, Код, Ед. изм., Трек планирования, Примечание)", lin2.head.join("|") === "WBS|Код|Ед. изм.|Трек планирования|Примечание", lin2.head.join("|"));
 
   await openScreen(b, "report-block-status", `document.querySelector('.v2-matrix')`);
-  await tap(b, "#bs-all"); await sleep(600);
+  check("учёт по блокам: по умолчанию всё дерево WBS, как в V1", await b.eval(`document.querySelector('#bs-all').checked && document.querySelectorAll('.v2-matrix tr.rw-node').length > 0`));
+  await sleep(600);
   const bsAll = await b.eval(`(()=>({ rows: document.querySelectorAll('.v2-matrix tbody tr').length, nodes: document.querySelectorAll('.v2-matrix tr.rw-node').length, inputs: document.querySelectorAll('.v2-matrix-input').length }))()`);
   await choose(b, "#bs-mode", "plan"); await sleep(300);
   const bsPlan = await b.eval(`(()=>({ inputs: document.querySelectorAll('.v2-matrix-input').length, dates: [...document.querySelectorAll('.v2-matrix td')].filter(td=>/^(\\d\\d\\.\\d\\d|—)–(\\d\\d\\.\\d\\d|—)$/.test(td.textContent.trim())).length, cycles: document.querySelectorAll('.v2-matrix-cycle').length }))()`);

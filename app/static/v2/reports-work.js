@@ -303,7 +303,7 @@ function blockStatusReport(data, state, ctx) {
   const all = bsFlatten(data.tree, 0, []);
   const leaves = all.filter(({ n }) => n.row_kind !== "узел" && !n.children?.length);
   const withData = leaves.filter(({ n }) => n.cells && Object.keys(n.cells).length);
-  // По умолчанию — только операции с данными (V2); «Показать все» — всё дерево с узлами, как в V1
+  // По умолчанию — всё дерево, как в V1; галочка позволяет оставить только операции с данными.
   const rows = state.all ? all : withData;
   const groups = [];
   for (const b of blocks) { const g = groups[groups.length - 1]; if (g && g.code === b.section_code) g.n++; else groups.push({ code: b.section_code, n: 1 }); }
@@ -331,7 +331,7 @@ function blockStatusReport(data, state, ctx) {
   const nodeRow = (n, depth) => `<tr class="rw-node"><td></td><td style="padding-left:${8 + depth * 16}px"><strong>${esc(n.name || "(без названия)")}</strong></td>${blocks.map(() => "<td></td>").join("")}${sectionCols.map(() => "<td></td>").join("")}<td></td></tr>`;
   const leafRow = (l, depth) => `<tr><td>${esc(l.code || "")}</td><td style="padding-left:${8 + depth * 16}px">${esc(l.name || "(без названия)")}</td>${blocks.map((b) => blockCell(l, b)).join("")}${sectionCols.map((s) => cycleCell(l, String(s.id), s.label, "сек")).join("")}${cycleCell(l, "объект", "Объект", "компл")}</tr>`;
   const body = rows.map(({ n, depth }) => (n.row_kind === "узел" || n.children?.length ? nodeRow(n, depth) : leafRow(n, state.all ? depth : 0))).join("");
-  return `<div class="v2-wire-row v2-report-controls">${modeSel}<label class="v2-wire-check"><input type="checkbox" id="bs-all" ${state.all ? "checked" : ""}> Показать все операции WBS с разделами (по умолчанию — только операции с данными)</label></div>
+  return `<div class="v2-wire-row v2-report-controls">${modeSel}<label class="v2-wire-check"><input type="checkbox" id="bs-all" ${state.all ? "checked" : ""}> Показать все операции WBS с разделами</label></div>
     <p class="v2-muted" role="status">Блоков: ${blocks.length}, секций: ${(data.sections || []).length} · операций WBS: ${leaves.length}, с данными: ${withData.length} · на ${esc(dateRu(data.report_date))}${canEdit ? (mode === "percent" ? "" : " · правка процента — в режиме «процент»") : " · только просмотр"}</p>
     <p id="bs-cell-msg" class="v2-muted" role="status" aria-live="polite">${esc(state.cellMsg || "")}</p>
     ${rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl v2-matrix"><thead>
