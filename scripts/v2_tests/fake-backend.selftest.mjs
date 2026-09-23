@@ -1,7 +1,9 @@
 // Самопроверка фейкового бэкенда стенда V2 (scripts/v2_tests/fake-backend.js)
 // через НАСТОЯЩИЙ app/static/v2/api.js: без браузера, сервера и БД.
 // Запуск: node scripts/v2_tests/fake-backend.selftest.mjs   (Node >= 22)
-import { api, ApiError } from "../../app/static/v2/api.js";
+import { register } from "node:module";
+register(new URL("./allow-all-loader.mjs", import.meta.url), import.meta.url);
+const { api, ApiError } = await import("../../app/static/v2/api.js");
 import { installFakeBackend } from "./fake-backend.js";
 const newSecret = "t-" + Math.random().toString(36).slice(2, 12); // синтетический, не хранится в коде
 let ctlForPasswords = null; const userPassword = (login) => ctlForPasswords.data.users.find((u) => u.domain_login === login).password;

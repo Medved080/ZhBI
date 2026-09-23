@@ -96,6 +96,14 @@ class Handler(SimpleHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 
+class TestServer(ThreadingHTTPServer):
+    # ES-модули V2 загружаются параллельно десятками. Стандартная очередь
+    # socketserver равна 5: лишние соединения Chrome получают RESET, и тест
+    # ошибочно считает, что интерфейс не загрузился, хотя файлы существуют.
+    request_queue_size = 128
+    daemon_threads = True
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if "--static" in args:
@@ -106,6 +114,6 @@ if __name__ == "__main__":
         i = args.index("--gate")
         del args[i:i + 2]
     port = int(args[0]) if args else 8031
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = TestServer(("127.0.0.1", port), Handler)
     print(f"Стенд V2 (без БД и без входа): http://127.0.0.1:{port}/tests/app.html", flush=True)
     server.serve_forever()

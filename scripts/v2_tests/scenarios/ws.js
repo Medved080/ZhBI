@@ -88,11 +88,12 @@ export const tests = [
         t.ok(de.scrollHeight <= a.win.innerHeight + 1 && de.scrollWidth <= a.win.innerWidth + 1, tag + "страница не прокручивается");
         t.ok(a.$("#ws-status").getBoundingClientRect().bottom <= a.win.innerHeight + 1, tag + "строка состояния видна");
         // сворачиваемая навигация и панель
-        const w0 = stage.width;
+        const nav0 = a.$("#v2-side").hidden;
         a.click(a.$("#ws-nav"));
         await a.settle(60);
         const w1 = a.$("#ws-stage").getBoundingClientRect().width;
-        t.ok(Math.abs(w1 - w0) > 100, tag + `переключатель навигации меняет ширину схемы (${Math.round(w0)} → ${Math.round(w1)})`);
+        t.ok(a.$("#v2-side").hidden !== nav0 && w1 >= 560,
+          tag + `переключатель навигации меняет её видимость, схема остаётся доступной (${Math.round(w1)} px)`);
         a.click(a.$("#ws-panel-toggle"));
         await a.settle(60);
         const w2 = a.$("#ws-stage").getBoundingClientRect().width;
@@ -154,7 +155,7 @@ export const tests = [
       a.click(a.$(".ws-tools [data-tool=\"fit\"]"));
       a.click(a.$(".ws-tools [data-tool=\"in\"]"));
       await waitFor(() => cmds(a).length >= 3, { what: "команды" });
-      const allowed = ["getFilters", "setView", "fit", "zoom", "select", "locate", "clearSelection", "setFilter", "resetFilters", "setZoneVisible", "search", "refreshElement", "setObject", "reload"];
+      const allowed = ["getFilters", "getFilteredIds", "getReportIds", "setView", "fit", "zoom", "select", "locate", "clearSelection", "setFilter", "resetFilters", "setZoneVisible", "search", "refreshElement", "setObject", "reload"];
       t.ok(cmds(a).every((c) => allowed.includes(c.cmd)), "все отправленные команды — из белого списка протокола");
       t.eq(cmds(a).find((c) => c.cmd === "setView")?.args, { mode: "3d" }, "setView несёт только режим");
       t.eq(cmds(a).find((c) => c.cmd === "zoom")?.args, { factor: 1 / 1.3 }, "zoom несёт только коэффициент");
@@ -378,7 +379,7 @@ export const tests = [
       const b = await openApp({ home: true });
       stub(b);
       await openWs(b, "ws-picker");
-      t.eq(b.$$(".ws-tabs button").map((x) => x.textContent), ["Отбор", "Показатели", "Контракты", "Распределение", "Свойства", "Вид"], "комплектовщик: вкладки");
+      t.eq(b.$$(".ws-tabs button").map((x) => x.textContent), ["Отбор", "Показатели", "Контракты", "Распределение", "Свойства", "Статус", "Вид"], "комплектовщик: вкладки");
       frameWin(b).__send({ proto: "zhbi-scene/1", evt: "picker", model: { slicers: [{ key: "elementType", title: "Тип элемента", selected: 0, contractedShown: true,
         rows: [{ v: "Колонна", label: "Колонна", count: 5, contracted: 7, on: false, available: true }, { v: "Балка", label: "Балка", count: 3, contracted: 2, on: false, available: true }] }],
         metrics: [{ key: "model", title: "В модели", value: 8, base: 8, clickable: false, on: false }, { key: "delivered", title: "Доставлено", value: 3, base: 8, share: 38, clickable: true, on: false, status: "delivered" }],

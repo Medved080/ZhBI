@@ -215,18 +215,26 @@ if (want("passwords")) {
   await openUsers(b); await click(b, `.v2-table [data-user="${selfId}"]`); await b.waitFor("!!document.querySelector('[data-tab=security]')");
   await click(b, "[data-tab=security]"); await b.sleep(600);
   ok("P-UI-6 в своей карточке: нет блокировки и нет установки пароля, есть ссылка на «Сменить пароль»", !(await exists(b, "#sec-block")) && !(await exists(b, "#sec-pass")) && (await text(b, "#sec-password-block")).includes("Сменить пароль"));
-  // зайти под пользователем: окно открывается в новой вкладке
-  await openUserCard(b, "qa_ui_user1", "security");
-  await b.eval("window.__opened=[]; window.open=(u)=>{const o={location:{set href(v){window.__opened.push(v);}},close(){}}; return o;}");
+  // Зайти под пользователем: V2 переключает ЭТУ вкладку, сохраняя токен только
+  // в её sessionStorage; красная полоса подтверждается ответом /me сервера.
+  // Синтетический пользователь выше ещё обязан сменить временный пароль;
+  // под ним оболочка закономерно не открывается. Для проверки режима берём
+  // уже активного user2 без этого флага (та же операция и те же права).
+  await openUserCard(b, "user2", "security");
   mark = b.requests.length;
   await click(b, "#sec-impersonate"); await confirmDialog(b);
-  await b.waitFor("(window.__opened||[]).length>0", 8000);
-  const url = await b.eval("window.__opened[0]");
-  ok("P-UI-7 «Зайти под пользователем»: POST /impersonate, вкладка открывается по адресу с токеном в #хэше", wr(b, mark).filter((x) => x.url.endsWith("/impersonate")).length === 1 && /^\/#impersonate=/.test(url), url?.slice(0, 40));
-  const tok = decodeURIComponent(url.split("=")[1]);
+  await b.waitFor("document.querySelector('#v2-impersonation-bar')?.hidden===false", 15000);
+  const tok = await b.eval("sessionStorage.getItem('zhbi_impersonate')");
+  ok("P-UI-7 «Зайти под пользователем»: один POST /impersonate и токен только в текущей вкладке",
+    wr(b, mark).filter((x) => x.url.endsWith("/impersonate")).length === 1 && !!tok &&
+      !(await b.eval("location.hash.includes('impersonate')")));
   const meImp = await fetch(BASE + "/me", { headers: { "X-Impersonate-Token": tok } });
   const meJson = await meImp.json();
-  ok("P-UI-7 с этим токеном сервер отвечает от имени человека, с пометкой, кто вошёл", meJson.domain_login === "qa_ui_user1" && !!meJson.impersonated_by, JSON.stringify({ l: meJson.domain_login, by: meJson.impersonated_by }));
+  ok("P-UI-7 с этим токеном сервер отвечает от имени человека, с пометкой, кто вошёл", meJson.domain_login === "user2" && !!meJson.impersonated_by, JSON.stringify({ l: meJson.domain_login, by: meJson.impersonated_by }));
+  await click(b, "#v2-impersonation-exit");
+  await b.waitFor("document.querySelector('#v2-impersonation-bar')?.hidden===true && !sessionStorage.getItem('zhbi_impersonate')", 15000);
+  ok("P-UI-7 выход из режима возвращает администратора без повторного входа",
+    (await b.eval("fetch('/me').then(r=>r.json()).then(u=>u.domain_login)")) === "admin");
   await flush();
   ok("P-UI-7 журнал: impersonate_start на имя администратора", q("SELECT * FROM activity_log WHERE action='impersonate_start'").length >= 1);
   ok("P-UI-8 исключений нет", b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));

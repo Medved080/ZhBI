@@ -2,7 +2,9 @@
 // записей (hasPendingWrites) должен учитывать И JSON-запросы, И загрузку
 // файла (api.upload), не считать GET, и обязательно опускаться после отказа.
 // Запуск: node scripts/verify_v2_api.mjs
-import { api, ApiError } from "../app/static/v2/api.js";
+import { register } from "node:module";
+register(new URL("./v2_tests/allow-all-loader.mjs", import.meta.url), import.meta.url);
+const { api, ApiError } = await import("../app/static/v2/api.js");
 
 let failures = 0;
 function check(cond, label) {
