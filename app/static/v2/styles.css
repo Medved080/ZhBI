@@ -16,6 +16,45 @@
   color-scheme: light dark;
 }
 
+/* Те же семь цветовых гамм, что у V1 (index.html). Форма компонентов,
+   размеры и типографика V2 остаются едиными; меняются только токены.
+   Атрибут ставит main.js по сохранённой личной настройке пользователя. */
+:root[data-skin="gos"] {
+  --bg: #FAFCFF; --surface: #F5F7FA; --ink: #0B1F33;
+  --muted: #66727F; --line: #E4ECFD; --accent: #0D4CD3;
+  --accent-ink: #FFFFFF; --sel: #EDF2FE; --good: #16832E; --bad: #B3263A;
+}
+:root[data-skin="msu"] {
+  --bg: #FBF7F7; --surface: #F7F1F1; --ink: #241717;
+  --muted: #7A6A6A; --line: #EBDCDC; --accent: #A31212;
+  --accent-ink: #FFFFFF; --sel: #F6E6E6; --good: #1E7E34; --bad: #C0392B;
+}
+:root[data-skin="graphite"] {
+  --bg: #14161A; --surface: #23272E; --ink: #E6E8EB;
+  --muted: #98A0AB; --line: #2E333B; --accent: #7AA2F7;
+  --accent-ink: #10131A; --sel: #262C38; --good: #62C77A; --bad: #F07178;
+}
+:root[data-skin="indigo"] {
+  --bg: #10121F; --surface: #202441; --ink: #E8EAF6;
+  --muted: #9AA0C4; --line: #2C3157; --accent: #8B9DFF;
+  --accent-ink: #10121F; --sel: #262B4D; --good: #5FD08A; --bad: #FF7A8A;
+}
+:root[data-skin="neon"] {
+  --bg: #0B0A12; --surface: #1C1930; --ink: #F2F0FF;
+  --muted: #9C93C7; --line: #3A2E63; --accent: #FCEE0A;
+  --accent-ink: #0B0A12; --sel: #2A2247; --good: #05D9E8; --bad: #FF2A6D;
+}
+:root[data-skin="emerald"] {
+  --bg: #F6FBF8; --surface: #EFF6F2; --ink: #10231C;
+  --muted: #5F7A70; --line: #DCE9E2; --accent: #0E8A5F;
+  --accent-ink: #FFFFFF; --sel: #E1F1E9; --good: #0E8A5F; --bad: #C0392B;
+}
+:root[data-skin="sand"] {
+  --bg: #FAF7F2; --surface: #F3EDE3; --ink: #2A2118;
+  --muted: #7C6F5F; --line: #E7DECF; --accent: #B4690E;
+  --accent-ink: #FFFFFF; --sel: #F6E9D6; --good: #3F7D3F; --bad: #B3261E;
+}
+
 * { box-sizing: border-box; }
 
 html, body {

@@ -157,6 +157,20 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     rs: sec.report === "blockstatus" ? { all: true } : {}, acking: false, ackMsg: "", filterOn: false }));
 
   sections.forEach((sec, i) => (sec.controls || []).forEach((c) => { if (c.default === "today") st[i].params[c.param] = todayIso(); }));
+  // При переходе из «Моей работы» к изделию схема заменяет весь экран отчёта.
+  // Держим выбранный период в этой вкладке браузера и отдельно для каждого объекта.
+  const myworkPeriodKey = objectId == null ? null : `v2.myworkPeriod.${objectId}`;
+  const saveMyworkPeriod = (s) => {
+    if (!myworkPeriodKey) return;
+    try { sessionStorage.setItem(myworkPeriodKey, JSON.stringify({ date_from: s.params.date_from, date_to: s.params.date_to })); } catch (e) { /* недоступное хранилище не мешает отчёту */ }
+  };
+  sections.forEach((sec, i) => {
+    if (sec.report !== "mywork" || !myworkPeriodKey) return;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(myworkPeriodKey) || "null");
+      for (const key of ["date_from", "date_to"]) if (/^\d{4}-\d{2}-\d{2}$/.test(saved?.[key] || "")) st[i].params[key] = saved[key];
+    } catch (e) { /* повреждённый снимок — период по умолчанию */ }
+  });
   // «Учитывать текущий фильтр схемы» (перенос V1: reportUseFilter) — у «Статуса комплектации» включена по
   // умолчанию (см. schemeFilterDefault в screens.json), у остальных — выключена, пока человек сам не включит.
   sections.forEach((sec, i) => { if (sec.schemeFilterDefault) st[i].filterOn = true; });
@@ -459,6 +473,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
       if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
       s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
+      if (sec.report === "mywork" && (inp.dataset.param === "date_from" || inp.dataset.param === "date_to")) saveMyworkPeriod(s);
       const c = (sec.controls || []).find((x) => x.param === inp.dataset.param);
       if (c?.remember) lsSet(c.remember, String(s.params[c.param]));
       load(active);

@@ -97,7 +97,8 @@ t(!A("POST", "/objects/1/external-models", fd({ meta: emMeta({ kind: "roof" }) }
 t(!A("POST", "/objects/1/external-models", fd({ meta: "not json" }, "m.fbx")), "external-models: метаданные не JSON");
 t(A("PATCH", "/objects/1/external-models/5", { expected_revision: 3, offset_x_mm: 100, rotation_deg: 10 }), "external-models: правка размещения");
 t(!A("PATCH", "/objects/1/external-models/5", { offset_x_mm: 100 }), "external-models: правка без версии для сверки");
-t(!A("PATCH", "/objects/1/external-models/5", { expected_revision: 3, auto_placement_status: "confident" }), "external-models: авто-совмещение (только V1) не разрешено");
+t(A("PATCH", "/objects/1/external-models/5", { expected_revision: 3, auto_placement_status: "confident" }), "external-models: авто-совмещение V2 разрешено со сверкой версии");
+t(!A("PATCH", "/objects/1/external-models/5", { expected_revision: 3, auto_placement_status: "unknown" }), "external-models: неизвестный статус автосовмещения запрещён");
 t(A("POST", "/objects/1/external-models/5/recenter", { expected_revision: 3 }), "external-models: перецентровка");
 t(!A("POST", "/objects/1/external-models/5/recenter", {}), "external-models: перецентровка без версии");
 t(A("DELETE", "/objects/1/external-models/5", undefined), "external-models: удаление");

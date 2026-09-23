@@ -10,6 +10,7 @@
 // другой запрос), применение не выполняется («устаревшая сверка»), человеку показывается новая таблица.
 import { showConfirmDialog } from "./dialogs.js";
 import { isRealDate } from "./card-edit.js";
+import { filterSnapshotFor, describeFilterSnapshot } from "./scheme-filter-snapshot.js";
 import {
   esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, mountTemplates, makeStatus, unknownOutcomeHtml, verifyOutcome, saveBlob,
   factsHtml, valueText, changesTableHtml, wireChangesTable, applyIndeterminate,
@@ -79,9 +80,13 @@ export function mountBulkEdit(el, ctx) {
     if (mode === "contracting") {
       scope.innerHTML = `<p class="v2-muted">Все позиции всех контрактов — одним файлом.</p>`;
     } else {
+      const filter = obj ? filterSnapshotFor(obj.id) : null;
+      const filterNote = obj ? describeFilterSnapshot(obj.id).text : "Сначала выберите объект в шапке.";
       scope.innerHTML = `<fieldset class="v2-fieldset"><legend>Что выгрузить</legend>
         <label class="v2-wire-check"><input type="radio" name="bk-scope" value="all" checked> Все элементы всех объектов</label>
-        <label class="v2-wire-check"><input type="radio" name="bk-scope" value="object" ${obj ? "" : "disabled"}> Только выбранный объект${obj ? `: ${esc(obj.name)}` : " (выберите объект в шапке)"}</label></fieldset>`;
+        <label class="v2-wire-check"><input type="radio" name="bk-scope" value="object" ${obj ? "" : "disabled"}> Только выбранный объект${obj ? `: ${esc(obj.name)}` : " (выберите объект в шапке)"}</label>
+        <label class="v2-wire-check"><input type="radio" name="bk-scope" value="filter" ${filter ? "" : "disabled"}> По последнему отбору схемы выбранного объекта</label>
+        <span class="v2-muted">${esc(filterNote)} Это сохранённый снимок отбора, а не живая синхронизация.</span></fieldset>`;
     }
     mountTemplates($("#bk-tpl"), api, [MODES[mode].tpl], () => dead);
   }
@@ -106,7 +111,14 @@ export function mountBulkEdit(el, ctx) {
     exporting = true; $("#bk-export").disabled = true; status.set("Готовим файл…", "busy");
     try {
       const body = { mode };
-      if (mode !== "contracting" && el.querySelector('input[name="bk-scope"]:checked')?.value === "object" && obj) body.object_id = obj.id;
+      const scope = el.querySelector('input[name="bk-scope"]:checked')?.value;
+      if (mode !== "contracting" && scope === "object" && obj) body.object_id = obj.id;
+      if (mode !== "contracting" && scope === "filter") {
+        const snapshot = obj && filterSnapshotFor(obj.id);
+        if (!snapshot) throw new Error("Отбор схемы больше не доступен для выбранного объекта. Откройте рабочее место и задайте отбор заново.");
+        if (!snapshot.elementIds.length) throw new Error("В отборе схемы нет элементов для выгрузки.");
+        body.element_ids = snapshot.elementIds;
+      }
       const { blob, filename } = await api.fetchFile("/elements/bulk-edit/export", { method: "POST", body });
       if (dead) return;
       saveBlob(blob, filename || "zhbi_elements.xlsx");

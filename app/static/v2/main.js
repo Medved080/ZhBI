@@ -64,15 +64,17 @@ const root = document.getElementById("v2-root");
   document.head.appendChild(l);
 })();
 
-// Тёмные гаммы V1 (index.html, :root[data-skin="..."]) — geometрия и
-// типографика у всех тем общие, различаются только токены; полный перенос
-// каждой темы в V2 не сделан (см. отчёт), но светлая/тёмная СЕМЬЯ выбранной
-// пользователем гаммы уважается вместо слепого следования системной теме
-// браузера — иначе тёмную "Индиго"/"Графит"/"Неон" V2 показывал бы светлой
-// заставкой, а светлые — наоборот, будь у ОС другая настройка.
+// Гамма пользователя действует на всю оболочку V2, а не только на сцену V1
+// в кадре. Геометрия и типографика оболочки общие; семь наборов цветовых
+// токенов определены в styles.css по той же палитре, что и V1.
 const DARK_SKINS = new Set(["graphite", "indigo", "neon"]);
+const SKINS = new Set(["gos", "msu", "graphite", "indigo", "neon", "emerald", "sand"]);
 function applyThemeFamily(uiTheme) {
-  try { document.documentElement.style.colorScheme = DARK_SKINS.has(uiTheme) ? "dark" : "light"; }
+  try {
+    const skin = SKINS.has(uiTheme) ? uiTheme : "gos";
+    document.documentElement.dataset.skin = skin;
+    document.documentElement.style.colorScheme = DARK_SKINS.has(skin) ? "dark" : "light";
+  }
   catch (e) { /* доступ к documentElement.style не должен ронять загрузку */ }
 }
 
