@@ -159,7 +159,9 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
     }
   });
   el.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-skin]"); if (b) { choose(b.dataset.skin); return; }
+    // Только карточки выбора гаммы: оболочка ставит data-skin и на <html> (main.js applyThemeFamily) — без ограничения #ap-body
+    // любой щелчок находил <html> и выходил, и «Сохранить порог подписей»/«Сохранить ракурс 3D» молча не срабатывали.
+    const b = e.target.closest("#ap-body [data-skin]"); if (b) { choose(b.dataset.skin); return; }
     if (e.target.id === "ap-minlabel-save") saveMinLabel();
     else if (e.target.id === "ap-view3d-save") saveView3d();
   });

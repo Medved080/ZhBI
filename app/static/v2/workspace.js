@@ -375,9 +375,31 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "" });
   }
 
+  // Вкладка «Статус» — как в V1: легенда «Статус по элементам» (статус × тип показанных элементов, цвет статуса, итоги),
+  // под ней мини-отчёты по текущему отбору (workspace-mini-reports.js)
+  function legendHtml() {
+    const by = sc.statusByType || { types: [], rows: [] };
+    const rows = new Map(by.rows.map(([s, arr]) => [s, new Map(arr)]));
+    const order = sc.statusOrder?.length ? sc.statusOrder : Array.from(rows.keys());
+    const types = by.types || [];
+    if (!types.length) return `<div class="ws-pad"><h3 class="ws-h">Статус по элементам</h3><p class="v2-muted">Нет показанных элементов.</p></div>`;
+    const colTotals = types.map(() => 0);
+    let grand = 0;
+    const body = order.map((s) => {
+      const m = rows.get(s) || new Map();
+      let rowTotal = 0;
+      const cells = types.map((t, i) => { const n = m.get(t) || 0; rowTotal += n; colTotals[i] += n; return `<td class="num">${n || ""}</td>`; }).join("");
+      grand += rowTotal;
+      return `<tr data-status="${esc(s)}"><td><i class="ws-sw" style="background:${esc(sw(s))}"></i>${esc(stLabel(s))}</td>${cells}<td class="num"><b>${rowTotal}</b></td></tr>`;
+    }).join("");
+    return `<div class="ws-pad"><h3 class="ws-h">Статус по элементам</h3>
+      <p class="v2-muted">По показанным элементам: ${grand} из ${sc.total}.</p>
+      <div class="ws-legend-wrap"><table class="ws-legend"><thead><tr><th></th>${types.map((t) => `<th>${esc(t)}</th>`).join("")}<th>Всего</th></tr></thead>
+      <tbody>${body}<tr class="ws-legend-total"><td>Итого</td>${colTotals.map((n) => `<td class="num">${n}</td>`).join("")}<td class="num">${grand}</td></tr></tbody></table></div></div>`;
+  }
   function statusHtml() {
     if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Схема загружается…</p>`;
-    return mini.html();
+    return legendHtml() + mini.html();
   }
 
   // ---- фильтры

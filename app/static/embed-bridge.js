@@ -79,6 +79,19 @@
     for (const e of state.elements) if (passesPlacementFilters(e)) m.set(e.current_status, (m.get(e.current_status) || 0) + 1);
     return Array.from(m);
   }
+  // Легенда «Статус по элементам» (V1 renderLegend): статус × тип по показанным элементам; типы — по алфавиту, как в V1
+  function statusByTypeShown() {
+    const m = new Map(), types = new Set();
+    for (const e of state.elements) {
+      if (!passesPlacementFilters(e)) continue;
+      types.add(e.element_type);
+      if (!m.has(e.current_status)) m.set(e.current_status, new Map());
+      const byType = m.get(e.current_status);
+      byType.set(e.element_type, (byType.get(e.element_type) || 0) + 1);
+    }
+    return { types: Array.from(types).sort((a, b) => String(a).localeCompare(String(b), "ru")),
+      rows: Array.from(m, ([status, byType]) => [status, Array.from(byType)]) };
+  }
   function snapshot() {
     const base = snapshotBase();
     if (PICKER) return { ...base, excluded: pickerSelCount() };
@@ -96,6 +109,7 @@
       selected: state.selectedId === null ? null : elementInfo(state.byId.get(state.selectedId)),
       multi: multi.length ? multiSummary(multi) : null,
       statusCounts: statusCountsShown(),
+      statusByType: statusByTypeShown(),
       statusLabels: state.statusLabels,
       statusColors: state.statusColors,
       statusOrder: state.statusOrder,

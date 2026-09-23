@@ -947,6 +947,13 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-kv dd { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ws-comment { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.ws-legend-wrap { overflow-x: auto; margin: 0 0 8px; }
+.ws-legend { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.ws-legend th, .ws-legend td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.ws-legend th { font-weight: 600; color: var(--muted); }
+.ws-legend td:first-child { position: sticky; left: 0; background: var(--surface); }
+.ws-legend td.num, .ws-legend th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.ws-legend .ws-legend-total td { font-weight: 700; border-top: 2px solid var(--line); }
 .ws-list li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .ws-hist { list-style: none; margin: 0; padding: 0; }
 .ws-hist li { display: grid; grid-template-columns: auto 1fr; gap: 0 6px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }

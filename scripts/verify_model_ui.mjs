@@ -313,7 +313,7 @@ if (want("group")) {
   await setVal(b, "#eo-gform textarea[name=comment]", "пачка 1");
   const snap0 = snapshot(ids); let mk = lastEvent();
   await b.eval(`document.querySelector('.ws-tabs [data-tab="status"]').click()`); await b.sleep(400);
-  const stTab0 = await b.eval(`[...document.querySelectorAll('#ws-panel-body .ws-list li')].map(l=>l.innerText.replace(/\\s+/g,' '))`);
+  const stTab0 = await b.eval(`[...document.querySelectorAll('#ws-panel-body table.ws-legend tr[data-status]')].map(tr=>tr.firstElementChild.innerText.trim()+': '+tr.lastElementChild.innerText.trim())`);
   const statDelivered0 = Number((stTab0.find((t) => /Доставлен/.test(t)) || "0").replace(/\D+/g, ""));
   await b.eval(`document.querySelector('.ws-tabs [data-tab="props"]').click()`); await b.sleep(300);
   let r0 = b.requests.length;
@@ -340,7 +340,7 @@ if (want("group")) {
   await b.sleep(500);
   ok("панель и схема обновились: статусы группы — «Доставлен»: 4", /Доставлен: 4|Доставлен:\s*4/.test(await panel(b).then((t) => t.replace(/\n/g, " "))), (await panel(b)).slice(0, 300));
   await b.eval(`document.querySelector('.ws-tabs [data-tab="status"]').click()`); await b.sleep(400);
-  const stTab = await b.eval(`[...document.querySelectorAll('#ws-panel-body .ws-list li')].map(l=>l.innerText.replace(/\\s+/g,' '))`);
+  const stTab = await b.eval(`[...document.querySelectorAll('#ws-panel-body table.ws-legend tr[data-status]')].map(tr=>tr.firstElementChild.innerText.trim()+': '+tr.lastElementChild.innerText.trim())`);
   ok("показатели: вкладка «Статус» считает доставленных по новому составу (число выросло на 4)", Number((stTab.find((t) => /Доставлен/.test(t)) || "0").replace(/\D+/g, "")) >= statDelivered0 + 4, JSON.stringify(stTab) + " было " + statDelivered0);
   await b.eval(`document.querySelector('.ws-tabs [data-tab="props"]').click()`); await b.sleep(300);
   await b.eval("location.reload()"); await b.waitFor(`/Показано \\d+ из \\d+/.test(document.querySelector('#ws-status')?.textContent||'')`, 90000, 300); await b.sleep(700);

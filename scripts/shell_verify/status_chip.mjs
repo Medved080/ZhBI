@@ -27,7 +27,11 @@ try {
   }
   check(`плашка у ${withChip} экранов; зелёная ровно у статуса 5 (${green}), подпись — из реестра`, withChip > 20 && bad.length === 0, bad.slice(0, 5).join("; "));
   check("ни на одном экране нет ошибок JavaScript при открытии", errs.length === 0, errs.slice(0, 3).join("; "));
-  await b.eval(`location.hash = "#/appearance"`); await sleep(900);
-  check("«Внешний вид» (статус 4) — плашка-предупреждение", await b.eval(`document.querySelector('#v2-content .v2-chip[title="Статус реализации в реестре охвата"]')?.classList.contains('v2-chip-warn') === true`));
+  // экран со статусом ниже 5 (если такой ещё есть в реестре и у него есть плашка) — предупреждение; все проверенные — выше
+  const partial = reg.screens.find((x) => x.group !== "home" && x.status < 5 && x.impl !== "v1");
+  if (partial) {
+    await b.eval(`location.hash = "#/${partial.id}"`); await sleep(900);
+    check(`«${partial.title}» (статус ${partial.status}) — плашка-предупреждение`, await b.eval(`document.querySelector('#v2-content .v2-chip[title="Статус реализации в реестре охвата"]')?.classList.contains('v2-chip-warn') === true`));
+  } else console.log("  (экранов со статусом ниже 5 в реестре нет — проверка предупреждения не применяется)");
 } finally { await b.close(); await stopServer(); }
 process.exit(summary() ? 1 : 0);
