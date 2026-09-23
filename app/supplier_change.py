@@ -75,6 +75,7 @@ from app import activity, contract_guard, impersonation, record_version
 from app.access import (
     assert_object_any_feature,
     assert_object_feature,
+    has_feature,
     require_any_feature,
 )
 from app.auth import audit_display_name, get_current_user
@@ -576,13 +577,18 @@ def list_supplier_changes(object_id: int = Query(...),
                           user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "read"))):
     conn = get_connection()
     try:
+        allowed_kinds = tuple(kind for kind, feature_key in KIND_FEATURES.items()
+                              if has_feature(conn, user, feature_key, "read", object_id))
+        if not allowed_kinds:
+            return []  # Право могли отозвать между проверкой зависимости и этим запросом.
+        placeholders = ",".join("?" for _ in allowed_kinds)
         rows = conn.execute(
-            """
+            f"""
             SELECT d.*, (SELECT COUNT(*) FROM supplier_change_items i WHERE i.doc_id = d.id) AS items
-            FROM supplier_change_docs d WHERE d.object_id = ?
+            FROM supplier_change_docs d WHERE d.object_id = ? AND d.kind IN ({placeholders})
             ORDER BY d.doc_date DESC, d.id DESC
             """,
-            (object_id,),
+            (object_id, *allowed_kinds),
         ).fetchall()
         return [{**_doc_head(conn, r), "items": r["items"]} for r in rows]
     finally:

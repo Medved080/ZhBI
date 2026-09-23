@@ -304,9 +304,25 @@ try {
     } finally { await b.close(); }
   }
 
+  // Список API должен скрывать и реквизиты вида, на который нет права.
+  exec(`INSERT INTO role_features(role_key, feature_key, level) VALUES ('user','doc_supplier_change','write');`);
+  const oneKind = await httpLogin("user2");
+  const supplierOnly = await http(oneKind, "GET", "/supplier-changes?object_id=1");
+  check("C0 список API: при праве только на замену выдаёт только замены",
+    supplierOnly.status === 200 && supplierOnly.json.length > 0 && supplierOnly.json.every((d) => d.kind === "supplier_change"),
+    `${supplierOnly.status}, видов: ${[...new Set((supplierOnly.json || []).map((d) => d.kind))].join(",")}`);
+  const deniedSwap = await http(oneKind, "GET", `/supplier-changes/${swDraft.json.id}`);
+  check("C0a карточка обмена без права недоступна", deniedSwap.status === 403, String(deniedSwap.status));
+  exec(`DELETE FROM role_features WHERE role_key='user' AND feature_key='doc_supplier_change';`);
+  exec(`INSERT INTO role_features(role_key, feature_key, level) VALUES ('user','doc_link_swap','read');`);
+  const swapOnly = await http(oneKind, "GET", "/supplier-changes?object_id=1");
+  check("C0b список API: при праве только на обмен выдаёт только обмены",
+    swapOnly.status === 200 && swapOnly.json.length > 0 && swapOnly.json.every((d) => d.kind === "link_swap"),
+    `${swapOnly.status}, видов: ${[...new Set((swapOnly.json || []).map((d) => d.kind))].join(",")}`);
+
   // ---------------------------------------------------------------- C. СМЕШАННЫЕ права (user2: замена — «Изменение», обмен — «Чтение»)
   console.log("\n== C. смешанные права: user2 — замена «Изменение», обмен «Чтение» ==");
-  exec(`INSERT INTO role_features(role_key, feature_key, level) VALUES ('user','doc_supplier_change','write'), ('user','doc_link_swap','read');`);
+  exec(`INSERT INTO role_features(role_key, feature_key, level) VALUES ('user','doc_supplier_change','write');`);
   {
     const fpC0 = fingerprint();
     const b = await browserAs("user2");
