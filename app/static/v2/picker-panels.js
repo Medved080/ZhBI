@@ -80,6 +80,9 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
     // Замена поставщика и обмен привязками — документы ПЕРЕПРИВЯЗКИ контракта (не «смена планируемого поставщика»: такой сущности в модели данных нет)
     const docs = `<p class="v2-muted ws-fnote ws-pad">Перепривязка контракта у уже привязанных изделий (замена поставщика, обмен привязками) оформляется документом: <a href="#/supplier-change">Документы контрактации</a>. Изделия без контракта привязывает вкладка «Распределение».</p>`;
     const listed = pk.contracts.map((g) => ({ ...g, rows: onlyRem ? g.rows.filter((r) => r.on || r.remainder !== 0) : g.rows })).filter((g) => g.rows.length);
+    // Как в V1: у строки «без контракта» остатка не бывает. В режиме «только с остатком»
+    // скрываем её, но выбранную строку оставляем, чтобы человек мог снять отбор.
+    const showUnlinked = (!onlyRem || pk.unlinkedOn) && (pk.unlinked || pk.unlinkedOn);
     // как V1 (renderPickerContracts): при суженном срезе сначала контрагенты, чьи контракты есть в срезе, затем черта «нет в текущем срезе»
     const groups = pk.narrowed ? [...listed.filter((g) => g.inSlice), ...listed.filter((g) => !g.inSlice)] : listed;
     const firstOut = pk.narrowed ? groups.findIndex((g) => !g.inSlice) : -1;
@@ -89,7 +92,7 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
       ${pk.positionSelected ? `<button type="button" class="v2-link-btn" data-pk-clearpos="1" title="Снять выбор марок и типов, сделанный кликами по позициям контрактов; отбор по самим контрактам останется">сбросить позиции (${pk.positionSelected})</button>` : ""}</div>`;
     const notes = (pk.narrowed ? `<p class="v2-muted ws-fnote ws-pad" title="«Всего» — число из позиций контракта, оно от среза не зависит. «Привязано» считается по изделиям, прошедшим остальные срезы, поэтому и остаток относится к срезу, а не ко всему объекту">«привязано» и «остаток» — внутри выбранного среза</p>` : "")
       + (pk.highlightUnlinked ? `<p class="v2-muted ws-fnote ws-pad" role="status">${pk.highlightCount ? `подсвечено ${nf(pk.highlightCount)} изделий без контракта` : "подсвечивать нечего: несвязанных изделий в этом срезе нет"}</p>` : "");
-    if (!groups.length && !pk.unlinked && !pk.unlinkedOn) return docs + tools + notes + `<p class="v2-muted ws-pad">${pk.contracts.length ? "Нет контрактов с остатком." : "У объекта нет контрактов."}</p>`;
+    if (!groups.length && !showUnlinked) return docs + tools + notes + `<p class="v2-muted ws-pad">${pk.contracts.length ? "Нет контрактов с остатком." : "У объекта нет контрактов."}</p>`;
     const cols = `<div class="ws-pkcols ws-pkcols-c"><span></span><em>всего</em><em>привязано</em><em>остаток</em></div>`;
     const exp = (id, open) => `<button type="button" class="ws-cex" data-pk-exp="${id}" aria-expanded="${open}" title="${open ? "Свернуть позиции" : "Показать позиции по маркам"}">${open ? "▾" : "▸"}</button>`;
     let html = docs + tools + notes + `<div class="ws-fbody">${cols}`;
@@ -103,7 +106,7 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
       }
       html += `</div>`;
     }
-    if (pk.unlinked || pk.unlinkedOn) {
+    if (showUnlinked) {
       const open = expanded.has("none");
       html += `<div class="ws-cgroup"><button type="button" class="ws-crow ws-chead${pk.unlinkedOn ? " on" : ""}" data-pkn="1" aria-pressed="${pk.unlinkedOn}"><span>— Без контрагента —</span><em>—</em><em>${nf(pk.unlinked)}</em><em>—</em></button>
         <div class="ws-crowline">${exp("none", open)}<button type="button" class="ws-crow ws-cnest${pk.unlinkedOn ? " on" : ""}" data-pkn="1" aria-pressed="${pk.unlinkedOn}"><span>— без контракта —</span><em>—</em><em>${nf(pk.unlinked)}</em><em>—</em></button></div>

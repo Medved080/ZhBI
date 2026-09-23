@@ -53,7 +53,8 @@ try {
 
   await openScreen(b, "ws-picker", `document.querySelector('.ws-tabs button[data-tab="status"]')`);
   await tap(b, '.ws-tabs button[data-tab="status"]');
-  await b.waitFor(`!!document.querySelector('[data-mini-full="dynamics"]')`, 60000);
+  await b.waitFor(`!!document.querySelector('[data-mini-full="dynamics"]') && !!document.querySelector('.ws-mini-chart svg')`, 60000);
+  await sleep(300); // дождаться перерисовки после трёх параллельных запросов мини-отчётов
   await tap(b, '[data-mini-full="dynamics"]');
   await b.waitFor(`location.hash==='#/report-dynamics' && !!document.querySelector('#rd-use-filter')`, 30000);
   const dynamicsFull = await b.eval(`({checked:document.querySelector('#rd-use-filter').checked,note:document.querySelector('#rd-filter-note').textContent})`);
