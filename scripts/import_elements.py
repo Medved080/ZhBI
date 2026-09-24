@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.db import get_connection, init_db
+from app.zone_color_service import ZONE_COLOR_PALETTE, ensure_crane_colors
 from parse_zhbi import ElementRecord  # тот же каталог scripts/
 
 FIELDS = [
@@ -240,12 +241,6 @@ def save_axis_grid(conn, grid, source_file):
 
 # Палитра для автоназначения цвета зоны каждому КРАНУ (см. Docs/backlog.md,
 # item 7) — циклическая, если кранов в файле больше, чем цветов в палитре.
-ZONE_COLOR_PALETTE = [
-    "#c0392b", "#1f8a4c", "#8e44ad", "#d68910", "#2471a3",
-    "#16a085", "#a04000", "#5b2c6f", "#117864", "#b03a2e",
-]
-
-
 def _ensure_zone_colors(conn, zones, object_id):
     """Автоназначает цвет каждому крану этого ОБЪЕКТА, у которого его ещё
     нет — не трогает уже настроенные админом цвета (`INSERT OR IGNORE`,
@@ -256,26 +251,7 @@ def _ensure_zone_colors(conn, zones, object_id):
     Ключ — объект, а не файл (этап D): новая версия чертежа приходит под
     новым именем, и при ключе по файлу настроенная раскраска пропадала бы
     вместе с каждой выдачей чертежа."""
-    crane_names = sorted({z.name for z in zones if z.category == "Кран" and z.name})
-    if not crane_names:
-        return
-    existing_rows = conn.execute(
-        "SELECT name, color FROM zone_colors WHERE object_id = ? AND category = 'Кран'", (object_id,)
-    ).fetchall()
-    existing_names = {r["name"] for r in existing_rows}
-    used_colors = {r["color"] for r in existing_rows}
-
-    for name in crane_names:
-        if name in existing_names:
-            continue
-        color = next((c for c in ZONE_COLOR_PALETTE if c not in used_colors), None)
-        if color is None:
-            color = ZONE_COLOR_PALETTE[len(used_colors) % len(ZONE_COLOR_PALETTE)]
-        used_colors.add(color)
-        conn.execute(
-            "INSERT OR IGNORE INTO zone_colors (object_id, category, name, color) VALUES (?, 'Кран', ?, ?)",
-            (object_id, name, color),
-        )
+    ensure_crane_colors(conn, object_id, zones)
     conn.commit()
 
 

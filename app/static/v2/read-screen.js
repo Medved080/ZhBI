@@ -134,7 +134,18 @@ function errorText(err) {
 
 export function mountReadScreen(el, { screen, structure, objectId, api, groupTitle, rights, go, switchObject, hasObject }) {
   el.className = "v2-page";
-  const sections = screen.read.sections;
+  // При версионировании кранов сводную с такими уровнями нужно строить за
+  // однородный период. Отдельные поля видны только в режиме сводной; пустые
+  // даты сохраняют прежнее поведение отчёта без группировки по зонам.
+  const sections = screen.read.sections.map((sec) => sec.report === "completion" ? {
+    ...sec,
+    controls: [
+      ...(sec.controls || []),
+      { param: "date_from", label: "Период с", type: "date", showWhen: { view: "pivot" } },
+      { param: "date_to", label: "По", type: "date", showWhen: { view: "pivot" } },
+      { label: "Весь срок", type: "button", resets: ["date_from", "date_to"], showWhen: { view: "pivot" } },
+    ],
+  } : sec);
   let dead = false;
   let active = 0;
   let editor = null; // открытая карточка строки (правка запланированной работы)

@@ -1854,9 +1854,39 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
     if normalize_view(body.view) != VIEW_PIVOT:
         return build_completion_report(conn, body.source_file, body.element_ids, object_id)
     try:
+        # Только группировка по крану/стоянке зависит от редакции зон.
+        # Сводная без этой группировки сохраняет прежний режим «весь срок».
+        uses_zones = bool(set(body.group_by or []) & {"crane", "stance"})
+        version = None
+        if uses_zones and object_id is not None and conn.execute(
+            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            (object_id,),
+        ).fetchone():
+            if not body.date_from or not body.date_to:
+                raise ValueError(
+                    "После корректировки крановых зон для группировки по крану или "
+                    "стоянке укажите обе даты однородного периода."
+                )
+            version = crane_zone_period_version(conn, object_id, body.date_from, body.date_to)
+        elif uses_zones and object_id is None and conn.execute(
+            "SELECT 1 FROM crane_zone_versions WHERE revision_no > 0 LIMIT 1"
+        ).fetchone():
+            raise ValueError("Для группировки по кранам и стоянкам выберите один объект")
+        if version is not None:
+            active = conn.execute(
+                "SELECT id FROM crane_zone_versions WHERE object_id = ? "
+                "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
+                (object_id,),
+            ).fetchone()
+            if active is None or version["id"] != active["id"]:
+                with historical_zone_overlay(conn, version):
+                    return build_completion_pivot(
+                        conn, body.source_file, body.element_ids, body.group_by,
+                        body.step, body.date_scale, object_id, body.date_from, body.date_to,
+                    )
         return build_completion_pivot(conn, body.source_file, body.element_ids,
                                       body.group_by, body.step, body.date_scale,
-                                      object_id)
+                                      object_id, body.date_from, body.date_to)
     except ValueError as exc:
         # Слишком много календарных колонок — это ошибка ЗАПРОСА, а не сбой:
         # отдаём 400 с текстом, который уже объясняет, что сделать.

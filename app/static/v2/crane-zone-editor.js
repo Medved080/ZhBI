@@ -10,14 +10,16 @@ const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow"
 export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
   const prefix = `/objects/${objectId}/crane-zone-versions`;
   let dead = false, busy = false, drawing = false;
-  let versions = [], drafts = [], draft = null, scene = [], selectedZone = null;
+  let versions = [], drafts = [], draft = null, scene = [], currentScene = [], selectedZone = null;
+  let selectedVersionId = null;
   let selectedElements = new Set(), dirty = false, preview = null, message = "";
   let effectiveDate = today();
   let view = null, drag = null, activeLevel = 0;
   const $ = (s) => root.querySelector(s);
 
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
-  function zones() { return draft?.zones || currentVersion()?.zones || []; }
+  function displayVersion() { return versions.find((v) => v.id === selectedVersionId) || currentVersion(); }
+  function zones() { return draft?.zones || displayVersion()?.zones || []; }
   function zoneById(id) { return zones().find((z) => z.id === id); }
   function selected() { return zoneById(selectedZone); }
   function markDirty() { dirty = true; preview = null; message = ""; draw(); updateStatus(); }
@@ -25,7 +27,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
   function status(text) { message = text; updateStatus(); }
   function updateStatus() {
     const node = $("#cz-status");
-    if (node) node.textContent = message || (dirty ? "Есть несохранённые изменения" : draft ? "Черновик сохранён" : "Просмотр действующей редакции");
+    if (node) node.textContent = message || (dirty ? "Есть несохранённые изменения" : draft ? "Черновик сохранён" : selectedVersionId ? "Просмотр сохранённой редакции · координаты изделий текущие" : "Просмотр действующей редакции");
     const save = $("#cz-save");
     if (save) save.disabled = !canEdit || !draft || !dirty || busy;
     const publish = $("#cz-publish");
@@ -65,12 +67,14 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
   function render() {
     if (dead) return;
     root.className = "cz-root";
-    const version = currentVersion();
+    const version = displayVersion();
     root.innerHTML = `<div class="cz-toolbar"><strong>Зоны кранов</strong><span class="cz-revision">${version ? `Редакция №${version.revision_no}${version.effective_date ? ` · с ${esc(version.effective_date)}` : " · исходная"}` : "Нет редакции"}</span>
+      <select id="cz-version-select" aria-label="История редакций"><option value="">Действующая редакция</option>${versions.map((v) => `<option value="${v.id}" ${selectedVersionId === v.id ? "selected" : ""}>№${v.revision_no} · ${v.effective_date || `исходная с ${v.known_from}`}${v.activated_at ? "" : " · ожидает"}</option>`).join("")}</select>
       <select id="cz-draft-select" aria-label="Черновик"><option value="">Действующая редакция</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select>
       ${canEdit ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
+      ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
       <div class="cz-body"><aside class="cz-tree"><div class="cz-title">Краны и стоянки</div>${treeHtml()}${canEdit && draft ? `<div class="cz-tree-add"><button type="button" class="v2-btn" id="cz-add-crane">+ Кран</button><button type="button" class="v2-btn" id="cz-add-stand">+ Стоянка</button></div>` : ""}</aside>
-      <div class="cz-map"><div class="cz-map-bar"><span>Схема · ${scene.length} изделий</span><span>${selectedElements.size ? `Выделено ${selectedElements.size}` : "Щелчок — выбор; Shift + протяжка — группа"}</span><button type="button" id="cz-fit" class="v2-btn">Вписать</button></div><canvas id="cz-canvas" aria-label="Схема зон кранов и изделий"></canvas><div class="cz-map-foot" id="cz-status" role="status"></div></div>
+      <div class="cz-map"><div class="cz-map-bar"><span>Схема · ${scene.length} изделий</span><span>${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : "Щелчок — выбор; Shift + протяжка — группа"}</span><button type="button" id="cz-fit" class="v2-btn">Вписать</button></div><canvas id="cz-canvas" aria-label="Схема зон кранов и изделий"></canvas><div class="cz-map-foot" id="cz-status" role="status"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>` : ""}`;
     bind();
@@ -199,6 +203,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
     if (best >= 0) { level.outline.splice(best + 1, 0, p.map(Math.round)); markDirty(); render(); }
   }
   function bind() {
+    $("#cz-version-select")?.addEventListener("change", async (e) => { if (dirty && !(await guardLeave())) { e.target.value = selectedVersionId || ""; return; } await loadVersion(e.target.value ? Number(e.target.value) : null); });
     $("#cz-draft-select")?.addEventListener("change", async (e) => { if (dirty && !(await guardLeave())) { e.target.value = draft?.id || ""; return; } await loadDraft(e.target.value ? Number(e.target.value) : null); });
     $("#cz-new")?.addEventListener("click", createDraft);
     $("#cz-save")?.addEventListener("click", save);
@@ -249,8 +254,23 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
     catch (e) { status(errText(e)); } finally { busy = false; updateStatus(); }
   }
   async function loadDraft(id) {
-    try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; dirty = false; preview = null; selectedZone = zones()[0]?.id ?? null; activeLevel = 0; view = null; render(); }
+    try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; selectedVersionId = null; scene = currentScene; selectedElements.clear(); dirty = false; preview = null; selectedZone = zones()[0]?.id ?? null; activeLevel = 0; view = null; message = ""; render(); }
     catch (e) { status(errText(e)); }
+  }
+  async function loadVersion(id) {
+    if (id && !versions.some((v) => v.id === id)) return status("Редакция не найдена");
+    try {
+      if (id) {
+        const [detail, image] = await Promise.all([
+          api.get(`${prefix}/${id}`), api.get(`${prefix}/scene?version_id=${id}`),
+        ]);
+        versions.find((v) => v.id === id).zones = detail.zones;
+        scene = image.elements || [];
+      } else scene = currentScene;
+      selectedVersionId = id; draft = null; dirty = false; preview = null;
+      selectedElements.clear(); selectedZone = zones()[0]?.id ?? null;
+      activeLevel = 0; view = null; message = ""; render();
+    } catch (e) { status(errText(e)); }
   }
   async function save() {
     if (!draft || !dirty || busy) return false;
@@ -278,9 +298,16 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
   }
   async function refresh() {
     const [v, d, s] = await Promise.all([api.get(prefix), api.get(`${prefix}/drafts`), api.get(`${prefix}/scene`)]);
-    versions = v; drafts = d; scene = s.elements || [];
+    versions = v; drafts = d; currentScene = s.elements || []; scene = currentScene;
     const current = currentVersion();
     if (current) current.zones = (await api.get(`${prefix}/${current.id}`)).zones;
+    if (selectedVersionId) {
+      const selected = versions.find((row) => row.id === selectedVersionId);
+      if (selected) {
+        selected.zones = (await api.get(`${prefix}/${selected.id}`)).zones;
+        scene = (await api.get(`${prefix}/scene?version_id=${selected.id}`)).elements || [];
+      } else selectedVersionId = null;
+    }
     if (draft && !drafts.some((item) => item.id === draft.id)) draft = null;
     selectedZone = selectedZone && zoneById(selectedZone) ? selectedZone : zones()[0]?.id ?? null;
     view = null; render();

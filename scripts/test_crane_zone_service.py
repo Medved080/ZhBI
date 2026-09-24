@@ -226,6 +226,43 @@ class CraneZoneServiceTest(unittest.TestCase):
             "AND is_current = 1", (self.object_id,),
         ).fetchone()[0], 1)
 
+    def test_full_dxf_import_stages_crane_contours_without_applying_them(self):
+        import ezdxf
+        from app.dxf_import import analyze_drawing, apply_drawing, parse_drawing
+        from scripts import generate_test_zones_dxf
+
+        path = Path(self.temp.name) / "synthetic_zones.dxf"
+        with patch.object(generate_test_zones_dxf, "OUTPUT_PATH", str(path)):
+            generate_test_zones_dxf.main()
+        drawing = ezdxf.readfile(path)
+        for entity in drawing.modelspace().query("TEXT"):
+            if entity.dxf.text == "Стоянка A":
+                entity.dxf.text = "Стоянка 1"
+            elif entity.dxf.text == "Стоянка B":
+                entity.dxf.text = "Стоянка 2"
+        drawing.saveas(path)
+        before = snapshot_zones(self.conn, self.object_id)
+        parsed = parse_drawing(path, path.name, self.object_id)
+        analysis = analyze_drawing(parsed, self.object_id)
+        result = apply_drawing(parsed, analysis)
+        self.assertEqual(result.inserted, 3)
+        self.assertEqual(snapshot_zones(self.conn, self.object_id), before)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_drafts WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0], 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM elements WHERE object_id = ? AND is_current = 1 "
+            "AND zone_crane_id IS NOT NULL", (self.object_id,),
+        ).fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_version_assignments a "
+            "JOIN elements e ON e.id = a.element_id WHERE e.object_id = ? "
+            "AND a.version_id = (SELECT id FROM crane_zone_versions "
+            "WHERE object_id = ? AND revision_no = 0)",
+            (self.object_id, self.object_id),
+        ).fetchone()[0], 4)
+
     def test_renaming_stance_migrates_schedule_flow_atomically(self):
         self.conn.execute(
             "INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) "
@@ -248,6 +285,30 @@ class CraneZoneServiceTest(unittest.TestCase):
             (self.object_id,),
         ).fetchone()
         self.assertEqual(tuple(row), ("Кран 1", "Стоянка 01 обновлённая", 7))
+
+    def test_crane_color_survives_rename_and_new_crane_gets_color(self):
+        self.conn.execute(
+            "INSERT INTO zone_colors (object_id, category, name, color) "
+            "VALUES (?, 'Кран', 'Кран 1', '#abcdef')", (self.object_id,),
+        )
+        self.conn.commit()
+        draft_id, token = self._draft_with_new_crane()
+        zones = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
+        ).fetchone()[0])
+        next(zone for zone in zones if zone["id"] == self.crane_id)["name"] = "Кран 01"
+        token = update_draft(self.conn, self.object_id, draft_id, token, zones,
+                             {str(self.element_id): {
+                                 "crane_zone_id": -1, "stance_zone_id": -2,
+                             }}, "Изменили название и добавили кран")
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        colors = {row["name"]: row["color"] for row in self.conn.execute(
+            "SELECT name, color FROM zone_colors WHERE object_id = ?", (self.object_id,),
+        )}
+        self.assertEqual(colors["Кран 01"], "#abcdef")
+        self.assertIn("Кран 2", colors)
+        self.assertNotEqual(colors["Кран 2"], "#abcdef")
 
     def test_failure_during_materialization_rolls_back_all(self):
         draft_id, token = self._draft_with_new_crane()
@@ -364,6 +425,27 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
         ).fetchone()[0], current)
 
+    def test_history_scene_shows_saved_assignments_not_current(self):
+        from app.crane_zone_api import zone_scene
+
+        draft_id, token = self._draft_with_new_crane()
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        old_id = self.conn.execute(
+            "SELECT id FROM crane_zone_versions WHERE object_id = ? AND revision_no = 0",
+            (self.object_id,),
+        ).fetchone()[0]
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        history = zone_scene(self.object_id, old_id, admin)
+        current = zone_scene(self.object_id, None, admin)
+        self.assertEqual(history["elements"][0]["zone_crane_id"], self.crane_id)
+        self.assertNotEqual(current["elements"][0]["zone_crane_id"], self.crane_id)
+        with self.assertRaises(HTTPException) as missing:
+            zone_scene(self.object_id, 9999999, admin)
+        self.assertEqual(missing.exception.status_code, 404)
+
     def test_delivery_report_refuses_crossing_and_uses_old_stance(self):
         from app.main import ReportRequestIn, _delivery_schedule
 
@@ -389,6 +471,49 @@ class CraneZoneServiceTest(unittest.TestCase):
             self.conn, admin, body.model_copy(update={"date_from": tomorrow}),
         )
         self.assertEqual(new["rows"][0]["label"], "Кран 2 · Стоянка 1")
+
+    def test_completion_pivot_requires_homogeneous_period_for_crane_group(self):
+        from app.main import ReportRequestIn, _completion
+
+        self.conn.execute(
+            "UPDATE elements SET planned_delivery_date = ? WHERE id = ?",
+            (business_date(), self.element_id),
+        )
+        self.conn.commit()
+        draft_id, token = self._draft_with_new_crane()
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        published = publish_draft(
+            self.conn, self.object_id, draft_id, token, tomorrow, None, "Тест",
+        )
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            self.assertEqual(activate_due(self.conn), [published["version_id"]])
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        common = ReportRequestIn(
+            object_id=self.object_id, source_file="test.dxf", view="pivot",
+            group_by=["crane"],
+        )
+        with self.assertRaises(HTTPException) as missing:
+            _completion(self.conn, admin, common)
+        self.assertIn("укажите обе даты", str(missing.exception.detail))
+        with self.assertRaises(HTTPException) as crossing:
+            _completion(self.conn, admin, common.model_copy(update={
+                "date_from": business_date(), "date_to": tomorrow,
+            }))
+        self.assertIn(tomorrow, str(crossing.exception.detail))
+        old = _completion(self.conn, admin, common.model_copy(update={
+            "date_from": business_date(), "date_to": business_date(),
+        }))
+        self.assertEqual(old["rows"][0]["label"], "Кран 1")
+        self.assertEqual(old["total"]["total"], 1)
+        self.assertEqual(old["date_from"], business_date())
+        self.assertEqual(old["date_to"], business_date())
+        # Без крановых уровней прежняя сводная не требует выбора периода.
+        ungrouped = _completion(self.conn, admin, common.model_copy(update={
+            "group_by": ["mark"],
+        }))
+        self.assertEqual(ungrouped["total"]["total"], 1)
 
     def test_analytics_uses_zone_revision_for_report_date(self):
         from app.main import ReportRequestIn, _analytics

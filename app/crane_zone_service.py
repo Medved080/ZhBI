@@ -13,6 +13,7 @@ from datetime import date
 
 from app.crane_zone_editor import ZoneDraftError, preview_assignments, validate_zones
 from app.crane_zone_versions import business_date, snapshot_zones
+from app.zone_color_service import ensure_crane_colors
 
 
 def _json(value):
@@ -248,7 +249,9 @@ def _reserve_new_zones(conn: sqlite3.Connection, object_id: int,
 def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
     """Материализовать уже опубликованную версию в старых рабочих таблицах."""
     zones = json.loads(version["zones_json"])
-    _migrate_schedule_flow(conn, object_id, snapshot_zones(conn, object_id), zones)
+    previous = snapshot_zones(conn, object_id)
+    _migrate_schedule_flow(conn, object_id, previous, zones)
+    ensure_crane_colors(conn, object_id, zones, previous)
     expected = {zone["id"] for zone in zones}
     alive = {
         row["id"] for row in conn.execute(

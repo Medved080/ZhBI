@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -59,18 +60,41 @@ def list_versions(object_id: int, user: sqlite3.Row = Depends(get_current_user))
 
 
 @router.get("/scene")
-def zone_scene(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
-    """Лёгкий слой точек схемы для выбора изделий и редактирования зон."""
+def zone_scene(object_id: int, version_id: Optional[int] = None,
+               user: sqlite3.Row = Depends(get_current_user)):
+    """Точки схемы с действующими либо сохранёнными в редакции назначениями.
+
+    Координаты изделия остаются текущими: версия хранит принадлежность, а не
+    геометрический снимок каждого изделия. Снятые с учёта изделия редакции
+    остаются видны для проверки её полного состава.
+    """
     conn = get_connection()
     try:
         _check(conn, user, object_id, "read")
-        rows = conn.execute(
-            "SELECT id, element_uid, element_type, mark, x, y, elevation_mm, "
-            "zone_crane_id, zone_stance_id, current_status "
-            "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id",
-            (object_id,),
-        )
-        return {"elements": [dict(row) for row in rows]}
+        if version_id is not None:
+            if conn.execute(
+                "SELECT 1 FROM crane_zone_versions WHERE id = ? AND object_id = ?",
+                (version_id, object_id),
+            ).fetchone() is None:
+                raise HTTPException(status_code=404, detail="Редакция не найдена")
+            rows = conn.execute(
+                "SELECT e.id, e.element_uid, e.element_type, e.mark, e.x, e.y, "
+                "e.elevation_mm, a.crane_zone_id AS zone_crane_id, "
+                "a.stance_zone_id AS zone_stance_id, e.current_status, e.is_current "
+                "FROM crane_zone_version_assignments a "
+                "JOIN elements e ON e.id = a.element_id "
+                "WHERE a.version_id = ? AND e.object_id = ? ORDER BY e.id",
+                (version_id, object_id),
+            )
+        else:
+            rows = conn.execute(
+                "SELECT id, element_uid, element_type, mark, x, y, elevation_mm, "
+                "zone_crane_id, zone_stance_id, current_status, is_current "
+                "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id",
+                (object_id,),
+            )
+        return {"elements": [dict(row) for row in rows],
+                "coordinates_note": "Координаты изделий показаны по текущей схеме"}
     finally:
         conn.close()
 

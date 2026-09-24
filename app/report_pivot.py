@@ -24,8 +24,9 @@
     на вопрос «сколько и когда», а не «где план разошёлся с фактом»;
   • шкала ВЫБИРАЕТСЯ одна на всю таблицу (план / факт / требуемая),
     по умолчанию плановая дата — та, по которой сводную строит заказчик;
-  • период не задаётся руками, а берётся из самих данных: сводную читают
-    «что вообще есть», а не «что в окне».
+  • по умолчанию период берётся из данных. После появления редакций крановых
+    зон при группировке по крану/стоянке оператор задаёт однородный период:
+    сводная не должна смешивать назначения из разных редакций.
 
 Что общее — общее по-настоящему: календарная сетка (шаг, границы периода,
 подписи колонок) живёт в `app/reports.py` и используется обоими отчётами.
@@ -43,6 +44,7 @@
 берут результат одной и той же функции и разойтись не могут.
 """
 
+from datetime import date
 from typing import Optional
 
 from app.contracts import build_document_label
@@ -206,6 +208,8 @@ def build_completion_pivot(
     step: Optional[str] = None,
     scale: Optional[str] = None,
     object_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> dict:
     """Сводная по тем же изделиям, что и плоский перечень.
 
@@ -220,6 +224,15 @@ def build_completion_pivot(
     groups = _normalize_groups(group_by)
     scale_key = _normalize_scale(scale)
     date_expr = _scale(scale_key)["expr"]
+    if bool(date_from) != bool(date_to):
+        raise ValueError("Для периода укажите обе даты: с и по")
+    if date_from:
+        try:
+            start_bound, end_bound = date.fromisoformat(date_from), date.fromisoformat(date_to)
+        except ValueError as exc:
+            raise ValueError("Неверная дата периода") from exc
+        if end_bound < start_bound:
+            raise ValueError("Конец периода раньше начала")
 
     clauses, params = [visible_elements_clause("e")], []
     if object_id is not None:
@@ -228,6 +241,9 @@ def build_completion_pivot(
     if source_file:
         clauses.append("e.source_file = ?")
         params.append(source_file)
+    if date_from:
+        clauses.append(f"date({date_expr}) BETWEEN ? AND ?")
+        params.extend((date_from, date_to))
     if element_ids is not None:
         if not element_ids:
             clauses.append("1=0")
@@ -267,7 +283,8 @@ def build_completion_pivot(
     ).fetchall()
 
     known = [d for d in (parse_iso_date(r["d"]) for r in rows) if d]
-    start, end = (min(known), max(known)) if known else (None, None)
+    start, end = ((start_bound, end_bound) if date_from else
+                  (min(known), max(known)) if known else (None, None))
 
     if known:
         span = (end - start).days + 1
@@ -385,6 +402,7 @@ def build_completion_pivot(
         "group_labels": [GROUP_LABELS[k] for k in groups],
         "date_from": start.isoformat() if start else None,
         "date_to": end.isoformat() if end else None,
+        "period_filtered": bool(date_from),
         # Та же честная пометка, что у «Графика поставки» и «Динамики»: дата
         # заполнена не у всех изделий, и сводная по части объёма внешне
         # неотличима от полной.

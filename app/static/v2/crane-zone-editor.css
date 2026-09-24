@@ -10,6 +10,7 @@
 .cz-toolbar strong { font-size: 17px; margin-right: 8px; }
 .cz-revision { font-size: 12px; color: #617784; margin-right: auto; white-space: nowrap; }
 .cz-toolbar select { min-width: 195px; max-width: 255px; }
+.cz-history-note { background: #edf4f8; color: #425f6e; border-bottom: 1px solid #d5e4eb; padding: 6px 16px; font-size: 12px; line-height: 1.3; }
 .cz-body { display: grid; grid-template-columns: minmax(190px, 245px) minmax(360px, 1fr) minmax(255px, 310px); flex: 1; min-height: 0; }
 .cz-tree, .cz-properties { overflow: auto; background: #fff; padding: 14px; min-width: 0; }
 .cz-tree { border-right: 1px solid #dce3e7; }
