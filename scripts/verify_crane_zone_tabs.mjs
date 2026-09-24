@@ -22,6 +22,7 @@ try {
       Math.abs(before.y - crane.y) <= 1 && Math.abs(pageBefore.x - pageCrane.x) <= 1 && Math.abs(pageBefore.w - pageCrane.w) <= 1,
       `${JSON.stringify({ before, crane, pageBefore, pageCrane })}`);
     check(`${width}: зона крана названа отдельно`, await browser.eval("document.querySelector('.cz-toolbar strong')?.textContent === 'Зоны кранов'"));
+    check(`${width}: в зонах кранов нет стоянок и команды их добавления`, await browser.eval("!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-stand') && document.querySelector('.cz-prop-head span')?.textContent === 'Кран'"));
     if (process.env.ZONES_SHOTS) await browser.shot(join(process.env.ZONES_SHOTS, `cranes-${width}.png`));
     await tap(browser, '[data-cat="Стоянка"]');
     await browser.waitFor("document.querySelector('.cz-toolbar strong')?.textContent === 'Стоянки кранов'");
@@ -30,6 +31,7 @@ try {
     check(`${width}: вкладки и ширина формы неподвижны при переходе к стоянкам`,
       Math.abs(before.y - stand.y) <= 1 && Math.abs(pageBefore.x - pageStand.x) <= 1 && Math.abs(pageBefore.w - pageStand.w) <= 1);
     check(`${width}: объяснены вложенность и действие`, await browser.eval("document.querySelector('#ze-context')?.textContent.includes('внутри выбранного крана') && document.querySelector('.cz-tree-intro')?.textContent.includes('Выберите кран')"));
+    check(`${width}: стоянки видны только в своём разделе`, await browser.eval("!!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-crane') && document.querySelector('.cz-prop-head span')?.textContent === 'Стоянка'"));
     const add = await browser.rect("#cz-add-stand");
     check(`${width}: добавление стоянки видно без прокрутки`, !!add && add.y >= 0 && add.y + add.h <= height && await browser.eval("!document.querySelector('#cz-add-stand').disabled"));
     check(`${width}: нет прокрутки страницы`, await noPageScroll(browser));
@@ -51,6 +53,14 @@ try {
     }
     await browser.close(); browser = null;
   }
+  browser = await session(base, "admin", { objectId: 1, width: 1366, height: 768 });
+  await browser.goto(`${base}/?ui=v1&object_id=1&open=menu&item=menu-zones-crane`, 1000);
+  await browser.waitFor("document.querySelector('.cz-v1-modal .cz-root') && document.querySelector('.cz-v1-modal .cz-tree-item')", 30000);
+  check("V1: раздел кранов показывает только краны", await browser.eval("document.querySelector('.cz-v1-head strong')?.textContent === 'Зоны кранов' && !document.querySelector('.cz-v1-modal .cz-stand') && !document.querySelector('.cz-v1-modal #cz-add-stand')"));
+  await browser.goto(`${base}/?ui=v1&object_id=1&open=menu&item=menu-zones-stance`, 1000);
+  await browser.waitFor("document.querySelector('.cz-v1-modal .cz-stand')", 30000);
+  check("V1: стоянки открываются отдельно", await browser.eval("document.querySelector('.cz-v1-head strong')?.textContent === 'Стоянки кранов' && !!document.querySelector('.cz-v1-modal #cz-add-stand')"));
+  await browser.close(); browser = null;
   if (summary("Зоны V2") !== 0) process.exitCode = 1;
 } finally {
   await browser?.close();

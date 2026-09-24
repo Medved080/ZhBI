@@ -17,8 +17,9 @@ export function openCraneZoneV1({ objectId, apiRequest, canEdit, onPublished, in
   if (!objectId) throw new Error("Сначала выберите объект в шапке");
   const backdrop = document.createElement("div");
   backdrop.className = "cz-v1-backdrop";
-  backdrop.innerHTML = `<section class="cz-v1-modal" role="dialog" aria-modal="true" aria-label="Редакции зон кранов и стоянок">
-    <header class="cz-v1-head"><strong>Редакции зон кранов и стоянок</strong><button type="button" class="v2-btn" id="cz-v1-close">Закрыть</button></header>
+  const title = initialCategory === "Стоянка" ? "Стоянки кранов" : "Зоны кранов";
+  backdrop.innerHTML = `<section class="cz-v1-modal" role="dialog" aria-modal="true" aria-label="${title}">
+    <header class="cz-v1-head"><strong>${title}</strong><button type="button" class="v2-btn" id="cz-v1-close">Закрыть</button></header>
     <div class="cz-v1-editor"></div>
   </section>`;
   document.body.appendChild(backdrop);
