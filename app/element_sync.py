@@ -248,6 +248,7 @@ def apply_import(
     refill_manual_fields: Optional[dict] = None,
     user=None,
     request_id: Optional[str] = None,
+    after_write=None,
 ) -> dict:
     """Применяет сверку. accept_mark_changes=False (или перечисление
     element_id в keep_mark_element_ids) оставляет ПРЕЖНЮЮ марку у
@@ -367,6 +368,8 @@ def apply_import(
     # самая длинная запись в системе, и опрос чужих вкладок за это время
     # успевает уйти вперёд по метке времени (см. app.db.touch_elements).
     touch_elements(conn, изменённые)
+    if after_write is not None:
+        after_write(conn)
     conn.commit()
 
     return {

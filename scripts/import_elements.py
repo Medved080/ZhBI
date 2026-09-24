@@ -328,7 +328,8 @@ _ZONE_CATEGORY_COLUMNS = {
 }
 
 
-def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id):
+def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id,
+                        allowed_categories=None):
     """element_records — те же ElementRecord (нового стандарта), что ушли
     в upsert_elements, с уже посчитанным record.zone_bindings (см.
     scripts/new_standard_pipeline.process). Элементы старого конвейера
@@ -351,6 +352,8 @@ def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id):
             continue
         updates = {"element_id": element_row["id"]}
         for category, result in record.zone_bindings.items():
+            if allowed_categories is not None and category not in allowed_categories:
+                continue
             id_col, status_col = _ZONE_CATEGORY_COLUMNS[category]
             resolved = zone_handle_to_id.get(result.zone_handle) if result.zone_handle else None
             zone_id, level_id = resolved if resolved else (None, None)
@@ -359,7 +362,8 @@ def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id):
             if category == "Стоянка":
                 updates["zone_stance_level_id"] = level_id
         set_clause = ", ".join(f"{col}=:{col}" for col in updates if col != "element_id")
-        conn.execute(f"UPDATE elements SET {set_clause} WHERE id=:element_id", updates)
+        if set_clause:
+            conn.execute(f"UPDATE elements SET {set_clause} WHERE id=:element_id", updates)
     conn.commit()
 
 

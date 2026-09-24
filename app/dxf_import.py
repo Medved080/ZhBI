@@ -29,6 +29,10 @@ from layer_naming import LayerNameError
 from zone_parser import classify_layers
 
 from app import activity, element_sync, zone_sync
+from app.crane_zone_editor import ZoneDraftError
+from app.crane_zone_import import stage_import_draft
+from app.crane_zone_service import register_import_membership
+from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 from app.db import get_connection, init_db
 from app.models import DxfImportResult, ZoneImportSummary
 from app.upload_limits import copy_upload_limited
@@ -381,6 +385,17 @@ def apply_drawing(
     init_db()
     conn = get_connection()
     try:
+        versioned_zones = has_crane_zone_versioning(conn, object_id)
+        if versioned_zones:
+            # ПРЕЖДЕ записи изделий: если DXF невозможно безопасно превратить
+            # в черновик, весь импорт останавливается без частичного итога.
+            try:
+                stage_import_draft(
+                    conn, object_id, parsed.zones, parsed.source_file,
+                    user["id"] if user is not None else None, "Импорт DXF",
+                )
+            except ZoneDraftError as exc:
+                raise DxfProcessingError(409, str(exc)) from exc
         # Подтипы — ПЕРВЫМИ, до записи изделий: изделие ссылается на подтип
         # своим полем, и проверка реквизитов (app/element_fields) сверяет
         # его со справочником ОБЪЕКТА. В обратном порядке только что
@@ -414,6 +429,8 @@ def apply_drawing(
                     for element_id, fields in (refill_manual_fields or {}).items()
                 },
                 user=user, request_id=request_id,
+                after_write=(lambda live_conn: register_import_membership(live_conn, object_id))
+                if versioned_zones else None,
             )
             activity.defer_flush(события)
         finally:
@@ -428,6 +445,7 @@ def apply_drawing(
                 zone_handle_to_id = zone_sync.sync_zones(
                     conn, object_id, parsed.source_file, parsed.zones,
                     create_new_zone_ids=set(create_new_zone_ids or ()),
+                    allowed_categories={"Захватка"} if versioned_zones else None,
                 )
             except zone_sync.ZoneSyncConflict as e:
                 # Этап изделий (apply_import выше) уже мог зафиксироваться — та же семантика, что у остальных
@@ -439,9 +457,11 @@ def apply_drawing(
             # с заменой записи зон (ключ у цветов свой: объект + имя крана,
             # с этапа D — раньше был файл, и настроенный цвет терялся на
             # каждой новой версии чертежа).
-            import_elements._ensure_zone_colors(conn, parsed.zones, object_id)
+            if not versioned_zones:
+                import_elements._ensure_zone_colors(conn, parsed.zones, object_id)
             import_elements.apply_zone_bindings(
-                conn, parsed.source_file, parsed.new_records, zone_handle_to_id
+                conn, parsed.source_file, parsed.new_records, zone_handle_to_id,
+                allowed_categories={"Захватка"} if versioned_zones else None,
             )
     finally:
         conn.close()

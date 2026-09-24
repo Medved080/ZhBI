@@ -71,6 +71,8 @@ from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
 from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 from app.crane_zone_versions import period_version as crane_zone_period_version
+from app.crane_zone_versions import version_for_date as crane_zone_version_for_date
+from app.crane_zone_versions import business_date as crane_zone_business_date
 from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_api import router as crane_zone_versions_router
 from app import settings_import
@@ -787,6 +789,13 @@ def on_startup():
     if выполнено:
         print(f"[startup] обработок релиза выполнено: {len(выполнено)}")
 
+    # Редакция с наступившей датой должна вступить в силу до первого
+    # пользовательского запроса, включая рестарт после полуночи.
+    from app.crane_zone_activation import activate_now
+    activated_zones = activate_now()
+    if activated_zones:
+        print(f"[startup] активировано редакций крановых зон: {len(activated_zones)}")
+
     # Подложка карты из интернета: настройка читается в память один раз, её
     # значение нужно КАЖДОМУ ответу сервера (политика безопасности строится
     # в middleware), а ходить за ним в базу на каждый запрос незачем.
@@ -819,6 +828,16 @@ def on_startup():
             print(f"[startup] внешние 3D-модели: убрано temp-файлов {removed_temp}")
     except Exception as exc:
         print(f"[startup] уборка temp-файлов внешних 3D-моделей не выполнена: {exc}")
+
+    from app.crane_zone_activation import start_worker
+    app.state.crane_zone_activation_stop = start_worker()
+
+
+@app.on_event("shutdown")
+def stop_crane_zone_activation():
+    stop = getattr(app.state, "crane_zone_activation_stop", None)
+    if stop is not None:
+        stop.set()
 
 
 # СТРАЖ РЕГИСТРАЦИИ СТАРТА (2026-08-17). Проверка стоит здесь, а не в тестах,
@@ -1884,7 +1903,22 @@ def _analytics(conn, user, body: ReportRequestIn) -> dict:
     if object_id is None:
         raise HTTPException(status_code=400,
                             detail="Отчёт строится по объекту — выберите объект в тулбаре")
-    return build_analytics_report(conn, object_id, body.report_date, body.horizon_days)
+    as_of = body.report_date or crane_zone_business_date()
+    version = crane_zone_version_for_date(conn, object_id, as_of)
+    if version is None and has_crane_zone_versioning(conn, object_id):
+        raise HTTPException(
+            status_code=400,
+            detail="На дату отчёта нет достоверной редакции кранов и стоянок",
+        )
+    if version is not None:
+        active = conn.execute(
+            "SELECT id FROM crane_zone_versions WHERE object_id = ? AND activated_at IS NOT NULL "
+            "ORDER BY revision_no DESC LIMIT 1", (object_id,),
+        ).fetchone()
+        if active is None or version["id"] != active["id"]:
+            with historical_zone_overlay(conn, version):
+                return build_analytics_report(conn, object_id, as_of, body.horizon_days)
+    return build_analytics_report(conn, object_id, as_of, body.horizon_days)
 
 
 @app.post("/reports/analytics")

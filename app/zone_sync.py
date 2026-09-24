@@ -165,6 +165,7 @@ def analyze_zones(conn: sqlite3.Connection, object_id: int, zones: list) -> dict
 def sync_zones(
     conn: sqlite3.Connection, object_id: int, source_file: str, zones: list,
     create_new_zone_ids: Optional[set] = None,
+    allowed_categories: Optional[set[str]] = None,
 ) -> dict:
     """Обновляет справочник зон по разобранному чертежу.
 
@@ -177,10 +178,15 @@ def sync_zones(
     (is_current=0, решение З4) — не удаляются: на них могут ссылаться
     элементы, и их история привязки не должна исчезать молча.
     """
+    if allowed_categories is not None and not allowed_categories:
+        return {}
     # Краны — первыми: стоянка ссылается на кран, и ключ опознания стоянки
     # включает parent_zone_id, поэтому кран должен уже иметь id в справочнике.
     order = {"Кран": 0, "Захватка": 1, "Стоянка": 2}
-    parsed = sorted(zones, key=lambda z: order.get(z.category, 9))
+    parsed = sorted(
+        (z for z in zones if allowed_categories is None or z.category in allowed_categories),
+        key=lambda z: order.get(z.category, 9),
+    )
 
     catalog = load_catalog(conn, object_id)
     handle_to_zone_id = {}   # handle полигона -> id записи справочника
@@ -256,10 +262,14 @@ def sync_zones(
         seen_zone_ids.add(zone_id)
 
     # Чего в чертеже больше нет — неактуально (решение З4).
+    stale_sql = "SELECT id FROM zones WHERE object_id = ? AND is_current = 1"
+    stale_params = [object_id]
+    if allowed_categories is not None:
+        stale_sql += " AND category IN (" + ",".join("?" for _ in allowed_categories) + ")"
+        stale_params.extend(sorted(allowed_categories))
     stale = [
-        row["id"] for row in conn.execute(
-            "SELECT id FROM zones WHERE object_id = ? AND is_current = 1", (object_id,)
-        ) if row["id"] not in seen_zone_ids
+        row["id"] for row in conn.execute(stale_sql, stale_params)
+        if row["id"] not in seen_zone_ids
     ]
     if stale:
         placeholders = ", ".join("?" for _ in stale)

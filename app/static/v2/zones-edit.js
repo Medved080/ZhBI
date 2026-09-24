@@ -19,6 +19,7 @@ import { statusChip } from "./registry.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { runDeleteFlow } from "./delete-plan.js";
 import { createZonePreview3d } from "./zone-preview-3d.js";
+import { mountCraneZoneEditor } from "./crane-zone-editor.js";
 
 const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || e));
 const unknownOutcome = (e) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
@@ -49,6 +50,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   // 3D-предпросмотр (как в V1: переключатель 2D/3D у предпросмотра). Контроллер живёт, пока открыта форма одной зоны:
   // камера ставится один раз на открытие формы, холст переносится при перерисовке формы; при закрытии — освобождается WebGL.
   let previewMode = "2d", p3d = null;
+  let craneModule = null;
   const drop3d = () => { p3d?.dispose(); p3d = null; };
   const st = { category: "Захватка", includeRetired: false, rows: null, error: "", q: "", editing: null, lastEdit: null, notice: "" };
 
@@ -76,6 +78,15 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   function paintList() {
     const box = $("#ze-body");
     const tabs = `<div class="v2-wire-tabs v2-read-tabs" role="tablist">${CATS.map(([c, label]) => `<button type="button" role="tab" class="v2-read-tab" aria-selected="${st.category === c}" data-cat="${esc(c)}">${esc(label)}</button>`).join("")}</div>`;
+    el.classList.toggle("cz-page", st.category !== "Захватка");
+    if (st.category !== "Захватка") {
+      box.innerHTML = tabs + `<div id="ze-crane-editor"></div>`;
+      wireTabs();
+      craneModule?.destroy();
+      if (objectId) craneModule = mountCraneZoneEditor($("#ze-crane-editor"), { objectId, api, canEdit });
+      else $("#ze-crane-editor").innerHTML = `<p class="v2-muted">Выберите объект в шапке.</p>`;
+      return;
+    }
     if (!objectId) { box.innerHTML = tabs + `<p class="v2-muted">Выберите объект в шапке — справочник зон свой у каждого объекта.</p>`; wireTabs(); return; }
     if (!st.rows) {
       box.innerHTML = tabs + (st.error
@@ -109,14 +120,17 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     box.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => deleteZone(Number(b.dataset.del))));
   }
   function wireTabs() {
-    el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => {
+    el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", async () => {
       if (busy) return;
       if (st.category === b.dataset.cat) return;
+      if (craneModule && !(await craneModule.guardLeave())) return;
+      craneModule?.destroy(); craneModule = null;
       st.category = b.dataset.cat; st.rows = null; st.q = ""; st.notice = ""; loadList();
     }));
   }
 
   async function loadList() {
+    if (st.category !== "Захватка") { paint(); return; }
     if (!objectId) { paint(); return; }
     const my = ++seq;
     const q = new URLSearchParams({ category: st.category, include_retired: String(st.includeRetired) });
@@ -400,8 +414,8 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   paint();
   loadList();
   return {
-    hasUnsavedChanges: () => dirty(),
-    async guardLeave() { return guardEditorLeave(); },
-    destroy() { dead = true; drop3d(); },
+    hasUnsavedChanges: () => dirty() || !!craneModule?.hasUnsavedChanges(),
+    async guardLeave() { return craneModule ? craneModule.guardLeave() : guardEditorLeave(); },
+    destroy() { dead = true; drop3d(); craneModule?.destroy(); },
   };
 }

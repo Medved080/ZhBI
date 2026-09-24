@@ -52,7 +52,6 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
             (version["id"],),
         )
     }
-    n = 0
     for row in conn.execute(
         "SELECT e.id, e.element_uid, e.zone_crane_id, e.zone_crane_status, "
         "e.zone_stance_id, e.zone_stance_status, l.elevation_mm "
@@ -70,9 +69,45 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
             raise ZoneDraftError(
                 f"Привязка изделия {row['id']} изменилась вне редакции — нужна сверка"
             )
-        n += 1
-    if n != len(saved):
-        raise ZoneDraftError("Состав изделий изменился после публикации редакции")
+    # Снятые чертежом изделия остаются в историческом снимке, но больше не
+    # участвуют в текущей редакции. Их нельзя удалять ради равенства счётчиков.
+
+
+def register_import_membership(conn: sqlite3.Connection, object_id: int) -> int:
+    """Дописать НОВЫЕ изделия в активную и ожидающую редакции без смены зон.
+
+    Вызывать сразу после этапа импорта изделий. Исторические редакции не
+    меняются; текущая и будущая получают новую позицию без назначений.
+    Позже редактор пересчитает её геометрически при публикации.
+    """
+    versions = conn.execute(
+        "SELECT id FROM crane_zone_versions WHERE object_id = ? AND "
+        "(activated_at IS NOT NULL OR effective_date > ?) "
+        "AND id IN (SELECT MAX(id) FROM crane_zone_versions WHERE object_id = ? "
+        "GROUP BY CASE WHEN activated_at IS NOT NULL THEN 'active' ELSE 'pending' END)",
+        (object_id, business_date(), object_id),
+    ).fetchall()
+    inserted = 0
+    for version in versions:
+        cur = conn.execute(
+            "INSERT INTO crane_zone_version_assignments "
+            "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
+            "stance_zone_id, stance_status, stance_elevation_mm, source) "
+            "SELECT ?, e.id, e.element_uid, e.zone_crane_id, e.zone_crane_status, "
+            "e.zone_stance_id, e.zone_stance_status, l.elevation_mm, 'geometry' "
+            "FROM elements e LEFT JOIN zone_levels l ON l.id = e.zone_stance_level_id "
+            "WHERE e.object_id = ? AND e.is_current = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM crane_zone_version_assignments a "
+            "WHERE a.version_id = ? AND a.element_id = e.id)",
+            (version["id"], object_id, version["id"]),
+        )
+        inserted += cur.rowcount
+        conn.execute(
+            "UPDATE crane_zone_versions SET assignment_count = "
+            "(SELECT COUNT(*) FROM crane_zone_version_assignments WHERE version_id = ?) "
+            "WHERE id = ?", (version["id"], version["id"]),
+        )
+    return inserted
 
 
 def create_draft(conn: sqlite3.Connection, object_id: int, user_id: int | None,
@@ -213,6 +248,7 @@ def _reserve_new_zones(conn: sqlite3.Connection, object_id: int,
 def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
     """Материализовать уже опубликованную версию в старых рабочих таблицах."""
     zones = json.loads(version["zones_json"])
+    _migrate_schedule_flow(conn, object_id, snapshot_zones(conn, object_id), zones)
     expected = {zone["id"] for zone in zones}
     alive = {
         row["id"] for row in conn.execute(
@@ -258,12 +294,13 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             "SELECT id FROM elements WHERE object_id = ? AND is_current = 1", (object_id,),
         )
     }
-    if current_ids != {row["element_id"] for row in assignments}:
+    if not current_ids.issubset({row["element_id"] for row in assignments}):
         raise ZoneDraftError(
-            "Состав изделий изменился после публикации. Сначала нужна сверка "
-            "новых/исчезнувших изделий с редакцией."
+            "Появились изделия без записи в редакции. Сначала нужна сверка импорта."
         )
     for assignment in assignments:
+        if assignment["element_id"] not in current_ids:
+            continue
         level_id = None
         if assignment["stance_zone_id"] is not None:
             level_id = levels.get((assignment["stance_zone_id"], assignment["stance_elevation_mm"]))
@@ -281,6 +318,62 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
         "UPDATE crane_zone_versions SET activated_at = datetime('now') WHERE id = ?",
         (version["id"],),
     )
+
+
+def _migrate_schedule_flow(conn: sqlite3.Connection, object_id: int,
+                           previous: list[dict], incoming: list[dict]) -> None:
+    """Сохранить очередь фронтов при переименовании/переносе стоянки.
+
+    Ключ schedule_flow — текстовые имена, не ID. Замена имён делается в той
+    же транзакции, что активация редакции; при неоднозначности вся операция
+    откатывается, вместо молчаливой потери настроенного порядка.
+    """
+    old_by_id = {z["id"]: z for z in previous}
+    new_by_id = {z["id"]: z for z in incoming}
+    old_pairs = {}
+    for stance in previous:
+        if stance["category"] != "Стоянка":
+            continue
+        crane = old_by_id.get(stance["parent_zone_id"])
+        if crane is None:
+            continue
+        old_pairs.setdefault((crane["name"], stance["name"]), []).append(stance["id"])
+    rows = conn.execute(
+        "SELECT id, crane_name, stance_name, floor, order_no FROM schedule_flow "
+        "WHERE object_id = ?", (object_id,),
+    ).fetchall()
+    changes = []
+    final_keys = set()
+    for row in rows:
+        old_pair = (row["crane_name"], row["stance_name"])
+        matches = old_pairs.get(old_pair, [])
+        if len(matches) > 1:
+            raise ZoneDraftError(
+                f"Поток графика неоднозначен для {old_pair[0]} · {old_pair[1]}"
+            )
+        new_pair = old_pair
+        if matches:
+            new_stance = new_by_id.get(matches[0])
+            new_crane = new_by_id.get(new_stance["parent_zone_id"]) if new_stance else None
+            if new_stance is None or new_crane is None:
+                raise ZoneDraftError("Стоянка из потока графика отсутствует в новой редакции")
+            new_pair = (new_crane["name"], new_stance["name"])
+        key = (new_pair[0], new_pair[1], row["floor"])
+        if key in final_keys:
+            raise ZoneDraftError("После изменения зон строки потока графика совпадут")
+        final_keys.add(key)
+        if new_pair != old_pair:
+            changes.append((row["id"], new_pair))
+    for row_id, _ in changes:
+        conn.execute(
+            "UPDATE schedule_flow SET crane_name = ?, stance_name = ? WHERE id = ?",
+            (f"__crane_zone_move_{row_id}__", f"__crane_zone_move_{row_id}__", row_id),
+        )
+    for row_id, pair in changes:
+        conn.execute(
+            "UPDATE schedule_flow SET crane_name = ?, stance_name = ? WHERE id = ?",
+            (*pair, row_id),
+        )
 
 
 def publish_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,

@@ -58,7 +58,24 @@ def list_versions(object_id: int, user: sqlite3.Row = Depends(get_current_user))
         conn.close()
 
 
-@router.get("/{version_id}")
+@router.get("/scene")
+def zone_scene(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Лёгкий слой точек схемы для выбора изделий и редактирования зон."""
+    conn = get_connection()
+    try:
+        _check(conn, user, object_id, "read")
+        rows = conn.execute(
+            "SELECT id, element_uid, element_type, mark, x, y, elevation_mm, "
+            "zone_crane_id, zone_stance_id, current_status "
+            "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id",
+            (object_id,),
+        )
+        return {"elements": [dict(row) for row in rows]}
+    finally:
+        conn.close()
+
+
+@router.get("/{version_id:int}")
 def get_version(object_id: int, version_id: int,
                 user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
@@ -87,6 +104,20 @@ def new_draft(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
         except ZoneDraftError as exc:
             _public_error(exc)
         return {"draft_id": draft_id, "edit_token": 1}
+    finally:
+        conn.close()
+
+
+@router.get("/drafts")
+def list_drafts(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        _check(conn, user, object_id, "read")
+        return [dict(row) for row in conn.execute(
+            "SELECT id, base_version_id, note, created_at, updated_at, author_name, edit_token "
+            "FROM crane_zone_drafts WHERE object_id = ? ORDER BY updated_at DESC, id DESC",
+            (object_id,),
+        )]
     finally:
         conn.close()
 

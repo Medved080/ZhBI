@@ -10,12 +10,16 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app import db
+from app import zone_sync
 from app.crane_zone_service import (
-    ZoneDraftError, activate_due, create_draft, preview_draft, publish_draft, update_draft,
+    ZoneDraftError, activate_due, create_draft, preview_draft, publish_draft,
+    register_import_membership, update_draft,
 )
 from app.crane_zone_editor import preview_assignments
 from app.crane_zone_report import historical_zone_overlay
+from app.crane_zone_import import build_candidate, stage_import_draft
 from app.crane_zone_versions import business_date, ensure_baselines, snapshot_zones
+from zone_parser import ZoneRecord
 
 
 def square(x, y, size):
@@ -149,6 +153,102 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertNotEqual(new[0], self.crane_id)
 
+    def test_import_adds_new_element_only_to_live_and_pending_versions(self):
+        draft_id, token = self._draft_with_new_crane()
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        published = publish_draft(
+            self.conn, self.object_id, draft_id, token, tomorrow, None, "Тест",
+        )
+        new_id = self.conn.execute(
+            "INSERT INTO elements (source_file, dxf_handle, layer, element_type, mark_source, "
+            "x, y, axis_status, elevation_mm, object_id, element_uid) "
+            "VALUES ('test.dxf', 'E2', 'test', 'Колонна', 'none', 3, 3, 'none', 0, ?, 'new-uid')",
+            (self.object_id,),
+        ).lastrowid
+        self.assertEqual(register_import_membership(self.conn, self.object_id), 2)
+        self.assertEqual(register_import_membership(self.conn, self.object_id), 0)
+        self.conn.commit()
+        self.assertIsNotNone(self.conn.execute(
+            "SELECT element_id FROM crane_zone_version_assignments "
+            "WHERE version_id = ? AND element_id = ?", (published["version_id"], new_id),
+        ).fetchone())
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            self.assertEqual(activate_due(self.conn), [published["version_id"]])
+        self.assertIsNone(self.conn.execute(
+            "SELECT zone_crane_id FROM elements WHERE id = ?", (new_id,),
+        ).fetchone()[0])
+
+    def test_dxf_zone_proposal_stays_in_draft_without_changing_live_zones(self):
+        before = snapshot_zones(self.conn, self.object_id)
+        records = [
+            ZoneRecord("C2", "Кран", None, square(0, 0, 12), "Кран 1", "matched"),
+            ZoneRecord("S2", "Стоянка", 0, square(0, 0, 6), "Стоянка 1", "matched",
+                       "C2", "matched"),
+            ZoneRecord("S2b", "Стоянка", 10000, square(0, 0, 6), "Стоянка 1",
+                       "matched", "C2", "matched"),
+        ]
+        draft_id = stage_import_draft(
+            self.conn, self.object_id, records, "new.dxf", None, "Импорт DXF",
+        )
+        self.assertIsNotNone(draft_id)
+        self.assertEqual(snapshot_zones(self.conn, self.object_id), before)
+        self.assertEqual(self.conn.execute(
+            "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
+        ).fetchone()[0], self.crane_id)
+        draft = self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
+        ).fetchone()
+        zones = json.loads(draft[0])
+        self.assertEqual(zones[0]["levels"][0]["outline"], square(0, 0, 12))
+        self.assertEqual(zones[1]["levels"][0]["outline"], square(0, 0, 6))
+        self.assertIsNone(stage_import_draft(
+            self.conn, self.object_id,
+            [
+                ZoneRecord("C1", "Кран", None, square(0, 0, 10), "Кран 1", "matched"),
+                ZoneRecord("S1", "Стоянка", 0, square(0, 0, 5), "Стоянка 1",
+                           "matched", "C1", "matched"),
+                ZoneRecord("S1b", "Стоянка", 10000, square(0, 0, 5), "Стоянка 1",
+                           "matched", "C1", "matched"),
+            ], "same.dxf", None, "Импорт DXF",
+        ))
+
+    def test_scoped_zone_sync_never_retires_cranes_or_stances(self):
+        before = snapshot_zones(self.conn, self.object_id)
+        zone_sync.sync_zones(
+            self.conn, self.object_id, "new.dxf",
+            [ZoneRecord("Z1", "Захватка", None, square(0, 0, 10),
+                        "Захватка 1", "matched")],
+            allowed_categories={"Захватка"},
+        )
+        self.assertEqual(snapshot_zones(self.conn, self.object_id), before)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM zones WHERE object_id = ? AND category = 'Захватка' "
+            "AND is_current = 1", (self.object_id,),
+        ).fetchone()[0], 1)
+
+    def test_renaming_stance_migrates_schedule_flow_atomically(self):
+        self.conn.execute(
+            "INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) "
+            "VALUES (?, 'Кран 1', 'Стоянка 1', 1, 7)", (self.object_id,),
+        )
+        self.conn.commit()
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        zones = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
+        ).fetchone()[0])
+        for zone in zones:
+            if zone["id"] == self.stance_id:
+                zone["name"] = "Стоянка 01 обновлённая"
+        token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {},
+                             "Уточнили название стоянки")
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        row = self.conn.execute(
+            "SELECT crane_name, stance_name, order_no FROM schedule_flow WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()
+        self.assertEqual(tuple(row), ("Кран 1", "Стоянка 01 обновлённая", 7))
+
     def test_failure_during_materialization_rolls_back_all(self):
         draft_id, token = self._draft_with_new_crane()
         before_zones = self.conn.execute("SELECT COUNT(*) FROM zones").fetchone()[0]
@@ -253,10 +353,13 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.assertNotEqual(current, self.crane_id)
         with historical_zone_overlay(self.conn, baseline):
             old = self.conn.execute(
-                "SELECT e.zone_crane_id, z.name FROM elements e "
-                "JOIN zones z ON z.id = e.zone_crane_id WHERE e.id = ?", (self.element_id,),
+                "SELECT e.zone_crane_id, z.name, zl.elevation_mm FROM elements e "
+                "JOIN zones z ON z.id = e.zone_crane_id "
+                "LEFT JOIN zone_levels zl ON zl.id = e.zone_stance_level_id "
+                "WHERE e.id = ?", (self.element_id,),
             ).fetchone()
             self.assertEqual((old["zone_crane_id"], old["name"]), (self.crane_id, "Кран 1"))
+            self.assertEqual(old["elevation_mm"], 0)
         self.assertEqual(self.conn.execute(
             "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
         ).fetchone()[0], current)
@@ -286,6 +389,30 @@ class CraneZoneServiceTest(unittest.TestCase):
             self.conn, admin, body.model_copy(update={"date_from": tomorrow}),
         )
         self.assertEqual(new["rows"][0]["label"], "Кран 2 · Стоянка 1")
+
+    def test_analytics_uses_zone_revision_for_report_date(self):
+        from app.main import ReportRequestIn, _analytics
+
+        draft_id, token = self._draft_with_new_crane()
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        publish_draft(self.conn, self.object_id, draft_id, token, tomorrow, None, "Тест")
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        today_report = _analytics(
+            self.conn, admin,
+            ReportRequestIn(object_id=self.object_id, source_file="test.dxf",
+                            report_date=business_date()),
+        )
+        future_report = _analytics(
+            self.conn, admin,
+            ReportRequestIn(object_id=self.object_id, source_file="test.dxf",
+                            report_date=tomorrow),
+        )
+        self.assertEqual(today_report["unmapped"]["no_level"], 0)
+        self.assertEqual(future_report["unmapped"]["no_level"], 0)
+        self.assertEqual(today_report["front"]["rows"][0]["crane"], "Кран 1")
+        self.assertEqual(future_report["front"]["rows"][0]["crane"], "Кран 2")
 
 
 if __name__ == "__main__":
