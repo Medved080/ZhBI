@@ -11,11 +11,15 @@ import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 from shapely.geometry import Point, Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from zone_binding import TIER_CAPPING_TYPES, bind_element_to_zones  # noqa: E402
+from zone_binding import (  # noqa: E402
+    TIER_CAPPING_TYPES, bind_element_to_zones, build_stance_level_polygons,
+    compute_column_tier_elevations,
+)
 from zone_parser import ZoneRecord  # noqa: E402
 
 
@@ -161,20 +165,14 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
                         zones: list[dict], base_zones: list[dict], overrides: dict) -> dict:
     """Все привязки для будущей редакции; без INSERT/UPDATE/COMMIT.
 
-    Объекты с одним физическим ярусом стоянок требуют особой «лесенки»
-    импортера. До переноса её алгоритма сюда выдаём отказ, а не неправильный
-    предпросмотр. Даже для пустого объекта это безопаснее выдуманной связи.
+    Для одного физического яруса используем ТУ ЖЕ «лесенку» по осям,
+    что импорт чертежа; если сетка отсутствует, даём явный отказ.
     """
     by_id = validate_zones(zones, base_zones)
     stance_elevations = {
         l["elevation_mm"] for z in zones if z["category"] == "Стоянка"
         for l in z["levels"] if l["elevation_mm"] is not None
     }
-    if len(stance_elevations) == 1:
-        raise ZoneDraftError(
-            "У стоянок один физический ярус: нужна импортная «лесенка» по осям. "
-            "Публикация этой редакции пока запрещена."
-        )
     elements = conn.execute(
         "SELECT id, element_uid, element_type, x, y, outline_json, elevation_mm, "
         "zone_crane_id, zone_crane_status, zone_stance_id, zone_stance_status "
@@ -182,6 +180,37 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
     ).fetchall()
     manual = validate_overrides(overrides, by_id, {e["id"] for e in elements})
     records = _records(zones)
+    stance_level_polys = tier_elevations = None
+    if len(stance_elevations) <= 1 and any(z["category"] == "Стоянка" for z in zones):
+        drawing = conn.execute(
+            "SELECT source_file FROM object_drawings WHERE object_id = ? "
+            "AND is_current = 1 LIMIT 1", (object_id,),
+        ).fetchone()
+        source_file = drawing["source_file"] if drawing else next(
+            (z.get("source_file") for z in zones if z.get("source_file")), None
+        )
+        axes = {"numeric": {}, "letter": {}}
+        if source_file:
+            for axis in conn.execute(
+                "SELECT kind, label, coord FROM axis_lines WHERE source_file = ?", (source_file,),
+            ):
+                if axis["kind"] in axes:
+                    axes[axis["kind"]][axis["label"]] = axis["coord"]
+        if not axes["numeric"] or not axes["letter"]:
+            raise ZoneDraftError(
+                "У чертежа с одним ярусом стоянок нет полной сетки осей; "
+                "невозможно надёжно пересчитать «лесенку» стоянок."
+            )
+        tier_elevations = compute_column_tier_elevations([
+            SimpleNamespace(element_type=e["element_type"], elevation_mm=e["elevation_mm"])
+            for e in elements
+        ])
+        try:
+            stance_level_polys = build_stance_level_polygons(
+                records, axes["numeric"], axes["letter"], tier_elevations,
+            )
+        except (IndexError, ValueError, KeyError, ZeroDivisionError) as exc:
+            raise ZoneDraftError("Не удалось построить ярусы стоянок по сетке осей") from exc
     changed = Counter()
     assignments = []
     for element in elements:
@@ -189,6 +218,7 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
         bound = bind_element_to_zones(
             element["element_type"], element["x"], element["y"], outline,
             element["elevation_mm"], records,
+            stance_level_polys=stance_level_polys, tier_elevations=tier_elevations,
         )
         crane_id, _, crane_status = _resolved(bound["Кран"], by_id)
         stance_id, stance_elevation, stance_status = _resolved(bound["Стоянка"], by_id)

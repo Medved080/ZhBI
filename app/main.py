@@ -69,6 +69,7 @@ from app.dict_delete import router as dict_delete_router
 from app.marks import router as marks_router
 from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
+from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 from app.crane_zone_api import router as crane_zone_versions_router
 from app import settings_import
 from app.db import (
@@ -3515,6 +3516,12 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(ge
         # принимать его параметром значило бы позволить назвать любой
         # доступный и править чужую зону.
         assert_object_feature(conn, admin, zone["object_id"], "zones", "write")
+        if zone["category"] in ("Кран", "Стоянка") and has_crane_zone_versioning(conn, zone["object_id"]):
+            raise HTTPException(
+                status_code=409,
+                detail="Краны и стоянки этого объекта ведутся редакциями. "
+                       "Откройте «Зоны кранов» и создайте черновик новой редакции.",
+            )
         _validate_zone_edit(conn, zone, body)
 
         before = {
@@ -3599,10 +3606,15 @@ def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(get_current_user))
     цепочку последствий, и отменяться должна вся цепочка."""
     conn = get_connection()
     try:
-        zone = conn.execute("SELECT object_id FROM zones WHERE id = ?", (zone_id,)).fetchone()
+        zone = conn.execute("SELECT object_id, category FROM zones WHERE id = ?", (zone_id,)).fetchone()
         if zone is None:
             raise HTTPException(status_code=404, detail="Зона не найдена")
         assert_object_feature(conn, admin, zone["object_id"], "zones", "write")
+        if zone["category"] in ("Кран", "Стоянка") and has_crane_zone_versioning(conn, zone["object_id"]):
+            raise HTTPException(
+                status_code=409,
+                detail="Откат крановой зоны выполняется новой редакцией, а не старой командой отмены.",
+            )
         result = zone_recalc.undo(conn, zone_id)
     finally:
         conn.close()

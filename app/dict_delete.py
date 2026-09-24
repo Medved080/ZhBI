@@ -52,6 +52,7 @@ from app import activity, contract_guard
 from app.access import require_service_feature
 from app.contracts import build_contract_name, build_document_label
 from app.db import begin_write, get_connection
+from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 
 router = APIRouter(tags=["dictionaries"])
 
@@ -458,6 +459,16 @@ def _zone_cascade(conn, row):
         "SELECT COUNT(*) AS n FROM zone_levels WHERE zone_id = ?", (row["id"],)
     ).fetchone()["n"]
     return _непустые([("Ярусы (контуры)", ярусов)])
+
+
+def _zone_blockers(conn, row):
+    if (row["category"] in ("Кран", "Стоянка") and row["object_id"] is not None
+            and has_crane_zone_versioning(conn, row["object_id"])):
+        return [{
+            "label": "Зона входит в историю редакций; удаление через старый справочник запрещено",
+            "count": 1,
+        }]
+    return []
 
 
 def _zone_candidates(conn, row, parent_target):
@@ -879,6 +890,7 @@ KINDS = {
         },
         "load": _zone_load, "label": _zone_label,
         "children": _zone_children, "refs": _zone_refs, "cascade": _zone_cascade,
+        "blockers": _zone_blockers,
         "candidates": _zone_candidates, "repoint": _zone_repoint, "delete": _zone_delete,
         "adopt": _merge_stances, "adopt_title": "стоянки крана",
     },

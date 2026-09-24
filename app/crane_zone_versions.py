@@ -19,6 +19,14 @@ def business_date() -> str:
     return datetime.now(BUSINESS_TZ).date().isoformat()
 
 
+def has_versioning(conn: sqlite3.Connection, object_id: int) -> bool:
+    """Есть исходный снимок: кран/стоянку уже нельзя менять мимо редакций."""
+    return conn.execute(
+        "SELECT 1 FROM crane_zone_versions WHERE object_id = ? LIMIT 1",
+        (object_id,),
+    ).fetchone() is not None
+
+
 def snapshot_zones(conn: sqlite3.Connection, object_id: int) -> list[dict]:
     """Краны и ВСЕ их стоянки одной редакцией, включая ярусы и имена.
 

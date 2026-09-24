@@ -7,11 +7,13 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from fastapi import HTTPException
 
 from app import db
 from app.crane_zone_service import (
     ZoneDraftError, activate_due, create_draft, preview_draft, publish_draft, update_draft,
 )
+from app.crane_zone_editor import preview_assignments
 from app.crane_zone_versions import business_date, ensure_baselines, snapshot_zones
 
 
@@ -205,6 +207,37 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT activated_at FROM crane_zone_versions WHERE id = ?", (result["version_id"],),
         ).fetchone()
         self.assertIsNone(row[0])
+
+    def test_single_stance_tier_uses_import_binder(self):
+        self.conn.execute(
+            "DELETE FROM zone_levels WHERE zone_id = ? AND elevation_mm = 10000",
+            (self.stance_id,),
+        )
+        zones = snapshot_zones(self.conn, self.object_id)
+        with self.assertRaisesRegex(ZoneDraftError, "сетк"):
+            preview_assignments(self.conn, self.object_id, zones, zones, {})
+        self.conn.executemany(
+            "INSERT INTO axis_lines (source_file, kind, label, coord) VALUES ('test.dxf', ?, ?, ?)",
+            [("numeric", "1", 0), ("numeric", "2", 10),
+             ("letter", "А", 0), ("letter", "Б", 10)],
+        )
+        result = preview_assignments(self.conn, self.object_id, zones, zones, {})
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["counts"], {})
+
+    def test_legacy_edit_and_delete_are_blocked_after_baseline(self):
+        from app.dict_delete import build_plan
+        from app.main import update_zone
+        from app.models import ZonePatchIn
+
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        with self.assertRaises(HTTPException) as caught:
+            update_zone(self.crane_id, ZonePatchIn(number=1, name="Кран 1", levels=[]), admin)
+        self.assertEqual(caught.exception.status_code, 409)
+        plan = build_plan(self.conn, "zone", str(self.crane_id))
+        self.assertTrue(plan["blockers"])
 
 
 if __name__ == "__main__":
