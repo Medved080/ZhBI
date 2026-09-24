@@ -76,6 +76,7 @@ from app.activity_actions import ACTION_CATEGORIES, CATEGORY_OTHER
 from app.access import require_service_feature
 from app.auth import get_current_user
 from app.changelog import CHANGELOG
+from app.crane_zone_versions import ensure_baselines as _ensure_crane_zone_baselines
 from app.db import get_connection
 
 router = APIRouter(tags=["release"])
@@ -1106,6 +1107,16 @@ RELEASE_TASKS = [
                "только роли, существовавшие на тот момент",
         "kind": KIND_DATA,
         "run": lambda conn: _grant_feature_to_all_roles(conn, "training"),
+    },
+    {
+        "name": "2026-09-24-crane-zone-versions-baseline",
+        "version": "0.85",
+        "date": "2026-09-24",
+        "title": "Сохранить исходную редакцию кранов и стоянок",
+        "why": "новые корректировки зон должны иметь историю, а существующее состояние "
+               "нельзя терять или выдавать за достоверное прошлое до ввода версионности",
+        "kind": KIND_DATA,
+        "run": _ensure_crane_zone_baselines,
     },
 ]
 

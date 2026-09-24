@@ -615,6 +615,71 @@ CREATE TABLE IF NOT EXISTS zone_edit_undo (
 
 CREATE INDEX IF NOT EXISTS idx_zone_edit_undo_zone ON zone_edit_undo (zone_id, undone_at);
 
+-- Редакция кранового зонирования — единый опубликованный снимок ВСЕХ кранов
+-- объекта вместе с подчинёнными стоянками. Не смешивать с zone_edit_undo:
+-- тот хранит только состояние ДО одной правки и не умеет отвечать на вопрос
+-- «какие зоны действовали на дату». Исходная редакция kind='baseline' не
+-- является корректировкой и не разрывает периоды отчётов.
+CREATE TABLE IF NOT EXISTS crane_zone_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    revision_no INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('baseline', 'published', 'rollback')),
+    effective_date TEXT,
+    known_from TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    author_name TEXT,
+    note TEXT,
+    zones_json TEXT NOT NULL,
+    assignment_count INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (object_id, revision_no),
+    CHECK ((kind = 'baseline' AND effective_date IS NULL) OR
+           (kind <> 'baseline' AND effective_date IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crane_zone_versions_baseline
+    ON crane_zone_versions (object_id) WHERE kind = 'baseline';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crane_zone_versions_effective
+    ON crane_zone_versions (object_id, effective_date) WHERE effective_date IS NOT NULL;
+
+-- Полный снимок назначений изделий В КАЖДОЙ редакции: отчёт за прошлый
+-- период не должен группировать старые события по сегодняшнему крану.
+-- ID зон и изделий сознательно не FK: снятие/удаление текущей записи не
+-- должно стирать её историческую принадлежность и имя (оно в zones_json).
+CREATE TABLE IF NOT EXISTS crane_zone_version_assignments (
+    version_id INTEGER NOT NULL REFERENCES crane_zone_versions (id) ON DELETE CASCADE,
+    element_id INTEGER NOT NULL,
+    element_uid TEXT,
+    crane_zone_id INTEGER,
+    crane_status TEXT,
+    stance_zone_id INTEGER,
+    stance_status TEXT,
+    stance_elevation_mm INTEGER,
+    source TEXT NOT NULL CHECK (source IN ('geometry', 'manual', 'legacy')),
+    PRIMARY KEY (version_id, element_id)
+);
+CREATE INDEX IF NOT EXISTS idx_crane_zone_version_assignments_element
+    ON crane_zone_version_assignments (element_id, version_id);
+
+-- Черновик можно править до публикации. Ключ base_version_id служит
+-- оптимистическим стражем: если другой оператор опубликовал новую редакцию,
+-- старый черновик нужно пересмотреть, а не накладывать поверх молча.
+CREATE TABLE IF NOT EXISTS crane_zone_drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    base_version_id INTEGER NOT NULL REFERENCES crane_zone_versions (id) ON DELETE RESTRICT,
+    zones_json TEXT NOT NULL,
+    overrides_json TEXT NOT NULL DEFAULT '{}',
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    author_name TEXT,
+    edit_token INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_crane_zone_drafts_object
+    ON crane_zone_drafts (object_id, updated_at);
+
 -- Цвет зоны — персонально на каждый КРАН (не общий на категорию, как
 -- раньше — см. Docs/backlog.md, item 7), его стоянки наследуют цвет
 -- родительского крана (zones.parent_zone_id) без отдельной записи здесь.
