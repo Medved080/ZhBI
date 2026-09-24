@@ -73,6 +73,8 @@ def _ru(d) -> str:
 
 def _subtitle(data: dict, object_name: str) -> str:
     части = [f"Объект: {object_name}"]
+    if data.get("date_from") and data.get("date_to"):
+        части.append(f"период: {_ru(data['date_from'])} — {_ru(data['date_to'])}")
     if data.get("version_id"):
         момент = str(data.get("loaded_at") or "")
         части.append(f"прогноз: «{data.get('version_title') or 'без названия'}»"

@@ -312,6 +312,9 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.assertEqual((old["min_date"], old["max_date"]), (yesterday, yesterday))
         self.assertEqual((current["min_date"], current["max_date"]),
                          (business_date(), tomorrow))
+        from app.schedule_gantt_export import _subtitle
+        self.assertIn(f"{date.fromisoformat(business_date()):%d.%m.%Y}",
+                      _subtitle(current, "Тестовый объект"))
 
     def test_dxf_zone_proposal_stays_in_draft_without_changing_live_zones(self):
         before = snapshot_zones(self.conn, self.object_id)
