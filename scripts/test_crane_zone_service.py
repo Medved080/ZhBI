@@ -253,6 +253,36 @@ class CraneZoneServiceTest(unittest.TestCase):
             with self.assertRaisesRegex(HTTPException, "Период пересекает"):
                 app_main._delivery_schedule(self.conn, None, body)
 
+    def test_analytics_horizon_rejects_future_zone_correction(self):
+        draft_id, token = self._draft_with_new_crane()
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      tomorrow, None, "Тест")
+        body = app_main.ReportRequestIn(
+            object_id=self.object_id, report_date=business_date(), horizon_days=14,
+        )
+        with patch.object(app_main, "_guard_report", side_effect=lambda _c, _u, request, _k: request):
+            with self.assertRaisesRegex(HTTPException, "Период пересекает"):
+                app_main._analytics(self.conn, None, body)
+
+    def test_schedule_preview_token_changes_with_zone_revision_and_new_elements(self):
+        from app.schedule_calc import inputs_version
+
+        initial = inputs_version(self.conn, self.object_id)
+        draft_id, token = self._draft_with_new_crane()
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        after_revision = inputs_version(self.conn, self.object_id)
+        self.assertNotEqual(initial, after_revision)
+        self.conn.execute(
+            "INSERT INTO elements (source_file, dxf_handle, layer, element_type, mark_source, "
+            "x, y, axis_status, elevation_mm, object_id, element_uid) "
+            "VALUES ('test.dxf', 'E4', 'test', 'Колонна', 'none', 3, 3, 'none', 0, ?, 'new-uid-4')",
+            (self.object_id,),
+        )
+        register_import_membership(self.conn, self.object_id)
+        self.assertNotEqual(after_revision, inputs_version(self.conn, self.object_id))
+
     def test_dxf_zone_proposal_stays_in_draft_without_changing_live_zones(self):
         before = snapshot_zones(self.conn, self.object_id)
         records = [
@@ -598,20 +628,20 @@ class CraneZoneServiceTest(unittest.TestCase):
         from app.main import ReportRequestIn, _analytics
 
         draft_id, token = self._draft_with_new_crane()
-        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
-        publish_draft(self.conn, self.object_id, draft_id, token, tomorrow, None, "Тест")
+        effective_day = (date.fromisoformat(business_date()) + timedelta(days=15)).isoformat()
+        publish_draft(self.conn, self.object_id, draft_id, token, effective_day, None, "Тест")
         admin = self.conn.execute(
             "SELECT * FROM users WHERE domain_login = 'admin'"
         ).fetchone()
         today_report = _analytics(
             self.conn, admin,
             ReportRequestIn(object_id=self.object_id, source_file="test.dxf",
-                            report_date=business_date()),
+                            report_date=business_date(), horizon_days=14),
         )
         future_report = _analytics(
             self.conn, admin,
             ReportRequestIn(object_id=self.object_id, source_file="test.dxf",
-                            report_date=tomorrow),
+                            report_date=effective_day),
         )
         self.assertEqual(today_report["unmapped"]["no_level"], 0)
         self.assertEqual(future_report["unmapped"]["no_level"], 0)

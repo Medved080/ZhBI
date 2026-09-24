@@ -91,7 +91,21 @@ def inputs_version(conn: sqlite3.Connection, object_id: int) -> str:
                         key=lambda r: (r[0], r[1] or ""))
     flow = sorted(([k[0], k[1], k[2], o] for k, o in поток.items()),
                   key=lambda r: (r[0], r[1], r[2]))
-    return digest({"work_kinds": work_kinds, "flow": flow})
+    zone_revision = conn.execute(
+        "SELECT id FROM crane_zone_versions WHERE object_id = ? "
+        "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
+        (object_id,),
+    ).fetchone()
+    arrivals = conn.execute(
+        "SELECT COUNT(*) FROM crane_zone_import_arrivals WHERE object_id = ?",
+        (object_id,),
+    ).fetchone()[0]
+    # Публикация зоны или появление изделий меняет состав фронтов даже когда
+    # темпы и текстовый порядок стоянок остались прежними. Старый предпросмотр
+    # нельзя подтвердить поверх уже другой схемы.
+    return digest({"work_kinds": work_kinds, "flow": flow,
+                   "zone_revision": zone_revision[0] if zone_revision else None,
+                   "arrivals": arrivals})
 
 
 def _flow(conn: sqlite3.Connection, object_id: int) -> dict:

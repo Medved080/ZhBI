@@ -6,7 +6,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -149,7 +149,8 @@ from app.reports import (
     in_development_title,
 )
 from app.report_analytics import (
-    TITLE as ANALYTICS_TITLE,
+    TITLE as ANALYTICS_TITLE, DEFAULT_HORIZON_DAYS as ANALYTICS_DEFAULT_HORIZON_DAYS,
+    HORIZONS as ANALYTICS_HORIZONS,
     build_analytics_report, build_analytics_report_pdf, build_analytics_report_xlsx,
 )
 from app.report_contracting import build_contracting_schedule
@@ -1928,12 +1929,16 @@ def _analytics(conn, user, body: ReportRequestIn) -> dict:
         raise HTTPException(status_code=400,
                             detail="Отчёт строится по объекту — выберите объект в тулбаре")
     as_of = body.report_date or crane_zone_business_date()
-    version = crane_zone_version_for_date(conn, object_id, as_of)
-    if version is None and has_crane_zone_versioning(conn, object_id):
-        raise HTTPException(
-            status_code=400,
-            detail="На дату отчёта нет достоверной редакции кранов и стоянок",
-        )
+    try:
+        version = crane_zone_version_for_date(conn, object_id, as_of)
+        if has_crane_zone_versioning(conn, object_id):
+            horizon = body.horizon_days if body.horizon_days in {
+                item["days"] for item in ANALYTICS_HORIZONS
+            } else ANALYTICS_DEFAULT_HORIZON_DAYS
+            end = (date.fromisoformat(as_of) + timedelta(days=horizon)).isoformat()
+            version = crane_zone_period_version(conn, object_id, as_of, end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if version is not None:
         with historical_zone_overlay(conn, version, as_of):
             return build_analytics_report(conn, object_id, as_of, body.horizon_days)
