@@ -14,7 +14,7 @@
 // возможен и позже через ту же кнопку после повторного открытия зоны, но кнопка «видит» только последнюю
 // правку текущего сеанса); неизвестный исход не повторяется — состояние перечитывается.
 import { ApiError } from "./api.js";
-import { esc, linkList } from "./screen-view.js";
+import { esc } from "./screen-view.js";
 import { statusChip } from "./registry.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { runDeleteFlow } from "./delete-plan.js";
@@ -43,7 +43,7 @@ function levelsText(levels) {
 
 export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitle, rights }) {
   const spec = screen.zones || { endpoint: "/zones" };
-  el.className = "v2-page";
+  el.className = "v2-page cz-page";
   const canEdit = !!rights?.system_admin || rights?.features?.zones === "write";
   const canDelete = !!rights?.system_admin || rights?.features?.dict_delete === "write";
   let dead = false, busy = false, seq = 0;
@@ -59,13 +59,22 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
-      <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canEdit ? "Правка зон в новом интерфейсе." : "Просмотр зон."}</strong>
-        Захватка — самостоятельное деление объекта; зона крана — рабочая зона крана; стоянка подчинена зоне крана. Пересчёт привязки изделий к зонам выполняется сервером автоматически при сохранении.
-        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
+      <div class="v2-wire-tabs v2-read-tabs ze-tabs" role="tablist" aria-label="Вид зон">${CATS.map(([c, label]) => `<button type="button" role="tab" class="v2-read-tab" aria-selected="${st.category === c}" data-cat="${esc(c)}">${esc(label)}</button>`).join("")}</div>
+      <p id="ze-context" class="ze-context v2-muted"></p>
       <div id="ze-body"></div>
     </div>`;
   const $ = (s) => el.querySelector(s);
+  wireTabs();
+
+  function paintTabInfo() {
+    el.querySelectorAll("[data-cat]").forEach((b) => { b.setAttribute("aria-selected", String(b.dataset.cat === st.category)); });
+    const text = {
+      "Захватка": "Захватки — самостоятельные участки объекта. Их геометрия редактируется отдельно от редакций кранов.",
+      "Кран": "Зона крана — верхний уровень: внутри неё находятся стоянки. Изменения кранов и стоянок публикуются одной редакцией.",
+      "Стоянка": "Стоянка — зона внутри выбранного крана. Чтобы добавить стоянку, выберите кран слева и нажмите «Добавить стоянку»; до публикации изменение остаётся в черновике.",
+    };
+    $("#ze-context").textContent = text[st.category];
+  }
 
   function dirty() {
     const ed = st.editing;
@@ -77,27 +86,24 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   // ---------------------------------------------------------------- список
   function paintList() {
     const box = $("#ze-body");
-    const tabs = `<div class="v2-wire-tabs v2-read-tabs" role="tablist">${CATS.map(([c, label]) => `<button type="button" role="tab" class="v2-read-tab" aria-selected="${st.category === c}" data-cat="${esc(c)}">${esc(label)}</button>`).join("")}</div>`;
-    el.classList.toggle("cz-page", st.category !== "Захватка");
     if (st.category !== "Захватка") {
-      box.innerHTML = tabs + `<div id="ze-crane-editor"></div>`;
-      wireTabs();
+      box.innerHTML = `<div id="ze-crane-editor"></div>`;
       craneModule?.destroy();
-      if (objectId) craneModule = mountCraneZoneEditor($("#ze-crane-editor"), { objectId, api, canEdit });
+      if (objectId) craneModule = mountCraneZoneEditor($("#ze-crane-editor"), { objectId, api, canEdit, initialCategory: st.category });
       else $("#ze-crane-editor").innerHTML = `<p class="v2-muted">Выберите объект в шапке.</p>`;
       return;
     }
-    if (!objectId) { box.innerHTML = tabs + `<p class="v2-muted">Выберите объект в шапке — справочник зон свой у каждого объекта.</p>`; wireTabs(); return; }
+    if (!objectId) { box.innerHTML = `<p class="v2-muted">Выберите объект в шапке — справочник зон свой у каждого объекта.</p>`; return; }
     if (!st.rows) {
-      box.innerHTML = tabs + (st.error
+      box.innerHTML = st.error
         ? `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить зоны.</strong> ${esc(st.error)}<div class="v2-callout-actions"><button type="button" class="v2-btn" id="ze-retry">Повторить</button></div></div>`
-        : `<p class="v2-muted" role="status">Загрузка…</p>`);
-      wireTabs(); $("#ze-retry")?.addEventListener("click", loadList);
+        : `<p class="v2-muted" role="status">Загрузка…</p>`;
+      $("#ze-retry")?.addEventListener("click", loadList);
       return;
     }
     const q = st.q.trim().toLowerCase();
     const rows = st.rows.filter((r) => !q || `${r.name || ""} ${r.parent_name || ""}`.toLowerCase().includes(q));
-    box.innerHTML = tabs + `
+    box.innerHTML = `
       <div class="v2-bar"><input type="search" id="ze-search" class="v2-search" placeholder="Поиск" aria-label="Поиск" value="${esc(st.q)}">
         <label class="v2-role-check"><input type="checkbox" id="ze-retired" ${st.includeRetired ? "checked" : ""}><span>Показывать зоны, которых нет в актуальном чертеже</span></label>
         <span class="v2-muted" id="ze-count" role="status" aria-live="polite">${esc(st.notice || `Найдено ${rows.length} из ${st.rows.length}`)}</span>
@@ -111,7 +117,6 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
           <td>${esc(levelsText(r.levels || []))}</td><td class="num">${r.elements}</td><td>${r.is_current ? "да" : "нет"}</td>
           ${canEdit || canDelete ? `<td>${canEdit ? `<button type="button" class="v2-btn" data-open="${r.id}">Править</button>` : ""} ${canDelete ? `<button type="button" class="v2-btn v2-danger" data-del="${r.id}" aria-label="Удалить зону ${esc(r.name || "")}">Удалить</button>` : ""}</td>` : ""}
         </tr>`).join("")}</tbody></table></div>` : `<p class="v2-muted">${q ? "Ничего не найдено по запросу." : `Зон категории «${esc(st.category)}» нет.`}</p>`}`;
-    wireTabs();
     $("#ze-search")?.addEventListener("input", (e) => { st.q = e.target.value; st.notice = ""; paintList(); const n = $("#ze-search"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
     $("#ze-retired")?.addEventListener("change", (e) => { st.includeRetired = e.target.checked; st.notice = ""; loadList(); });
     $("#ze-refresh")?.addEventListener("click", () => { st.notice = ""; loadList(); });
@@ -123,8 +128,10 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     el.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", async () => {
       if (busy) return;
       if (st.category === b.dataset.cat) return;
+      if (st.editing && !(await guardEditorLeave())) return;
       if (craneModule && !(await craneModule.guardLeave())) return;
       craneModule?.destroy(); craneModule = null;
+      drop3d(); st.editing = null; ++seq;
       st.category = b.dataset.cat; st.rows = null; st.q = ""; st.notice = ""; loadList();
     }));
   }
@@ -408,6 +415,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
 
   function paint() {
     if (dead) return;
+    paintTabInfo();
     if (st.editing) paintEditor(); else paintList();
   }
 

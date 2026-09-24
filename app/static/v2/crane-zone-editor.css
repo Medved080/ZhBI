@@ -1,9 +1,10 @@
 .v2-page.cz-page { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .cz-page > .v2-container { max-width: none; width: 100%; margin: 0; padding: 8px 16px 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.cz-page .v2-crumbs, .cz-page .v2-screen-head, .cz-page > .v2-container > .v2-muted { flex: none; }
-.cz-page .v2-callout { display: none; }
+.cz-page .v2-crumbs, .cz-page .v2-screen-head, .cz-page .ze-tabs, .cz-page .ze-context { flex: none; }
+.cz-page .ze-tabs { margin: 8px 0 0; min-height: 43px; align-items: center; }
+.cz-page .ze-context { min-height: 36px; margin: 0; display: flex; align-items: center; font-size: 12px; line-height: 1.3; }
 .cz-page #ze-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.cz-page #ze-body > .v2-wire-tabs { flex: none; }
+.cz-page #ze-body > .v2-read-table { overflow: auto; min-height: 0; }
 .cz-page #ze-crane-editor { min-height: 0; display: flex; flex: 1; margin: 0 -16px; }
 .cz-root { min-height: 0; flex: 1; display: flex; flex-direction: column; color: #273d4b; background: #f5f7f8; }
 .cz-toolbar { min-height: 54px; display: flex; align-items: center; gap: 9px; padding: 8px 16px; border-bottom: 1px solid #dce3e7; background: #fff; flex-wrap: wrap; }
@@ -14,6 +15,13 @@
 .cz-body { display: grid; grid-template-columns: minmax(190px, 245px) minmax(360px, 1fr) minmax(255px, 310px); flex: 1; min-height: 0; }
 .cz-tree, .cz-properties { overflow: auto; background: #fff; padding: 14px; min-width: 0; }
 .cz-tree { border-right: 1px solid #dce3e7; }
+.cz-tree-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.cz-tree-head .cz-title { margin: 0; }
+.cz-tree-intro { margin: 0; color: #627782; font-size: 12px; line-height: 1.35; }
+.cz-tree-add { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 4px 0 0; }
+.cz-tree-add .v2-btn { white-space: normal; text-align: left; }
+.cz-tree-add .v2-primary { font-weight: 650; }
+.cz-parent-hint { color: #627782; font-size: 11px; line-height: 1.3; }
 .cz-properties { border-left: 1px solid #dce3e7; display: flex; flex-direction: column; gap: 9px; }
 .cz-title { color: #657884; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
 .cz-crane { margin-bottom: 5px; }
@@ -25,7 +33,7 @@
 .cz-tree-icon { color: #4b9870; }
 .cz-stand { padding-left: 23px; }
 .cz-stand .cz-tree-icon { color: #6185a5; }
-.cz-tree-add, .cz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.cz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .cz-map { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .cz-map-bar, .cz-map-foot { display: flex; gap: 8px; align-items: center; min-height: 34px; background: #fff; padding: 4px 10px; font-size: 12px; color: #607782; }
 .cz-map-bar > span:first-child { font-weight: 700; color: #344e5f; }
