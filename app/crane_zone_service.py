@@ -60,7 +60,21 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
         "WHERE e.object_id = ? AND e.is_current = 1", (object_id,),
     ):
         old = saved.get(row["id"])
-        if old is None or (
+        if old is None:
+            arrival = conn.execute(
+                "SELECT 1 FROM crane_zone_import_arrivals WHERE object_id = ? AND element_id = ?",
+                (object_id, row["id"]),
+            ).fetchone()
+            if arrival is not None and all(row[key] is None for key in (
+                "zone_crane_id", "zone_crane_status", "zone_stance_id",
+                "zone_stance_status", "elevation_mm",
+            )):
+                continue
+            raise ZoneDraftError(
+                f"Изделие {row['id']} отсутствует в редакции и не зарегистрировано "
+                "как новое изделие без крановой зоны"
+            )
+        if (
             row["element_uid"], row["zone_crane_id"], row["zone_crane_status"],
             row["zone_stance_id"], row["zone_stance_status"], row["elevation_mm"]
         ) != (
@@ -75,40 +89,38 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
 
 
 def register_import_membership(conn: sqlite3.Connection, object_id: int) -> int:
-    """Дописать НОВЫЕ изделия в активную и ожидающую редакции без смены зон.
+    """Зарегистрировать новые изделия отдельно, НЕ меняя опубликованные снимки.
 
-    Вызывать сразу после этапа импорта изделий. Исторические редакции не
-    меняются; текущая и будущая получают новую позицию без назначений.
-    Позже редактор пересчитает её геометрически при публикации.
+    Вызывается внутри транзакции импорта изделий. Новое изделие остаётся
+    без крановой зоны до публикации следующей редакции.
     """
-    versions = conn.execute(
-        "SELECT id FROM crane_zone_versions WHERE object_id = ? AND "
-        "(activated_at IS NOT NULL OR effective_date > ?) "
-        "AND id IN (SELECT MAX(id) FROM crane_zone_versions WHERE object_id = ? "
-        "GROUP BY CASE WHEN activated_at IS NOT NULL THEN 'active' ELSE 'pending' END)",
-        (object_id, business_date(), object_id),
-    ).fetchall()
-    inserted = 0
-    for version in versions:
-        cur = conn.execute(
-            "INSERT INTO crane_zone_version_assignments "
-            "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
-            "stance_zone_id, stance_status, stance_elevation_mm, source) "
-            "SELECT ?, e.id, e.element_uid, e.zone_crane_id, e.zone_crane_status, "
-            "e.zone_stance_id, e.zone_stance_status, l.elevation_mm, 'geometry' "
-            "FROM elements e LEFT JOIN zone_levels l ON l.id = e.zone_stance_level_id "
-            "WHERE e.object_id = ? AND e.is_current = 1 "
-            "AND NOT EXISTS (SELECT 1 FROM crane_zone_version_assignments a "
-            "WHERE a.version_id = ? AND a.element_id = e.id)",
-            (version["id"], object_id, version["id"]),
+    unexpected = conn.execute(
+        "SELECT e.id FROM elements e WHERE e.object_id = ? AND e.is_current = 1 "
+        "AND NOT EXISTS (SELECT 1 FROM crane_zone_version_assignments a "
+        "JOIN crane_zone_versions v ON v.id = a.version_id "
+        "WHERE v.object_id = ? AND a.element_id = e.id) "
+        "AND NOT EXISTS (SELECT 1 FROM crane_zone_import_arrivals i "
+        "WHERE i.object_id = ? AND i.element_id = e.id) "
+        "AND (e.zone_crane_id IS NOT NULL OR e.zone_crane_status IS NOT NULL "
+        "OR e.zone_stance_id IS NOT NULL OR e.zone_stance_status IS NOT NULL "
+        "OR e.zone_stance_level_id IS NOT NULL) LIMIT 1",
+        (object_id, object_id, object_id),
+    ).fetchone()
+    if unexpected is not None:
+        raise ZoneDraftError(
+            f"Новое изделие {unexpected['id']} получило крановую зону вне редакции"
         )
-        inserted += cur.rowcount
-        conn.execute(
-            "UPDATE crane_zone_versions SET assignment_count = "
-            "(SELECT COUNT(*) FROM crane_zone_version_assignments WHERE version_id = ?) "
-            "WHERE id = ?", (version["id"], version["id"]),
-        )
-    return inserted
+    cur = conn.execute(
+        "INSERT INTO crane_zone_import_arrivals (object_id, element_id, first_seen_date) "
+        "SELECT ?, e.id, ? FROM elements e WHERE e.object_id = ? AND e.is_current = 1 "
+        "AND NOT EXISTS (SELECT 1 FROM crane_zone_version_assignments a "
+        "JOIN crane_zone_versions v ON v.id = a.version_id "
+        "WHERE v.object_id = ? AND a.element_id = e.id) "
+        "AND NOT EXISTS (SELECT 1 FROM crane_zone_import_arrivals i "
+        "WHERE i.object_id = ? AND i.element_id = e.id)",
+        (object_id, business_date(), object_id, object_id, object_id),
+    )
+    return cur.rowcount
 
 
 def create_draft(conn: sqlite3.Connection, object_id: int, user_id: int | None,
@@ -297,10 +309,22 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             "SELECT id FROM elements WHERE object_id = ? AND is_current = 1", (object_id,),
         )
     }
-    if not current_ids.issubset({row["element_id"] for row in assignments}):
-        raise ZoneDraftError(
-            "Появились изделия без записи в редакции. Сначала нужна сверка импорта."
-        )
+    missing = current_ids - {row["element_id"] for row in assignments}
+    if missing:
+        valid_arrivals = {
+            row["element_id"] for row in conn.execute(
+                "SELECT i.element_id FROM crane_zone_import_arrivals i "
+                "JOIN elements e ON e.id = i.element_id "
+                "WHERE i.object_id = ? AND e.is_current = 1 "
+                "AND e.zone_crane_id IS NULL AND e.zone_crane_status IS NULL "
+                "AND e.zone_stance_id IS NULL AND e.zone_stance_status IS NULL "
+                "AND e.zone_stance_level_id IS NULL", (object_id,),
+            )
+        }
+        if not missing.issubset(valid_arrivals):
+            raise ZoneDraftError(
+                "Появились изделия без записи в редакции и без безопасной регистрации импорта"
+            )
     for assignment in assignments:
         if assignment["element_id"] not in current_ids:
             continue

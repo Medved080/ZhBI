@@ -30,6 +30,7 @@
 .cz-map-bar, .cz-map-foot { display: flex; gap: 8px; align-items: center; min-height: 34px; background: #fff; padding: 4px 10px; font-size: 12px; color: #607782; }
 .cz-map-bar > span:first-child { font-weight: 700; color: #344e5f; }
 .cz-map-bar > span:nth-child(2) { flex: 1; text-align: center; }
+.cz-map-bar .cz-mode-active { background: #e5f0e9; border-color: #49976d; color: #236747; }
 .cz-map-foot { border-top: 1px solid #dce3e7; min-height: 31px; }
 #cz-canvas { display: block; width: 100%; flex: 1; min-height: 0; touch-action: none; cursor: crosshair; }
 .cz-properties label, .cz-bottom label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #627782; }

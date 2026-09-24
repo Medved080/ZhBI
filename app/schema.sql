@@ -662,6 +662,18 @@ CREATE TABLE IF NOT EXISTS crane_zone_version_assignments (
 CREATE INDEX IF NOT EXISTS idx_crane_zone_version_assignments_element
     ON crane_zone_version_assignments (element_id, version_id);
 
+-- Изделия, загруженные после публикации редакции. Не дописывать их в
+-- неизменяемый снимок: до следующей редакции у них нет крановой зоны.
+-- Дата нужна, чтобы исторический отчёт не видел изделие до его появления.
+CREATE TABLE IF NOT EXISTS crane_zone_import_arrivals (
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    element_id INTEGER NOT NULL,
+    first_seen_date TEXT NOT NULL,
+    PRIMARY KEY (object_id, element_id)
+);
+CREATE INDEX IF NOT EXISTS idx_crane_zone_import_arrivals_date
+    ON crane_zone_import_arrivals (object_id, first_seen_date);
+
 -- Черновик можно править до публикации. Ключ base_version_id служит
 -- оптимистическим стражем: если другой оператор опубликовал новую редакцию,
 -- старый черновик нужно пересмотреть, а не накладывать поверх молча.

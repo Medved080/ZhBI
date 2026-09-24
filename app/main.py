@@ -1873,17 +1873,11 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
         ).fetchone():
             raise ValueError("Для группировки по кранам и стоянкам выберите один объект")
         if version is not None:
-            active = conn.execute(
-                "SELECT id FROM crane_zone_versions WHERE object_id = ? "
-                "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
-                (object_id,),
-            ).fetchone()
-            if active is None or version["id"] != active["id"]:
-                with historical_zone_overlay(conn, version):
-                    return build_completion_pivot(
-                        conn, body.source_file, body.element_ids, body.group_by,
-                        body.step, body.date_scale, object_id, body.date_from, body.date_to,
-                    )
+            with historical_zone_overlay(conn, version, body.date_to):
+                return build_completion_pivot(
+                    conn, body.source_file, body.element_ids, body.group_by,
+                    body.step, body.date_scale, object_id, body.date_from, body.date_to,
+                )
         return build_completion_pivot(conn, body.source_file, body.element_ids,
                                       body.group_by, body.step, body.date_scale,
                                       object_id, body.date_from, body.date_to)
@@ -1941,13 +1935,8 @@ def _analytics(conn, user, body: ReportRequestIn) -> dict:
             detail="На дату отчёта нет достоверной редакции кранов и стоянок",
         )
     if version is not None:
-        active = conn.execute(
-            "SELECT id FROM crane_zone_versions WHERE object_id = ? AND activated_at IS NOT NULL "
-            "ORDER BY revision_no DESC LIMIT 1", (object_id,),
-        ).fetchone()
-        if active is None or version["id"] != active["id"]:
-            with historical_zone_overlay(conn, version):
-                return build_analytics_report(conn, object_id, as_of, body.horizon_days)
+        with historical_zone_overlay(conn, version, as_of):
+            return build_analytics_report(conn, object_id, as_of, body.horizon_days)
     return build_analytics_report(conn, object_id, as_of, body.horizon_days)
 
 
@@ -2085,14 +2074,7 @@ def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
         version = crane_zone_period_version(
             conn, object_id, report["date_from"], report["date_to"],
         )
-        active = conn.execute(
-            "SELECT id FROM crane_zone_versions WHERE object_id = ? "
-            "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
-            (object_id,),
-        ).fetchone()
-        if active is not None and version["id"] == active["id"]:
-            return report
-        with historical_zone_overlay(conn, version):
+        with historical_zone_overlay(conn, version, report["date_to"]):
             return build_delivery_schedule_report(
                 conn, body.source_file, body.element_ids,
                 body.date_from, body.date_to, body.step, body.group_by,
@@ -2147,14 +2129,8 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
                 conn, body.source_file, body.element_ids, body.date_from, body.date_to,
                 body.step, body.group_by, body.path, body.column)
         if version is not None:
-            active = conn.execute(
-                "SELECT id FROM crane_zone_versions WHERE object_id = ? "
-                "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
-                (object_id,),
-            ).fetchone()
-            if active is None or active["id"] != version["id"]:
-                with historical_zone_overlay(conn, version):
-                    return build_cell()
+            with historical_zone_overlay(conn, version, body.date_to):
+                return build_cell()
         return build_cell()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -14,8 +14,12 @@ export async function loadRegistry() {
     fetchJson("/static/v2/screens.json"),
     fetchJson("/static/v2/screen-structure.json"),
   ]);
-  const byId = new Map(reg.screens.map((s) => [s.id, s]));
-  return { groups: reg.groups, screens: reg.screens, structure, byId };
+  // Новая цельная редакция кранов заменила прежнюю проверенную форму зон.
+  // Пока не завершена регрессия всего сценария, общий экран не должен
+  // показывать старую зелёную отметку «рабочий и проверенный».
+  const screens = reg.screens.map((s) => s.id === "zones" ? { ...s, status: 4 } : s);
+  const byId = new Map(screens.map((s) => [s.id, s]));
+  return { groups: reg.groups, screens, structure, byId };
 }
 
 // Уровень «write» включает чтение (лестница, как в V1: can()).

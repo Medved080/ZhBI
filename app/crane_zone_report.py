@@ -9,6 +9,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import date
 
 
 def _ident(name: str) -> str:
@@ -16,7 +17,7 @@ def _ident(name: str) -> str:
 
 
 @contextmanager
-def historical_zone_overlay(conn: sqlite3.Connection, version):
+def historical_zone_overlay(conn: sqlite3.Connection, version, as_of: str):
     """Подменить только кран/стоянку в читаемых отчётом ``e`` и ``z``.
 
     Состав изделий берётся из снимка редакции; изделие, появившееся позже,
@@ -25,6 +26,10 @@ def historical_zone_overlay(conn: sqlite3.Connection, version):
     крановое зонирование, не обещает полный исторический снимок учёта.
     """
     version_id = int(version["id"])
+    date.fromisoformat(as_of)
+    # SQLite VIEW не принимает параметры; дата после строгого ISO-разбора.
+    day_sql = as_of.replace("'", "''")
+    object_id = int(version["object_id"])
     zones = json.loads(version["zones_json"])
     try:
         conn.execute(
@@ -64,8 +69,17 @@ def historical_zone_overlay(conn: sqlite3.Connection, version):
         select_cols = [f"{overrides.get(c, 'e.' + _ident(c))} AS {_ident(c)}" for c in cols]
         conn.execute(
             f"CREATE TEMP VIEW elements AS SELECT {', '.join(select_cols)} "
-            "FROM main.elements e JOIN main.crane_zone_version_assignments a "
-            f"ON a.element_id = e.id AND a.version_id = {version_id} "
+            "FROM main.elements e JOIN ("
+            "SELECT element_id, crane_zone_id, crane_status, stance_zone_id, "
+            "stance_status, stance_elevation_mm "
+            "FROM main.crane_zone_version_assignments "
+            f"WHERE version_id = {version_id} UNION ALL "
+            "SELECT i.element_id, NULL, NULL, NULL, NULL, NULL "
+            "FROM main.crane_zone_import_arrivals i "
+            f"WHERE i.object_id = {object_id} AND i.first_seen_date <= '{day_sql}' "
+            "AND NOT EXISTS (SELECT 1 FROM main.crane_zone_version_assignments old "
+            f"WHERE old.version_id = {version_id} AND old.element_id = i.element_id)"
+            ") a ON a.element_id = e.id "
             "LEFT JOIN temp.crane_hist_levels hl ON hl.zone_id = a.stance_zone_id "
             "AND hl.elevation_mm IS a.stance_elevation_mm"
         )

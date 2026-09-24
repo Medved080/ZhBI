@@ -360,6 +360,11 @@ TABLES = [
     ("stance_elevation_mm", "INTEGER", "", "отметка яруса вместо нестабильного zone_levels.id"),
     ("source", "TEXT", "", "geometry / manual / legacy — источник назначения"),
 ]),
+("crane_zone_import_arrivals", "crane_zone_import_arrivals — Новые изделия между редакциями", C_ZONE, S_ZONE, [
+    ("object_id", "INTEGER", "PK,FK", "объект → objects.id (CASCADE)"),
+    ("element_id", "INTEGER", "PK", "новое изделие; опубликованные снимки не дополняются"),
+    ("first_seen_date", "TEXT", "", "дата появления изделия по времени Москвы"),
+]),
 ("crane_zone_drafts", "crane_zone_drafts — Черновики редакций кранов и стоянок", C_ZONE, S_ZONE, [
     ("id", "INTEGER", "PK", "идентификатор черновика"),
     ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
@@ -972,6 +977,7 @@ FKS = [
     ("crane_zone_versions", "object_id", "objects", "id", "CASCADE"),
     ("crane_zone_versions", "created_by", "users", "id", "SET NULL"),
     ("crane_zone_version_assignments", "version_id", "crane_zone_versions", "id", "CASCADE"),
+    ("crane_zone_import_arrivals", "object_id", "objects", "id", "CASCADE"),
     ("crane_zone_drafts", "object_id", "objects", "id", "CASCADE"),
     ("crane_zone_drafts", "base_version_id", "crane_zone_versions", "id", "RESTRICT"),
     ("crane_zone_drafts", "created_by", "users", "id", "SET NULL"),

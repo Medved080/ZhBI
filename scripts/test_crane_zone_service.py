@@ -10,6 +10,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app import db
+from app import main as app_main
 from app import zone_sync
 from app.crane_zone_service import (
     ZoneDraftError, activate_due, create_draft, preview_draft, publish_draft,
@@ -153,30 +154,104 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertNotEqual(new[0], self.crane_id)
 
-    def test_import_adds_new_element_only_to_live_and_pending_versions(self):
+    def test_import_tracks_arrival_without_mutating_published_versions(self):
         draft_id, token = self._draft_with_new_crane()
         tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        day_after = (date.fromisoformat(business_date()) + timedelta(days=2)).isoformat()
         published = publish_draft(
-            self.conn, self.object_id, draft_id, token, tomorrow, None, "Тест",
+            self.conn, self.object_id, draft_id, token, day_after, None, "Тест",
         )
+        baseline = self.conn.execute(
+            "SELECT * FROM crane_zone_versions WHERE object_id = ? AND revision_no = 0",
+            (self.object_id,),
+        ).fetchone()
         new_id = self.conn.execute(
             "INSERT INTO elements (source_file, dxf_handle, layer, element_type, mark_source, "
             "x, y, axis_status, elevation_mm, object_id, element_uid) "
             "VALUES ('test.dxf', 'E2', 'test', 'Колонна', 'none', 3, 3, 'none', 0, ?, 'new-uid')",
             (self.object_id,),
         ).lastrowid
-        self.assertEqual(register_import_membership(self.conn, self.object_id), 2)
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            self.assertEqual(register_import_membership(self.conn, self.object_id), 1)
         self.assertEqual(register_import_membership(self.conn, self.object_id), 0)
         self.conn.commit()
-        self.assertIsNotNone(self.conn.execute(
-            "SELECT element_id FROM crane_zone_version_assignments "
-            "WHERE version_id = ? AND element_id = ?", (published["version_id"], new_id),
-        ).fetchone())
-        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_version_assignments WHERE element_id = ?",
+            (new_id,),
+        ).fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT first_seen_date FROM crane_zone_import_arrivals WHERE element_id = ?",
+            (new_id,),
+        ).fetchone()[0], tomorrow)
+        with historical_zone_overlay(self.conn, baseline, business_date()):
+            self.assertIsNone(self.conn.execute(
+                "SELECT id FROM elements WHERE id = ?", (new_id,),
+            ).fetchone())
+        with historical_zone_overlay(self.conn, baseline, tomorrow):
+            row = self.conn.execute(
+                "SELECT zone_crane_id FROM elements WHERE id = ?", (new_id,),
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertIsNone(row["zone_crane_id"])
+        self.conn.commit()
+        with patch("app.crane_zone_service.business_date", return_value=day_after):
             self.assertEqual(activate_due(self.conn), [published["version_id"]])
         self.assertIsNone(self.conn.execute(
             "SELECT zone_crane_id FROM elements WHERE id = ?", (new_id,),
         ).fetchone()[0])
+
+    def test_active_report_excludes_arrival_before_import_day(self):
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        self.conn.execute(
+            "INSERT INTO elements (source_file, dxf_handle, layer, element_type, mark_source, "
+            "x, y, axis_status, elevation_mm, object_id, element_uid) "
+            "VALUES ('test.dxf', 'E3', 'test', 'Колонна', 'none', 3, 3, 'none', 0, ?, 'new-uid-3')",
+            (self.object_id,),
+        )
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            register_import_membership(self.conn, self.object_id)
+        self.conn.commit()
+        def count_rows(conn, *_args):
+            return {"count": conn.execute(
+                "SELECT COUNT(*) FROM elements WHERE object_id = ?", (self.object_id,),
+            ).fetchone()[0]}
+        with patch.object(app_main, "_guard_report", side_effect=lambda _c, _u, body, _k: body), \
+             patch.object(app_main, "build_analytics_report", side_effect=count_rows):
+            earlier = app_main._analytics(
+                self.conn, None, app_main.ReportRequestIn(
+                    object_id=self.object_id, report_date=business_date(),
+                ),
+            )
+            later = app_main._analytics(
+                self.conn, None, app_main.ReportRequestIn(
+                    object_id=self.object_id, report_date=tomorrow,
+                ),
+            )
+        self.assertEqual(earlier["count"], 1)
+        self.assertEqual(later["count"], 2)
+
+    def test_delivery_and_completion_reject_period_across_change(self):
+        yesterday = (date.fromisoformat(business_date()) - timedelta(days=1)).isoformat()
+        self.conn.execute(
+            "UPDATE crane_zone_versions SET known_from = ? WHERE object_id = ?",
+            (yesterday, self.object_id),
+        )
+        self.conn.commit()
+        draft_id, token = self._draft_with_new_crane()
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        body = app_main.ReportRequestIn(
+            object_id=self.object_id, date_from=yesterday,
+            date_to=business_date(), group_by=["crane"], view="pivot",
+        )
+        with patch.object(app_main, "_guard_report", side_effect=lambda _c, _u, request, _k: request), \
+             patch.object(app_main, "build_delivery_schedule_report", return_value={
+                 "date_from": yesterday, "date_to": business_date(),
+             }):
+            with self.assertRaisesRegex(HTTPException, "Период пересекает"):
+                app_main._completion(self.conn, None, body)
+            with self.assertRaisesRegex(HTTPException, "Период пересекает"):
+                app_main._delivery_schedule(self.conn, None, body)
 
     def test_dxf_zone_proposal_stays_in_draft_without_changing_live_zones(self):
         before = snapshot_zones(self.conn, self.object_id)
@@ -261,7 +336,11 @@ class CraneZoneServiceTest(unittest.TestCase):
             "AND a.version_id = (SELECT id FROM crane_zone_versions "
             "WHERE object_id = ? AND revision_no = 0)",
             (self.object_id, self.object_id),
-        ).fetchone()[0], 4)
+        ).fetchone()[0], 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_import_arrivals WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0], 3)
 
     def test_renaming_stance_migrates_schedule_flow_atomically(self):
         self.conn.execute(
@@ -412,7 +491,7 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
         ).fetchone()[0]
         self.assertNotEqual(current, self.crane_id)
-        with historical_zone_overlay(self.conn, baseline):
+        with historical_zone_overlay(self.conn, baseline, business_date()):
             old = self.conn.execute(
                 "SELECT e.zone_crane_id, z.name, zl.elevation_mm FROM elements e "
                 "JOIN zones z ON z.id = e.zone_crane_id "

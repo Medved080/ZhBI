@@ -490,6 +490,8 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
       s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
       if (sec.report === "mywork" && (inp.dataset.param === "date_from" || inp.dataset.param === "date_to")) saveMyworkPeriod(s);
+      if (sec.report === "completion" && (inp.dataset.param === "date_from" || inp.dataset.param === "date_to") &&
+          !!s.params.date_from !== !!s.params.date_to) return; // дождаться второй границы, не показывать промежуточный отказ
       const c = (sec.controls || []).find((x) => x.param === inp.dataset.param);
       if (c?.remember) lsSet(c.remember, String(s.params[c.param]));
       load(active);
