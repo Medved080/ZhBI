@@ -30,7 +30,7 @@ from zone_parser import classify_layers
 
 from app import activity, element_sync, zone_sync
 from app.crane_zone_editor import ZoneDraftError
-from app.crane_zone_import import stage_import_draft
+from app.crane_zone_import import preflight_import_draft, stage_import_draft
 from app.crane_zone_service import register_import_membership
 from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 from app.db import get_connection, init_db
@@ -386,13 +386,13 @@ def apply_drawing(
     conn = get_connection()
     try:
         versioned_zones = has_crane_zone_versioning(conn, object_id)
+        import_zone_base = None
         if versioned_zones:
             # ПРЕЖДЕ записи изделий: если DXF невозможно безопасно превратить
             # в черновик, весь импорт останавливается без частичного итога.
             try:
-                stage_import_draft(
+                import_zone_base = preflight_import_draft(
                     conn, object_id, parsed.zones, parsed.source_file,
-                    user["id"] if user is not None else None, "Импорт DXF",
                 )
             except ZoneDraftError as exc:
                 raise DxfProcessingError(409, str(exc)) from exc
@@ -463,6 +463,15 @@ def apply_drawing(
                 conn, parsed.source_file, parsed.new_records, zone_handle_to_id,
                 allowed_categories={"Захватка"} if versioned_zones else None,
             )
+        if versioned_zones and import_zone_base is not None:
+            try:
+                stage_import_draft(
+                    conn, object_id, parsed.zones, parsed.source_file,
+                    user["id"] if user is not None else None, "Импорт DXF",
+                    expected_base_version_id=import_zone_base,
+                )
+            except ZoneDraftError as exc:
+                raise DxfProcessingError(409, str(exc)) from exc
     finally:
         conn.close()
 

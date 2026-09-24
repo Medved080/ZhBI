@@ -1,8 +1,8 @@
 """Крановые контуры нового DXF как непубликованный черновик редакции.
 
 Импорт изделий может продолжаться, но старые zones/назначения кранов и
-стоянок не трогаются. Черновик создаётся до записи изделий, так что даже
-сбой следующего этапа не теряет предложение из файла.
+стоянок не трогаются. Контуры проверяются до записи изделий; черновик
+сохраняется только после успешного применения всех этапов импорта.
 """
 
 from __future__ import annotations
@@ -101,9 +101,25 @@ def build_candidate(base_zones: list[dict], records: list, source_file: str) -> 
     return zones
 
 
+def preflight_import_draft(conn: sqlite3.Connection, object_id: int,
+                           records: list, source_file: str) -> int | None:
+    """Проверить предложение до первой записи и закрепить ID основы."""
+    if not any(r.category in ("Кран", "Стоянка") for r in records):
+        return None
+    base = conn.execute(
+        "SELECT id, zones_json FROM crane_zone_versions WHERE object_id = ? "
+        "ORDER BY revision_no DESC LIMIT 1", (object_id,),
+    ).fetchone()
+    if base is None:
+        return None
+    build_candidate(json.loads(base["zones_json"]), records, source_file)
+    return base["id"]
+
+
 def stage_import_draft(conn: sqlite3.Connection, object_id: int, records: list,
                        source_file: str, user_id: int | None,
-                       author_name: str | None) -> int | None:
+                       author_name: str | None,
+                       expected_base_version_id: int | None = None) -> int | None:
     """Сохранить предложенную DXF редакцию, не затронув рабочие зоны."""
     if not any(r.category in ("Кран", "Стоянка") for r in records):
         return None
@@ -113,6 +129,9 @@ def stage_import_draft(conn: sqlite3.Connection, object_id: int, records: list,
     ).fetchone()
     if base is None:
         return None
+    if expected_base_version_id is not None and base["id"] != expected_base_version_id:
+        raise ZoneDraftError("За время импорта опубликована другая редакция зон; "
+                             "повторите загрузку чертежа")
     base_zones = json.loads(base["zones_json"])
     candidate = build_candidate(base_zones, records, source_file)
     def logical(zones):

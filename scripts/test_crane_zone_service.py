@@ -404,6 +404,13 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT COUNT(*) FROM crane_zone_import_arrivals WHERE object_id = ?",
             (self.object_id,),
         ).fetchone()[0], 3)
+        with patch("app.dxf_import.element_sync.apply_import", side_effect=RuntimeError("test stop")):
+            with self.assertRaisesRegex(RuntimeError, "test stop"):
+                apply_drawing(parsed, analysis)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_drafts WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0], 1, "Неудачная загрузка не должна создавать черновик")
 
     def test_renaming_stance_migrates_schedule_flow_atomically(self):
         self.conn.execute(
