@@ -14,6 +14,7 @@ from app.crane_zone_service import (
     ZoneDraftError, activate_due, create_draft, preview_draft, publish_draft, update_draft,
 )
 from app.crane_zone_editor import preview_assignments
+from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_versions import business_date, ensure_baselines, snapshot_zones
 
 
@@ -238,6 +239,53 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 409)
         plan = build_plan(self.conn, "zone", str(self.crane_id))
         self.assertTrue(plan["blockers"])
+
+    def test_historical_overlay_reads_old_zone_without_changing_db(self):
+        draft_id, token = self._draft_with_new_crane()
+        publish_draft(self.conn, self.object_id, draft_id, token, business_date(), None, "Тест")
+        baseline = self.conn.execute(
+            "SELECT * FROM crane_zone_versions WHERE object_id = ? AND revision_no = 0",
+            (self.object_id,),
+        ).fetchone()
+        current = self.conn.execute(
+            "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
+        ).fetchone()[0]
+        self.assertNotEqual(current, self.crane_id)
+        with historical_zone_overlay(self.conn, baseline):
+            old = self.conn.execute(
+                "SELECT e.zone_crane_id, z.name FROM elements e "
+                "JOIN zones z ON z.id = e.zone_crane_id WHERE e.id = ?", (self.element_id,),
+            ).fetchone()
+            self.assertEqual((old["zone_crane_id"], old["name"]), (self.crane_id, "Кран 1"))
+        self.assertEqual(self.conn.execute(
+            "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
+        ).fetchone()[0], current)
+
+    def test_delivery_report_refuses_crossing_and_uses_old_stance(self):
+        from app.main import ReportRequestIn, _delivery_schedule
+
+        draft_id, token = self._draft_with_new_crane()
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        publish_draft(self.conn, self.object_id, draft_id, token, tomorrow, None, "Тест")
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        body = ReportRequestIn(
+            object_id=self.object_id, source_file="test.dxf", date_from=business_date(),
+            date_to=tomorrow, group_by=["stance"],
+        )
+        with self.assertRaises(HTTPException) as caught:
+            _delivery_schedule(self.conn, admin, body)
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn(tomorrow, str(caught.exception.detail))
+        old = _delivery_schedule(
+            self.conn, admin, body.model_copy(update={"date_to": business_date()}),
+        )
+        self.assertEqual(old["rows"][0]["label"], "Кран 1 · Стоянка 1")
+        new = _delivery_schedule(
+            self.conn, admin, body.model_copy(update={"date_from": tomorrow}),
+        )
+        self.assertEqual(new["rows"][0]["label"], "Кран 2 · Стоянка 1")
 
 
 if __name__ == "__main__":

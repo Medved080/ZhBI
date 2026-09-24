@@ -70,6 +70,8 @@ from app.marks import router as marks_router
 from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
 from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
+from app.crane_zone_versions import period_version as crane_zone_period_version
+from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_api import router as crane_zone_versions_router
 from app import settings_import
 from app.db import (
@@ -1998,9 +2000,39 @@ def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
     открывает отчёт целиком (аудит безопасности 2026-08-03)."""
     body = _guard_report(conn, user, body, "report_delivery")
     try:
-        return build_delivery_schedule_report(
+        report = build_delivery_schedule_report(
             conn, body.source_file, body.element_ids,
             body.date_from, body.date_to, body.step, body.group_by)
+        object_id = _report_object_id(conn, body)
+        if object_id is None:
+            if conn.execute(
+                "SELECT 1 FROM crane_zone_versions WHERE revision_no > 0 LIMIT 1"
+            ).fetchone():
+                raise ValueError(
+                    "После корректировки зон график строится по одному объекту. "
+                    "Выберите объект в шапке."
+                )
+            return report
+        if not conn.execute(
+            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            (object_id,),
+        ).fetchone():
+            return report
+        version = crane_zone_period_version(
+            conn, object_id, report["date_from"], report["date_to"],
+        )
+        active = conn.execute(
+            "SELECT id FROM crane_zone_versions WHERE object_id = ? "
+            "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
+            (object_id,),
+        ).fetchone()
+        if active is not None and version["id"] == active["id"]:
+            return report
+        with historical_zone_overlay(conn, version):
+            return build_delivery_schedule_report(
+                conn, body.source_file, body.element_ids,
+                body.date_from, body.date_to, body.step, body.group_by,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -2033,9 +2065,33 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
     conn = get_connection()
     try:
         body = _guard_report(conn, user, body, "report_delivery")
-        return build_delivery_cell_detail(
-            conn, body.source_file, body.element_ids, body.date_from, body.date_to,
-            body.step, body.group_by, body.path, body.column)
+        object_id = _report_object_id(conn, body)
+        version = None
+        if object_id is not None and conn.execute(
+            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            (object_id,),
+        ).fetchone():
+            if not body.date_from or not body.date_to:
+                raise ValueError("Не задан период отчёта")
+            version = crane_zone_period_version(conn, object_id, body.date_from, body.date_to)
+        elif object_id is None and conn.execute(
+            "SELECT 1 FROM crane_zone_versions WHERE revision_no > 0 LIMIT 1"
+        ).fetchone():
+            raise ValueError("Выберите один объект для разбора графика после корректировки зон")
+        def build_cell():
+            return build_delivery_cell_detail(
+                conn, body.source_file, body.element_ids, body.date_from, body.date_to,
+                body.step, body.group_by, body.path, body.column)
+        if version is not None:
+            active = conn.execute(
+                "SELECT id FROM crane_zone_versions WHERE object_id = ? "
+                "AND activated_at IS NOT NULL ORDER BY revision_no DESC LIMIT 1",
+                (object_id,),
+            ).fetchone()
+            if active is None or active["id"] != version["id"]:
+                with historical_zone_overlay(conn, version):
+                    return build_cell()
+        return build_cell()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     finally:
