@@ -69,6 +69,7 @@ from app.dict_delete import router as dict_delete_router
 from app.marks import router as marks_router
 from app.reference_catalogs import router as reference_catalogs_router
 from app import zone_recalc
+from app.crane_zone_api import router as crane_zone_versions_router
 from app import settings_import
 from app.db import (
     DB_PATH,
@@ -406,6 +407,7 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
+app.include_router(crane_zone_versions_router)
 from app.allocation import router as allocation_router, state_router as allocation_state_router  # noqa: E402
 app.include_router(allocation_router)
 app.include_router(allocation_state_router)
