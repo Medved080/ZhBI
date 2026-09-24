@@ -628,6 +628,7 @@ CREATE TABLE IF NOT EXISTS crane_zone_versions (
     effective_date TEXT,
     known_from TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    activated_at TEXT,              -- NULL до применения к текущему снимку zones/elements
     created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
     author_name TEXT,
     note TEXT,

@@ -87,8 +87,8 @@ def ensure_baselines(conn: sqlite3.Connection) -> str:
         snapshot = snapshot_zones(conn, object_id)
         cur = conn.execute(
             "INSERT INTO crane_zone_versions "
-            "(object_id, revision_no, kind, effective_date, known_from, zones_json, note) "
-            "VALUES (?, 0, 'baseline', NULL, ?, ?, ?)",
+            "(object_id, revision_no, kind, effective_date, known_from, activated_at, zones_json, note) "
+            "VALUES (?, 0, 'baseline', NULL, ?, datetime('now'), ?, ?)",
             (object_id, known_from, json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
              "Исходное состояние при вводе версионности; прошлое до known_from не подтверждено"),
         )
