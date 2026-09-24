@@ -28,12 +28,15 @@
 """
 
 import sqlite3
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import activity
+from app.crane_zone_report import historical_zone_overlay
+from app.crane_zone_versions import period_version as crane_zone_period_version
 from app.access import assert_object_feature, is_system_admin
 from app.auth import get_current_user
 from app.db import begin_write, get_connection
@@ -365,16 +368,31 @@ def _gantt_span(node: dict, ps, pe, fs, fe) -> None:
         node[ключ] = значение if текущее is None else крайний(текущее, значение)
 
 
+def _gantt_clip(start, end, date_from: str, date_to: str):
+    """Оставить только видимую часть одной плановой/прогнозной полосы."""
+    if start is None and end is None:
+        return None, None
+    first, last = (start or end)[:10], (end or start)[:10]
+    if last < date_from or first > date_to:
+        return None, None
+    if start is not None and end is not None:
+        return max(start[:10], date_from), min(end[:10], date_to)
+    return (start[:10], None) if start is not None else (None, end[:10])
+
+
 def gantt_tree(conn: sqlite3.Connection, object_id: int,
-               version_id: Optional[int] = None) -> dict:
-    """Дерево узлов группировки с плановыми и прогнозными сроками."""
+               version_id: Optional[int] = None,
+               date_from: Optional[str] = None,
+               date_to: Optional[str] = None) -> dict:
+    """Дерево Ганта в однородном периоде крановых зон."""
     from app.models import Status
     from app.reports import _item_label, natural_key
     from app.schedule_calc import _flow, _work_kinds
 
     version_id = version_id if version_id is not None else latest_current_id(conn, object_id)
-    rows = conn.execute(
-        """
+    def read_rows():
+        return conn.execute(
+            """
         SELECT zc.name AS crane, zs.name AS stance, e.floor AS floor,
                e.element_type AS etype, e.subtype AS subtype, e.current_status AS st,
                e.project_smr_start_date AS ps, e.project_delivery_date AS pe,
@@ -384,11 +402,32 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id AND e.zone_stance_status = 'matched'
         LEFT JOIN schedule_version_dates d ON d.element_id = e.id AND d.version_id = ?
         WHERE e.object_id = ? AND e.is_current = 1
-        """,
-        (version_id if version_id is not None else -1, object_id),
-    ).fetchall()
+            """,
+            (version_id if version_id is not None else -1, object_id),
+        ).fetchall()
 
-    поток = _flow(conn, object_id)          # (кран, стоянка, этаж) → номер фронта
+    if bool(date_from) != bool(date_to):
+        raise ValueError("Для диаграммы Ганта укажите обе границы периода")
+    if date_from and date_to:
+        date.fromisoformat(date_from)
+        date.fromisoformat(date_to)
+        if date_to < date_from:
+            raise ValueError("Конец периода раньше начала")
+    rows = read_rows()
+    all_dates = [str(r[key])[:10] for r in rows for key in ("ps", "pe", "fs", "fe") if r[key]]
+    effective_from = date_from or (min(all_dates) if all_dates else None)
+    effective_to = date_to or (max(all_dates) if all_dates else None)
+    if effective_from and effective_to and conn.execute(
+        "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0 LIMIT 1",
+        (object_id,),
+    ).fetchone():
+        revision = crane_zone_period_version(conn, object_id, effective_from, effective_to)
+        with historical_zone_overlay(conn, revision, effective_to):
+            rows = read_rows()
+            поток = _flow(conn, object_id)
+    else:
+        поток = _flow(conn, object_id)
+
     виды = _work_kinds(conn, object_id)     # (тип, подтип) → {"rate", "order"}
     ХВОСТ = 10 ** 6                         # то, чему порядок не задан, — в конец
 
@@ -401,6 +440,12 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
     без_дат = 0
     без_прогноза = 0
     for r in rows:
+        if date_from and date_to:
+            ps, pe = _gantt_clip(r["ps"], r["pe"], date_from, date_to)
+            fs, fe = _gantt_clip(r["fs"], r["fe"], date_from, date_to)
+            if not any((ps, pe, fs, fe)):
+                continue
+            r = {**dict(r), "ps": ps, "pe": pe, "fs": fs, "fe": fe}
         if not (r["ps"] or r["pe"] or r["fs"] or r["fe"]):
             # Изделие, у которого нет ни директивных дат, ни прогноза, рисовать
             # нечем. Молча пропасть оно не должно — сколько таких, диаграмма
@@ -482,6 +527,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
     v = conn.execute("SELECT title, kind, loaded_at FROM schedule_versions WHERE id = ?",
                      (version_id,)).fetchone() if version_id is not None else None
     return {
+        "object_id": object_id,
         "version_id": version_id,
         "version_title": v["title"] if v else None,
         "version_kind": v["kind"] if v else None,
@@ -493,6 +539,8 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
         "no_forecast": без_прогноза,
         "min_date": min(даты)[:10] if даты else None,
         "max_date": max(даты)[:10] if даты else None,
+        "date_from": date_from,
+        "date_to": date_to,
     }
 
 
@@ -512,17 +560,23 @@ def get_versions(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
 
 @router.get("/gantt")
 def get_gantt(object_id: int, version_id: Optional[int] = None,
+              date_from: Optional[str] = None, date_to: Optional[str] = None,
               user: sqlite3.Row = Depends(get_current_user)):
     """Дерево для диаграммы Ганта. version_id не задан — текущий прогноз."""
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "schedule", "read")
-        return gantt_tree(conn, object_id, version_id=version_id)
+        try:
+            return gantt_tree(conn, object_id, version_id=version_id,
+                              date_from=date_from, date_to=date_to)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         conn.close()
 
 
-def _gantt_file(object_id: int, version_id: Optional[int], user, вид: str):
+def _gantt_file(object_id: int, version_id: Optional[int], user, вид: str,
+                date_from: Optional[str] = None, date_to: Optional[str] = None):
     """Диаграмма файлом. GET, а не POST: выгружается ВСЁ дерево объекта, и
     сужать его списком id (как это делают отчёты) незачем — тела запроса
     не нужно."""
@@ -535,7 +589,11 @@ def _gantt_file(object_id: int, version_id: Optional[int], user, вид: str):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "schedule", "read")
-        data = gantt_tree(conn, object_id, version_id=version_id)
+        try:
+            data = gantt_tree(conn, object_id, version_id=version_id,
+                              date_from=date_from, date_to=date_to)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
         имя_объекта = row["name"] if row else "—"
     finally:
@@ -557,14 +615,16 @@ def _gantt_file(object_id: int, version_id: Optional[int], user, вид: str):
 
 @router.get("/gantt.xlsx")
 def get_gantt_xlsx(object_id: int, version_id: Optional[int] = None,
+                   date_from: Optional[str] = None, date_to: Optional[str] = None,
                    user: sqlite3.Row = Depends(get_current_user)):
-    return _gantt_file(object_id, version_id, user, "xlsx")
+    return _gantt_file(object_id, version_id, user, "xlsx", date_from, date_to)
 
 
 @router.get("/gantt.pdf")
 def get_gantt_pdf(object_id: int, version_id: Optional[int] = None,
+                  date_from: Optional[str] = None, date_to: Optional[str] = None,
                   user: sqlite3.Row = Depends(get_current_user)):
-    return _gantt_file(object_id, version_id, user, "pdf")
+    return _gantt_file(object_id, version_id, user, "pdf", date_from, date_to)
 
 
 @router.get("/deviation")

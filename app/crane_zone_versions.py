@@ -159,9 +159,15 @@ def period_version(conn: sqlite3.Connection, object_id: int,
         )
     version = version_for_date(conn, object_id, date_from)
     if version is None:
+        baseline = conn.execute(
+            "SELECT known_from FROM crane_zone_versions "
+            "WHERE object_id = ? AND kind = 'baseline'",
+            (object_id,),
+        ).fetchone()
+        known = f" (с {baseline['known_from']})" if baseline is not None else ""
         raise ValueError(
             "Для начала периода нет достоверной редакции крановых зон: "
-            "исходный снимок создан позднее. Историю до ввода версионности "
+            f"исходный снимок создан позднее{known}. Историю до ввода версионности "
             "нельзя восстановить из текущих назначений."
         )
     return version

@@ -914,6 +914,8 @@
     display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;
   }
   .gantt-toolbar select { max-width: 320px; }
+  .gantt-toolbar .gantt-period { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; white-space: nowrap; }
+  .gantt-toolbar .gantt-period input { width: 132px; min-width: 0; }
   .gantt-legend { display: flex; gap: 12px; align-items: center; font-size: 12px; }
   .gantt-legend span { display: inline-flex; align-items: center; gap: 5px; }
   .gantt-legend i {
@@ -8791,6 +8793,9 @@
       <div class="gantt-toolbar">
         <label class="field" style="margin:0">Прогноз</label>
         <select id="gantt-version"></select>
+        <label class="gantt-period">С <input type="date" id="gantt-date-from" aria-label="Диаграмма Ганта: период с"></label>
+        <label class="gantt-period">По <input type="date" id="gantt-date-to" aria-label="Диаграмма Ганта: период по"></label>
+        <button class="btn btn-sm btn-secondary" id="gantt-apply-period">Показать</button>
         <div class="gantt-legend">
           <span><i class="plan"></i>план (директивные даты)</span>
           <span><i class="fc"></i>прогноз</span>

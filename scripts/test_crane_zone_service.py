@@ -283,6 +283,36 @@ class CraneZoneServiceTest(unittest.TestCase):
         register_import_membership(self.conn, self.object_id)
         self.assertNotEqual(after_revision, inputs_version(self.conn, self.object_id))
 
+    def test_gantt_requires_one_zone_revision_and_clips_selected_period(self):
+        from app.schedule_versions import gantt_tree
+
+        yesterday = (date.fromisoformat(business_date()) - timedelta(days=1)).isoformat()
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        self.conn.execute(
+            "UPDATE crane_zone_versions SET known_from = ? WHERE object_id = ?",
+            (yesterday, self.object_id),
+        )
+        self.conn.execute(
+            "UPDATE elements SET project_smr_start_date = ?, project_delivery_date = ? "
+            "WHERE id = ?", (yesterday, tomorrow, self.element_id),
+        )
+        self.conn.commit()
+        draft_id, token = self._draft_with_new_crane()
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        with self.assertRaisesRegex(ValueError, "Период пересекает"):
+            gantt_tree(self.conn, self.object_id)
+        old = gantt_tree(self.conn, self.object_id,
+                         date_from=yesterday, date_to=yesterday)
+        current = gantt_tree(self.conn, self.object_id,
+                             date_from=business_date(), date_to=tomorrow)
+        self.assertEqual(current["object_id"], self.object_id)
+        self.assertEqual(old["nodes"][0]["label"], "Кран 1")
+        self.assertEqual(current["nodes"][0]["label"], "Кран 2")
+        self.assertEqual((old["min_date"], old["max_date"]), (yesterday, yesterday))
+        self.assertEqual((current["min_date"], current["max_date"]),
+                         (business_date(), tomorrow))
+
     def test_dxf_zone_proposal_stays_in_draft_without_changing_live_zones(self):
         before = snapshot_zones(self.conn, self.object_id)
         records = [

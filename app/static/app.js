@@ -29248,14 +29248,25 @@ let ganttNameWShown = GANTT_NAME_MIN;   // что получилось на по
 
 const ganttDay = (iso) => Date.parse(iso.slice(0, 10) + "T00:00:00Z") / 86400000;
 
+function ganttQuery(shown = false) {
+  const from = shown ? ganttData.date_from || "" : document.getElementById("gantt-date-from").value;
+  const to = shown ? ganttData.date_to || "" : document.getElementById("gantt-date-to").value;
+  if (!!from !== !!to) throw new Error("Укажите обе границы периода диаграммы Ганта");
+  if (from && to < from) throw new Error("Конец периода раньше начала");
+  const params = new URLSearchParams({ object_id: String(shown ? ganttData.object_id : state.objectId) });
+  const version = shown ? ganttData.version_id : ganttVersionId;
+  if (version) params.set("version_id", String(version));
+  if (from) { params.set("date_from", from); params.set("date_to", to); }
+  return params.toString();
+}
+
 async function loadScheduleGantt() {
   const box = document.getElementById("gantt-box");
   const status = document.getElementById("gantt-status");
   box.innerHTML = '<div class="hint-text" style="padding:12px">Загрузка…</div>';
   status.textContent = "";
   try {
-    const запрос = `/schedule-versions/gantt?object_id=${state.objectId}`
-      + (ganttVersionId ? `&version_id=${ganttVersionId}` : "");
+    const запрос = `/schedule-versions/gantt?${ganttQuery()}`;
     ganttData = await api(запрос);
     ganttVersionId = ganttData.version_id;
     ganttCollapsed = new Set();
@@ -29395,8 +29406,10 @@ function renderGantt() {
   const d = ganttData;
   if (!d) return;
   if (!d.nodes.length) {
-    box.innerHTML = '<div class="hint-text" style="padding:12px">Рисовать нечего: ни у одного '
-      + 'изделия объекта нет ни директивных дат СМР, ни прогноза.</div>';
+    box.innerHTML = '<div class="hint-text" style="padding:12px">'
+      + (d.date_from ? 'В выбранном периоде нет работ с плановыми или прогнозными датами.'
+        : 'Рисовать нечего: ни у одного изделия объекта нет ни директивных дат СМР, ни прогноза.')
+      + '</div>';
     status.textContent = "";
     return;
   }
@@ -29612,6 +29625,7 @@ document.getElementById("gantt-version").addEventListener("change", (e) => {
   ganttVersionId = e.target.value ? Number(e.target.value) : null;
   loadScheduleGantt();
 });
+document.getElementById("gantt-apply-period").addEventListener("click", loadScheduleGantt);
 const ganttZoom = (k) => {
   if (!ganttData) return;
   const box = document.getElementById("gantt-box");
@@ -29647,9 +29661,13 @@ async function downloadGantt(вид) {
   const было = status.textContent;
   status.textContent = `Готовим ${вид.toUpperCase()}…`;
   try {
-    const res = await fetch(`/schedule-versions/gantt.${вид}?object_id=${state.objectId}`
-      + (ganttVersionId ? `&version_id=${ganttVersionId}` : ""));
-    if (!res.ok) throw new Error(`Ошибка ${res.status}`);
+    if (!ganttData) throw new Error("Сначала сформируйте диаграмму");
+    const res = await fetch(`/schedule-versions/gantt.${вид}?${ganttQuery(true)}`);
+    if (!res.ok) {
+      const error = await res.json().catch(() => null);
+      const detail = error?.detail;
+      throw new Error(typeof detail === "string" ? detail : `Ошибка ${res.status}`);
+    }
     const url = URL.createObjectURL(await res.blob());
     const a = document.createElement("a");
     a.href = url;
