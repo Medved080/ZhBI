@@ -15073,8 +15073,16 @@ function openZonesModal(category) {
 }
 
 document.getElementById("menu-zones-zakhvatka").addEventListener("click", () => openZonesModal("Захватка"));
-document.getElementById("menu-zones-crane").addEventListener("click", () => openZonesModal("Кран"));
-document.getElementById("menu-zones-stance").addEventListener("click", () => openZonesModal("Стоянка"));
+async function openCraneZoneRevisions(initialCategory) {
+  try {
+    const { openCraneZoneV1 } = await import("/static/crane-zone-v1.js");
+    openCraneZoneV1({ objectId: state.objectId, apiRequest: api, canEdit: canEditZones(), initialCategory,
+      onPublished: (result) => { if (result.activated && state.sourceFile) loadPlan(true).catch((e) => showToast(e.message, "warning")); },
+    });
+  } catch (e) { showToast(e.message || "Не удалось открыть редактор зон кранов", "warning"); }
+}
+document.getElementById("menu-zones-crane").addEventListener("click", () => openCraneZoneRevisions("Кран"));
+document.getElementById("menu-zones-stance").addEventListener("click", () => openCraneZoneRevisions("Стоянка"));
 document.getElementById("zones-close").addEventListener("click", () => zonesBackdrop.classList.remove("open"));
 
 // Откат последней правки зоны — целиком: реквизиты, ярусы И привязки

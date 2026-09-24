@@ -1,0 +1,17 @@
+@import url("/static/v2/crane-zone-editor.css");
+
+.cz-v1-backdrop { position: fixed; inset: 0; z-index: 110; display: flex; align-items: center; justify-content: center; background: rgb(15 25 35 / 55%); }
+.cz-v1-modal { width: min(1600px, calc(100vw - 32px)); height: min(960px, calc(100vh - 32px)); display: flex; flex-direction: column; min-height: 0; background: #fff; color: #273d4b; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 70px rgb(0 0 0 / 28%); }
+.cz-v1-head { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid #dce3e7; }
+.cz-v1-head strong { font-size: 16px; }
+.cz-v1-editor { min-height: 0; flex: 1; display: flex; }
+.cz-v1-backdrop .cz-toolbar select { min-width: 160px; max-width: 190px; }
+.cz-v1-backdrop .v2-btn, .v2-dialog-backdrop .v2-btn { padding: 7px 11px; border: 1px solid #cbd8df; border-radius: 7px; background: #fff; color: #273d4b; font: inherit; white-space: nowrap; cursor: pointer; }
+.cz-v1-backdrop .v2-btn:hover, .v2-dialog-backdrop .v2-btn:hover { background: #eef4f7; }
+.cz-v1-backdrop .v2-btn:disabled { opacity: .5; cursor: not-allowed; }
+.cz-v1-backdrop .v2-primary, .v2-dialog-backdrop .v2-primary { background: #2c8953; border-color: #2c8953; color: #fff; }
+.cz-v1-backdrop .v2-muted { color: #657884; }
+.v2-dialog-backdrop { position: fixed; inset: 0; z-index: 130; display: flex; align-items: center; justify-content: center; background: rgb(15 20 30 / 45%); }
+.v2-dialog { width: 420px; max-width: calc(100vw - 32px); padding: 20px; border: 1px solid #dce3e7; border-radius: 12px; background: #fff; color: #273d4b; box-shadow: 0 16px 48px rgb(0 0 0 / 16%); }
+.v2-dialog p { margin: 0 0 16px; font-size: 14px; }
+.v2-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }

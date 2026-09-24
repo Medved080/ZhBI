@@ -42,7 +42,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     deviation: { open: false, loading: false, error: "", data: null },
     inputs: { loaded: false, error: "", workKinds: [], flow: [], version: null, status: "" },
     calc: { startDate: today(), skipInstalled: true, busy: false, preview: null, status: "", error: "" },
-    gantt: { loaded: false, error: "", data: null, versionId: null, collapsed: new Set(), depth: 4, pxPerDay: null, status: "", nameW: readNameW(), fullscreen: false },
+    gantt: { loaded: false, error: "", data: null, versionId: null, dateFrom: "", dateTo: "", collapsed: new Set(), depth: 4, pxPerDay: null, status: "", nameW: readNameW(), fullscreen: false },
     parseStatus: "",
   };
 
@@ -275,13 +275,25 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
   }
 
   // ------------------------------------------------------------ диаграмма Ганта
+  function ganttQuery(shown = false) {
+    const g = S.gantt;
+    const from = shown ? g.data?.date_from || "" : g.dateFrom;
+    const to = shown ? g.data?.date_to || "" : g.dateTo;
+    if (!!from !== !!to) throw new Error("Укажите обе границы периода диаграммы Ганта");
+    if (from && to < from) throw new Error("Конец периода раньше начала");
+    const params = new URLSearchParams({ object_id: String(objectId) });
+    const versionId = shown ? g.data?.version_id : g.versionId;
+    if (versionId) params.set("version_id", String(versionId));
+    if (from) { params.set("date_from", from); params.set("date_to", to); }
+    return params.toString();
+  }
   async function loadGantt() {
-    S.gantt.error = "";
+    S.gantt.error = ""; S.gantt.loaded = false; S.gantt.data = null;
     try {
-      const q = `/schedule-versions/gantt?object_id=${objectId}` + (S.gantt.versionId ? `&version_id=${S.gantt.versionId}` : "");
+      const q = `/schedule-versions/gantt?${ganttQuery()}`;
       const d = await api.get(q);
       S.gantt.data = d; S.gantt.versionId = d.version_id; S.gantt.collapsed = new Set(); S.gantt.depth = 4; S.gantt.loaded = true;
-    } catch (err) { S.gantt.error = err?.detail || "Не удалось построить диаграмму"; }
+    } catch (err) { S.gantt.error = err?.detail || err?.message || "Не удалось построить диаграмму"; }
   }
   function applyDepth(depth) {
     if (!S.gantt.data) return;
@@ -297,9 +309,10 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
   }
   const dayNum = (iso) => Date.parse(iso.slice(0, 10) + "T00:00:00Z") / 86400000;
   async function downloadGantt(kind) {
+    if (!S.gantt.data) return;
     S.gantt.status = `Готовим ${kind.toUpperCase()}…`; paint();
     try {
-      const blob = await api.download(`/schedule-versions/gantt.${kind}?object_id=${objectId}${S.gantt.versionId ? `&version_id=${S.gantt.versionId}` : ""}`, undefined, { method: "GET" });
+      const blob = await api.download(`/schedule-versions/gantt.${kind}?${ganttQuery(true)}`, undefined, { method: "GET" });
       const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `График СМР — диаграмма Ганта.${kind}`;
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       S.gantt.status = "";
@@ -308,14 +321,18 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
   }
   function ganttHtml() {
     const g = S.gantt;
-    if (g.error && !g.loaded) return `<p class="v2-note">${esc(g.error)} <button type="button" class="v2-btn" data-a="retry-g">Повторить</button></p>`;
-    if (!g.loaded) return `<p class="v2-muted">Загрузка…</p>`;
+    const period = `<div class="v2-inline" role="group" aria-label="Период диаграммы Ганта" style="margin:8px 0 12px">
+      <label>С <input type="date" id="sc-gantt-from" value="${esc(g.dateFrom)}" aria-label="Диаграмма Ганта: период с"></label>
+      <label>По <input type="date" id="sc-gantt-to" value="${esc(g.dateTo)}" aria-label="Диаграмма Ганта: период по"></label>
+      <button type="button" class="v2-btn" data-a="gantt-apply">Показать</button></div>`;
+    if (g.error && !g.loaded) return period + `<p class="v2-note" role="alert">${esc(g.error)}</p>`;
+    if (!g.loaded) return period + `<p class="v2-muted">Загрузка…</p>`;
     const d = g.data;
     const versions = S.versions.items;
     const versionSelect = versions.length
       ? `<select id="sc-gantt-version" aria-label="Версия прогноза">${versions.map((v) => `<option value="${v.id}" ${v.id === g.versionId ? "selected" : ""}>${esc(v.kind_label)}: ${esc(v.title || "без названия")}${S.versions.currentId === v.id ? " · текущий прогноз" : ""}</option>`).join("")}</select>`
       : `<span class="v2-muted">версий графика нет</span>`;
-    const head = `<div class="v2-inline" style="margin:8px 0 12px;justify-content:space-between">
+    const head = period + `<div class="v2-inline" style="margin:8px 0 12px;justify-content:space-between">
         <div class="v2-inline">${versionSelect}
           <div class="v2-seg" role="group" aria-label="Уровень группировки">${GANTT_LEVELS.map(([depth, label]) => `<button type="button" data-gantt-level="${depth}" aria-pressed="${depth === g.depth}">${esc(label)}</button>`).join("")}</div>
         </div>
@@ -323,7 +340,7 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
           <button type="button" class="v2-btn" data-a="gantt-xlsx">Выгрузить в XLSX</button><button type="button" class="v2-btn" data-a="gantt-pdf">Выгрузить в PDF</button>
           <button type="button" class="v2-btn" data-a="gantt-fs" aria-pressed="${g.fullscreen}">${g.fullscreen ? "Свернуть" : "Во весь экран"}</button></div>
       </div>`;
-    if (!d.nodes.length) return head + `<p class="v2-note">Рисовать нечего: ни у одного изделия объекта нет ни директивных дат СМР, ни прогноза.</p>`;
+    if (!d.nodes.length) return head + `<p class="v2-note">${d.date_from ? "В выбранном периоде нет работ с плановыми или прогнозными датами." : "Рисовать нечего: ни у одного изделия объекта нет ни директивных дат СМР, ни прогноза."}</p>`;
 
     const first = new Date(d.min_date + "T00:00:00Z"), last = new Date(d.max_date + "T00:00:00Z");
     const from = Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1) / 86400000;
@@ -410,6 +427,9 @@ export function mountSchedule(container, { screen, objectId, api, rights, groupT
     inner.querySelector('[data-a="calc-confirm"]')?.addEventListener("click", confirmCalc);
     inner.querySelector('[data-a="calc-cancel"]')?.addEventListener("click", () => { S.calc.preview = null; paint(); });
     // диаграмма
+    inner.querySelector("#sc-gantt-from")?.addEventListener("change", (e) => { S.gantt.dateFrom = e.target.value; });
+    inner.querySelector("#sc-gantt-to")?.addEventListener("change", (e) => { S.gantt.dateTo = e.target.value; });
+    inner.querySelector('[data-a="gantt-apply"]')?.addEventListener("click", async () => { await loadGantt(); paint(); });
     inner.querySelector("#sc-gantt-version")?.addEventListener("change", (e) => { S.gantt.versionId = e.target.value ? Number(e.target.value) : null; S.gantt.loaded = false; loadGantt().then(paint); });
     inner.querySelectorAll("[data-gantt-level]").forEach((b) => b.addEventListener("click", () => { applyDepth(Number(b.dataset.ganttLevel)); paint(); }));
     inner.querySelectorAll("[data-gantt-toggle]").forEach((b) => b.addEventListener("click", () => { const id = Number(b.dataset.ganttToggle); if (S.gantt.collapsed.has(id)) S.gantt.collapsed.delete(id); else S.gantt.collapsed.add(id); paint(); }));

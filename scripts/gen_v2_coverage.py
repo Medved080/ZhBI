@@ -74,11 +74,12 @@ def check(data, d):
     problems = []
     seen_ids = set()
     for s in data["screens"]:
+        v1 = s.get("v1") or {}
         if s["id"] in seen_ids:
             problems.append(f"повтор идентификатора экрана: {s['id']}")
         seen_ids.add(s["id"])
         for kind, universe in (("menu", menu_ids), ("modals", modal_ids), ("toolbar", tb_ids)):
-            for i in s["v1"].get(kind, []):
+            for i in v1.get(kind, []):
                 if i not in universe:
                     problems.append(f"{s['id']}: {kind} «{i}» нет в V1")
                 claimed[kind].add(i)
@@ -107,19 +108,20 @@ def build_structure(data, d):
     tbs = {t["id"]: t for t in d["toolbar"]}
     out = {}
     for s in data["screens"]:
+        v1 = s.get("v1") or {}
         entry = {"menu": [], "modals": [], "regions": [], "api": [], "calls": []}
         feats = []
-        for i in s["v1"]["menu"]:
+        for i in v1.get("menu", []):
             m = menu[i]
             entry["menu"].append({"id": i, "label": m["label"], "path": m["path"], "feature": m["feature"], "kind": m["kind"], "dev": m["in_dev"], "danger": m["danger"]})
             if m["feature"]:
                 feats.append([m["feature"].split(","), m["kind"] or "write"])
-        for i in s["v1"]["modals"]:
+        for i in v1.get("modals", []):
             mo = modals[i]
             entry["modals"].append({"id": i, "title": mo["title"], "tabs": mo["tabs"], "structure": mo["structure"]})
         for i in s.get("regions", []):
             entry["regions"].append({"id": i, "structure": d["regions"][i]["structure"]})
-        ids = list(s["v1"]["menu"]) + list(s["v1"]["toolbar"])
+        ids = list(v1.get("menu", [])) + list(v1.get("toolbar", []))
         dyn = []
         for i in ids:
             h = d["handlers"].get(i)
@@ -132,7 +134,7 @@ def build_structure(data, d):
         # шаблоны V1 показываем, только если статическая разметка бедна (иначе дублируют и шумят)
         static_n = sum(1 for m in entry["modals"] for b in m["structure"] if b["t"] in ("field", "table", "btn", "check", "radio"))
         entry["dynamic"] = dyn[:60] if static_n < 6 else []
-        entry["toolbar"] = [{"id": i, "text": tbs[i]["text"]} for i in s["v1"]["toolbar"]]
+        entry["toolbar"] = [{"id": i, "text": tbs[i]["text"]} for i in v1.get("toolbar", [])]
         entry["menu_features"] = feats
         out[s["id"]] = entry
     return out

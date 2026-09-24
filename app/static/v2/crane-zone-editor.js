@@ -7,7 +7,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 const errText = (e) => String(e?.detail || e?.message || e);
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 
-export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
+export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished, initialCategory = "Кран" }) {
   const prefix = `/objects/${objectId}/crane-zone-versions`;
   let dead = false, busy = false, drawing = false, selectMode = false;
   let versions = [], drafts = [], draft = null, scene = [], currentScene = [], selectedZone = null;
@@ -20,6 +20,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
   function displayVersion() { return versions.find((v) => v.id === selectedVersionId) || currentVersion(); }
   function zones() { return draft?.zones || displayVersion()?.zones || []; }
+  function firstZoneId() { return zones().find((z) => z.category === initialCategory)?.id ?? zones()[0]?.id ?? null; }
   function zoneById(id) { return zones().find((z) => z.id === id); }
   function selected() { return zoneById(selectedZone); }
   function markDirty() { dirty = true; preview = null; message = ""; draw(); updateStatus(); }
@@ -255,7 +256,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
     catch (e) { status(errText(e)); } finally { busy = false; updateStatus(); }
   }
   async function loadDraft(id) {
-    try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; selectedVersionId = null; scene = currentScene; selectedElements.clear(); dirty = false; preview = null; selectedZone = zones()[0]?.id ?? null; activeLevel = 0; view = null; message = ""; render(); }
+    try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; selectedVersionId = null; scene = currentScene; selectedElements.clear(); dirty = false; preview = null; selectedZone = firstZoneId(); activeLevel = 0; view = null; message = ""; render(); }
     catch (e) { status(errText(e)); }
   }
   async function loadVersion(id) {
@@ -269,7 +270,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
         scene = image.elements || [];
       } else scene = currentScene;
       selectedVersionId = id; draft = null; dirty = false; preview = null;
-      selectedElements.clear(); selectedZone = zones()[0]?.id ?? null;
+      selectedElements.clear(); selectedZone = firstZoneId();
       activeLevel = 0; view = null; message = ""; render();
     } catch (e) { status(errText(e)); }
   }
@@ -294,7 +295,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
     if (!date) return status("Укажите дату действия.");
     if (!(await showConfirmDialog(`Опубликовать всю редакцию кранов и стоянок с ${date}? Изменится привязка ${preview.counts.crane || 0} изделий по крану и ${preview.counts.stance || 0} по стоянке.`, { confirmLabel: "Опубликовать редакцию" }))) return;
     busy = true; updateStatus();
-    try { const r = await api.post(`${prefix}/drafts/${draft.id}/publish`, { edit_token: draft.edit_token, effective_date: date }); draft = null; dirty = false; preview = null; await refresh(); status(r.activated ? "Редакция опубликована и действует." : `Редакция опубликована; вступит в силу ${date}.`); }
+    try { const r = await api.post(`${prefix}/drafts/${draft.id}/publish`, { edit_token: draft.edit_token, effective_date: date }); draft = null; dirty = false; preview = null; await refresh(); status(r.activated ? "Редакция опубликована и действует." : `Редакция опубликована; вступит в силу ${date}.`); onPublished?.(r); }
     catch (e) { status(`${errText(e)} Состояние перечитайте перед повтором.`); await refresh(); } finally { busy = false; updateStatus(); }
   }
   async function refresh() {
@@ -310,7 +311,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit }) {
       } else selectedVersionId = null;
     }
     if (draft && !drafts.some((item) => item.id === draft.id)) draft = null;
-    selectedZone = selectedZone && zoneById(selectedZone) ? selectedZone : zones()[0]?.id ?? null;
+    selectedZone = selectedZone && zoneById(selectedZone) ? selectedZone : firstZoneId();
     view = null; render();
   }
   async function guardLeave() {
