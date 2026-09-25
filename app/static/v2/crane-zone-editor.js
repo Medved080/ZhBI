@@ -54,10 +54,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return standFocus && zone?.category === "Стоянка" ? elementsOnStanceLevel(scene, zone.levels, activeLevel) : scene;
   }
   function zoneColor(zone = selected()) { return zone?.category === "Стоянка" ? "#4682b4" : "#2c8953"; }
-  // Изделия внутри контура должны отличаться от самого объёма зоны.
-  // Малиновый контрастирует и с зелёным краном, и с синей стоянкой;
-  // оранжевые ручки редактирования остаются отдельным сигналом.
-  const elementHighlightColor = "#d23f73";
+  // Тот же оранжевый, что у выбранного блока на схеме МФР.
+  // Зоны остаются зелёными/синими, а изделия внутри выбранного контура — оранжевыми.
+  const elementHighlightColor = "#ff6a00";
+  const elementHighlightFill = "#ffb347";
   function highlightedElementIds(elements = visibleElements()) {
     const outline = selected()?.levels?.[activeLevel]?.outline;
     if (!outline?.length) return new Set();
@@ -270,8 +270,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy);
       });
       ctx.closePath();
-      ctx.fillStyle = pass ? elementHighlightColor : "#c9d2d8";
-      ctx.globalAlpha = pass ? 0.48 : 0.24; ctx.fill();
+      ctx.fillStyle = pass ? elementHighlightFill : "#c9d2d8";
+      ctx.globalAlpha = pass ? 0.85 : 0.24; ctx.fill();
       ctx.globalAlpha = pass ? 0.85 : 0.48;
       ctx.strokeStyle = selectedElements.has(e.id) ? "#e36b2c" : pass ? elementHighlightColor : "#667984";
       ctx.lineWidth = selectedElements.has(e.id) ? 1.7 : pass ? 1.1 : 0.65;

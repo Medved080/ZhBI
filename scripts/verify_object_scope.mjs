@@ -52,10 +52,10 @@ try {
   assert.equal(await browser.eval("document.querySelector('#ze-count')?.textContent"), `Найдено ${ownZones} из ${ownZones}`);
   await tap(browser, '[data-cat="Кран"]');
   await browser.waitFor("!!document.querySelector('#cz-canvas')?.dataset.highlightColor", 30000);
-  assert.equal(await browser.eval("document.querySelector('#cz-canvas').dataset.highlightColor"), "#d23f73");
+  assert.equal(await browser.eval("document.querySelector('#cz-canvas').dataset.highlightColor"), "#ff6a00");
   await tap(browser, "#cz-view-3d");
   await browser.waitFor("!!document.querySelector('#cz-3d')?.dataset.highlightColor", 30000);
-  assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.highlightColor"), "#d23f73");
+  assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.highlightColor"), "#ff6a00");
   console.log("PASS V2: справочник и редактор зон текущего объекта, контрастная подсветка 2D/3D");
 
   await openScreen(browser, "contracts", "!!document.querySelector('#cl-inner [data-open]')");

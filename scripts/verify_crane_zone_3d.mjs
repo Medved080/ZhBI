@@ -48,6 +48,8 @@ try {
     console.log(`PASS V2: выбор другого крана обновляет подсветку ${craneOneHighlighted} → ${recolored} изделий`);
   }
   await tap(browser, "#cz-view-2d");
+  await browser.waitFor("document.querySelector('#cz-canvas')?.dataset.highlightColor === '#ff6a00'", 5000);
+  assert.equal(await browser.eval("document.querySelector('#cz-canvas').dataset.highlightColor"), "#ff6a00");
   console.log("PASS V2: в 2D нарисованы контуры изделий; переключатель 2D/3D виден и не сдвигается");
   await tap(browser, "#cz-add-crane");
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')");
@@ -111,8 +113,8 @@ try {
     assert.equal(Number(await browser.eval("document.querySelector('#cz-3d').dataset.visibleElements")), shown);
     const highlighted = Number(await browser.eval("document.querySelector('#cz-3d').dataset.highlightedElements"));
     assert.ok(highlighted > 0 && highlighted < shown, `выделение выбранной стоянки: ${highlighted} из ${shown}`);
-    assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.highlightColor"), "#d23f73");
-    console.log(`PASS V2: контрастный цвет применяется к ${highlighted} из ${shown} изделий стоянки`);
+    assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.highlightColor"), "#ff6a00");
+    console.log(`PASS V2: оранжевый МФР применяется к ${highlighted} из ${shown} изделий стоянки`);
     if (process.env.ZONE_STAND_SHOT) await browser.shot(process.env.ZONE_STAND_SHOT);
     console.log(`PASS V2: стоянка показывает только ${shown} изделий выбранного яруса в 2D и 3D`);
     assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.editable"), "true");
