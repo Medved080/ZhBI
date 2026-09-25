@@ -1,0 +1,335 @@
+// Интерактивная 3D-схема черновика кранов и стоянок. Правка вершины/ребра
+// происходит в горизонтальной плоскости выбранного яруса; высоту меняет
+// отдельное поле «Отметка». Сохранение и публикация остаются в редакторе.
+import { displacedEdgeEndpoints, nearestEdgeIndex } from "./zone-edge-geometry.js";
+
+let libraries;
+function loadLibraries() {
+  if (!libraries) libraries = Promise.all([import("three"), import("/static/vendor/three/OrbitControls.js")])
+    .then(([THREE, module]) => ({ THREE, OrbitControls: module.OrbitControls }))
+    .catch((error) => { libraries = null; throw error; });
+  return libraries;
+}
+
+export function createCraneZone3d(callbacks) {
+  let r = null, host = null, data = null, disposed = false, framed = false;
+  let homeDistance = 0, frame = null, observer = null, drag = null, box = null;
+  let meshes = [];
+
+  function requestFrame() {
+    if (!r || frame != null) return;
+    frame = requestAnimationFrame(() => { frame = null; r?.renderer.render(r.scene, r.camera); updateHandlePositions(); });
+  }
+  function resize() {
+    if (!r || !host) return;
+    const w = host.clientWidth, h = host.clientHeight;
+    if (!w || !h) return;
+    r.renderer.setSize(w, h, false);
+    r.camera.aspect = w / h; r.camera.updateProjectionMatrix();
+    requestFrame();
+  }
+  function disposeGroup() {
+    if (!r?.group) return;
+    r.scene.remove(r.group);
+    r.group.traverse((object) => {
+      object.geometry?.dispose();
+      if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
+      else object.material?.dispose();
+    });
+    r.group = null; meshes = [];
+  }
+  function activeLevel() {
+    const zone = data?.zones.find((item) => item.id === data.selectedZone);
+    return zone?.levels[data.activeLevel] || null;
+  }
+  function extent() {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    const add = (x, y, z) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      if (Number.isFinite(z)) { minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+    };
+    for (const zone of data?.zones || []) for (const level of zone.levels) {
+      for (const point of level.outline || []) add(point[0], point[1], levelY(level));
+    }
+    for (const element of data?.elements || []) add(element.x, element.y, Number(element.elevation_mm) || 0);
+    if (!Number.isFinite(minX)) return { minX: -500, maxX: 500, minY: -500, maxY: 500, minZ: 0, maxZ: 1000 };
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+  }
+  function levelY(level) { return Number.isFinite(level?.elevation_mm) ? level.elevation_mm : 0; }
+  function project(point) {
+    const rect = r.renderer.domElement.getBoundingClientRect();
+    const p = point.clone().project(r.camera);
+    return [(p.x + 1) * rect.width / 2, (1 - p.y) * rect.height / 2];
+  }
+  function toScreen(point) {
+    return project(new r.THREE.Vector3(point[0], levelY(activeLevel()), -point[1]));
+  }
+  function updateHandlePositions() {
+    if (!host) return;
+    const outline = activeLevel()?.outline || [];
+    host.dataset.edgeMidpoints = JSON.stringify(outline.map((point, index) => {
+      const a = toScreen(point), b = toScreen(outline[(index + 1) % outline.length]);
+      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+    }));
+  }
+  function pointer(event) {
+    const rect = r.renderer.domElement.getBoundingClientRect();
+    return [event.clientX - rect.left, event.clientY - rect.top];
+  }
+  function worldOnLevel(x, y) {
+    const rect = r.renderer.domElement.getBoundingClientRect();
+    r.ray.setFromCamera(new r.THREE.Vector2(x / rect.width * 2 - 1, 1 - y / rect.height * 2), r.camera);
+    const plane = new r.THREE.Plane(new r.THREE.Vector3(0, 1, 0), -levelY(activeLevel()));
+    const hit = new r.THREE.Vector3();
+    return r.ray.ray.intersectPlane(plane, hit) ? [hit.x, -hit.z] : null;
+  }
+  function nearestHandle(x, y) {
+    const level = activeLevel();
+    if (!data?.editable || !level?.outline?.length) return null;
+    for (let i = 0; i < level.outline.length; i++) {
+      const p = toScreen(level.outline[i]);
+      if (Math.hypot(p[0] - x, p[1] - y) <= 11) return { kind: "vertex", index: i };
+    }
+    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 10);
+    return edge == null ? null : { kind: "edge", index: edge };
+  }
+  function nearestElement(x, y) {
+    let nearest = null, distance = 11;
+    for (const element of data?.elements || []) {
+      if (!Number.isFinite(element.x) || !Number.isFinite(element.y)) continue;
+      const p = project(new r.THREE.Vector3(element.x, Number(element.elevation_mm) || 0, -element.y));
+      const gap = Math.hypot(p[0] - x, p[1] - y);
+      if (gap < distance) { nearest = element; distance = gap; }
+    }
+    return nearest;
+  }
+  function pickZone(x, y) {
+    const rect = r.renderer.domElement.getBoundingClientRect();
+    r.ray.setFromCamera(new r.THREE.Vector2(x / rect.width * 2 - 1, 1 - y / rect.height * 2), r.camera);
+    const hit = r.ray.intersectObjects(meshes, false)[0];
+    return hit?.object.userData || null;
+  }
+  function removeBox() { box?.remove(); box = null; }
+  function onDown(event) {
+    if (event.button !== 0) return;
+    const [x, y] = pointer(event);
+    const selecting = event.shiftKey || data?.selectMode;
+    const handle = selecting ? null : nearestHandle(x, y);
+    if (selecting || handle) {
+      event.preventDefault();
+      r.controls.enabled = false;
+      if (selecting) {
+        drag = { kind: "box", x, y, lastX: x, lastY: y };
+        box = document.createElement("div"); box.className = "cz-3d-selection"; host.appendChild(box);
+      } else {
+        const start = worldOnLevel(x, y);
+        if (!start) { r.controls.enabled = true; return; }
+        drag = { ...handle, x, y, start, outline: activeLevel().outline.map((point) => [...point]), moved: false };
+      }
+      r.renderer.domElement.setPointerCapture(event.pointerId);
+    } else drag = { kind: "orbit", x, y, moved: false };
+  }
+  function onMove(event) {
+    const [x, y] = pointer(event);
+    if (!drag) {
+      r.renderer.domElement.style.cursor = data?.selectMode ? "crosshair" : nearestHandle(x, y) ? "move" : "grab";
+      return;
+    }
+    if (drag.kind === "box") {
+      drag.lastX = x; drag.lastY = y;
+      Object.assign(box.style, { left: `${Math.min(drag.x, x)}px`, top: `${Math.min(drag.y, y)}px`,
+        width: `${Math.abs(drag.x - x)}px`, height: `${Math.abs(drag.y - y)}px` });
+      return;
+    }
+    if (drag.kind === "orbit") { if (Math.hypot(x - drag.x, y - drag.y) > 4) drag.moved = true; return; }
+    const world = worldOnLevel(x, y); if (!world) return;
+    const outline = drag.outline.map((point) => [...point]);
+    if (drag.kind === "vertex") outline[drag.index] = world.map(Math.round);
+    else {
+      const endpoints = displacedEdgeEndpoints(outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
+      if (!endpoints) return;
+      outline[drag.index] = endpoints[0]; outline[(drag.index + 1) % outline.length] = endpoints[1];
+    }
+    if (Math.hypot(x - drag.x, y - drag.y) > 2) drag.moved = true;
+    if (drag.moved) callbacks.onOutline(outline);
+  }
+  function onUp(event) {
+    if (!drag) return;
+    const [x, y] = pointer(event), last = drag;
+    drag = null; r.controls.enabled = true;
+    if (r.renderer.domElement.hasPointerCapture(event.pointerId)) r.renderer.domElement.releasePointerCapture(event.pointerId);
+    if (last.kind === "box") {
+      removeBox();
+      const x0 = Math.min(last.x, x), x1 = Math.max(last.x, x), y0 = Math.min(last.y, y), y1 = Math.max(last.y, y);
+      callbacks.onSelectElements((data?.elements || []).filter((element) => {
+        const p = project(new r.THREE.Vector3(element.x, Number(element.elevation_mm) || 0, -element.y));
+        return p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
+      }).map((element) => element.id));
+    } else if (last.kind === "orbit" && !last.moved) {
+      const element = nearestElement(x, y), zone = element ? null : pickZone(x, y);
+      if (element) callbacks.onSelectElements([element.id]);
+      else if (zone) callbacks.onSelectZone(zone.zoneId, zone.levelIndex);
+    } else if (last.moved) callbacks.onCommit();
+  }
+  function onDoubleClick(event) {
+    const [x, y] = pointer(event), handle = nearestHandle(x, y);
+    if (handle?.kind !== "edge") return;
+    const world = worldOnLevel(x, y); if (!world) return;
+    const outline = activeLevel().outline.map((point) => [...point]);
+    outline.splice(handle.index + 1, 0, world.map(Math.round));
+    callbacks.onOutline(outline); callbacks.onCommit();
+  }
+  async function ensure() {
+    if (r) return r;
+    const { THREE, OrbitControls } = await loadLibraries();
+    if (disposed) return null;
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setClearColor(0xf8fafb);
+    renderer.domElement.setAttribute("aria-label", "3D-схема зон: перетаскивание — поворот, колесо — масштаб, ручки — редактирование контура");
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 1, 100000000);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = false;
+    controls.zoomSpeed = 0.45;
+    controls.maxPolarAngle = Math.PI * 0.46;
+    controls.addEventListener("change", () => { requestFrame(); callbacks.onViewChange?.(); });
+    scene.add(new THREE.AmbientLight(0xffffff, 1));
+    const light = new THREE.DirectionalLight(0xffffff, 0.5); light.position.set(1, 2, 1); scene.add(light);
+    const ray = new THREE.Raycaster();
+    r = { THREE, renderer, scene, camera, controls, group: null, ray };
+    renderer.domElement.addEventListener("pointerdown", onDown, true);
+    renderer.domElement.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("pointerup", onUp);
+    renderer.domElement.addEventListener("pointercancel", onUp);
+    renderer.domElement.addEventListener("dblclick", onDoubleClick);
+    return r;
+  }
+  function rebuild() {
+    if (!r || !data) return;
+    if (host) { host.dataset.visibleElements = String(data.elements.length); host.dataset.editable = String(!!data.editable); }
+    disposeGroup();
+    const { THREE } = r, group = new THREE.Group();
+    const points = [], colors = [], selectedPoints = [];
+    for (const element of data.elements) {
+      if (!Number.isFinite(element.x) || !Number.isFinite(element.y)) continue;
+      points.push(element.x, Number(element.elevation_mm) || 0, -element.y);
+      const color = new THREE.Color(data.selectedElements.has(element.id) ? 0xef6b33 : 0x344e5f);
+      colors.push(color.r, color.g, color.b);
+      if (data.selectedElements.has(element.id)) selectedPoints.push(element.x, Number(element.elevation_mm) || 0, -element.y);
+    }
+    if (points.length) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      const cloud = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 2.2, sizeAttenuation: false, vertexColors: true,
+        transparent: true, opacity: 0.55, depthWrite: false }));
+      group.add(cloud);
+    }
+    if (selectedPoints.length) {
+      const geometry = new THREE.BufferGeometry(); geometry.setAttribute("position", new THREE.Float32BufferAttribute(selectedPoints, 3));
+      const highlighted = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xef6b33, size: 7,
+        sizeAttenuation: false, depthTest: false }));
+      highlighted.renderOrder = 4; group.add(highlighted);
+    }
+    const bounds = extent();
+    const span = Math.max(1000, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+    const grid = new THREE.GridHelper(span * 1.2, 10, 0xc8d8df, 0xe4ecf0);
+    grid.position.set((bounds.minX + bounds.maxX) / 2, bounds.minZ - Math.max(20, span * 0.005), -(bounds.minY + bounds.maxY) / 2);
+    group.add(grid);
+    for (const zone of data.zones) for (const [levelIndex, level] of zone.levels.entries()) {
+      const outline = level.outline;
+      if (!outline || outline.length < 3) continue;
+      const y = levelY(level), active = zone.id === data.selectedZone && levelIndex === data.activeLevel;
+      const color = active ? 0xee7131 : zone.category === "Кран" ? 0x2c8953 : 0x4682b4;
+      const shape = new THREE.Shape(outline.map((point) => new THREE.Vector2(point[0], point[1])));
+      const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color, transparent: true,
+        opacity: active ? 0.2 : 0.07, side: THREE.DoubleSide, depthWrite: false, depthTest: false }));
+      fill.rotation.x = -Math.PI / 2; fill.position.y = y;
+      fill.renderOrder = 2;
+      fill.userData = { zoneId: zone.id, levelIndex };
+      meshes.push(fill); group.add(fill);
+      const loop = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outline.map((point) => new THREE.Vector3(point[0], y + 2, -point[1]))),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: active ? 1 : 0.65, depthTest: false }));
+      loop.renderOrder = 3;
+      group.add(loop);
+      if (active) {
+        const higher = zone.levels.map(levelY).filter((elevation) => elevation > y);
+        const top = higher.length ? Math.min(...higher) : y + Math.max(3000, (bounds.maxZ - bounds.minZ) / 10);
+        const verticals = [];
+        for (const point of outline) verticals.push(point[0], y, -point[1], point[0], top, -point[1]);
+        const geometry = new THREE.BufferGeometry(); geometry.setAttribute("position", new THREE.Float32BufferAttribute(verticals, 3));
+        const sides = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color, transparent: true,
+          opacity: 0.45, depthTest: false }));
+        sides.renderOrder = 3; group.add(sides);
+      }
+      if (active && data.editable) {
+        const vertices = [], edges = [];
+        for (let i = 0; i < outline.length; i++) {
+          const point = outline[i], next = outline[(i + 1) % outline.length];
+          vertices.push(point[0], y + 5, -point[1]);
+          edges.push((point[0] + next[0]) / 2, y + 5, -(point[1] + next[1]) / 2);
+        }
+        const vertexGeometry = new THREE.BufferGeometry(); vertexGeometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+        const edgeGeometry = new THREE.BufferGeometry(); edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edges, 3));
+        const vertexMarkers = new THREE.Points(vertexGeometry, new THREE.PointsMaterial({ color: 0xee7131, size: 13, sizeAttenuation: false, depthTest: false }));
+        const edgeMarkers = new THREE.Points(edgeGeometry, new THREE.PointsMaterial({ color: 0xffffff, size: 10, sizeAttenuation: false, depthTest: false }));
+        vertexMarkers.renderOrder = 5; edgeMarkers.renderOrder = 5;
+        group.add(vertexMarkers, edgeMarkers);
+      }
+    }
+    r.group = group; r.scene.add(group); requestFrame();
+  }
+  function fit() {
+    if (!r || !data) return;
+    const { minX, maxX, minY, maxY, minZ, maxZ } = extent();
+    const span = Math.max(maxX - minX, maxY - minY, (maxZ - minZ) * 1.5, 1000);
+    homeDistance = span * 1.4;
+    const cx = (minX + maxX) / 2, cy = (minZ + maxZ) / 2, cz = -(minY + maxY) / 2;
+    r.controls.target.set(cx, cy, cz);
+    r.camera.position.set(cx + homeDistance * 0.58, cy + homeDistance * 0.66, cz + homeDistance * 0.47);
+    homeDistance = r.camera.position.distanceTo(r.controls.target);
+    r.controls.maxDistance = homeDistance;
+    r.controls.minDistance = homeDistance / 100;
+    r.controls.update(); framed = true; requestFrame();
+  }
+  function zoom(factor) {
+    if (!r || !homeDistance) return;
+    const offset = r.camera.position.clone().sub(r.controls.target);
+    const next = Math.max(homeDistance / 100, Math.min(homeDistance, offset.length() / factor));
+    offset.setLength(next); r.camera.position.copy(r.controls.target).add(offset);
+    r.controls.update(); requestFrame();
+  }
+  function zoomPercent() {
+    if (!r || !homeDistance) return 100;
+    return Math.max(100, Math.round(homeDistance / r.camera.position.distanceTo(r.controls.target) * 100));
+  }
+  return {
+    async show(nextHost, nextData) {
+      if (disposed || !nextHost) return;
+      data = nextData;
+      await ensure();
+      if (disposed) return;
+      host = nextHost;
+      if (r.renderer.domElement.parentNode !== host) host.appendChild(r.renderer.domElement);
+      observer?.disconnect();
+      observer = new ResizeObserver(resize); observer.observe(host);
+      resize(); rebuild();
+      if (!framed) fit();
+    },
+    update(nextData) { data = nextData; rebuild(); },
+    fit, zoom, zoomPercent,
+    info() { return { elements: data?.elements.length || 0, zones: data?.zones.length || 0, percent: zoomPercent(), editable: !!data?.editable }; },
+    dispose() {
+      disposed = true; observer?.disconnect(); removeBox();
+      if (frame != null) cancelAnimationFrame(frame);
+      if (!r) return;
+      disposeGroup(); r.controls.dispose(); r.renderer.dispose();
+      try { r.renderer.forceContextLoss(); } catch { /* контекст уже потерян */ }
+      r.renderer.domElement.remove(); r = null;
+    },
+  };
+}
