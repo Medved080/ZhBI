@@ -289,8 +289,11 @@ export function createCraneZone3d(callbacks) {
       faceGeometry.setAttribute("normal", new THREE.BufferAttribute(n, 3));
       faceGeometry.setAttribute("color", new THREE.BufferAttribute(c, 3));
       r.modelFace = new THREE.Mesh(faceGeometry, new THREE.MeshStandardMaterial({ vertexColors: true,
-        transparent: true, opacity: 0.52, depthWrite: false, side: THREE.DoubleSide,
+        transparent: true, opacity: 0.65, depthWrite: false, side: THREE.DoubleSide,
         polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 }));
+      // Цвет изделий должен читаться поверх полупрозрачной грани зоны,
+      // иначе зелёный/синий объём перекрашивает их обратно в свой цвет.
+      r.modelFace.renderOrder = 4.5;
       r.modelColorRanges = colorRanges;
       group.add(r.modelFace);
     }
@@ -326,7 +329,7 @@ export function createCraneZone3d(callbacks) {
     attribute.needsUpdate = true;
     r.modelHighlightIds = new Set(highlighted);
     r.modelHighlightColor = data.highlightColor;
-    if (host) host.dataset.highlightedElements = String(highlighted.size);
+    if (host) { host.dataset.highlightedElements = String(highlighted.size); host.dataset.highlightColor = data.highlightColor; }
     requestFrame();
   }
   function rebuild() {

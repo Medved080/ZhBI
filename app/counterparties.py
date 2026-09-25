@@ -201,7 +201,7 @@ def list_counterparties(user: sqlite3.Row = Depends(get_current_user)):
 
 
 @router.get("/counterparties/full")
-def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
+def list_counterparties_full(object_id: Optional[int] = Query(None), user: sqlite3.Row = Depends(get_current_user)):
     """Вложенное дерево Контрагент -> Договоры -> Спецификации одним
     запросом — для каскадных селектов в форме контракта."""
     conn = get_connection()
@@ -216,7 +216,8 @@ def list_counterparties_full(user: sqlite3.Row = Depends(get_current_user)):
         # договорами: своего объекта у них нет, он выводится по цепочке.
         доступ, доступ_params = _accessible_agreements_clause(conn, user)
         agreements = [dict(r, version=record_version.agreement_version(r)) for r in conn.execute(
-            f"SELECT * FROM agreements WHERE {доступ} ORDER BY number", доступ_params)]
+            f"SELECT * FROM agreements WHERE {доступ} {('AND object_id = ?' if object_id is not None else '')} ORDER BY number",
+            [*доступ_params, *([object_id] if object_id is not None else [])])]
         if agreements:
             marks = ",".join("?" * len(agreements))
             specifications = [dict(r, version=record_version.specification_version(r)) for r in conn.execute(
@@ -311,7 +312,7 @@ def update_counterparty(counterparty_id: int, body: CounterpartyIn, admin: sqlit
 
 
 @router.get("/agreements", response_model=list[AgreementOut])
-def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depends(get_current_user)):
+def list_agreements(counterparty_id: int = Query(...), object_id: Optional[int] = Query(None), user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         # Договор — сущность ОБЪЕКТНАЯ, и для правки это учитывалось
@@ -320,8 +321,8 @@ def list_agreements(counterparty_id: int = Query(...), user: sqlite3.Row = Depen
         # безопасности 2026-08-03).
         доступ, доступ_params = _accessible_agreements_clause(conn, user)
         rows = conn.execute(
-            f"SELECT * FROM agreements WHERE counterparty_id = ? AND {доступ} ORDER BY number",
-            (counterparty_id, *доступ_params),
+            f"SELECT * FROM agreements WHERE counterparty_id = ? AND {доступ} {('AND object_id = ?' if object_id is not None else '')} ORDER BY number",
+            (counterparty_id, *доступ_params, *([object_id] if object_id is not None else [])),
         ).fetchall()
         return [dict(r, version=record_version.agreement_version(r)) for r in rows]
     finally:

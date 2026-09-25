@@ -974,6 +974,7 @@ def ack_changelog(user: sqlite3.Row = Depends(get_current_user)):
 
 @app.get("/elements", response_model=list[ElementOut])
 def list_elements(
+    object_id: Optional[int] = Query(None, description="Текущий объект"),
     status: Optional[str] = Query(None, description="Фильтр по current_status"),
     element_type: Optional[str] = Query(None),
     source_file: Optional[str] = Query(None),
@@ -988,6 +989,9 @@ def list_elements(
         доступ, доступ_params = _accessible_objects_clause(conn, user)
         clauses.append(доступ)
         params.extend(доступ_params)
+        if object_id is not None:
+            clauses.append("object_id = ?")
+            params.append(object_id)
         if status:
             clauses.append("current_status = ?")
             params.append(status)
@@ -3368,6 +3372,7 @@ _ZONE_ELEMENT_COLUMN = {
 def list_zones(
     category: str = Query(..., description="Захватка | Кран | Стоянка"),
     include_retired: bool = Query(False, description="Показывать зоны, которых нет в актуальном чертеже"),
+    object_id: Optional[int] = Query(None, description="Текущий объект"),
     user: sqlite3.Row = Depends(get_current_user),
 ):
     """Справочник зон одной категории (этап 2). Доступно всем ролям только
@@ -3381,13 +3386,14 @@ def list_zones(
     column = _ZONE_ELEMENT_COLUMN[category]
     conn = get_connection()
     try:
-        # Справочник зон отдавал зоны ВСЕХ объектов сразу — отбор был только
-        # «объект вообще задан» (аудит безопасности 2026-08-03). Показательно,
-        # что операции ЗАПИСИ по тем же зонам объект проверяли: проверку
-        # писали, но только для правки.
+        # Права и выбранный объект — разные ограничения: даже пользователь с
+        # доступом к двум стройкам видит здесь зоны только одной выбранной.
         доступ, доступ_params = _accessible_objects_clause(conn, user, "z.object_id")
         where = f"z.object_id IS NOT NULL AND {доступ} AND z.category = ?"
         params = [*доступ_params, category]
+        if object_id is not None:
+            where += " AND z.object_id = ?"
+            params.append(object_id)
         if not include_retired:
             where += " AND z.is_current = 1"
         rows = conn.execute(
@@ -3829,7 +3835,7 @@ PLACEMENT_NONE_SENTINEL = "__none__"
 FILLED_SENTINEL = "__filled__"
 
 # Параметры запроса, которые НЕ являются отбором по колонке.
-_EC_RESERVED = ("limit", "offset", "sort", "direction", "search")
+_EC_RESERVED = ("limit", "offset", "sort", "direction", "search", "object_id")
 
 
 def _ec_value_sort_key(value):
@@ -3848,6 +3854,7 @@ def _ec_value_sort_key(value):
 @app.get("/element-catalog")
 def elements_catalog(
     request: Request,
+    object_id: Optional[int] = Query(None, description="Текущий объект"),
     limit: int = Query(200, le=2000),
     offset: int = Query(0, ge=0),
     sort: str = Query("id"),
@@ -3893,13 +3900,13 @@ def elements_catalog(
         # может: справочник допускает ручную правку, и строка, оставшаяся
         # без объекта из-за сбоя, не должна всплыть в чужом объекте.
         # _доступ вычисляется ниже, сразу после открытия соединения, и
-        # попадает сюда замыканием: справочник не принимает объект
-        # параметром, поэтому единственный способ не отдать чужие строки —
-        # сузить выборку по доступным объектам (аудит безопасности
-        # 2026-08-03; до него отбор был только по «объект вообще задан»,
-        # то есть любой вошедший листал элементы всех строек разом).
+        # попадает сюда замыканием; object_id дополнительно сужает выборку
+        # до объекта, который человек выбрал в шапке интерфейса.
         parts = ["e.object_id IS NOT NULL", "e.is_current = 1", _доступ]
         params = list(_доступ_params)
+        if object_id is not None:
+            parts.append("e.object_id = ?")
+            params.append(object_id)
         for column, value in filters.items():
             if column == skip:
                 continue
@@ -5430,6 +5437,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         # должно. Файл может быть и не привязан к объекту (наследие) —
         # тогда объектных настроек нет и читать нечего.
         plan_object_id = None
+        selection_object_set = False
         _current_files = {
             r["source_file"]
             for r in conn.execute("SELECT source_file FROM object_drawings WHERE is_current = 1")
@@ -5464,9 +5472,14 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # переданный source_file уважается — им пользуется форма
             # «Версии чертежа объекта», чтобы показать НЕ актуальную версию.
             item = _resolve_selection_item(conn, user, item)
-            item_object_id = item.object_id or _object_for_source_file(conn, item.source_file)
-            if plan_object_id is None:
+            item_object_id = _object_for_source_file(conn, item.source_file)
+            if item.object_id is not None and item.object_id != item_object_id:
+                raise HTTPException(status_code=400, detail="Чертёж принадлежит другому объекту")
+            if not selection_object_set:
                 plan_object_id = item_object_id
+                selection_object_set = True
+            elif item_object_id != plan_object_id:
+                raise HTTPException(status_code=400, detail="Одна схема может содержать только один объект")
             # Условие видимости (is_current = 1) прячет элементы, ИСЧЕЗНУВШИЕ
             # из актуального чертежа. При просмотре ПРОШЛОЙ версии оно
             # обессмысливает саму функцию: у элементов старой версии
@@ -5483,14 +5496,14 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # None, из-за чего "снять все галочки" молча показывало ВСЕ
             # элементы вместо ни одного (см. Docs/backlog.md).
             if item.layers is None:
-                q = f"SELECT * FROM elements WHERE source_file = ? AND {видимость} ORDER BY id"
-                params = (item.source_file,)
+                q = f"SELECT * FROM elements WHERE source_file = ? AND object_id IS ? AND {видимость} ORDER BY id"
+                params = (item.source_file, item_object_id)
                 rows = conn.execute(q, params).fetchall()
             elif item.layers:
                 placeholders = ",".join("?" * len(item.layers))
-                q = (f"SELECT * FROM elements WHERE source_file = ? AND layer IN ({placeholders}) "
+                q = (f"SELECT * FROM elements WHERE source_file = ? AND object_id IS ? AND layer IN ({placeholders}) "
                      f"AND {видимость} ORDER BY id")
-                params = (item.source_file, *item.layers)
+                params = (item.source_file, item_object_id, *item.layers)
                 rows = conn.execute(q, params).fetchall()
             else:
                 rows = []
@@ -5538,8 +5551,8 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, "
                 "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
                 "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
-                "WHERE l.source_file = ? AND z.is_current = 1",
-                (item.source_file,),
+                "WHERE l.source_file = ? AND z.object_id IS ? AND z.is_current = 1",
+                (item.source_file, item_object_id),
             ).fetchall():
                 z = dict(r)
                 z["outline"] = json.loads(z.pop("outline_json"))
@@ -5586,7 +5599,9 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 JOIN specifications s ON s.id = co.specification_id
                 JOIN agreements a ON a.id = s.agreement_id
                 JOIN counterparties c ON c.id = a.counterparty_id
-                """
+                WHERE a.object_id IS ?
+                """,
+                (plan_object_id,),
             ).fetchall()
         }
         for el in elements:
@@ -5619,9 +5634,17 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             JOIN specifications s ON s.id = co.specification_id
             JOIN agreements a ON a.id = s.agreement_id
             JOIN counterparties c ON c.id = a.counterparty_id
-            """
+            WHERE a.object_id IS ?
+            """,
+            (plan_object_id,),
         ).fetchall()
-        line_rows = conn.execute("SELECT contract_id, element_type FROM contract_lines").fetchall()
+        line_rows = conn.execute(
+            "SELECT cl.contract_id, cl.element_type FROM contract_lines cl "
+            "JOIN contracts co ON co.id = cl.contract_id "
+            "JOIN specifications s ON s.id = co.specification_id "
+            "JOIN agreements a ON a.id = s.agreement_id WHERE a.object_id IS ?",
+            (plan_object_id,),
+        ).fetchall()
         types_by_contract = {}
         for lr in line_rows:
             types_by_contract.setdefault(lr["contract_id"], []).append(lr["element_type"])

@@ -1,4 +1,4 @@
-// «Элементы» — табличный справочник изделий всех доступных объектов (перенос V1: app.js renderElementCatalog, renderEcDetail,
+// «Элементы» — табличный справочник изделий текущего объекта (перенос V1: app.js renderElementCatalog, renderEcDetail,
 // openElementForm; форма `element-catalog-backdrop`). Что человек делает в V1 и что здесь то же:
 //   • поиск по марке или адресу, «Сбросить отбор», служебные поля за галочкой (оси, координаты, слой, файл, UID, даты записи);
 //   • сортировка щелчком по заголовку (▲/▼), отбор по каждой колонке: выпадающий список значений или подстрока, у любой
@@ -61,19 +61,19 @@ const momentRu = (v) => {
 };
 const errText = (e) => (e instanceof ApiError ? (typeof e.detail === "string" ? e.detail : `Ошибка ${e.status}`) : String(e?.message || e));
 
-function loadSaved() {
-  try { const s = JSON.parse(sessionStorage.getItem(STATE_KEY) || "null"); if (s && typeof s === "object") return s; } catch (e) { /* по умолчанию */ }
+function loadSaved(objectId) {
+  try { const s = JSON.parse(sessionStorage.getItem(`${STATE_KEY}.${objectId}`) || "null"); if (s && typeof s === "object") return s; } catch (e) { /* по умолчанию */ }
   return null;
 }
 
 export function mountElementCatalog(el, { screen, objectId, api, groupTitle, go, switchObject, hasObject }) {
   el.className = "v2-page";
-  const saved = loadSaved();
+  const saved = loadSaved(objectId);
   const S = { sort: "id", direction: "asc", offset: 0, filters: {}, search: "", extra: false, active: null, ...(saved || {}) };
   const D = { rows: [], total: 0, values: {}, contractNames: {}, loading: false, error: "", seq: 0 };
   const card = { id: null, el: null, detail: null, error: "", seq: 0, rightsObj: null };
   let colors = {}, contracts = null, dead = false, textTimer = null, searchTimer = null;
-  const save = () => { try { sessionStorage.setItem(STATE_KEY, JSON.stringify({ sort: S.sort, direction: S.direction, offset: S.offset, filters: S.filters, search: S.search, extra: S.extra, active: S.active })); } catch (e) { /* не критично */ } };
+  const save = () => { try { sessionStorage.setItem(`${STATE_KEY}.${objectId}`, JSON.stringify({ sort: S.sort, direction: S.direction, offset: S.offset, filters: S.filters, search: S.search, extra: S.extra, active: S.active })); } catch (e) { /* не критично */ } };
   const stLabel = (k) => STATUS_RU[k] || k || "—";
   const stColor = (k) => (/^#[0-9a-fA-F]{3,8}$/.test(colors[k] || "") ? colors[k] : "#9aa0a6");
   const valueLabel = (key, v) => {
@@ -114,7 +114,7 @@ export function mountElementCatalog(el, { screen, objectId, api, groupTitle, go,
   }
   async function loadContracts() {
     if (contracts) return contracts;
-    const list = await api.get("/contracts");
+    const list = await api.get(`/contracts?object_id=${objectId}`);
     contracts = (list || []).map((c) => ({ id: c.id, name: c.name, theme: c.theme, specification_id: c.specification_id, specification_number: c.specification_number, specification_date: c.specification_date,
       agreement_id: c.agreement_id, agreement_number: c.agreement_number, agreement_date: c.agreement_date, counterparty_id: c.counterparty_id, counterparty_short_name: c.counterparty_short_name,
       counterparty_code: c.counterparty_code, is_archived: !!c.is_archived }));
@@ -144,6 +144,7 @@ export function mountElementCatalog(el, { screen, objectId, api, groupTitle, go,
     try {
       const d = await api.get(`/elements/${id}`);
       if (dead || seq !== card.seq) return;
+      if (d.object_id !== objectId) throw new Error("Изделие принадлежит другому объекту");
       if (d.contract_id) await loadContracts().catch(() => null);
       if (dead || seq !== card.seq) return;
       card.detail = d; card.el = cardElement(d, D.rows.find((r) => r.id === id));
@@ -266,7 +267,7 @@ export function mountElementCatalog(el, { screen, objectId, api, groupTitle, go,
 
   async function loadRows() {
     const seq = ++D.seq;
-    const p = new URLSearchParams({ limit: String(PAGE), offset: String(S.offset), sort: S.sort, direction: S.direction });
+    const p = new URLSearchParams({ limit: String(PAGE), offset: String(S.offset), sort: S.sort, direction: S.direction, object_id: String(objectId) });
     if (S.search) p.set("search", S.search);
     for (const [k, v] of Object.entries(S.filters)) if (v && (S.extra || !COLUMNS.find((c) => c.key === k)?.extra)) p.set(k, v);
     D.loading = true; D.error = ""; save();
@@ -302,7 +303,7 @@ export function mountElementCatalog(el, { screen, objectId, api, groupTitle, go,
 
   api.get("/status-colors").then((c) => { colors = c || {}; if (!dead) { paintRows(); paintCard(); } }).catch(() => { /* нейтральный серый */ });
   paintCard();
-  loadRows().then(() => { if (S.active && !dead) loadCard(S.active); });
+  loadRows().then(() => { if (S.active && !dead && D.rows.some((r) => r.id === S.active)) loadCard(S.active); });
 
   return {
     hasUnsavedChanges: () => ops.hasUnsaved(),

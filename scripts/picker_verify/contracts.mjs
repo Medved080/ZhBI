@@ -12,9 +12,9 @@ try {
   await login(b, base, "admin");
   await go("#/contracts");
   await b.waitFor(`document.querySelectorAll('#cl-inner tbody tr').length>0`, 15000);
-  const total = one("SELECT COUNT(*) FROM contracts co WHERE co.is_archived=0");
-  const rows0 = await b.eval(`document.querySelectorAll('#cl-inner tbody tr').length`);
-  check("K0.1 список контрактов: строк столько же, сколько неархивных контрактов в БД", rows0 === total, `${rows0} / ${total}`);
+  const total = one("SELECT COUNT(*) FROM contracts co JOIN specifications s ON s.id=co.specification_id JOIN agreements a ON a.id=s.agreement_id WHERE a.object_id=1 AND co.is_archived=0");
+  const rows0 = await b.eval(`document.querySelectorAll('#cl-inner [data-open]').length`);
+  check("K0.1 список контрактов: строк столько же, сколько действующих контрактов выбранного объекта в БД", rows0 === total, `${rows0} / ${total}`);
   check("K0.2 в навигации нет метки «V1» у раздела «Контракты»", !(await b.eval(`document.querySelector('[data-section="contracts"]')?.innerText.includes('V1')`)));
   await b.clickSel("[data-q]"); await b.type("QA-нов");
   await sleep(400);

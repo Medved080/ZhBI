@@ -8341,9 +8341,10 @@ function clearContractPositionsCache() {
 }
 
 function contractPositions(elementType) {
-  if (!contractPositionsCache.has(elementType)) {
-    const params = new URLSearchParams({ element_type: elementType });
-    contractPositionsCache.set(elementType, api(`/contracts/positions?${params}`)
+  const key = `${state.objectId}:${elementType}`;
+  if (!contractPositionsCache.has(key)) {
+    const params = new URLSearchParams({ element_type: elementType, object_id: String(state.objectId) });
+    contractPositionsCache.set(key, api(`/contracts/positions?${params}`)
       .then((list) => {
         const byMark = new Map();
         for (const p of list) {
@@ -8351,12 +8352,12 @@ function contractPositions(elementType) {
           if (!byMark.has(key)) byMark.set(key, new Map());
           byMark.get(key).set(p.contract_id, p);
         }
-        contractPositionsReady.set(elementType, byMark);
+        contractPositionsReady.set(key, byMark);
         return byMark;
       })
-      .catch((e) => { contractPositionsCache.delete(elementType); throw e; }));
+      .catch((e) => { contractPositionsCache.delete(key); throw e; }));
   }
-  return contractPositionsCache.get(elementType);
+  return contractPositionsCache.get(key);
 }
 
 // ОБЛАСТЬ выбора — что именно выбираем контрактом: одно изделие или целую
@@ -8839,7 +8840,7 @@ function updateBulkRowContractButton(button, element) {
 
 // Позиция под изделие из уже загруженного кэша — без сети и без промисов.
 function bulkRowPositionFor(element, contractId) {
-  const byMark = contractPositionsReady.get(element.element_type);
+  const byMark = contractPositionsReady.get(`${state.objectId}:${element.element_type}`);
   const byContract = byMark && byMark.get(element.mark == null ? "" : element.mark);
   return byContract ? byContract.get(contractId) || null : null;
 }
@@ -9139,7 +9140,7 @@ function bulkReservedFor(elementType, mark, contractId, exceptElement) {
 
 // Позиция под (тип, марку) из уже загруженного кэша — без сети и промисов.
 function positionForMark(elementType, mark, contractId) {
-  const byMark = contractPositionsReady.get(elementType);
+  const byMark = contractPositionsReady.get(`${state.objectId}:${elementType}`);
   const byContract = byMark && byMark.get(mark == null ? "" : mark);
   return byContract ? byContract.get(contractId) || null : null;
 }
@@ -13631,7 +13632,7 @@ async function renderElementCatalog() {
   summary.textContent = "Загрузка…";
   let data;
   try {
-    data = await api(`/element-catalog?${params.toString()}`);
+    data = await api(objectUrl("/element-catalog", Object.fromEntries(params)));
   } catch (e) {
     summary.textContent = "Ошибка: " + e.message;
     return;
@@ -14535,7 +14536,7 @@ async function renderZonesModal() {
   box.innerHTML = `<p class="hint-text">Загрузка…</p>`;
   const retired = document.getElementById("zones-include-retired").checked;
   try {
-    const zones = await api(`/zones?category=${encodeURIComponent(zonesCategory)}&include_retired=${retired}`);
+    const zones = await api(objectUrl("/zones", { category: zonesCategory, include_retired: retired }));
     if (!zones.length) {
       box.innerHTML = `<p class="hint-text">Зон этой категории нет. Они появляются при загрузке чертежа.</p>`;
       return;
@@ -17763,7 +17764,7 @@ async function renderCounterpartyAgreements() {
   const первыйПоказ = box.dataset.rendered !== "1";
   box.dataset.rendered = "1";
   box.innerHTML = "Загрузка…";
-  const agreements = await api(`/agreements?counterparty_id=${editingCounterpartyId}`);
+  const agreements = await api(objectUrl("/agreements", { counterparty_id: editingCounterpartyId }));
   // Контракты — третий уровень иерархии (2026-08-05, запрос пользователя):
   // до этого форма контрагента обрывалась на спецификации, и увидеть, что за
   // ней стоит, можно было только в отдельном справочнике «Контракты», где
@@ -17772,7 +17773,7 @@ async function renderCounterpartyAgreements() {
   // каждую спецификацию превратил бы открытие формы в полсотни обращений.
   let contractsBySpec = new Map();
   try {
-    for (const c of await api("/contracts")) {
+    for (const c of await api(objectUrl("/contracts"))) {
       if (!contractsBySpec.has(c.specification_id)) contractsBySpec.set(c.specification_id, []);
       contractsBySpec.get(c.specification_id).push(c);
     }
@@ -18630,7 +18631,7 @@ let editingContract = null; // полный объект (с .lines) — нуж�
 let counterpartiesFullCache = null; // снимок GET /counterparties/full на время открытой формы контракта
 
 async function renderContractsList() {
-  const contracts = await api("/contracts");
+  const contracts = await api(objectUrl("/contracts"));
   const box = document.getElementById("contracts-list");
   box.innerHTML = "";
   if (!contracts.length) { box.innerHTML = '<div class="hint-text">нет контрактов</div>'; return contracts; }
@@ -20369,7 +20370,7 @@ async function openContractEdit(contract) {
   archivedBox.closest("label").style.display = contract ? "" : "none";
   updateArchiveHint(contract);
 
-  counterpartiesFullCache = await api("/counterparties/full");
+  counterpartiesFullCache = await api(objectUrl("/counterparties/full"));
   const cpSelect = document.getElementById("ce-counterparty");
   // Контрагенты — только те, с кем есть договор на ПОКАЗЫВАЕМЫЙ объект:
   // иначе человек выбирал бы контрагента и получал пустой список договоров,

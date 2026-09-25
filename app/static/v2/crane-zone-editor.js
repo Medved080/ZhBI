@@ -54,6 +54,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return standFocus && zone?.category === "Стоянка" ? elementsOnStanceLevel(scene, zone.levels, activeLevel) : scene;
   }
   function zoneColor(zone = selected()) { return zone?.category === "Стоянка" ? "#4682b4" : "#2c8953"; }
+  // Изделия внутри контура должны отличаться от самого объёма зоны.
+  // Малиновый контрастирует и с зелёным краном, и с синей стоянкой;
+  // оранжевые ручки редактирования остаются отдельным сигналом.
+  const elementHighlightColor = "#d23f73";
   function highlightedElementIds(elements = visibleElements()) {
     const outline = selected()?.levels?.[activeLevel]?.outline;
     if (!outline?.length) return new Set();
@@ -131,7 +135,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const modelKey = standFocus && selected()?.category === "Стоянка" ? `stand:${selectedZone}:${activeLevel}:${selectedVersionId || "current"}` : `all:${selectedVersionId || "current"}`;
     return { zones: visibleZones(), elements: visible, selectedZone, selectedCategory: selected()?.category, activeLevel, selectMode, showElements, modelKey,
       modelElements: showElements && model3d ? model3d.elements.filter((element) => ids.has(element.id)) : [],
-      highlightIds: highlightedElementIds(visible), highlightColor: zoneColor(),
+      highlightIds: highlightedElementIds(visible), highlightColor: elementHighlightColor,
       selectedElements, editable: !!draft && canEdit && (!standFocus || selected()?.category === "Стоянка") };
   }
   async function ensureModelData() {
@@ -254,7 +258,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ctx.lineWidth = active ? 2.7 : z.category === "Кран" ? 1.5 : 1; ctx.stroke();
       if (active && draft && canEdit) activeOutline = level.outline;
     }
-    const visible = visibleElements(), highlighted = highlightedElementIds(visible), zonePaint = zoneColor();
+    const visible = visibleElements(), highlighted = highlightedElementIds(visible);
     let drawn = 0, accented = 0;
     if (showElements) for (const pass of [false, true]) for (const e of visible) {
       if (highlighted.has(e.id) !== pass) continue;
@@ -266,15 +270,16 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy);
       });
       ctx.closePath();
-      ctx.fillStyle = pass ? zonePaint : "#c9d2d8";
+      ctx.fillStyle = pass ? elementHighlightColor : "#c9d2d8";
       ctx.globalAlpha = pass ? 0.48 : 0.24; ctx.fill();
       ctx.globalAlpha = pass ? 0.85 : 0.48;
-      ctx.strokeStyle = selectedElements.has(e.id) ? "#e36b2c" : pass ? zonePaint : "#667984";
+      ctx.strokeStyle = selectedElements.has(e.id) ? "#e36b2c" : pass ? elementHighlightColor : "#667984";
       ctx.lineWidth = selectedElements.has(e.id) ? 1.7 : pass ? 1.1 : 0.65;
       ctx.stroke(); ctx.globalAlpha = 1;
       drawn++; if (pass) accented++;
     }
     canvas.dataset.renderKind = "outlines";
+    canvas.dataset.highlightColor = elementHighlightColor;
     canvas.dataset.renderedOutlines = String(drawn);
     canvas.dataset.highlightedOutlines = String(accented);
     // Ручки поверх изделий: на плотной схеме маркеры не должны закрывать

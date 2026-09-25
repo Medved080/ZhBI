@@ -374,7 +374,7 @@ def _to_contract_out(conn, contract_row, bundle: Optional[dict] = None) -> Contr
 
 
 @router.get("", response_model=list[ContractOut])
-def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
+def list_contracts(object_id: Optional[int] = Query(None), user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         # ORDER BY name невозможен — name больше не столбец, а генерируется
@@ -391,10 +391,10 @@ def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
             JOIN specifications s ON s.id = co.specification_id
             JOIN agreements a ON a.id = s.agreement_id
             JOIN counterparties c ON c.id = a.counterparty_id
-            WHERE {доступ}
+            WHERE {доступ} {"AND a.object_id = ?" if object_id is not None else ""}
             ORDER BY c.short_name, a.number, s.number
             """,
-            доступ_params,
+            [*доступ_params, *([object_id] if object_id is not None else [])],
         ).fetchall()
         # Агрегаты — ОДИН раз на все контракты сразу (см. _load_contract_bundle),
         # иначе на каждую строку каждого контракта уходило по два запроса.
@@ -407,6 +407,7 @@ def list_contracts(user: sqlite3.Row = Depends(get_current_user)):
 @router.get("/positions", response_model=list[ContractPositionOut])
 def contract_positions(
     element_type: str = Query(...),
+    object_id: Optional[int] = Query(None),
     user: sqlite3.Row = Depends(get_current_user),
 ):
     """Позиции контрактов по ТИПУ изделия — все марки сразу, с планом,
@@ -446,8 +447,9 @@ def contract_positions(
             JOIN specifications s ON s.id = co.specification_id
             JOIN agreements a ON a.id = s.agreement_id
             WHERE cl.element_type = ? AND co.is_archived = 0 AND {доступ}
+              {"AND a.object_id = ?" if object_id is not None else ""}
             """,
-            [element_type, *доступ_params],
+            [element_type, *доступ_params, *([object_id] if object_id is not None else [])],
         ).fetchall()
         if not line_rows:
             return []

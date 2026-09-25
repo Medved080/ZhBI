@@ -178,6 +178,7 @@ function emptyContracting() {
 
 export function mountCounterparties(container, ctx) {
   const { api } = ctx;
+  const currentObjectId = Number(ctx.objectId) || 0;
 
   const state = {
     list: [], loaded: false, loadError: null,
@@ -453,7 +454,7 @@ export function mountCounterparties(container, ctx) {
   async function ensureObjects(force) {
     if (state.objectsLoaded && !force) return true;
     try {
-      state.objects = await api.get("/objects");
+      state.objects = (await api.get("/objects")).filter((object) => object.id === currentObjectId);
       state.objectsLoaded = true;
       state.objectsError = null;
       return true;
@@ -571,9 +572,9 @@ export function mountCounterparties(container, ctx) {
   const isStale = (err) => err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object" && err.rawDetail.conflict === "stale_version";
   async function fetchFreshRecord(kind, id) {
     if (kind === "counterparty") return (await api.get("/counterparties")).find((x) => x.id === id) || null;
-    if (kind === "agreement") return (await api.get(`/agreements?counterparty_id=${state.editingId}`)).find((x) => x.id === id) || null;
+    if (kind === "agreement") return (await api.get(`/agreements?counterparty_id=${state.editingId}&object_id=${currentObjectId}`)).find((x) => x.id === id) || null;
     if (kind === "specification") { const { agreementId } = findSpecAndAgreementId(id); return agreementId == null ? null : ((await api.get(`/specifications?agreement_id=${agreementId}`)).find((x) => x.id === id) || null); }
-    if (kind === "contract") return (await api.get("/contracts")).find((x) => x.id === id) || null;
+    if (kind === "contract") return (await api.get(`/contracts?object_id=${currentObjectId}`)).find((x) => x.id === id) || null;
     return null;
   }
   function applyFreshRecord(kind, id, fresh) {
@@ -614,11 +615,11 @@ export function mountCounterparties(container, ctx) {
   }
   async function findCreated(kind, body) {
     if (kind === "counterparty") return (await api.get("/counterparties")).find((x) => !state.list.some((o) => o.id === x.id) && sameAsBody(kind, x, body, true)) || null;
-    if (kind === "agreement") return (await api.get(`/agreements?counterparty_id=${body.counterparty_id}`)).find((x) => !state.contracting.agreements.some((o) => o.id === x.id) && sameAsBody(kind, x, body)) || null;
+    if (kind === "agreement") return (await api.get(`/agreements?counterparty_id=${body.counterparty_id}&object_id=${currentObjectId}`)).find((x) => !state.contracting.agreements.some((o) => o.id === x.id) && sameAsBody(kind, x, body)) || null;
     if (kind === "specification") return (await api.get(`/specifications?agreement_id=${body.agreement_id}`)).find((x) => !(state.contracting.specsByAgreement.get(body.agreement_id)?.specs || []).some((o) => o.id === x.id) && sameAsBody(kind, x, body)) || null;
     if (kind === "contract") {
       const known = new Set([...state.contracting.contractsBySpec.values()].flat().map((c) => c.id));
-      return (await api.get("/contracts")).find((x) => !known.has(x.id) && sameAsBody(kind, x, body)) || null;
+      return (await api.get(`/contracts?object_id=${currentObjectId}`)).find((x) => !known.has(x.id) && sameAsBody(kind, x, body)) || null;
     }
     return null;
   }
@@ -814,7 +815,7 @@ export function mountCounterparties(container, ctx) {
   // loadSpecsFor — при ошибке entry.specs не перезаписывается).
   async function loadAgreementsList() {
     try {
-      state.contracting.agreements = await api.get(`/agreements?counterparty_id=${state.editingId}`);
+      state.contracting.agreements = await api.get(`/agreements?counterparty_id=${state.editingId}&object_id=${currentObjectId}`);
       state.contracting.agreementsLoaded = true;
       state.contracting.agreementsError = null;
       return true;
@@ -825,7 +826,7 @@ export function mountCounterparties(container, ctx) {
   }
   async function loadContractsList() {
     try {
-      const contracts = await api.get("/contracts");
+      const contracts = await api.get(`/contracts?object_id=${currentObjectId}`);
       const bySpec = new Map();
       for (const c of contracts) {
         if (!bySpec.has(c.specification_id)) bySpec.set(c.specification_id, []);
@@ -1636,7 +1637,7 @@ export function mountCounterparties(container, ctx) {
 
   function wireContractingHandlers(el) {
     el.querySelector("#cp-new-agreement-toggle")?.addEventListener("click", () => {
-      state.newAgreementForm = { number: "", date: "", objectId: "", error: "", saving: false };
+      state.newAgreementForm = { number: "", date: "", objectId: currentObjectId || "", error: "", saving: false };
       // Кнопка «+ Договор» заменяется формой — фокус переходит на её первое поле
       // (иначе он падал бы на <body> и клавиатурный пользователь терял место).
       Promise.resolve(renderContractingTab()).then(() => container.querySelector("#cp-new-agreement-object")?.focus());
@@ -2045,7 +2046,7 @@ export function mountCounterparties(container, ctx) {
     const existing = state.contractCascade.agreementsByCounterparty.get(counterpartyId);
     if (existing && (existing.loaded || existing.error)) return;
     try {
-      const agreements = await api.get(`/agreements?counterparty_id=${counterpartyId}`);
+      const agreements = await api.get(`/agreements?counterparty_id=${counterpartyId}&object_id=${currentObjectId}`);
       state.contractCascade.agreementsByCounterparty.set(counterpartyId, { agreements, loaded: true, error: null });
     } catch (err) {
       state.contractCascade.agreementsByCounterparty.set(counterpartyId, { agreements: [], loaded: false, error: err?.detail || err?.message || "Не удалось загрузить договоры" });

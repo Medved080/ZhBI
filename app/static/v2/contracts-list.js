@@ -1,4 +1,4 @@
-// V2: «Контракты» — список контрактов всех доступных объектов (GET /contracts) с поиском и переходом к работе с контрактом,
+// V2: «Контракты» — список контрактов выбранного объекта (GET /contracts?object_id=…) с поиском и переходом к работе с контрактом,
 // плюс «Контракт по умолчанию по типу изделия» ВЫБРАННОГО в шапке объекта (тот же раздел формы, что в V1).
 // Создание и правка контракта (тема, позиции и количество, инциденты, нормативы, архив, удаление с переносом изделий, плановая дата поставки)
 // выполняются в карточке контрагента — там реализованы все проверки (версия записи, страж покрытия, отказ без изменений). Отсюда — «Открыть»
@@ -37,7 +37,7 @@ export function mountContractsList(container, { screen, objectId, api, rights, g
 
   async function load() {
     S.error = "";
-    try { S.items = await api.get("/contracts"); S.loaded = true; } catch (err) { S.error = err instanceof ApiError ? err.detail : "Не удалось загрузить контракты"; }
+    try { S.items = objectId ? await api.get(`/contracts?object_id=${objectId}`) : []; S.loaded = true; } catch (err) { S.error = err instanceof ApiError ? err.detail : "Не удалось загрузить контракты"; }
     if (objectId && canReadDM) await loadDefaultMap();
     paint();
   }
@@ -109,7 +109,7 @@ export function mountContractsList(container, { screen, objectId, api, rights, g
   async function loadAdd(kind, id) {
     const a = S.add;
     try {
-      if (kind === "cp") { a.agreements = []; a.specs = []; a.agreement = ""; a.spec = ""; a.cp = id; if (id) a.agreements = await api.get(`/agreements?counterparty_id=${id}`); }
+      if (kind === "cp") { a.agreements = []; a.specs = []; a.agreement = ""; a.spec = ""; a.cp = id; if (id) a.agreements = await api.get(`/agreements?counterparty_id=${id}&object_id=${objectId}`); }
       else if (kind === "agreement") { a.specs = []; a.spec = ""; a.agreement = id; if (id) a.specs = await api.get(`/specifications?agreement_id=${id}`); }
       a.error = "";
     } catch (err) { a.error = err instanceof ApiError ? err.detail : "Не удалось загрузить список"; }

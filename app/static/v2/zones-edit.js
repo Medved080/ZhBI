@@ -140,7 +140,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
     if (st.category !== "Захватка") { paint(); return; }
     if (!objectId) { paint(); return; }
     const my = ++seq;
-    const q = new URLSearchParams({ category: st.category, include_retired: String(st.includeRetired) });
+    const q = new URLSearchParams({ category: st.category, include_retired: String(st.includeRetired), object_id: String(objectId) });
     try {
       const data = await api.get(`${spec.endpoint}?${q}`);
       if (dead || my !== seq) return;

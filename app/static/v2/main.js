@@ -569,7 +569,7 @@ async function renderShell(user, permissions) {
         activeModule = mountHome(content, { registry, allowed: allowedScreen, hiddenCount: hidden, go: (k) => openSection(k) });
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
-        activeModule = MODULES[target.id](content, moduleCtx);
+        activeModule = MODULES[target.id](content, { ...moduleCtx, objectId });
       } else if (hasAdminScreen(target.adminExtra || target.impl)) {
         // Экраны области «администрирование» (admin-screens.js): смена своего пароля, «Мой доступ», служебные разделы.
         document.title = `${target.title} — ЖБИ`;

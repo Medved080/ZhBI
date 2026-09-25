@@ -451,7 +451,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     al.loading = true; al.loadError = ""; paintPanel();
     const obj = curObject;
     try {
-      const list = await api.get("/contracts");
+      const list = await api.get(`/contracts?object_id=${obj}`);
       if (dead || obj !== curObject) return;
       const ids = objectContractIds();
       al.contracts = list.filter((c) => ids.has(c.id) && !c.is_archived);

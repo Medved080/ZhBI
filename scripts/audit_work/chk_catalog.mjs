@@ -15,7 +15,7 @@ const summaryText = (b) => b.eval(`document.querySelector('#ec-summary').textCon
 const found = async (b) => Number(((await summaryText(b)).match(/Найдено (\d+)/) || [])[1]);
 const waitLoaded = (b) => b.waitFor(`/Найдено \\d+/.test(document.querySelector('#ec-summary').textContent)`, 30000);
 const ecReq = (b, from) => b.requests.slice(from).filter((r) => new URL(r.url).pathname === "/element-catalog").map((r) => Object.fromEntries(new URL(r.url).searchParams));
-const ALL = "e.object_id IS NOT NULL AND e.is_current = 1";
+const ALL = "e.object_id = 1 AND e.is_current = 1";
 let b;
 try {
   b = await session(S.base, "admin", { objectId: 1 });
@@ -23,7 +23,7 @@ try {
   await openScreen(b, "element-catalog", `document.querySelectorAll('#ec-table tbody tr').length > 0`);
   await waitLoaded(b);
   const total = sql1(S.db, `SELECT COUNT(*) FROM elements e WHERE ${ALL}`);
-  check("справочник: «Найдено» = SQL (все текущие изделия доступных объектов)", (await found(b)) === total, `${await found(b)} / SQL ${total}`);
+  check("справочник: «Найдено» = SQL (изделия выбранного объекта)", (await found(b)) === total, `${await found(b)} / SQL ${total}`);
   check("справочник: 20 колонок по умолчанию (как V1 без служебных), страница 200 строк", (await b.eval(`document.querySelectorAll('#ec-table thead tr:first-child th').length`)) === 20 && (await b.eval(`document.querySelectorAll('#ec-table tbody tr').length`)) === 200);
 
   // сортировка щелчком по заголовку

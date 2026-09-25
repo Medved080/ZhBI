@@ -126,7 +126,7 @@ export function createElementOps(ctx) {
     let list, positions;
     try {
       list = (await askContracts()).filter((c) => !c.is_archived);
-      positions = await api.get(`/contracts/positions?element_type=${encodeURIComponent(element.element_type)}`);
+      positions = await api.get(`/contracts/positions?element_type=${encodeURIComponent(element.element_type)}&object_id=${encodeURIComponent(element.object_id ?? getObjectId())}`);
     } catch (err) {
       await showInfoDialog(`Не удалось загрузить контракты: ${err instanceof ApiError ? err.detail : (err.message || "нет ответа")}`);
       return undefined;
@@ -898,7 +898,7 @@ export function createElementOps(ctx) {
         let limit = free.length;
         if (v !== "none") {
           try {
-            const pos = (await api.get(`/contracts/positions?element_type=${encodeURIComponent(free[0].type)}`)).filter((p) => p.contract_id === v && norm(p.mark) === norm(free[0].mark));
+            const pos = (await api.get(`/contracts/positions?element_type=${encodeURIComponent(free[0].type)}&object_id=${encodeURIComponent(getObjectId())}`)).filter((p) => p.contract_id === v && norm(p.mark) === norm(free[0].mark));
             if (pos.length) {
               const remaining = pos.reduce((n, p) => n + p.quantity, 0) - Math.max(...pos.map((p) => p.fact)) - Math.max(...pos.map((p) => p.damaged));
               const reserved = (st.rows || []).filter((r) => markKey(r) === key && r.chosen && r.contractValue === v && r.expectedContract !== v).length;
