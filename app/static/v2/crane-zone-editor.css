@@ -41,6 +41,8 @@
 .cz-map-bar .cz-mode-active { background: #e5f0e9; border-color: #49976d; color: #236747; }
 .cz-view-switch { display: flex; gap: 2px; padding: 2px; border: 1px solid #dce3e7; border-radius: 7px; }
 .cz-view-switch .v2-btn { min-width: 36px; padding: 4px 7px; }
+.cz-elements-layer { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; color: #425b68; }
+.cz-elements-layer input { margin: 0; accent-color: #2c8953; }
 .cz-map-foot { border-top: 1px solid #dce3e7; min-height: 31px; }
 #cz-canvas { display: block; width: 100%; flex: 1; min-height: 0; touch-action: none; cursor: crosshair; }
 #cz-canvas[hidden], #cz-3d[hidden] { display: none; }

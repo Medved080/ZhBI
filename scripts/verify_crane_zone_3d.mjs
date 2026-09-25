@@ -43,6 +43,15 @@ try {
   assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
   console.log("PASS V2: 3D-схема открылась, доступна правка и масштаб 100–110%");
 
+  assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.modelKind"), "hidden");
+  await tap(browser, "#cz-show-elements");
+  await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'", 60000);
+  assert.equal(Number(await browser.eval("document.querySelector('#cz-3d').dataset.modelCount")), count);
+  if (process.env.ZONE_MODEL_SHOT) await browser.shot(process.env.ZONE_MODEL_SHOT);
+  console.log(`PASS V2: включается слой из ${count} объёмных изделий с цветами основной модели`);
+  await tap(browser, "#cz-show-elements");
+  await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'hidden'", 10000);
+
   await tap(browser, "#cz-save");
   await browser.waitFor("document.querySelector('#cz-status')?.textContent.startsWith('Черновик сохранён')");
   await browser.waitFor("!!document.querySelector('#cz-3d').dataset.edgeMidpoints", 5000);
