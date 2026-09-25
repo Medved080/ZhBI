@@ -5,11 +5,16 @@
   const HOVER_DELAY = 1000;
   let tooltip = null, active = null, nativeTitle = null, describedBy = null;
   let timer = null, visible = false, pointerX = 0, pointerY = 0;
+  let lastPointerDownAt = 0;
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim().slice(0, 320);
   const same = (a, b) => clean(a).toLocaleLowerCase("ru") === clean(b).toLocaleLowerCase("ru");
 
   function description(control) {
     if (!control || control.matches("[data-no-tooltip]")) return "";
+    if (control.matches("label")) {
+      const childHelp = clean(control.querySelector("[data-tooltip]")?.getAttribute("data-tooltip"));
+      if (childHelp) return childHelp;
+    }
     const label = control.labels?.[0] || control.closest("label") ||
       (control.id ? document.querySelector(`label[for="${CSS.escape(control.id)}"]`) : null);
     const visibleName = clean(control.getAttribute("aria-label") || label?.textContent || control.textContent);
@@ -99,10 +104,11 @@
     const control = event.target instanceof Element ? event.target.closest(selector) : null;
     if (!control) return hide();
     const rect = control.getBoundingClientRect();
-    activate(control, rect.left + Math.min(rect.width / 2, 80), rect.bottom, false);
+    activate(control, rect.left + Math.min(rect.width / 2, 80), rect.bottom,
+      Date.now() - lastPointerDownAt < 400);
   }, true);
   document.addEventListener("focusout", () => { if (!active?.matches(":hover")) hide(); }, true);
-  document.addEventListener("pointerdown", hide, true);
+  document.addEventListener("pointerdown", () => { lastPointerDownAt = Date.now(); hide(); }, true);
   document.addEventListener("scroll", hide, true);
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") hide(); }, true);
   window.addEventListener("blur", hide);
