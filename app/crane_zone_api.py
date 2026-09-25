@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from app import activity
 from app.access import assert_object_feature
 from app.auth import format_display_name, get_current_user
-from app.crane_zone_editor import ZoneDraftError
+from app.crane_zone_editor import ZoneDraftError, stance_containment_issues
 from app.crane_zone_service import (
     create_draft, preview_draft, publish_draft, update_draft,
 )
@@ -161,6 +161,7 @@ def get_draft(object_id: int, draft_id: int,
         result = dict(row)
         result["zones"] = json.loads(result.pop("zones_json"))
         result["overrides"] = json.loads(result.pop("overrides_json"))
+        result["warnings"] = stance_containment_issues(result["zones"])
         return result
     finally:
         conn.close()
@@ -177,7 +178,8 @@ def patch_draft(object_id: int, draft_id: int, body: DraftPatch,
                                  body.zones, body.overrides, body.note)
         except ZoneDraftError as exc:
             _public_error(exc)
-        return {"draft_id": draft_id, "edit_token": token}
+        return {"draft_id": draft_id, "edit_token": token,
+                "warnings": stance_containment_issues(body.zones)}
     finally:
         conn.close()
 

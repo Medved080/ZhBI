@@ -33,7 +33,30 @@ def _zone_id(value):
     return value
 
 
-def validate_zones(zones: list[dict], base_zones: list[dict]) -> dict[int, dict]:
+def stance_containment_issues(zones: list[dict]) -> list[str]:
+    """Понятные оператору причины, мешающие публикации черновика."""
+    by_id = {zone["id"]: zone for zone in zones}
+    issues = []
+    for zone in zones:
+        if zone["category"] != "Стоянка":
+            continue
+        crane = by_id.get(zone["parent_zone_id"])
+        if crane is None or crane["category"] != "Кран":
+            continue
+        crane_polys = [Polygon(level["outline"]) for level in crane["levels"]]
+        for level in zone["levels"]:
+            if not any(poly.covers(Point(point)) for poly in crane_polys for point in level["outline"]):
+                tier = (f" на ярусе +{level['elevation_mm']} мм"
+                        if level["elevation_mm"] is not None else "")
+                issues.append(
+                    f"«{zone['name']}»{tier} оказалась вне зоны «{crane['name']}». "
+                    "Расширьте кран или переместите стоянку внутрь него, затем проверьте редакцию."
+                )
+    return issues
+
+
+def validate_zones(zones: list[dict], base_zones: list[dict], *,
+                   allow_outside_stances: bool = False) -> dict[int, dict]:
     """Сверяет весь снимок; старые зоны нельзя молча потерять из черновика."""
     if not isinstance(zones, list):
         raise ZoneDraftError("Список зон должен быть массивом")
@@ -105,11 +128,10 @@ def validate_zones(zones: list[dict], base_zones: list[dict]) -> dict[int, dict]
         if key in names:
             raise ZoneDraftError(f"Номер {zone['number']} повторяется в одном кране")
         names.add(key)
-        if zone["category"] == "Стоянка":
-            crane_polys = [Polygon(l["outline"]) for l in by_id[parent]["levels"]]
-            for level in zone["levels"]:
-                if not any(poly.covers(Point(p)) for poly in crane_polys for p in level["outline"]):
-                    raise ZoneDraftError(f"Стоянка {zone_id} целиком вне зоны крана {parent}")
+    if not allow_outside_stances:
+        issues = stance_containment_issues(zones)
+        if issues:
+            raise ZoneDraftError(issues[0])
     # Соседние зоны одного яруса могут касаться рёбрами, но не должны
     # накладываться площадью. Исторические DXF-контуры местами уже имеют
     # небольшие наложения: сохранять их без ухудшения разрешаем, увеличение

@@ -84,12 +84,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       selectedVersionId ? "Просмотр сохранённой редакции. Для правки создайте черновик; координаты изделий показаны по текущей схеме." :
       !draft ? "Шаг 1 из 3: создайте черновик, затем измените зоны." :
       dirty ? "Шаг 1 из 3: есть несохранённые изменения — сохраните их в черновике." :
+      draft.warnings?.length ? `Черновик сохранён, но пока не готов к публикации: ${draft.warnings[0]}` :
       !draft.note?.trim() ? "Шаг 2 из 3: укажите причину изменения и сохраните черновик." :
       !preview ? "Шаг 2 из 3: выполните предпросмотр назначений изделий." :
       "Шаг 3 из 3: проверьте результат и подтвердите публикацию.";
     const visibleMessage = message || guide;
     const feedback = $("#cz-feedback");
-    if (feedback) { feedback.textContent = visibleMessage; feedback.dataset.tone = message ? messageTone : "info"; }
+    if (feedback) { feedback.textContent = visibleMessage; feedback.dataset.tone = message ? messageTone : draft?.warnings?.length ? "warning" : "info"; }
     const node = $("#cz-status");
     if (node) node.textContent = visibleMessage;
     const next = $("#cz-new");
@@ -105,14 +106,15 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (previewButton) {
       previewButton.disabled = busy;
       previewButton.dataset.tooltip = busy ? "Дождитесь завершения операции." :
-        dirty ? "Сначала сохранит черновик, затем рассчитает новые назначения изделий без публикации." :
+        dirty ? "Сначала сохраните черновик. Затем можно рассчитать новые назначения без публикации." :
+        draft?.warnings?.length ? draft.warnings[0] :
         "Рассчитать назначения изделий по черновику без изменения действующей схемы.";
     }
     const publish = $("#cz-publish");
     if (publish) {
-      publish.disabled = !canEdit || !draft || dirty || !draft.note?.trim() || !preview || busy;
+      publish.disabled = !canEdit || !draft || dirty || !!draft.warnings?.length || !draft.note?.trim() || !preview || busy;
       publish.dataset.tooltip = busy ? "Дождитесь завершения операции." : !draft ? "Сначала создайте черновик." :
-        dirty ? "Сначала сохраните изменения в черновике." : !draft.note?.trim() ?
+        dirty ? "Сначала сохраните изменения в черновике." : draft.warnings?.length ? draft.warnings[0] : !draft.note?.trim() ?
           "Укажите причину изменения, сохраните черновик и выполните предпросмотр." : !preview ?
           "Сначала выполните предпросмотр назначений изделий." :
           "Опубликовать редакцию после подтверждения. Назначения изделий будут пересчитаны.";
@@ -137,13 +139,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const level = z.levels[activeLevel] || z.levels[0];
     const can = canEdit && !!draft;
     return `<div class="cz-prop-head"><span>${z.category}</span><strong>${esc(z.name)}</strong>${z.category === "Стоянка" ? `<small>В составе крана «${esc(zoneById(z.parent_zone_id)?.name || "не выбран")}»</small>` : standFocus ? `<small>Выбран родитель стоянки. Добавить её можно кнопкой слева.</small>` : ""}</div>
-      <label>Номер<input id="cz-number" type="number" min="1" step="1" value="${z.number}" ${can ? "" : "disabled"}></label>
-      <label>Название<input id="cz-name" type="text" maxlength="200" value="${esc(z.name)}" ${can ? "" : "disabled"}></label>
-      ${z.category === "Стоянка" ? `<label>Кран<select id="cz-parent" ${can ? "" : "disabled"}>${zones().filter((v) => v.category === "Кран").map((c) => `<option value="${c.id}" ${z.parent_zone_id === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>` : ""}
+      <label>Номер<input id="cz-number" type="number" min="1" step="1" data-tooltip="Порядковый номер зоны в пределах объекта; у стоянки — в пределах её крана. Используется в справочнике и назначениях изделий." value="${z.number}" ${can ? "" : "disabled"}></label>
+      <label>Название<input id="cz-name" type="text" maxlength="200" data-tooltip="Название зоны в списках и отчётах. Изменение не перемещает контур и не меняет принадлежность изделий." value="${esc(z.name)}" ${can ? "" : "disabled"}></label>
+      ${z.category === "Стоянка" ? `<label>Кран<select id="cz-parent" data-tooltip="Родительский кран стоянки. При публикации стоянка должна попадать внутрь его зоны; смена крана пересчитает назначения изделий." ${can ? "" : "disabled"}>${zones().filter((v) => v.category === "Кран").map((c) => `<option value="${c.id}" ${z.parent_zone_id === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>` : ""}
       <div class="cz-subtitle">Ярусы и контуры</div>
       <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}">${l.elevation_mm == null ? "Без отметки" : `+${l.elevation_mm} мм`} · ${l.outline.length} точек</button>`).join("")}</div>
       ${can ? `<button type="button" class="v2-btn" id="cz-add-level">Добавить ярус</button>` : ""}
-      ${level ? `<label>Отметка, мм<input id="cz-elevation" type="number" step="1" value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label>
+      ${level ? `<label>Отметка, мм<input id="cz-elevation" type="number" step="1" data-tooltip="Высота начала яруса в миллиметрах. Влияет на то, к каким изделиям по высоте применяется этот контур." value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label>
         <p class="cz-hint">Тяните ребро контура: соответствующая боковая грань сдвигается параллельно себе, прямоугольная форма сохраняется. В 3D поворачивайте сцену вне ручек.</p>
         <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Number(p[0].toFixed(1))}; ${Number(p[1].toFixed(1))}</span>`).join("")}</div>` : ""}
       <div class="cz-subtitle">Выбрано изделий: ${selectedElements.size}</div>
@@ -158,15 +160,15 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const parent = parentCrane();
     const primaryAdd = standFocus ? `<button type="button" class="v2-btn v2-primary" id="cz-add-stand" ${parent ? "" : "disabled"}>${draft ? "+ Добавить стоянку" : "Создать черновик и добавить стоянку"}</button>` : `<button type="button" class="v2-btn v2-primary" id="cz-add-crane">${draft ? "+ Добавить кран" : "Создать черновик и добавить кран"}</button>`;
     root.innerHTML = `<div class="cz-toolbar"><strong>${standFocus ? "Стоянки кранов" : "Зоны кранов"}</strong><span class="cz-revision">${version ? `Редакция №${version.revision_no}${version.effective_date ? ` · с ${esc(version.effective_date)}` : " · исходная"}` : "Нет редакции"}</span>
-      <select id="cz-version-select" aria-label="История редакций"><option value="">Действующая редакция</option>${versions.map((v) => `<option value="${v.id}" ${selectedVersionId === v.id ? "selected" : ""}>№${v.revision_no} · ${v.effective_date || `исходная с ${v.known_from}`}${v.activated_at ? "" : " · ожидает"}</option>`).join("")}</select>
-      <select id="cz-draft-select" aria-label="Черновик"><option value="">Действующая редакция</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select>
+      <select id="cz-version-select" aria-label="История редакций" data-tooltip="Открывает опубликованную редакцию для просмотра. Назначения изделий показываются на дату этой редакции; изменить её нельзя."><option value="">Действующая редакция</option>${versions.map((v) => `<option value="${v.id}" ${selectedVersionId === v.id ? "selected" : ""}>№${v.revision_no} · ${v.effective_date || `исходная с ${v.known_from}`}${v.activated_at ? "" : " · ожидает"}</option>`).join("")}</select>
+      <select id="cz-draft-select" aria-label="Черновик" data-tooltip="Переключает сохранённые незавершённые редакции. Черновик не меняет действующие зоны до публикации."><option value="">Действующая редакция</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select>
       ${canEdit ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
       <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div><p class="cz-tree-intro">${standFocus ? "Выберите кран — он станет владельцем новой стоянки. Выбор существующей стоянки тоже сохранит её кран." : "Здесь показаны только зоны кранов. Для стоянок откройте соседнюю вкладку."}</p>${canEdit ? `<div class="cz-tree-add">${primaryAdd}</div><div class="cz-parent-hint">${standFocus ? parent ? `Выбранный кран: ${esc(parent.name)}.` : "Сначала создайте кран на вкладке «Зоны кранов»." : ""} ${draft ? "Изменения пока только в черновике." : "Черновик создаётся при добавлении; рабочие зоны не меняются до публикации."}</div>` : ""}</div>${treeHtml()}</aside>
       <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
-      ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>` : ""}`;
+      ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>` : ""}`;
     bind();
     updateStatus();
     const generation = ++renderGeneration;
@@ -583,12 +585,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   async function save() {
     if (!draft || !dirty || busy) return false;
     busy = true; message = ""; updateStatus();
-    try { const r = await api.patch(`${prefix}/drafts/${draft.id}`, { edit_token: draft.edit_token, zones: draft.zones, overrides: draft.overrides, note: draft.note || "" }); draft.edit_token = r.edit_token; dirty = false; status(`Черновик сохранён; действующая редакция не изменилась. ${draft.note?.trim() ? "Теперь выполните предпросмотр." : "Укажите причину изменения, затем выполните предпросмотр."}`, "success"); return true; }
+    try { const r = await api.patch(`${prefix}/drafts/${draft.id}`, { edit_token: draft.edit_token, zones: draft.zones, overrides: draft.overrides, note: draft.note || "" }); draft.edit_token = r.edit_token; draft.warnings = r.warnings || []; dirty = false; status(draft.warnings.length ? `Черновик сохранён, действующая схема не изменена. Перед публикацией исправьте: ${draft.warnings[0]}` : `Черновик сохранён; действующая редакция не изменилась. ${draft.note?.trim() ? "Теперь выполните предпросмотр." : "Укажите причину изменения, затем выполните предпросмотр."}`, draft.warnings.length ? "warning" : "success"); return true; }
     catch (e) { status(errText(e), "error"); return false; } finally { busy = false; updateStatus(); }
   }
   async function loadPreview() {
     if (!draft || busy) return;
     if (dirty && !(await save())) return;
+    if (draft.warnings?.length) return status(`Предпросмотр пока недоступен: ${draft.warnings[0]} Черновик сохранён, рабочая схема не изменена.`, "warning");
     busy = true; message = ""; updateStatus();
     try { preview = await api.readPost(`${prefix}/drafts/${draft.id}/preview`); render(); status("Предпросмотр рассчитан без публикации. Проверьте изменения и нажмите «Опубликовать».", "success"); }
     catch (e) { status(errText(e), "error"); } finally { busy = false; updateStatus(); }

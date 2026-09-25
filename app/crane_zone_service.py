@@ -173,7 +173,10 @@ def update_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         ).fetchone()
         if base is None:
             raise ZoneDraftError("Исходная редакция черновика не найдена")
-        validate_zones(zones, json.loads(base["zones_json"]))
+        # Промежуточный черновик может временно оставить стоянку вне крана:
+        # оператору нужно сохранить сдвиг крана до перемещения стоянки.
+        # Предпросмотр и публикация по-прежнему требуют корректной геометрии.
+        validate_zones(zones, json.loads(base["zones_json"]), allow_outside_stances=True)
         if not isinstance(overrides, dict) or len(overrides) > 100000:
             raise ZoneDraftError("Слишком много ручных назначений")
         if not isinstance(note, str) or len(note) > 2000:

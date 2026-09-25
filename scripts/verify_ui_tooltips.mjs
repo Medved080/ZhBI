@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, stopServer, session, openScreen, tap, openV1, noPageScroll, sql1 } from "./audit_work/lib.mjs";
+import { startServer, stopServer, session, openScreen, tap, openV1, noPageScroll, sql1, sleep } from "./audit_work/lib.mjs";
 
 const work = mkdtempSync(join(tmpdir(), "zhbi-ui-tooltips-"));
 let browser;
@@ -17,12 +17,18 @@ try {
   assert.equal(await browser.eval("document.querySelector('#cz-save').disabled"), true);
   const disabledSave = await browser.rect("#cz-save");
   await browser.move(disabledSave.cx, disabledSave.cy);
+  assert.notEqual(await browser.eval("document.querySelector('#ui-control-tooltip')?.dataset.visible"), "true", "подсказка не должна появляться сразу");
+  await sleep(500);
+  assert.notEqual(await browser.eval("document.querySelector('#ui-control-tooltip')?.dataset.visible"), "true", "подсказка должна ждать секунду");
   await browser.waitFor("document.querySelector('#ui-control-tooltip')?.textContent.includes('Сначала создайте черновик')");
   assert.equal(await browser.eval("document.querySelector('#ui-control-tooltip').dataset.visible"), "true");
-  console.log("PASS V2: disabled-кнопка объясняет причину недоступности при наведении");
+  console.log("PASS V2: подсказка disabled-кнопки появляется через секунду и объясняет причину");
 
   await tap(browser, "#cz-new");
   await browser.waitFor("!!document.querySelector('#cz-note') && document.querySelector('#cz-feedback')?.textContent.includes('Создан черновик')", 30000);
+  await browser.eval("document.querySelector('#cz-name').focus()");
+  await browser.waitFor("document.querySelector('#ui-control-tooltip')?.textContent.includes('не перемещает контур')");
+  assert.notEqual(await browser.eval("document.querySelector('#ui-control-tooltip').textContent"), "Название");
   assert.equal(await browser.eval("document.querySelector('#cz-save').disabled"), true);
   const publishedBefore = Number(sql1(db, "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id=1 AND activated_at IS NOT NULL"));
   await browser.eval(`(() => {
@@ -40,6 +46,9 @@ try {
   const disabledPublish = await browser.rect("#cz-publish");
   await browser.move(disabledPublish.cx, disabledPublish.cy);
   await browser.waitFor("document.querySelector('#ui-control-tooltip')?.textContent.includes('Сначала выполните предпросмотр')");
+  const disabledColor = await browser.eval(`(() => { const s = getComputedStyle(document.querySelector('#cz-publish')); return { color: s.color, background: s.backgroundColor }; })()`);
+  assert.notEqual(disabledColor.color, disabledColor.background, "текст кнопки должен отличаться от фона при наведении");
+  assert.equal(disabledColor.color, "rgb(77, 99, 85)");
   await browser.eval("document.querySelector('#cz-preview').focus()");
   await browser.waitFor("document.querySelector('#ui-control-tooltip')?.textContent.includes('Рассчитать назначения изделий')");
   console.log("PASS V2: сохранение видно; публикация объясняет обязательный предпросмотр");
@@ -57,17 +66,23 @@ try {
   console.log("PASS V2: кнопки реально сохраняют, рассчитывают предпросмотр и публикуют редакцию на копии БД");
 
   await openV1(browser, base, 1);
-  const control = await browser.eval(`(() => {
-    const el = [...document.querySelectorAll('button, a[href], input:not([type=hidden])')]
-      .find((item) => { const r = item.getBoundingClientRect(); return r.width > 30 && r.height > 15 && r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; });
-    if (!el) return null;
-    const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  await browser.eval(`(() => {
+    const button = document.createElement('button');
+    button.id = 'tooltip-v1-check'; button.textContent = 'Показать';
+    button.dataset.tooltip = 'Открывает подробности без изменения данных.';
+    Object.assign(button.style, { position: 'fixed', left: '12px', top: '120px', zIndex: 99999 });
+    document.body.appendChild(button);
   })()`);
-  assert.ok(control, "не найден видимый элемент управления V1");
-  await browser.move(control.x, control.y);
+  const control = await browser.rect("#tooltip-v1-check");
+  await browser.move(control.cx, control.cy);
   await browser.waitFor("document.querySelector('#ui-control-tooltip')?.dataset.visible === 'true'");
-  assert.ok((await browser.eval("document.querySelector('#ui-control-tooltip').textContent")).trim());
-  console.log("PASS V1: общий механизм показывает подсказку и в старом интерфейсе");
+  assert.match(await browser.eval("document.querySelector('#ui-control-tooltip').textContent"), /без изменения данных/);
+  await browser.eval("document.querySelector('#tooltip-v1-check').dataset.tooltip = 'Показать'");
+  await browser.move(control.cx + 40, control.cy + 40);
+  await browser.move(control.cx, control.cy);
+  await sleep(1150);
+  assert.notEqual(await browser.eval("document.querySelector('#ui-control-tooltip')?.dataset.visible"), "true", "повтор подписи показывать нельзя");
+  console.log("PASS V1: подсказка объясняет действие и не повторяет подпись");
   assert.equal(browser.exceptions.length, 0, browser.exceptions.join("\n"));
 } finally {
   try { await browser?.close(); } catch { /* */ }

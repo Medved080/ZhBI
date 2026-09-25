@@ -136,6 +136,27 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(old[0], self.crane_id)
 
+    def test_temporary_outside_stance_can_be_saved_but_not_published(self):
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        zones = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
+        ).fetchone()[0])
+        next(z for z in zones if z["id"] == self.crane_id)["levels"][0]["outline"] = square(20, 0, 10)
+        token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {}, "Промежуточное положение")
+        self.assertEqual(token, 2)
+        stored = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
+        ).fetchone()[0])
+        self.assertEqual(stored, zones)
+        with self.assertRaisesRegex(ZoneDraftError, "Стоянка 1.*Кран 1.*Расширьте"):
+            preview_draft(self.conn, self.object_id, draft_id)
+        with self.assertRaisesRegex(ZoneDraftError, "Стоянка 1.*Кран 1.*Расширьте"):
+            publish_draft(self.conn, self.object_id, draft_id, token, business_date(), None, "Тест")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            (self.object_id,),
+        ).fetchone()[0], 0)
+
     def test_future_version_does_not_change_current_until_activation(self):
         draft_id, token = self._draft_with_new_crane()
         tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()

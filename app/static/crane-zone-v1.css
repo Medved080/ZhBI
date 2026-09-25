@@ -10,6 +10,9 @@
 .cz-v1-backdrop .v2-btn:hover, .v2-dialog-backdrop .v2-btn:hover { background: #eef4f7; }
 .cz-v1-backdrop .v2-btn:disabled { opacity: .5; cursor: not-allowed; }
 .cz-v1-backdrop .v2-primary, .v2-dialog-backdrop .v2-primary { background: #2c8953; border-color: #2c8953; color: #fff; }
+.cz-v1-backdrop .cz-root .v2-btn.v2-primary:hover:not(:disabled) { background: #236f43; border-color: #236f43; color: #fff; }
+.cz-v1-backdrop .cz-root .v2-btn.v2-primary:disabled,
+.cz-v1-backdrop .cz-root .v2-btn.v2-primary:disabled:hover { background: #eef2ef; border-color: #ccd7cf; color: #4d6355; opacity: 1; }
 .cz-v1-backdrop .v2-muted { color: #657884; }
 .v2-dialog-backdrop { position: fixed; inset: 0; z-index: 130; display: flex; align-items: center; justify-content: center; background: rgb(15 20 30 / 45%); }
 .v2-dialog { width: 420px; max-width: calc(100vw - 32px); padding: 20px; border: 1px solid #dce3e7; border-radius: 12px; background: #fff; color: #273d4b; box-shadow: 0 16px 48px rgb(0 0 0 / 16%); }
