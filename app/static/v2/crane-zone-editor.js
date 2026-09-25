@@ -4,7 +4,7 @@ import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
 import { overlapArea, peerOverlap, polygonArea } from "./zone-overlap.js";
-import { fitChildToResizedParent } from "./zone-parent-transform.js";
+import { fitChildrenToResizedParent } from "./zone-parent-transform.js";
 import { countElementsInZone } from "./zone-live-count.js";
 import { createCraneZone3d } from "./crane-zone-3d.js";
 import { computeElementRenderHeights } from "./element-render-heights.js";
@@ -115,16 +115,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (!oldCrane) return false;
     const updates = new Map(before.map((item) => [item.id, item.outlines.map(clone)]));
     updates.get(crane.id)[craneLevelIndex] = nextOutline;
-    for (const child of moveMembers(crane).filter((item) => item.category === "Стоянка")) {
-      child.levels.forEach((level, index) => {
-        if (matchingCraneLevel(crane, level.elevation_mm) !== craneLevelIndex) return;
-        const next = fitChildToResizedParent(
-          oldCrane.outlines[craneLevelIndex], nextOutline,
-          before.find((item) => item.id === child.id).outlines[index],
-        );
-        if (next) updates.get(child.id)[index] = next;
-      });
-    }
+    const childLevels = moveMembers(crane).filter((item) => item.category === "Стоянка")
+      .flatMap((child) => child.levels.map((level, index) => ({ child, level, index })))
+      .filter(({ level }) => matchingCraneLevel(crane, level.elevation_mm) === craneLevelIndex);
+    const nextChildren = fitChildrenToResizedParent(oldCrane.outlines[craneLevelIndex], nextOutline,
+      childLevels.map(({ child, index }) => before.find((item) => item.id === child.id).outlines[index]));
+    if (!nextChildren) return false;
+    childLevels.forEach(({ child, index }, i) => { updates.get(child.id)[index] = nextChildren[i]; });
     const copyZones = (withUpdates) => zones().map((zone) => ({ ...zone,
       levels: zone.levels.map((level, index) => ({ ...level,
         outline: (withUpdates ? updates.get(zone.id) : before.find((item) => item.id === zone.id)?.outlines)?.[index] || level.outline,
@@ -136,11 +133,15 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         const parent = crane.levels[matchingCraneLevel(crane, level.elevation_mm)];
         const parentOutline = matchingCraneLevel(crane, level.elevation_mm) === craneLevelIndex
           ? nextOutline : parent.outline;
-        if (overlapArea(parentOutline, level.outline) < Math.abs(polygonArea(level.outline)) - 1) return false;
+        // DXF-стоянка может иметь выступы и 5+ вершин. Клиповать её надо
+        // выпуклой границей крана, а не наоборот.
+        if (overlapArea(level.outline, parentOutline) < Math.abs(polygonArea(level.outline)) - 1) return false;
         const baseline = new Map(peerOverlap(oldZones, original, level.elevation_mm, original.levels[index].outline)
           .map(({ other, elevation_mm, area }) => [`${other.id}:${elevation_mm}`, area]));
+        const areaScale = Math.max(1, Math.abs(polygonArea(level.outline)) /
+          Math.max(1, Math.abs(polygonArea(original.levels[index].outline))));
         if (peerOverlap(nextZones, child, level.elevation_mm, level.outline).some(({ other, elevation_mm, area }) =>
-          area > (baseline.get(`${other.id}:${elevation_mm}`) || 0) + 1)) return false;
+          area > (baseline.get(`${other.id}:${elevation_mm}`) || 0) * areaScale + 1)) return false;
       }
     }
     for (const [id, outlines] of updates) outlines.forEach((outline, index) => {
@@ -152,7 +153,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (zone.category === "Стоянка") {
       const crane = zoneById(zone.parent_zone_id);
       if (!crane?.levels?.some((level) =>
-        overlapArea(level.outline, outline) >= Math.abs(polygonArea(outline)) - 1)) return false;
+        overlapArea(outline, level.outline) >= Math.abs(polygonArea(outline)) - 1)) return false;
     }
     const key = (other, level) => `${other.id}:${level}`;
     const oldAreas = new Map(previous ? peerOverlap(zones(), zone, elevation, previous).map(({ other, elevation_mm, area }) => [key(other, elevation_mm), area]) : []);
