@@ -22,11 +22,33 @@ const work = mkdtempSync(join(tmpdir(), "crane-3d-"));
 let browser;
 try {
   const { base } = await startServer(8378, work);
-  browser = await session(base, "admin", { objectId: 1, width: 1366, height: 768,
+  browser = await session(base, "admin", { objectId: 1,
+    width: Number(process.env.ZONE_TEST_WIDTH) || 1366, height: Number(process.env.ZONE_TEST_HEIGHT) || 768,
     args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
   await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Кран]')");
   await tap(browser, '[data-cat="Кран"]');
   await browser.waitFor("!!document.querySelector('#cz-add-crane')");
+  await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.renderedOutlines) > 9000", 30000);
+  assert.equal(await browser.eval("document.querySelector('#cz-canvas').dataset.renderKind"), "outlines");
+  const switch2d = await browser.rect("#cz-view-2d");
+  if (process.env.ZONE_2D_SHOT) await browser.shot(process.env.ZONE_2D_SHOT);
+  await tap(browser, "#cz-view-3d");
+  await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'", 30000);
+  const switch3d = await browser.rect("#cz-view-2d");
+  assert.ok(Math.abs(switch2d.x - switch3d.x) < 1, "переключатель 2D/3D сдвинулся при смене режима");
+  const craneOneHighlighted = Number(await browser.eval("document.querySelector('#cz-3d').dataset.highlightedElements"));
+  assert.ok(craneOneHighlighted > 0);
+  if (process.env.ZONE_CRANE_SHOT) await browser.shot(process.env.ZONE_CRANE_SHOT);
+  const secondCrane = await browser.eval("document.querySelectorAll('.cz-tree-item:not(.cz-stand)')[1]?.dataset.zoneId");
+  if (secondCrane) {
+    await tap(browser, `.cz-tree-item[data-zone-id="${secondCrane}"]`);
+    await browser.waitFor(`document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions' && Number(document.querySelector('#cz-3d')?.dataset.highlightedElements) > 0 && Number(document.querySelector('#cz-3d')?.dataset.highlightedElements) !== ${craneOneHighlighted}`, 10000);
+    const recolored = Number(await browser.eval("document.querySelector('#cz-3d').dataset.highlightedElements"));
+    assert.ok(recolored > 0);
+    console.log(`PASS V2: выбор другого крана обновляет подсветку ${craneOneHighlighted} → ${recolored} изделий`);
+  }
+  await tap(browser, "#cz-view-2d");
+  console.log("PASS V2: в 2D нарисованы контуры изделий; переключатель 2D/3D виден и не сдвигается");
   await tap(browser, "#cz-add-crane");
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')");
   await tap(browser, "#cz-view-3d");
@@ -43,12 +65,14 @@ try {
   assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
   console.log("PASS V2: 3D-схема открылась, доступна правка и масштаб 100–110%");
 
-  assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.modelKind"), "hidden");
+  assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.modelKind"), "extrusions");
+  await tap(browser, "#cz-show-elements");
+  await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'hidden'", 10000);
   await tap(browser, "#cz-show-elements");
   await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'", 60000);
   assert.equal(Number(await browser.eval("document.querySelector('#cz-3d').dataset.modelCount")), count);
   if (process.env.ZONE_MODEL_SHOT) await browser.shot(process.env.ZONE_MODEL_SHOT);
-  console.log(`PASS V2: включается слой из ${count} объёмных изделий с цветами основной модели`);
+  console.log(`PASS V2: слой из ${count} полупрозрачных объёмных изделий включается и выключается`);
   await tap(browser, "#cz-show-elements");
   await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'hidden'", 10000);
 
@@ -69,11 +93,16 @@ try {
   if (stand) {
     await tap(browser, `.cz-tree-item.cz-stand[data-zone-id="${stand}"]`);
     await browser.waitFor("!!document.querySelector('.cz-level[data-level]')");
-    const shown = Number((await browser.eval("document.querySelector('.cz-map-bar').textContent.match(/показано (\\d+) из/)?.[1]")) || 0);
+    await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.renderedOutlines) > 0", 5000);
+    const shown = Number((await browser.eval("document.querySelector('.cz-map-summary').textContent.match(/(\\d+) изделий/)?.[1]")) || 0);
     assert.ok(shown < count, `при выборе яруса список не сократился: ${shown} из ${count}`);
     await tap(browser, "#cz-view-3d");
     await browser.waitFor("!!document.querySelector('#cz-3d canvas')", 30000);
     assert.equal(Number(await browser.eval("document.querySelector('#cz-3d').dataset.visibleElements")), shown);
+    const highlighted = Number(await browser.eval("document.querySelector('#cz-3d').dataset.highlightedElements"));
+    assert.ok(highlighted > 0 && highlighted < shown, `выделение выбранной стоянки: ${highlighted} из ${shown}`);
+    console.log(`PASS V2: цвет стоянки применяется к ${highlighted} из ${shown} изделий`);
+    if (process.env.ZONE_STAND_SHOT) await browser.shot(process.env.ZONE_STAND_SHOT);
     console.log(`PASS V2: стоянка показывает только ${shown} изделий выбранного яруса в 2D и 3D`);
     assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.editable"), "true");
     await browser.waitFor("!!document.querySelector('#cz-3d').dataset.edgeMidpoints", 5000);
@@ -98,8 +127,12 @@ try {
   }
   await browser.goto(`${base}/?ui=v1&object_id=1&open=menu&item=menu-zones-crane`, 1000);
   await browser.waitFor("!!document.querySelector('.cz-v1-modal .cz-root')", 30000);
+  const v1Switch2d = await browser.rect(".cz-v1-modal #cz-view-2d");
+  assert.ok(v1Switch2d.w > 20 && v1Switch2d.x > 0);
   await tap(browser, "#cz-view-3d");
   await browser.waitFor("!!document.querySelector('.cz-v1-modal #cz-3d canvas')", 30000);
+  const v1Switch3d = await browser.rect(".cz-v1-modal #cz-view-2d");
+  assert.ok(Math.abs(v1Switch2d.x - v1Switch3d.x) < 1);
   console.log("PASS V1: тот же 3D-редактор доступен в текущем интерфейсе");
   assert.equal(browser.exceptions.length, 0, browser.exceptions.join("\n"));
   assert.equal(browser.requests.filter((request) => /\/publish$/.test(request.url)).length, 0);

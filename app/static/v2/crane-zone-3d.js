@@ -26,12 +26,11 @@ export function createCraneZone3d(callbacks) {
     frame = requestAnimationFrame(() => {
       frame = null;
       if (!r) return;
-      // В компактном редакторе 9580 двухпиксельных контуров сливаются в
-      // чёрное пятно. Цвета граней и геометрия те же, что в основной модели;
-      // контуры проявляются по мере приближения.
+      // В компактном редакторе тысячи контуров сливаются в тёмное пятно.
+      // Объём изделий виден всегда, тонкие рёбра проявляются при приближении.
       if (r.modelEdges) {
-        r.modelEdges.visible = zoomPercent() > 125;
-        r.edgeMaterial.opacity = Math.min(1, Math.max(0, (zoomPercent() - 125) / 75));
+        r.modelEdges.visible = zoomPercent() > 160;
+        r.edgeMaterial.opacity = Math.min(0.35, Math.max(0, (zoomPercent() - 160) / 200));
       }
       r.renderer.render(r.scene, r.camera); updateHandlePositions();
     });
@@ -59,7 +58,9 @@ export function createCraneZone3d(callbacks) {
     if (!r?.modelGroup) return;
     r.scene.remove(r.modelGroup);
     r.modelGroup.traverse((object) => { object.geometry?.dispose(); object.material?.dispose(); });
-    r.modelGroup = null; r.modelEdges = null; r.edgeMaterial = null; modelSignature = null;
+    r.modelGroup = null; r.modelFace = null; r.modelColorRanges = null;
+    r.modelHighlightIds = null; r.modelHighlightColor = null;
+    r.modelEdges = null; r.edgeMaterial = null; modelSignature = null;
     if (host) { host.dataset.modelKind = "hidden"; host.dataset.modelCount = "0"; }
   }
   function activeLevel() {
@@ -253,13 +254,13 @@ export function createCraneZone3d(callbacks) {
   function updateModel() {
     if (!r || !data?.showElements || !data.modelElements?.length) { disposeModel(); return; }
     if (r.modelGroup && modelSignature === data.modelKey) {
+      updateModelColors();
       if (host) { host.dataset.modelKind = "extrusions"; host.dataset.modelCount = String(data.modelElements.length); }
       return;
     }
     disposeModel();
-    const { THREE } = r, positions = [], normals = [], colors = [], edgeChunks = [];
+    const { THREE } = r, positions = [], normals = [], edgeChunks = [], colorRanges = [];
     let faceLength = 0, edgeLength = 0;
-    const color = new THREE.Color();
     for (const element of data.modelElements) {
       if (!Array.isArray(element.outline) || element.outline.length < 3 || !(element.renderHeight > 0)) continue;
       // Та же схема построения, что build3DElementGeometry основной модели:
@@ -269,11 +270,8 @@ export function createCraneZone3d(callbacks) {
       geometry.rotateX(-Math.PI / 2);
       geometry.translate(0, element.elevation_mm || 0, 0);
       const p = geometry.attributes.position.array, n = geometry.attributes.normal.array;
-      positions.push(p); normals.push(n); faceLength += p.length;
-      color.set(data.statusColors[element.current_status] || "#999999");
-      const rgb = new Float32Array(p.length);
-      for (let i = 0; i < p.length; i += 3) { rgb[i] = color.r; rgb[i + 1] = color.g; rgb[i + 2] = color.b; }
-      colors.push(rgb);
+      positions.push(p); normals.push(n);
+      colorRanges.push({ id: element.id, start: faceLength, length: p.length }); faceLength += p.length;
       const edgeGeometry = new THREE.EdgesGeometry(geometry);
       const edgePositions = edgeGeometry.attributes.position.array;
       edgeChunks.push(edgePositions); edgeLength += edgePositions.length;
@@ -285,13 +283,16 @@ export function createCraneZone3d(callbacks) {
       const p = new Float32Array(faceLength), n = new Float32Array(faceLength), c = new Float32Array(faceLength);
       let offset = 0;
       for (let i = 0; i < positions.length; i++) {
-        p.set(positions[i], offset); n.set(normals[i], offset); c.set(colors[i], offset); offset += positions[i].length;
+        p.set(positions[i], offset); n.set(normals[i], offset); offset += positions[i].length;
       }
       faceGeometry.setAttribute("position", new THREE.BufferAttribute(p, 3));
       faceGeometry.setAttribute("normal", new THREE.BufferAttribute(n, 3));
       faceGeometry.setAttribute("color", new THREE.BufferAttribute(c, 3));
-      group.add(new THREE.Mesh(faceGeometry, new THREE.MeshStandardMaterial({ vertexColors: true,
-        side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 })));
+      r.modelFace = new THREE.Mesh(faceGeometry, new THREE.MeshStandardMaterial({ vertexColors: true,
+        transparent: true, opacity: 0.52, depthWrite: false, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 }));
+      r.modelColorRanges = colorRanges;
+      group.add(r.modelFace);
     }
     if (edgeLength) {
       const edges = new Float32Array(edgeLength);
@@ -299,13 +300,34 @@ export function createCraneZone3d(callbacks) {
       for (const chunk of edgeChunks) { edges.set(chunk, offset); offset += chunk.length; }
       const geometry = new r.LineSegmentsGeometry(); geometry.setPositions(edges);
       const resolution = new THREE.Vector2(host?.clientWidth || 1, host?.clientHeight || 1);
-      r.edgeMaterial = new r.LineMaterial({ color: 0x000000, linewidth: 2, resolution, transparent: true });
+      r.edgeMaterial = new r.LineMaterial({ color: 0x53636d, linewidth: 1, resolution, transparent: true });
       r.modelEdges = new r.LineSegments2(geometry, r.edgeMaterial);
       group.add(r.modelEdges);
     }
     r.modelGroup = group; modelSignature = data.modelKey;
+    updateModelColors();
     if (host) { host.dataset.modelKind = "extrusions"; host.dataset.modelCount = String(data.modelElements.length); }
     r.scene.add(group); requestFrame();
+  }
+  function updateModelColors() {
+    if (!r?.modelFace || !r.modelColorRanges) return;
+    const highlighted = data.highlightIds || new Set();
+    if (r.modelHighlightColor === data.highlightColor && r.modelHighlightIds?.size === highlighted.size
+      && [...highlighted].every((id) => r.modelHighlightIds.has(id))) return;
+    const neutral = new r.THREE.Color("#aebac2");
+    const accent = new r.THREE.Color(data.highlightColor || "#2c8953");
+    const attribute = r.modelFace.geometry.getAttribute("color"), values = attribute.array;
+    for (const { id, start, length } of r.modelColorRanges) {
+      const color = highlighted.has(id) ? accent : neutral;
+      for (let i = start; i < start + length; i += 3) {
+        values[i] = color.r; values[i + 1] = color.g; values[i + 2] = color.b;
+      }
+    }
+    attribute.needsUpdate = true;
+    r.modelHighlightIds = new Set(highlighted);
+    r.modelHighlightColor = data.highlightColor;
+    if (host) host.dataset.highlightedElements = String(highlighted.size);
+    requestFrame();
   }
   function rebuild() {
     if (!r || !data) return;
@@ -325,18 +347,20 @@ export function createCraneZone3d(callbacks) {
       if (!outline || outline.length < 3) continue;
       const y = levelY(level), top = zoneTop(zone, levelIndex, bounds);
       const active = zone.id === data.selectedZone && levelIndex === data.activeLevel;
-      const color = active ? 0xee7131 : zone.category === "Кран" ? 0x2c8953 : 0x4682b4;
+      const color = zone.category === "Кран" ? 0x2c8953 : 0x4682b4;
+      const quietStand = data.selectedCategory === "Стоянка" && zone.category === "Стоянка" && !active;
       const shape = new THREE.Shape(outline.map((point) => new THREE.Vector2(point[0], point[1])));
       const geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(100, top - y), bevelEnabled: false, steps: 1 });
       const volume = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true,
-        opacity: data.showElements ? 0 : active ? 0.2 : 0.07, side: THREE.DoubleSide, depthWrite: false, depthTest: true }));
+        opacity: active ? 0.38 : quietStand ? 0 : data.showElements ? 0.015 : 0.05,
+        side: THREE.DoubleSide, depthWrite: false, depthTest: !active }));
       volume.rotation.x = -Math.PI / 2; volume.position.y = y;
-      volume.renderOrder = active ? 2 : 1;
+      volume.renderOrder = active ? 4 : 1;
       volume.userData = { zoneId: zone.id, levelIndex };
       meshes.push(volume); group.add(volume);
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color,
-        transparent: true, opacity: active ? 1 : 0.58, depthTest: false }));
-      edges.rotation.x = -Math.PI / 2; edges.position.y = y; edges.renderOrder = 3;
+        transparent: true, opacity: active ? 0.95 : quietStand ? 0 : 0.13, depthTest: false }));
+      edges.rotation.x = -Math.PI / 2; edges.position.y = y; edges.renderOrder = active ? 5 : 2;
       group.add(edges);
       if (active && data.editable) {
         const vertices = [], edgeCenters = [];
@@ -349,7 +373,7 @@ export function createCraneZone3d(callbacks) {
         const edgeGeometry = new THREE.BufferGeometry(); edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edgeCenters, 3));
         const vertexMarkers = new THREE.Points(vertexGeometry, new THREE.PointsMaterial({ color: 0xee7131, size: 13, sizeAttenuation: false, depthTest: false }));
         const edgeMarkers = new THREE.Points(edgeGeometry, new THREE.PointsMaterial({ color: 0xffffff, size: 10, sizeAttenuation: false, depthTest: false }));
-        vertexMarkers.renderOrder = 5; edgeMarkers.renderOrder = 5;
+        vertexMarkers.renderOrder = 6; edgeMarkers.renderOrder = 6;
         group.add(vertexMarkers, edgeMarkers);
       }
     }
@@ -361,7 +385,7 @@ export function createCraneZone3d(callbacks) {
     const { minX, maxX, minY, maxY, minZ } = bounds;
     const maxZ = Math.max(bounds.maxZ, ...data.zones.flatMap((zone) => zone.levels.map((_, index) => zoneTop(zone, index, bounds))));
     const span = Math.max(maxX - minX, maxY - minY, (maxZ - minZ) * 1.5, 1000);
-    homeDistance = span * 1.4;
+    homeDistance = span * 1.75;
     const cx = (minX + maxX) / 2, cy = (minZ + maxZ) / 2, cz = -(minY + maxY) / 2;
     r.controls.target.set(cx, cy, cz);
     r.camera.position.set(cx + homeDistance * 0.58, cy + homeDistance * 0.66, cz + homeDistance * 0.47);
