@@ -34,13 +34,18 @@
 .cz-stand { padding-left: 23px; }
 .cz-stand .cz-tree-icon { color: #6185a5; }
 .cz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.cz-map { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.cz-map { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .cz-map-bar, .cz-map-foot { display: flex; gap: 8px; align-items: center; min-height: 34px; background: #fff; padding: 4px 10px; font-size: 12px; color: #607782; }
 .cz-map-bar > span:first-child { font-weight: 700; color: #344e5f; }
 .cz-map-bar > span:nth-child(2) { flex: 1; text-align: center; }
 .cz-map-bar .cz-mode-active { background: #e5f0e9; border-color: #49976d; color: #236747; }
 .cz-map-foot { border-top: 1px solid #dce3e7; min-height: 31px; }
 #cz-canvas { display: block; width: 100%; flex: 1; min-height: 0; touch-action: none; cursor: crosshair; }
+.cz-zoom-controls { position: absolute; right: 12px; bottom: 42px; z-index: 2; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid #cbd8df; border-radius: 8px; background: #fff; box-shadow: 0 2px 8px rgb(25 50 65 / 13%); }
+.cz-zoom-controls button { width: 30px; height: 29px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #294254; font-family: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.cz-zoom-controls button:hover:not(:disabled) { background: #eaf1f5; }
+.cz-zoom-controls button:disabled { opacity: .35; cursor: not-allowed; }
+.cz-zoom-controls output { min-width: 47px; text-align: center; color: #273d4b; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .cz-properties label, .cz-bottom label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #627782; }
 .cz-properties input, .cz-properties select, .cz-bottom input, .cz-toolbar select { border: 1px solid #cdd9df; border-radius: 7px; padding: 7px 8px; color: #294254; background: #fff; font: inherit; min-width: 0; }
 .cz-prop-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid #e3e9ec; }

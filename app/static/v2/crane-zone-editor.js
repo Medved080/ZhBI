@@ -7,6 +7,8 @@ import { displacedEdgeEndpoints, nearestEdgeIndex } from "./zone-edge-geometry.j
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const errText = (e) => String(e?.detail || e?.message || e);
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const WHEEL_SENSITIVITY = 0.00065;
+const BUTTON_ZOOM_STEP = 1.1;
 
 export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished, initialCategory = "Кран" }) {
   const standFocus = initialCategory === "Стоянка";
@@ -16,7 +18,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let selectedVersionId = null;
   let selectedElements = new Set(), dirty = false, preview = null, message = "";
   let effectiveDate = today();
-  let view = null, drag = null, hoverEdge = null, activeLevel = 0;
+  let view = null, fitScale = null, viewWidth = 0, viewHeight = 0;
+  let drag = null, hoverEdge = null, activeLevel = 0;
+  let canvasResizeObserver = null;
   const $ = (s) => root.querySelector(s);
 
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
@@ -83,7 +87,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ${canEdit ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
       <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div><p class="cz-tree-intro">${standFocus ? "Выберите кран — он станет владельцем новой стоянки. Выбор существующей стоянки тоже сохранит её кран." : "Здесь показаны только зоны кранов. Для стоянок откройте соседнюю вкладку."}</p>${canEdit ? `<div class="cz-tree-add">${primaryAdd}</div><div class="cz-parent-hint">${standFocus ? parent ? `Выбранный кран: ${esc(parent.name)}.` : "Сначала создайте кран на вкладке «Зоны кранов»." : ""} ${draft ? "Изменения пока только в черновике." : "Черновик создаётся при добавлении; рабочие зоны не меняются до публикации."}</div>` : ""}</div>${treeHtml()}</aside>
-      <div class="cz-map"><div class="cz-map-bar"><span>${standFocus ? "Схема стоянок" : "Схема зон кранов"} · ${scene.length} изделий</span><span>${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : "Щелчок — выбор; Shift + протяжка — группа"}</span><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button><button type="button" id="cz-fit" class="v2-btn">Вписать</button></div><canvas id="cz-canvas" aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div class="cz-map-foot" id="cz-status" role="status"></div></div>
+      <div class="cz-map"><div class="cz-map-bar"><span>${standFocus ? "Схема стоянок" : "Схема зон кранов"} · ${scene.length} изделий</span><span>${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : "Щелчок — выбор; Shift + протяжка — группа"}</span><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><canvas id="cz-canvas" aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" role="status"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>` : ""}`;
     bind();
@@ -100,10 +104,32 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
     return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
   }
+  function fittedScale(w, h) { const b = bounds(); return Math.min(w / (b.w * 1.18), h / (b.h * 1.18)); }
+  function updateZoomControls() {
+    const value = $("#cz-zoom-value");
+    if (value) value.textContent = view && fitScale ? `${Math.max(100, Math.round(view.scale / fitScale * 100))}%` : "100%";
+    const out = $("#cz-zoom-out");
+    if (out) out.disabled = !view || !fitScale || view.scale <= fitScale * (1 + 1e-8);
+    const zoomIn = $("#cz-zoom-in");
+    if (zoomIn) zoomIn.disabled = !!view && view.scale >= (fitScale || 0) * 100 * (1 - 1e-8);
+  }
   function fit() {
     const canvas = $("#cz-canvas"); if (!canvas) return;
     const b = bounds(), w = canvas.clientWidth || 600, h = canvas.clientHeight || 400;
-    view = { x: b.x, y: b.y, scale: Math.min(w / (b.w * 1.18), h / (b.h * 1.18)) };
+    fitScale = fittedScale(w, h);
+    viewWidth = w; viewHeight = h;
+    view = { x: b.x, y: b.y, scale: fitScale };
+    draw();
+  }
+  function zoom(factor, x, y, canvas) {
+    if (!view) fit();
+    if (!view || !fitScale) return;
+    const next = Math.max(fitScale, Math.min(fitScale * 100, view.scale * factor));
+    if (Math.abs(next - view.scale) < 1e-12) return;
+    const before = toWorld(x, y, canvas);
+    view.scale = next;
+    const after = toWorld(x, y, canvas);
+    view.x += before[0] - after[0]; view.y += before[1] - after[1];
     draw();
   }
   function toScreen(x, y, canvas) { return [(x - view.x) * view.scale + canvas.clientWidth / 2, (view.y - y) * view.scale + canvas.clientHeight / 2]; }
@@ -116,6 +142,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     if (!view) { fit(); return; }
+    if (w !== viewWidth || h !== viewHeight) {
+      const ratio = view.scale / fitScale;
+      fitScale = fittedScale(w, h);
+      view.scale = Math.min(fitScale * 100, Math.max(fitScale, fitScale * ratio));
+      viewWidth = w; viewHeight = h;
+    }
+    updateZoomControls();
     drawing = true;
     const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#f8fafb"; ctx.fillRect(0, 0, w, h);
@@ -276,6 +309,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-publish")?.addEventListener("click", publish);
     $("#cz-preview")?.addEventListener("click", loadPreview);
     $("#cz-fit")?.addEventListener("click", fit);
+    $("#cz-zoom-in")?.addEventListener("click", () => { const canvas = $("#cz-canvas"); zoom(BUTTON_ZOOM_STEP, canvas.clientWidth / 2, canvas.clientHeight / 2, canvas); });
+    $("#cz-zoom-out")?.addEventListener("click", () => { const canvas = $("#cz-canvas"); zoom(1 / BUTTON_ZOOM_STEP, canvas.clientWidth / 2, canvas.clientHeight / 2, canvas); });
     $("#cz-select-mode")?.addEventListener("click", () => { selectMode = !selectMode; render(); });
     root.querySelectorAll("[data-zone-id]").forEach((b) => b.addEventListener("click", () => { selectedZone = Number(b.dataset.zoneId); activeLevel = 0; render(); }));
     root.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => { activeLevel = Number(b.dataset.level); render(); }));
@@ -291,10 +326,20 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-assign")?.addEventListener("click", () => assign(false));
     $("#cz-clear")?.addEventListener("click", () => assign(true));
     const canvas = $("#cz-canvas");
+    canvasResizeObserver?.disconnect();
+    if (canvas && typeof ResizeObserver === "function") {
+      canvasResizeObserver = new ResizeObserver(() => { if (!dead) draw(); });
+      canvasResizeObserver.observe(canvas);
+    }
     canvas?.addEventListener("pointerdown", onDown); canvas?.addEventListener("pointermove", onMove); canvas?.addEventListener("pointerup", onUp); canvas?.addEventListener("pointercancel", onCancel);
     canvas?.addEventListener("pointerleave", () => { if (!drag && hoverEdge != null) { hoverEdge = null; draw(); } });
     canvas?.addEventListener("dblclick", onDoubleClick);
-    canvas?.addEventListener("wheel", (e) => { e.preventDefault(); const [x, y] = pointer(e), before = toWorld(x, y, canvas); view.scale = Math.max(0.0001, Math.min(view.scale * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 100)); const after = toWorld(x, y, canvas); view.x += before[0] - after[0]; view.y += before[1] - after[1]; draw(); }, { passive: false });
+    canvas?.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const [x, y] = pointer(e);
+      const pixels = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1);
+      zoom(Math.exp(-Math.max(-180, Math.min(180, pixels)) * WHEEL_SENSITIVITY), x, y, canvas);
+    }, { passive: false });
   }
   async function startAddingZone(category) {
     if (!canEdit || busy) return;
@@ -405,5 +450,5 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
   root.innerHTML = `<p class="v2-muted">Загрузка редакций и схемы…</p>`;
   refresh().then(async () => { if (!dead && drafts.length) await loadDraft(drafts[0].id); }).catch((e) => { root.innerHTML = `<div class="v2-callout v2-callout-bad">${esc(errText(e))}</div>`; });
-  return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; } };
+  return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; canvasResizeObserver?.disconnect(); } };
 }

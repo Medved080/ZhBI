@@ -60,12 +60,27 @@ try {
   await browser.waitFor("document.querySelector('#cz-status')?.textContent.startsWith('Черновик сохранён')");
   await tap(browser, "#cz-fit");
   if (process.env.EDGE_SHOT) await browser.shot(process.env.EDGE_SHOT);
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-out').disabled"), true);
+  const canvas = await browser.rect("#cz-canvas");
+  await browser.wheel(canvas.cx, canvas.cy, -100);
+  const wheelPercent = Number((await browser.eval("document.querySelector('#cz-zoom-value').textContent")).replace("%", ""));
+  assert.ok(wheelPercent > 100 && wheelPercent <= 110, `колесо слишком резко приблизило: ${wheelPercent}%`);
+  await browser.wheel(canvas.cx, canvas.cy, 100);
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
+  await browser.wheel(canvas.cx, canvas.cy, 1000);
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
+  await tap(browser, "#cz-zoom-in");
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "110%");
+  await tap(browser, "#cz-fit");
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
 
   await dragAndVerify("V2");
   await browser.goto(`${base}/?ui=v1&object_id=1&open=menu&item=menu-zones-crane`, 1000);
   await browser.waitFor("!!document.querySelector('.cz-v1-modal .cz-root') && !!document.querySelector('.cz-v1-modal .cz-tree-item[data-zone-id=\"-1\"]')", 30000);
   await tap(browser, '.cz-v1-modal .cz-tree-item[data-zone-id="-1"]');
   await tap(browser, "#cz-fit");
+  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
   await dragAndVerify("V1");
   assert.equal(browser.requests.filter(r => /\/publish$/.test(r.url)).length, 0, "публикация не должна вызываться");
   assert.equal(browser.exceptions.length, 0, browser.exceptions.join("\n"));

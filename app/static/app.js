@@ -7036,6 +7036,15 @@ function updateAxisLabelSizing(pxPerUnit) {
 }
 
 function setView(v) {
+  // «100%» = весь исходный охват. Любой путь изменения вида (колесо,
+  // кнопки V2, переход к элементу) не может отдалить схему ниже него.
+  if (state.initialView?.w > 0 && state.initialView?.h > 0 && v.w > 0 && v.h > 0) {
+    const k = Math.min(1, state.initialView.w / v.w, state.initialView.h / v.h);
+    if (k < 1) {
+      v = { x: v.x + v.w * (1 - k) / 2, y: v.y + v.h * (1 - k) / 2,
+        w: v.w * k, h: v.h * k };
+    }
+  }
   state.view = v;
   document.getElementById("svg-root").setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
   updateSizesForZoom();
@@ -14266,6 +14275,7 @@ function rebuildElementMap3d() {
   const радиус = Math.max(maxX - minX, maxY - minY) || 1000;
   efMap3d.camera.position.set(cx + радиус * 0.7, радиус * 0.8, -cy + радиус * 0.7);
   efMap3d.controls.target.set(cx, 0, -cy);
+  efMap3d.controls.maxDistance = efMap3d.camera.position.distanceTo(efMap3d.controls.target);
   efMap3d.controls.update();
   efMapRequestFrame();
 }
@@ -14995,6 +15005,7 @@ function rebuildZonePreview3d() {
     const span = bbox ? Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]) : 100000;
     zonePreview3d.controls.target.set(cx, 0, -cy);
     zonePreview3d.camera.position.set(cx - span * 0.55, span * 0.55, -cy + span * 0.75);
+    zonePreview3d.controls.maxDistance = zonePreview3d.camera.position.distanceTo(zonePreview3d.controls.target);
     zonePreview3d.controls.update();
     zonePreview3d.framed = true;
   }
@@ -19296,6 +19307,7 @@ function scdRenderPicker(сохранитьВид) {
   }
   scdPickBase = box;
   if (!сохранитьВид || !scdPickView) scdPickView = { ...box };
+  else if (scdPickView.w > box.w || scdPickView.h > box.h) scdPickView = { ...box };
   scdApplyView();
 
   // Сетка осей — для ориентира: без неё десяток одинаковых прямоугольников
@@ -27494,6 +27506,7 @@ function create3DRendererAndControls(container) {
   container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(v3.camera, renderer.domElement);
+  if (v3.homeDistance) controls.maxDistance = v3.homeDistance;
   // enableDamping=false — камера должна чётко следовать за курсором и
   // останавливаться сразу, как только оператор отпустил кнопку/колесо, а
   // не "докручиваться" по инерции ещё какое-то время (живой репорт
@@ -27632,11 +27645,12 @@ function fit3DCameraToData() {
   v3.camera.near = Math.max(size / 1000, 1);
   v3.camera.far = size * 20;
   v3.camera.updateProjectionMatrix();
+  v3.homeDistance = distance;
+  v3.controls.maxDistance = distance;
   v3.controls.update();
   // Точка отсчёта для индикатора зума 3D (см. updateZoomIndicator3D ниже) —
   // "100%" всегда означает именно ЭТОТ, только что установленный обзор
   // всей схемы целиком, тот же смысл, что у state.initialView в 2D.
-  v3.homeDistance = v3.camera.position.distanceTo(v3.controls.target);
   updateZoomIndicator3D();
   requestRender3D(); // камера переставлена — нужен кадр с нового ракурса
 }
@@ -30902,6 +30916,14 @@ function updateMfrAxisLabelSizing(svg, v) {
 function bindRevitPlanZoom(svg) {
   const v = revitPlanState.view;
   const apply = () => {
+    const fit = revitPlanState.fit;
+    if (fit?.w > 0 && fit?.h > 0 && v.w > 0 && v.h > 0) {
+      const k = Math.min(1, fit.w / v.w, fit.h / v.h);
+      if (k < 1) {
+        v.x += v.w * (1 - k) / 2; v.y += v.h * (1 - k) / 2;
+        v.w *= k; v.h *= k;
+      }
+    }
     svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
     updateMfrAxisLabelSizing(svg, v);
     updateMfrPlanZoomIndicator();
@@ -32931,6 +32953,7 @@ function applyMfr3DAngles(camera, controls, home) {
     home.targetZ + distance * Math.sin(pitch * DEG),
   );
   controls.target.set(home.targetX, home.targetY, home.targetZ);
+  controls.maxDistance = distance;
   controls.update();
 }
 
@@ -33759,6 +33782,7 @@ async function buildMfr3D() {
   mfr3d.homeDistance = охват * 1.45;
 
   const controls = new OrbitControls(camera, renderer.domElement);
+  controls.maxDistance = mfr3d.homeDistance;
   if (сохранённыйРакурс) {
     camera.position.copy(сохранённыйРакурс.position);
     controls.target.copy(сохранённыйРакурс.target);

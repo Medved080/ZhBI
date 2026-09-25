@@ -143,6 +143,7 @@ export function createZonePreview3d() {
       const span = bbox ? Math.max(bbox[2] - bbox[0], bbox[3] - bbox[1]) : 100000;
       r.controls.target.set(cx, 0, -cy);
       r.camera.position.set(cx - span * 0.55, span * 0.55, -cy + span * 0.75);
+      r.controls.maxDistance = r.camera.position.distanceTo(r.controls.target);
       r.controls.update();
       framed = true;
     }

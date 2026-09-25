@@ -778,8 +778,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   function tool(t) {
     if (t === "fit") send("fit");
-    else if (t === "in") send("zoom", { factor: 1 / 1.3 });
-    else if (t === "out") send("zoom", { factor: 1.3 });
+    else if (t === "in") send("zoom", { factor: 1 / 1.1 });
+    else if (t === "out") send("zoom", { factor: 1.1 });
     else if (t === "clear") send("clearSelection");
   }
 

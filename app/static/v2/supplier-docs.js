@@ -350,6 +350,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (!box) return `<p class="v2-muted">На этом этаже изделий выбранной марки нет.</p>`;
     pk.base = box;
     if (!pk.view) pk.view = { ...box };
+    else if (pk.view.w > box.w || pk.view.h > box.h) pk.view = { ...box };
     const view = pk.view;
     // Точный мировой-на-пиксель масштаб доступен только у уже вставленного в DOM узла (getScreenCTM); здесь — оценка по ширине
     // панели (мини-схема занимает примерно половину формы), достаточная для того, чтобы маркер не превращался в невидимую точку.
