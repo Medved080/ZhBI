@@ -87,7 +87,9 @@ from app.db_schema_doc import (  # noqa: E402
 COLUMNS = [
     # Выгрузки модели МФР (Revit). Обработки релиза ни с чем не связаны —
     # им место в самой короткой колонке, линий они не добавляют.
-    ["revit_packages", "revit_elements", "revit_rooms", "release_tasks"],
+    ["revit_packages", "revit_elements", "revit_rooms", "release_tasks",
+     # Внешние 3D-модели объекта (благоустройство, FBX) — тоже модель, линия одна (к objects).
+     "object_external_models"],
     # Иерархия «проект → объект» и структура объекта: секции, этажи, оси,
     # квартиры, подложки планов. Соседствует с теми, кто ссылается на неё чаще
     # всего — выгрузками модели слева и учётом по блокам справа.
@@ -102,7 +104,9 @@ COLUMNS = [
     # и запланированная работа (ЗР) со сроками.
     ["blocks", "block_boxes", "work_types", "block_works", "block_work_forecasts",
      "work_progress", "work_fact_reports", "work_fact_items", "work_fact_item_history",
-     "planning_tracks"],
+     "planning_tracks", "chess_flat_batches",
+     # План и факт работ на уровне ОБЪЕКТА (вне блоков, 2026-09-25) — рядом с блочными аналогами.
+     "object_works", "object_fact_reports", "object_fact_items"],
     # Пользователи, доступ, журнал действий, обучение. В середине схемы: на
     # users ссылаются и учёт по блокам слева, и график с историей справа.
     ["users", "sessions", "user_access", "object_roles", "role_features",
@@ -110,7 +114,10 @@ COLUMNS = [
     # Зоны (захватка / кран / стоянка) и график СМР: версии, темпы, поток.
     ["zones", "zone_levels", "zone_edit_undo", "zone_colors",
      "schedule_versions", "schedule_version_dates", "schedule_work_kinds",
-     "schedule_flow"],
+     "schedule_flow",
+     # Редакции зон кранов и стоянок (2026-09-24): опубликованные снимки, назначения, черновики.
+     "crane_zone_versions", "crane_zone_version_assignments", "crane_zone_import_arrivals",
+     "crane_zone_drafts"],
     # Элементы ЖБИ с историей плюс справочники и настройки, от которых
     # зависит их отображение (цвета, формы, подписи, подтипы).
     ["elements", "status_history", "axis_lines", "marks", "mark_type_prefixes",

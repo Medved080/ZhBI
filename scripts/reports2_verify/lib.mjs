@@ -95,6 +95,17 @@ export async function v2ExcludeFirstStatus(b, openScreen) {
 }
 
 // V1 (`/`): вкладка «Фильтры» → группа «Статус» (раскрыть, если свёрнута) → снять значение с той же подписью.
+// V1 при входе показывает «Что нового», пока пользователь не нажал «Ознакомился» (с новыми записями журнала — снова):
+// окно перекрывает страницу, и щелчки проверки уходят в его подложку. Закрываем НАСТОЯЩИМ щелчком по «Закрыть» —
+// как человек; «Ознакомился» не нажимаем, чтобы проверка не писала в базу.
+export async function v1CloseChangelog(b) {
+  await sleep(300);
+  if (await b.eval(`!!document.getElementById('changelog-backdrop')?.classList.contains('open')`)) {
+    await clickEl(b, `document.getElementById('changelog-close')`);
+    await b.waitFor(`!document.getElementById('changelog-backdrop').classList.contains('open')`, 5000);
+  }
+}
+
 export async function v1ExcludeStatus(b, label) {
   await clickEl(b, `document.querySelector('.tab-btn[data-tab="filters"]')`);
   await b.waitFor(`!!document.querySelector('#placement-filters .filter-group[data-filter-key="status"]')`, 15000);

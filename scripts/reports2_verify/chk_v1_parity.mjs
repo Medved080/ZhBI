@@ -4,7 +4,7 @@
 // «Учитывать текущий фильтр схемы» включена по умолчанию в обоих. Сравниваются: ответы сервера, которые получили
 // экраны (JSON целиком), видимые строки таблиц (каждая ячейка), наборы id отбора.
 // Настоящий backend (копия обезличенной БД), настоящий вход формой V2. Запуск: node scripts/reports2_verify/chk_v1_parity.mjs
-import { startServer, stopServer, check, summary, sleep, SP, hardGoto, chooseByLabel, clickEl, responseJson, waitReq, v2ExcludeFirstStatus, v1ExcludeStatus, v1OpenReport } from "./lib.mjs";
+import { startServer, stopServer, check, summary, sleep, SP, hardGoto, chooseByLabel, clickEl, responseJson, waitReq, v2ExcludeFirstStatus, v1ExcludeStatus, v1OpenReport , v1CloseChangelog } from "./lib.mjs";
 import { session, openScreen } from "../verify_mfr_lib.mjs";
 
 const PORT = 8342;
@@ -42,6 +42,7 @@ async function v1Goto(b) {
       if (attempt >= 2) throw e;
     }
   }
+  await v1CloseChangelog(b);
   await sleep(300);
 }
 const lastReq = (b, re) => b.requests.filter((r) => re.test(r.url) && r.status !== undefined).pop();

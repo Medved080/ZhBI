@@ -117,15 +117,15 @@ def run():
     # (права на контрагентов проверяются зависимостью маршрута — при прямом вызове обработчика их нет; см. проверку по HTTP в браузерных сценариях)
 
     # договор / спецификация
-    ag = call(cp.list_agreements, c0["id"], ADMIN)[1]
+    ag = call(cp.list_agreements, c0["id"], object_id=None, user=ADMIN)[1]
     if not ag:
-        ag = call(cp.list_agreements, lst[1]["id"], ADMIN)[1]
+        ag = call(cp.list_agreements, lst[1]["id"], object_id=None, user=ADMIN)[1]
     a0 = ag[0]
     ok("список договоров отдаёт version", all(x.get("version") for x in ag))
     body = lambda ver=None, num=None: cp.AgreementIn(counterparty_id=a0["counterparty_id"], number=num or a0["number"], agreement_date=a0["agreement_date"], object_id=a0["object_id"], expected_version=ver)
     if a0["object_id"] is None:
         c = db(); c.execute("UPDATE agreements SET object_id = 1 WHERE id = ?", (a0["id"],)); c.commit(); c.close()
-        ag = call(cp.list_agreements, a0["counterparty_id"], ADMIN)[1]; a0 = next(x for x in ag if x["id"] == a0["id"])
+        ag = call(cp.list_agreements, a0["counterparty_id"], object_id=None, user=ADMIN)[1]; a0 = next(x for x in ag if x["id"] == a0["id"])
     r1 = call(cp.update_agreement, a0["id"], body(a0["version"], a0["number"] + "-Б"), ADMIN)
     ok("договор: правка с актуальной версией", r1[0] == "ok", str(r1))
     before = fp()
@@ -148,7 +148,7 @@ def run():
     pos, ids = H.find_position(db(), 4)
     cid = pos["contract_id"]
     H.make_room(db(), pos, 3)
-    cl = call(contracts_mod.list_contracts, ADMIN)[1]
+    cl = call(contracts_mod.list_contracts, object_id=None, user=ADMIN)[1]
     k0 = next(x for x in cl if x.id == cid)
     ok("список контрактов отдаёт version", all(x.version for x in cl))
     r = call(contracts_mod.update_contract, cid, contract_in(cid, theme="тема-1", expected_version=k0.version), ADMIN)
@@ -158,13 +158,13 @@ def run():
     ok("контракт: устаревшая версия → 409, без изменений", stale_code(r2) and fp() == before, str(r2))
     ok("контракт: блокировка освобождена после 409", not clean(), str(clean()))
     # распределение (факт) версию НЕ меняет
-    v_before = call(contracts_mod.list_contracts, ADMIN)[1]
+    v_before = call(contracts_mod.list_contracts, object_id=None, user=ADMIN)[1]
     v_before = next(x for x in v_before if x.id == cid).version
     if allocation is not None:
         al = allocation.AllocationIn(object_id=1, element_type=pos["element_type"], mark=pos["mark"],
                                      items=[allocation.AllocationItem(element_id=ids[0], expected_status="planned")])
         ra = call(allocation.allocate, cid, al, ADMIN)
-        v_after = next(x for x in call(contracts_mod.list_contracts, ADMIN)[1] if x.id == cid).version
+        v_after = next(x for x in call(contracts_mod.list_contracts, object_id=None, user=ADMIN)[1] if x.id == cid).version
         ok("распределение изделия (факт) не делает версию контракта устаревшей", ra[0] == "ok" and v_before == v_after, str(ra))
     # повтор пары (тип, марка)
     dupl = [contracts_mod.ContractLineIn(element_type="Колонна", mark="ТЕСТ-1", quantity=1), contracts_mod.ContractLineIn(element_type="Колонна", mark="ТЕСТ-1", quantity=2)]

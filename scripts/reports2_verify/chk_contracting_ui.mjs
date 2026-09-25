@@ -3,7 +3,7 @@
 // Отбор задаётся НАСТОЯЩИМ щелчком (снято одно значение «Статус») и в рабочем месте V2 «Модель», и в панели фильтров V1;
 // галочки — настоящими щелчками. Числа сверяются с ответами, которые получили экраны, и с прямым SQL по копии БД.
 // Настоящий backend (копия обезличенной БД), настоящий вход формой V2. Запуск: node scripts/reports2_verify/chk_contracting_ui.mjs
-import { startServer, stopServer, check, summary, sleep, SP, sql1, hardGoto, chooseValue, clickEl, responseJson, waitReq, v2ExcludeFirstStatus, v1ExcludeStatus, v1OpenReport } from "./lib.mjs";
+import { startServer, stopServer, check, summary, sleep, SP, sql1, hardGoto, chooseValue, clickEl, responseJson, waitReq, v2ExcludeFirstStatus, v1ExcludeStatus, v1OpenReport , v1CloseChangelog } from "./lib.mjs";
 import { session, openScreen, setObject } from "../verify_mfr_lib.mjs";
 
 const PORT = 8343;
@@ -29,6 +29,7 @@ async function v1Goto(b) {
       break;
     } catch (e) { console.log(`V1 не готов (попытка ${attempt})`); if (attempt >= 2) throw e; }
   }
+  await v1CloseChangelog(b);
   await sleep(300);
 }
 
