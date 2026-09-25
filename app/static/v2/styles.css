@@ -644,14 +644,6 @@ input:disabled, select:disabled, textarea:disabled {
 }
 .v2-shellnav-icon-btn:hover, .v2-shellnav-icon-btn:focus-visible { background: var(--sel); }
 .v2-shellnav-icon-btn[aria-pressed="true"] { background: var(--sel); color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-/* Подсказка по наведению И по фокусу (не только native title, которого на клавиатуре не видно) — п.2а задания. */
-.v2-shellnav-icon-btn[data-tooltip]::after {
-  content: attr(data-tooltip); position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
-  background: var(--ink); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 5px; white-space: nowrap;
-  opacity: 0; pointer-events: none; transition: opacity .1s; z-index: 30;
-}
-.v2-shellnav-icon-btn[data-tooltip]:hover::after, .v2-shellnav-icon-btn[data-tooltip]:focus-visible::after { opacity: 1; }
-
 .v2-shellnav-rail {
   position: absolute; left: 0; top: 0; bottom: 0; width: var(--shellnav-w, 260px);
   background: var(--surface); display: flex; flex-direction: column; z-index: 5;

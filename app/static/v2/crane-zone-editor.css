@@ -9,6 +9,9 @@
 .cz-root { min-height: 0; flex: 1; display: flex; flex-direction: column; color: #273d4b; background: #f5f7f8; }
 .cz-toolbar { min-height: 54px; display: flex; align-items: center; gap: 9px; padding: 8px 16px; border-bottom: 1px solid #dce3e7; background: #fff; flex-wrap: wrap; }
 .cz-toolbar strong { font-size: 17px; margin-right: 8px; }
+.cz-feedback { flex: none; padding: 7px 16px; border-bottom: 1px solid #e6dfd2; background: #fff8ec; color: #69480e; font-size: 12px; line-height: 1.35; }
+.cz-feedback[data-tone="success"] { background: #eaf6ee; border-color: #c8e5d0; color: #22643a; }
+.cz-feedback[data-tone="error"] { background: #fff0ee; border-color: #edcbc6; color: #9d2f25; }
 .cz-revision { font-size: 12px; color: #617784; margin-right: auto; white-space: nowrap; }
 .cz-toolbar select { min-width: 195px; max-width: 255px; }
 .cz-history-note { background: #edf4f8; color: #425f6e; border-bottom: 1px solid #d5e4eb; padding: 6px 16px; font-size: 12px; line-height: 1.3; }

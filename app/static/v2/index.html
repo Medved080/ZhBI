@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/v2/styles.css">
 <link rel="stylesheet" href="/static/v2/mfr.css">
 <link rel="stylesheet" href="/static/v2/crane-zone-editor.css">
+<link rel="stylesheet" href="/static/ui-tooltips.css">
 <!-- Тот же importmap, что в V1 (index.html) — вендоренный Three.js по bare specifier "three", которого требует
      FBXLoader.js (import ... from 'three'). Подгружается лениво (динамический import()) только экраном «Загрузить
      из FBX» (exchange-external-models.js), а не на каждой загрузке страницы. ВАЖНО: при изменении текста этого
@@ -23,6 +24,7 @@
 </head>
 <body>
 <div id="v2-root" class="v2-loading">Загрузка…</div>
+<script src="/static/ui-tooltips.js"></script>
 <script type="module" src="/static/v2/main.js"></script>
 </body>
 </html>
