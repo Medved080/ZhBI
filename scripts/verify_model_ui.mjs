@@ -152,7 +152,8 @@ if (want("gest")) {
     ok(tag + "сдвиг не меняет выбор", (await statusBar(b)).split("\n")[1] === selBefore.split("\n")[1], await statusBar(b));
     await b.clickSel('.ws-tools [data-tool="in"]'); await b.sleep(300);
     const v4 = await vb();
-    ok(tag + "кнопка «+» приближает", v4.w < v3.w * 0.9);
+    // шаг кнопок V2 — 1.1 (2026-09-25, мягче прежних 1.3): «+» уменьшает охват примерно на 9%
+    ok(tag + "кнопка «+» приближает", v4.w < v3.w * 0.95, `${Math.round(v3.w)} → ${Math.round(v4.w)}`);
     await b.clickSel('.ws-tools [data-tool="fit"]'); await b.sleep(400);
     const v5 = await vb();
     ok(tag + "«Вписать» возвращает вид", Math.abs(v5.w - v0.w) / v0.w < 0.05, `${Math.round(v5.w)} vs ${Math.round(v0.w)}`);
@@ -882,7 +883,7 @@ if (want("foreman")) {
     await b.sleep(1800);            // панель отбора слева достраивается — схема получает окончательный размер
     const layout = await b.eval(`({left:!!document.querySelector('#ws-left'),strip:document.querySelector('#ws-strip')?.innerText||'',sh:document.documentElement.scrollHeight,ih:innerHeight,sw:document.documentElement.scrollWidth,iw:innerWidth,stage:(()=>{const r=document.querySelector('#ws-stage').getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)]})()})`);
     ok(tag + "панель отбора слева, полоса показателей, страница не прокручивается", layout.left && /элементов/.test(layout.strip) && layout.sh <= layout.ih + 1 && layout.sw <= layout.iw + 1, JSON.stringify(layout));
-    for (let k = 0; k < 3; k++) { await b.clickSel('.ws-tools [data-tool="in"]'); await b.sleep(250); }   // крупнее — больше фигур пригодны для щелчка
+    for (let k = 0; k < 8; k++) { await b.clickSel('.ws-tools [data-tool="in"]'); await b.sleep(200); }   // крупнее — больше фигур пригодны для щелчка (шаг кнопки 1.1: 8 нажатий ≈ прежние 3 по 1.3)
     await b.sleep(600);
     const hits = (await topHits(b)).filter((x) => x.st === "planned" || x.st === "contracting");
     const list = hits.slice(0, 3);
