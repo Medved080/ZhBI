@@ -4,6 +4,7 @@ import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { displacedEdgeEndpoints, nearestEdgeIndex } from "./zone-edge-geometry.js";
 import { createCraneZone3d } from "./crane-zone-3d.js";
+import { computeElementRenderHeights } from "./element-render-heights.js";
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const errText = (e) => String(e?.detail || e?.message || e);
@@ -29,7 +30,7 @@ export function elementsOnStanceLevel(elements, levels, activeIndex) {
 export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished, initialCategory = "Кран" }) {
   const standFocus = initialCategory === "Стоянка";
   const prefix = `/objects/${objectId}/crane-zone-versions`;
-  let dead = false, busy = false, drawing = false, selectMode = false, mode3d = false;
+  let dead = false, busy = false, drawing = false, selectMode = false, mode3d = false, showElements3d = false;
   let versions = [], drafts = [], draft = null, scene = [], currentScene = [], selectedZone = null;
   let selectedVersionId = null;
   let selectedElements = new Set(), dirty = false, preview = null, message = "";
@@ -38,6 +39,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let drag = null, hoverEdge = null, activeLevel = 0;
   let canvasResizeObserver = null;
   let viewer3d = null, renderGeneration = 0;
+  let model3d = null, pendingModelFit = false;
   const $ = (s) => root.querySelector(s);
 
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
@@ -111,6 +113,17 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-map"><div class="cz-map-bar"><span>${standFocus ? "Схема стоянок" : "Схема зон кранов"} · показано ${visibleElements().length} из ${scene.length} изделий</span><span>${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : standFocus && selected()?.category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм` : "Щелчок — выбор; Shift + протяжка — группа"}</span><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" role="status"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>` : ""}`;
+    if (mode3d) {
+      const layer = document.createElement("label");
+      layer.className = "cz-elements-layer";
+      layer.innerHTML = `<input type="checkbox" id="cz-show-elements" ${showElements3d ? "checked" : ""}> Изделия`;
+      $(".cz-view-switch").after(layer);
+      $(".cz-map-bar > span:first-child").textContent = standFocus && selected()?.category === "Стоянка"
+        ? `Стоянки · ярус ${selected().levels[activeLevel]?.elevation_mm ?? "—"} мм` : "Объёмные зоны кранов";
+      $(".cz-map-bar > span:nth-child(2)").textContent = selectedElements.size
+        ? `${selectedElements.size} выделено` : standFocus && selected()?.category === "Стоянка"
+          ? `${visibleElements().length} изделий на ярусе` : "Перетаскивание — поворот";
+    }
     bind();
     updateStatus();
     const generation = ++renderGeneration;
@@ -118,8 +131,28 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
 
   function viewerData() {
-    return { zones: visibleZones(), elements: visibleElements(), selectedZone, activeLevel, selectMode,
+    const visible = visibleElements();
+    const ids = showElements3d && model3d ? new Set(visible.map((element) => element.id)) : null;
+    const modelKey = standFocus && selected()?.category === "Стоянка" ? `stand:${selectedZone}:${activeLevel}:${selectedVersionId || "current"}` : `all:${selectedVersionId || "current"}`;
+    return { zones: visibleZones(), elements: visible, selectedZone, activeLevel, selectMode, showElements: showElements3d, modelKey,
+      modelElements: showElements3d && model3d ? model3d.elements.filter((element) => ids.has(element.id)) : [],
+      statusColors: model3d?.statusColors || {},
       selectedElements, editable: !!draft && canEdit && (!standFocus || selected()?.category === "Стоянка") };
+  }
+  async function toggleElements3d(on) {
+    if (!on) { showElements3d = false; render(); return; }
+    if (!model3d) {
+      status("Загрузка геометрии и цветов основной 3D-модели…");
+      try {
+        const plan = await api.readPost("/plan-data", { selection: [{ object_id: objectId }] });
+        if (dead) return;
+        const heights = computeElementRenderHeights(plan.elements || []);
+        model3d = { elements: (plan.elements || []).filter((element) => heights.has(element.id)).map((element) => ({
+          ...element, renderHeight: heights.get(element.id),
+        })), statusColors: plan.status_colors || {} };
+      } catch (error) { status(`Не удалось загрузить изделия основной модели: ${errText(error)}`); return; }
+    }
+    showElements3d = true; pendingModelFit = true; message = ""; render();
   }
   async function render3d(generation) {
     if (!viewer3d) viewer3d = createCraneZone3d({
@@ -135,6 +168,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     });
     try {
       await viewer3d.show($("#cz-3d"), viewerData());
+      if (pendingModelFit && !dead && mode3d && generation === renderGeneration) { pendingModelFit = false; viewer3d.fit(); }
       if (!dead && mode3d && generation === renderGeneration) updateZoomControls();
     } catch (e) {
       if (dead || generation !== renderGeneration) return;
@@ -370,7 +404,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-zoom-out")?.addEventListener("click", () => { const canvas = $("#cz-canvas"); zoom(1 / BUTTON_ZOOM_STEP, canvas.clientWidth / 2, canvas.clientHeight / 2, canvas); });
     $("#cz-view-2d")?.addEventListener("click", () => { if (mode3d) { mode3d = false; render(); } });
     $("#cz-view-3d")?.addEventListener("click", () => { if (!mode3d) { mode3d = true; render(); } });
-    $("#cz-select-mode")?.addEventListener("click", () => { selectMode = !selectMode; render(); });
+    $("#cz-show-elements")?.addEventListener("change", (e) => toggleElements3d(e.target.checked));
+    $("#cz-select-mode")?.addEventListener("click", async () => {
+      if (mode3d && !showElements3d && !selectMode) await toggleElements3d(true);
+      if (mode3d && !showElements3d) return;
+      selectMode = !selectMode; render();
+    });
     root.querySelectorAll("[data-zone-id]").forEach((b) => b.addEventListener("click", () => { selectedZone = Number(b.dataset.zoneId); activeLevel = 0; selectedElements.clear(); view = null; render(); }));
     root.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => { activeLevel = Number(b.dataset.level); selectedElements.clear(); view = null; render(); }));
     $("#cz-number")?.addEventListener("change", (e) => { selected().number = Number(e.target.value); markDirty(); render(); });
