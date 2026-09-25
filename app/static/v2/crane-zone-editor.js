@@ -4,6 +4,8 @@ import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
 import { overlapArea, peerOverlap, polygonArea } from "./zone-overlap.js";
+import { fitChildToResizedParent } from "./zone-parent-transform.js";
+import { countElementsInZone } from "./zone-live-count.js";
 import { createCraneZone3d } from "./crane-zone-3d.js";
 import { computeElementRenderHeights } from "./element-render-heights.js";
 
@@ -41,6 +43,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let canvasResizeObserver = null;
   let viewer3d = null, renderGeneration = 0;
   let model3d = null, modelById = new Map(), modelPromise = null, pendingModelFit = false;
+  let liveCounts = new Map();
   const $ = (s) => root.querySelector(s);
 
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
@@ -54,6 +57,36 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const zone = selected();
     return standFocus && zone?.category === "Стоянка" ? elementsOnStanceLevel(scene, zone.levels, activeLevel) : scene;
   }
+  function countForZone(zone) {
+    return draft ? liveCounts.get(zone.id) ?? 0 : scene.filter((element) =>
+      zone.category === "Стоянка" ? element.zone_stance_id === zone.id : element.zone_crane_id === zone.id).length;
+  }
+  function zoneCountLabel(zone) { return `${draft ? "≈" : ""}${countForZone(zone)}`; }
+  function zoneCountDescription(zone) {
+    return draft ? `${zoneCountLabel(zone)} изделий по текущему контуру` :
+      `${zoneCountLabel(zone)} изделий назначено`;
+  }
+  function updateMapCount() {
+    const zone = selected(), hint = $(".cz-map-hint");
+    if (!draft || !zone || selectedElements.size || !hint) return;
+    const tier = standFocus && zone.category === "Стоянка"
+      ? ` · на выбранном ярусе ≈${highlightedElementIds().size}` : "";
+    hint.textContent = `${zoneCountDescription(zone)}${tier}`;
+  }
+  function refreshLiveCounts() {
+    liveCounts = draft ? new Map(zones().map((zone) => [zone.id, countElementsInZone(zone, scene)])) : new Map();
+    root.querySelectorAll(".cz-tree-item[data-zone-id]").forEach((button) => {
+      const zone = zoneById(Number(button.dataset.zoneId));
+      if (!zone) return;
+      const badge = button.querySelector("b");
+      if (badge) badge.textContent = standFocus && zone.category === "Кран"
+        ? `${zones().filter((item) => item.category === "Стоянка" && item.parent_zone_id === zone.id).length} ст. · ${zoneCountLabel(zone)}`
+        : zoneCountLabel(zone);
+    });
+    const selectedZone = selected();
+    if (selectedZone && $("#cz-live-count")) $("#cz-live-count").textContent = zoneCountDescription(selectedZone);
+    updateMapCount();
+  }
   function zoneColor(zone = selected()) { return zone?.category === "Стоянка" ? "#4682b4" : "#2c8953"; }
   // Тот же оранжевый, что у выбранного блока на схеме МФР.
   // Зоны остаются зелёными/синими, а изделия внутри выбранного контура — оранжевыми.
@@ -65,6 +98,56 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return new Set(elements.filter((element) => Number.isFinite(element.x) && Number.isFinite(element.y) && inside(outline, element.x, element.y)).map((element) => element.id));
   }
   function parentCrane() { const z = selected(); return z?.category === "Кран" ? z : zoneById(z?.parent_zone_id); }
+  function memberOutlines(zone) {
+    return moveMembers(zone).map((item) => ({ id: item.id,
+      outlines: item.levels.map((level) => clone(level.outline)) }));
+  }
+  function matchingCraneLevel(crane, elevation) {
+    if (crane.levels.length === 1) return 0;
+    const height = Number(elevation) || 0;
+    return crane.levels.map((level, index) => ({ index, height: Number(level.elevation_mm) || 0 }))
+      .filter((level) => level.height <= height)
+      .sort((a, b) => b.height - a.height)[0]?.index ?? 0;
+  }
+  function resizeCraneWithStances(crane, craneLevelIndex, nextOutline, originals = null) {
+    const before = originals || memberOutlines(crane);
+    const oldCrane = before.find((item) => item.id === crane.id);
+    if (!oldCrane) return false;
+    const updates = new Map(before.map((item) => [item.id, item.outlines.map(clone)]));
+    updates.get(crane.id)[craneLevelIndex] = nextOutline;
+    for (const child of moveMembers(crane).filter((item) => item.category === "Стоянка")) {
+      child.levels.forEach((level, index) => {
+        if (matchingCraneLevel(crane, level.elevation_mm) !== craneLevelIndex) return;
+        const next = fitChildToResizedParent(
+          oldCrane.outlines[craneLevelIndex], nextOutline,
+          before.find((item) => item.id === child.id).outlines[index],
+        );
+        if (next) updates.get(child.id)[index] = next;
+      });
+    }
+    const copyZones = (withUpdates) => zones().map((zone) => ({ ...zone,
+      levels: zone.levels.map((level, index) => ({ ...level,
+        outline: (withUpdates ? updates.get(zone.id) : before.find((item) => item.id === zone.id)?.outlines)?.[index] || level.outline,
+      })) }));
+    const oldZones = copyZones(false), nextZones = copyZones(true);
+    for (const child of nextZones.filter((zone) => zone.category === "Стоянка" && zone.parent_zone_id === crane.id)) {
+      const original = oldZones.find((zone) => zone.id === child.id);
+      for (const [index, level] of child.levels.entries()) {
+        const parent = crane.levels[matchingCraneLevel(crane, level.elevation_mm)];
+        const parentOutline = matchingCraneLevel(crane, level.elevation_mm) === craneLevelIndex
+          ? nextOutline : parent.outline;
+        if (overlapArea(parentOutline, level.outline) < Math.abs(polygonArea(level.outline)) - 1) return false;
+        const baseline = new Map(peerOverlap(oldZones, original, level.elevation_mm, original.levels[index].outline)
+          .map(({ other, elevation_mm, area }) => [`${other.id}:${elevation_mm}`, area]));
+        if (peerOverlap(nextZones, child, level.elevation_mm, level.outline).some(({ other, elevation_mm, area }) =>
+          area > (baseline.get(`${other.id}:${elevation_mm}`) || 0) + 1)) return false;
+      }
+    }
+    for (const [id, outlines] of updates) outlines.forEach((outline, index) => {
+      zoneById(id).levels[index].outline = outline;
+    });
+    return true;
+  }
   function outlineAllowed(zone, elevation, outline, previous = null) {
     if (zone.category === "Стоянка") {
       const crane = zoneById(zone.parent_zone_id);
@@ -76,7 +159,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return peerOverlap(zones(), zone, elevation, outline).every(({ other, elevation_mm, area }) =>
       area <= (oldAreas.get(key(other, elevation_mm)) || 0) + 1);
   }
-  function markDirty() { dirty = true; preview = null; message = ""; messageTone = "info"; if (mode3d) viewer3d?.update(viewerData()); else draw(); updateStatus(); }
+  function markDirty(geometry = true) {
+    dirty = true; preview = null; message = ""; messageTone = "info";
+    if (geometry) refreshLiveCounts();
+    if (mode3d) viewer3d?.update(viewerData()); else draw();
+    updateStatus();
+  }
 
   function status(text, tone = "info") { message = text; messageTone = tone; updateStatus(); }
   function updateStatus() {
@@ -125,9 +213,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const all = zones(), cranes = all.filter((z) => z.category === "Кран");
     return cranes.map((crane) => {
       const stands = standFocus ? all.filter((z) => z.category === "Стоянка" && z.parent_zone_id === crane.id) : [];
-      const count = scene.filter((e) => e.zone_crane_id === crane.id).length;
-      return `<div class="cz-crane"><button type="button" class="cz-tree-item ${selectedZone === crane.id ? "active" : ""}" data-zone-id="${crane.id}" data-tooltip="Выбрать контур крана на схеме. Число справа показывает ${standFocus ? "количество его стоянок" : "изделия, назначенные крану"}." aria-label="Кран ${esc(crane.name)}, ${standFocus ? `${stands.length} стоянок` : `${count} изделий`}"><span class="cz-tree-icon">▣</span><span>${esc(crane.name)}</span><b>${standFocus ? `${stands.length} ст.` : count}</b></button>
-        ${stands.map((stand) => `<button type="button" class="cz-tree-item cz-stand ${selectedZone === stand.id ? "active" : ""}" data-zone-id="${stand.id}" data-tooltip="Выбрать стоянку и её контур. Изделия и границы можно проверить по каждому ярусу справа."><span class="cz-tree-icon">⌞</span><span>${esc(stand.name)}</span><b>${scene.filter((e) => e.zone_stance_id === stand.id).length}</b></button>`).join("")}
+      const count = zoneCountLabel(crane);
+      return `<div class="cz-crane"><button type="button" class="cz-tree-item ${selectedZone === crane.id ? "active" : ""}" data-zone-id="${crane.id}" data-tooltip="Выбрать контур крана на схеме. ${draft ? "Знак ≈ означает предварительный подсчёт изделий по текущему контуру; точные назначения проверяются в предпросмотре." : "Число справа — изделия, назначенные этому крану."}" aria-label="Кран ${esc(crane.name)}, ${standFocus ? `${stands.length} стоянок, ` : ""}${count} изделий"><span class="cz-tree-icon">▣</span><span>${esc(crane.name)}</span><b>${standFocus ? `${stands.length} ст. · ${count}` : count}</b></button>
+        ${stands.map((stand) => `<button type="button" class="cz-tree-item cz-stand ${selectedZone === stand.id ? "active" : ""}" data-zone-id="${stand.id}" data-tooltip="Выбрать стоянку и её контур. ${draft ? "Знак ≈ означает предварительный подсчёт по текущей геометрии; точные назначения — в предпросмотре." : "Число справа — уже назначенные изделия."}"><span class="cz-tree-icon">⌞</span><span>${esc(stand.name)}</span><b>${zoneCountLabel(stand)}</b></button>`).join("")}
         ${standFocus && !stands.length ? `<p class="cz-parent-hint">Стоянок у этого крана пока нет.</p>` : ""}</div>`;
     }).join("") || `<p class="v2-muted">Кранов пока нет.</p>`;
   }
@@ -135,10 +223,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function propertyHtml() {
     const z = selected();
     if (!z) return `<div class="cz-empty">Выберите ${standFocus ? "кран или стоянку" : "кран"} в списке либо на схеме.</div>`;
-    if (standFocus && z.category === "Кран") return `<div class="cz-prop-head"><span>Кран-владелец</span><strong>${esc(z.name)}</strong></div><p class="cz-hint">Кран выбран для новой стоянки. Его номер и контур редактируются на вкладке «Зоны кранов».</p>`;
+    if (standFocus && z.category === "Кран") return `<div class="cz-prop-head"><span>Кран-владелец</span><strong>${esc(z.name)}</strong><small id="cz-live-count">${zoneCountDescription(z)}</small></div><p class="cz-hint">Кран выбран для новой стоянки. Его номер и контур редактируются на вкладке «Зоны кранов».</p>`;
     const level = z.levels[activeLevel] || z.levels[0];
     const can = canEdit && !!draft;
-    return `<div class="cz-prop-head"><span>${z.category}</span><strong>${esc(z.name)}</strong>${z.category === "Стоянка" ? `<small>В составе крана «${esc(zoneById(z.parent_zone_id)?.name || "не выбран")}»</small>` : standFocus ? `<small>Выбран родитель стоянки. Добавить её можно кнопкой слева.</small>` : ""}</div>
+    return `<div class="cz-prop-head"><span>${z.category}</span><strong>${esc(z.name)}</strong><small id="cz-live-count">${zoneCountDescription(z)}</small>${z.category === "Стоянка" ? `<small>В составе крана «${esc(zoneById(z.parent_zone_id)?.name || "не выбран")}»</small>` : standFocus ? `<small>Выбран родитель стоянки. Добавить её можно кнопкой слева.</small>` : ""}</div>
       <label>Номер<input id="cz-number" type="number" min="1" step="1" data-tooltip="Порядковый номер зоны в пределах объекта; у стоянки — в пределах её крана. Используется в справочнике и назначениях изделий." value="${z.number}" ${can ? "" : "disabled"}></label>
       <label>Название<input id="cz-name" type="text" maxlength="200" data-tooltip="Название зоны в списках и отчётах. Изменение не перемещает контур и не меняет принадлежность изделий." value="${esc(z.name)}" ${can ? "" : "disabled"}></label>
       ${z.category === "Стоянка" ? `<label>Кран<select id="cz-parent" data-tooltip="Родительский кран стоянки. При публикации стоянка должна попадать внутрь его зоны; смена крана пересчитает назначения изделий." ${can ? "" : "disabled"}>${zones().filter((v) => v.category === "Кран").map((c) => `<option value="${c.id}" ${z.parent_zone_id === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>` : ""}
@@ -146,7 +234,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}" data-tooltip="Показать контур и изделия этого высотного яруса. Изменения границы затронут назначения изделий на соответствующей отметке.">${l.elevation_mm == null ? "Без отметки" : `+${l.elevation_mm} мм`} · ${l.outline.length} точек</button>`).join("")}</div>
       ${can ? `<button type="button" class="v2-btn" id="cz-add-level" data-tooltip="Создаёт следующий высотный ярус с копией текущего контура. Его отметку и границы можно изменить до публикации.">Добавить ярус</button>` : ""}
       ${level ? `<label>Отметка, мм<input id="cz-elevation" type="number" step="1" data-tooltip="Высота начала яруса в миллиметрах. Влияет на то, к каким изделиям по высоте применяется этот контур." value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label>
-        <p class="cz-hint">Тяните ребро контура: соответствующая боковая грань сдвигается параллельно себе, прямоугольная форма сохраняется. В 3D поворачивайте сцену вне ручек.</p>
+        <p class="cz-hint">В 2D потяните зону внутри контура, чтобы переместить её целиком, или потяните ребро, чтобы изменить размер. Перетаскивание пустого фона сдвигает вид. В 3D поворачивайте сцену вне ручек.</p>
         <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Number(p[0].toFixed(1))}; ${Number(p[1].toFixed(1))}</span>`).join("")}</div>` : ""}
       <div class="cz-subtitle">Выбрано изделий: ${selectedElements.size}</div>
       ${can ? `<div class="cz-actions"><button type="button" class="v2-btn" id="cz-assign" data-tooltip="Записывает ручное назначение выбранных изделий этой зоне в черновик. Действующие свойства изменятся только после публикации." ${selectedElements.size ? "" : "disabled"}>Назначить выбранные сюда</button><button type="button" class="v2-btn" id="cz-clear" data-tooltip="Убирает назначение крана и стоянки у выделенных изделий в черновике; опубликованные данные пока не меняются." ${selectedElements.size ? "" : "disabled"}>Без зоны</button></div>` : ""}
@@ -155,6 +243,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function render() {
     if (dead) return;
+    const treeScroll = $(".cz-tree")?.scrollTop ?? 0;
+    const propertiesScroll = $(".cz-properties")?.scrollTop ?? 0;
+    liveCounts = draft ? new Map(zones().map((zone) => [zone.id, countElementsInZone(zone, scene)])) : new Map();
     root.className = "cz-root";
     const version = displayVersion();
     const parent = parentCrane();
@@ -165,12 +256,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ${canEdit ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
-      <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div><p class="cz-tree-intro">${standFocus ? "Выберите кран — он станет владельцем новой стоянки. Выбор существующей стоянки тоже сохранит её кран." : "Здесь показаны только зоны кранов. Для стоянок откройте соседнюю вкладку."}</p>${canEdit ? `<div class="cz-tree-add">${primaryAdd}</div><div class="cz-parent-hint">${standFocus ? parent ? `Выбранный кран: ${esc(parent.name)}.` : "Сначала создайте кран на вкладке «Зоны кранов»." : ""} ${draft ? "Изменения пока только в черновике." : "Черновик создаётся при добавлении; рабочие зоны не меняются до публикации."}</div>` : ""}</div>${treeHtml()}</aside>
-      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
+      <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div><p class="cz-tree-intro">${standFocus ? "Выберите кран — он станет владельцем новой стоянки. Выбор существующей стоянки тоже сохранит её кран." : "Здесь показаны только зоны кранов. Для стоянок откройте соседнюю вкладку."} ${draft ? "≈ — предварительно по текущим контурам; точный пересчёт — в предпросмотре." : ""}</p>${canEdit ? `<div class="cz-tree-add">${primaryAdd}</div><div class="cz-parent-hint">${standFocus ? parent ? `Выбранный кран: ${esc(parent.name)}.` : "Сначала создайте кран на вкладке «Зоны кранов»." : ""} ${draft ? "Изменения пока только в черновике." : "Черновик создаётся при добавлении; рабочие зоны не меняются до публикации."}</div>` : ""}</div>${treeHtml()}</aside>
+      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>` : ""}`;
     const controlHelp = {
-      "cz-view-2d": "Показать вид сверху для правки контуров перетаскиванием рёбер. Данные черновика при переключении сохраняются.",
+      "cz-view-2d": "Показать вид сверху: внутри зоны можно переместить её целиком, за ребро — изменить размер. Данные черновика при переключении сохраняются.",
       "cz-view-3d": "Показать объёмные зоны и полупрозрачные изделия. Грань зоны можно сдвигать параллельно самой себе.",
       "cz-show-elements": "Скрывает или показывает изделия на схеме; контуры зон и назначения не меняются.",
       "cz-select-mode": "Включает выделение нескольких изделий рамкой для ручного назначения зоне.",
@@ -179,6 +270,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       "cz-fit": "Возвращает обзор всей схемы и масштаб 100%, не меняя геометрию зон.",
     };
     for (const [id, help] of Object.entries(controlHelp)) $(`#${id}`)?.setAttribute("data-tooltip", help);
+    updateMapCount();
+    if ($(".cz-tree")) $(".cz-tree").scrollTop = treeScroll;
+    if ($(".cz-properties")) $(".cz-properties").scrollTop = propertiesScroll;
     bind();
     updateStatus();
     const generation = ++renderGeneration;
@@ -215,13 +309,19 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   async function render3d(generation) {
     if (!viewer3d) viewer3d = createCraneZone3d({
       onOutline(outline) {
-        const level = selected()?.levels[activeLevel];
+        const zone = selected(), level = zone?.levels[activeLevel];
         if (!level || !draft || !canEdit) return;
-        if (!outlineAllowed(selected(), level.elevation_mm, outline, level.outline)) {
+        if (!outlineAllowed(zone, level.elevation_mm, outline, level.outline)) {
           status("Грань достигла соседней зоны или границы крана: пересечение не допускается.", "error");
           return;
         }
-        level.outline = outline; markDirty();
+        if (zone.category === "Кран") {
+          if (!resizeCraneWithStances(zone, activeLevel, outline)) {
+            status("Не удалось вписать стоянки в изменённую зону крана без пересечения. Уточните границу.", "error");
+            return;
+          }
+        } else level.outline = outline;
+        markDirty();
       },
       onCommit() { render(); },
       onSelectElements(ids) { selectedElements = new Set(ids); render(); },
@@ -396,18 +496,73 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     }
     return result;
   }
-  function chooseZone(x, y, canvas) {
+  function hitZone(x, y, canvas) {
     const [wx, wy] = toWorld(x, y, canvas);
-    const candidates = visibleZones().filter((z) => z.levels.some((l) => inside(l.outline, wx, wy)));
-    return candidates.sort((a, b) => (a.category === "Стоянка" ? -1 : 1) - (b.category === "Стоянка" ? -1 : 1))[0];
+    const activeStanceElevation = standFocus && selected()?.category === "Стоянка"
+      ? selected().levels[activeLevel]?.elevation_mm : undefined;
+    const hits = visibleZones().flatMap((zone) => zone.levels.flatMap((level, index) => {
+      if (standFocus && selected()?.category === "Стоянка" && zone.category === "Стоянка" &&
+          level.elevation_mm !== activeStanceElevation) return [];
+      return inside(level.outline, wx, wy) ? [{ zone, index }] : [];
+    }));
+    return hits.sort((a, b) => {
+      const priority = (hit) => (hit.zone.id === selectedZone && hit.index === activeLevel ? 0 :
+        hit.zone.category === "Стоянка" ? 1 : 2);
+      return priority(a) - priority(b);
+    })[0] || null;
+  }
+  function moveMembers(zone) {
+    return [zone, ...(zone.category === "Кран"
+      ? zones().filter((item) => item.category === "Стоянка" && item.parent_zone_id === zone.id) : [])];
+  }
+  function beginZoneDrag(hit, x, y, canvas) {
+    return { kind: "zone", zoneId: hit.zone.id, levelIndex: hit.index,
+      start: toWorld(x, y, canvas), x, y, attempted: false, moved: false,
+      members: moveMembers(hit.zone).map((item) => ({ id: item.id,
+        outlines: item.levels.map((level) => clone(level.outline)) })),
+      wasDirty: dirty, wasPreview: preview };
+  }
+  function moveZone(move, x, y, canvas) {
+    if (Math.hypot(x - move.x, y - move.y) <= 3 && !move.attempted) return;
+    move.attempted = true;
+    const world = toWorld(x, y, canvas);
+    const dx = world[0] - move.start[0], dy = world[1] - move.start[1];
+    const shifted = move.members.map((item) => ({ id: item.id,
+      outlines: item.outlines.map((outline) => outline.map(([px, py]) => [px + dx, py + dy])) }));
+    const zone = zoneById(move.zoneId);
+    // Для стоянки проверяем каждый ярус; кран переносится вместе со своими
+    // стоянками, поэтому их взаимное расположение не меняется.
+    const main = shifted[0];
+    if (!main.outlines.every((outline, index) => outlineAllowed(
+      zone, zone.levels[index].elevation_mm, outline, move.members[0].outlines[index],
+    ))) {
+      status(zone.category === "Стоянка"
+        ? "Стоянка упирается в соседнюю стоянку или выходит за пределы своего крана. Перемещение остановлено."
+        : "Кран упирается в соседнюю зону крана. Перемещение остановлено.", "error");
+      return;
+    }
+    if (!main.outlines.some((outline, index) => outline.some((point, p) =>
+      Math.hypot(point[0] - zone.levels[index].outline[p][0], point[1] - zone.levels[index].outline[p][1]) > 0.001))) return;
+    for (const item of shifted) {
+      const target = zoneById(item.id);
+      item.outlines.forEach((outline, index) => { target.levels[index].outline = outline; });
+    }
+    selectedZone = move.zoneId; activeLevel = move.levelIndex;
+    move.moved = true; markDirty();
   }
   function onDown(e) {
     const canvas = e.currentTarget, [x, y] = pointer(e);
     if (e.shiftKey || selectMode) drag = { kind: "box", x, y, lastX: x, lastY: y };
     else {
       const edge = nearestEdge(x, y, canvas);
-      if (edge != null) drag = { kind: "edge", index: edge, start: toWorld(x, y, canvas), outline: clone(selected().levels[activeLevel].outline), wasDirty: dirty, wasPreview: preview, moved: false };
-      else drag = { kind: "pan", x, y, lastX: x, lastY: y, moved: false };
+      if (edge != null) drag = { kind: "edge", index: edge, start: toWorld(x, y, canvas), outline: clone(selected().levels[activeLevel].outline),
+        members: memberOutlines(selected()), wasDirty: dirty, wasPreview: preview, moved: false };
+      else {
+        const hit = hitZone(x, y, canvas);
+        drag = hit && draft && canEdit && (!standFocus || hit.zone.category === "Стоянка")
+          ? beginZoneDrag(hit, x, y, canvas)
+          : { kind: "pan", x, y, lastX: x, lastY: y, moved: false };
+      }
     }
     hoverEdge = drag.kind === "edge" ? drag.index : null;
     canvas.setPointerCapture(e.pointerId);
@@ -416,7 +571,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const canvas = e.currentTarget, [x, y] = pointer(e);
     if (!drag) {
       const edge = !selectMode ? nearestEdge(x, y, canvas) : null;
-      canvas.style.cursor = selectMode ? "crosshair" : edge != null ? "grab" : "crosshair";
+      const hit = !selectMode && edge == null ? hitZone(x, y, canvas) : null;
+      canvas.style.cursor = selectMode ? "crosshair" : edge != null ? "grab" :
+        hit && draft && canEdit && (!standFocus || hit.zone.category === "Стоянка") ? "move" : "crosshair";
       if (hoverEdge !== edge) { hoverEdge = edge; draw(); }
       return;
     }
@@ -425,14 +582,21 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const world = toWorld(x, y, canvas);
       const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
       if (!outline) return;
-      if (!outlineAllowed(selected(), level.elevation_mm, outline, level.outline)) {
+      if (!outlineAllowed(selected(), level.elevation_mm, outline, drag.outline)) {
         status("Грань достигла соседней зоны или границы крана: пересечение не допускается.", "error");
         return;
       }
       if (level.outline.some((point, i) => Math.hypot(point[0] - outline[i][0], point[1] - outline[i][1]) > 0.001)) {
-        level.outline = outline; drag.moved = true; markDirty();
+        if (selected().category === "Кран") {
+          if (!resizeCraneWithStances(selected(), activeLevel, outline, drag.members)) {
+            status("Не удалось вписать стоянки в изменённую зону крана без пересечения. Уточните границу.", "error");
+            return;
+          }
+        } else level.outline = outline;
+        drag.moved = true; markDirty();
       }
-    } else if (drag.kind === "box") { drag.lastX = x; drag.lastY = y; draw(); }
+    } else if (drag.kind === "zone") moveZone(drag, x, y, canvas);
+    else if (drag.kind === "box") { drag.lastX = x; drag.lastY = y; draw(); }
     else { if (Math.hypot(x - drag.x, y - drag.y) > 3) drag.moved = true; view.x -= (x - drag.lastX) / view.scale; view.y += (y - drag.lastY) / view.scale; drag.lastX = x; drag.lastY = y; draw(); }
   }
   function onUp(e) {
@@ -442,21 +606,27 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const x0 = Math.min(move.x, x), x1 = Math.max(move.x, x), y0 = Math.min(move.y, y), y1 = Math.max(move.y, y);
       selectedElements = new Set(visibleElements().filter((item) => { const p = toScreen(item.x, item.y, canvas); return p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1; }).map((item) => item.id));
       render();
-    } else if (move.kind === "pan" && !move.moved) {
-      const element = nearestElement(x, y, canvas), zone = element ? null : chooseZone(x, y, canvas);
+    } else if ((move.kind === "pan" && !move.moved) || (move.kind === "zone" && !move.attempted)) {
+      const element = nearestElement(x, y, canvas), hit = element ? null : hitZone(x, y, canvas);
       if (element) selectedElements = new Set([element.id]);
-      else if (zone) { selectedZone = zone.id; activeLevel = 0; }
+      else if (hit) { selectedZone = hit.zone.id; activeLevel = hit.index; }
       render();
-    } else if (move.kind === "edge") render();
+    } else if (move.kind === "edge" || move.kind === "zone") render();
     drag = null;
   }
   function onCancel() {
     if (drag?.kind === "edge" && drag.moved) {
-      const level = selected()?.levels[activeLevel];
-      if (level) level.outline = drag.outline;
+      for (const item of drag.members) item.outlines.forEach((outline, index) => {
+        zoneById(item.id).levels[index].outline = outline;
+      });
+      dirty = drag.wasDirty; preview = drag.wasPreview;
+    } else if (drag?.kind === "zone" && drag.moved) {
+      for (const item of drag.members) item.outlines.forEach((outline, index) => {
+        zoneById(item.id).levels[index].outline = outline;
+      });
       dirty = drag.wasDirty; preview = drag.wasPreview;
     }
-    drag = null; hoverEdge = null; render();
+    drag = null; hoverEdge = null; message = ""; render();
   }
   function bind() {
     $("#cz-version-select")?.addEventListener("change", async (e) => { if (dirty && !(await guardLeave())) { e.target.value = selectedVersionId || ""; return; } await loadVersion(e.target.value ? Number(e.target.value) : null); });
@@ -481,7 +651,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-name")?.addEventListener("change", (e) => { selected().name = e.target.value; markDirty(); render(); });
     $("#cz-parent")?.addEventListener("change", (e) => { selected().parent_zone_id = Number(e.target.value); markDirty(); render(); });
     $("#cz-elevation")?.addEventListener("change", (e) => { selected().levels[activeLevel].elevation_mm = e.target.value === "" ? null : Number(e.target.value); markDirty(); render(); });
-    $("#cz-note")?.addEventListener("input", (e) => { draft.note = e.target.value; markDirty(); });
+    $("#cz-note")?.addEventListener("input", (e) => { draft.note = e.target.value; markDirty(false); });
     $("#cz-date")?.addEventListener("change", (e) => { effectiveDate = e.target.value; });
     $("#cz-add-crane")?.addEventListener("click", () => startAddingZone("Кран"));
     $("#cz-add-stand")?.addEventListener("click", () => startAddingZone("Стоянка"));
