@@ -2,7 +2,7 @@
 // Все изменения до публикации живут только в локальном/серверном черновике.
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
-import { displacedEdgeEndpoints, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
 import { createCraneZone3d } from "./crane-zone-3d.js";
 import { computeElementRenderHeights } from "./element-render-heights.js";
 
@@ -101,7 +101,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}">${l.elevation_mm == null ? "Без отметки" : `+${l.elevation_mm} мм`} · ${l.outline.length} точек</button>`).join("")}</div>
       ${can ? `<button type="button" class="v2-btn" id="cz-add-level">Добавить ярус</button>` : ""}
       ${level ? `<label>Отметка, мм<input id="cz-elevation" type="number" step="1" value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label>
-        <p class="cz-hint">В 2D и 3D тяните вершину или ребро контура. В 3D поворачивайте сцену перетаскиванием вне ручек. Двойной щелчок по ребру добавляет точку.</p>
+        <p class="cz-hint">Тяните ребро контура: соответствующая боковая грань сдвигается параллельно себе, прямоугольная форма сохраняется. В 3D поворачивайте сцену вне ручек.</p>
         <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Number(p[0].toFixed(1))}; ${Number(p[1].toFixed(1))}</span>`).join("")}</div>` : ""}
       <div class="cz-subtitle">Выбрано изделий: ${selectedElements.size}</div>
       ${can ? `<div class="cz-actions"><button type="button" class="v2-btn" id="cz-assign" ${selectedElements.size ? "" : "disabled"}>Назначить выбранные сюда</button><button type="button" class="v2-btn" id="cz-clear" ${selectedElements.size ? "" : "disabled"}>Без зоны</button></div>` : ""}
@@ -282,9 +282,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     canvas.dataset.highlightColor = elementHighlightColor;
     canvas.dataset.renderedOutlines = String(drawn);
     canvas.dataset.highlightedOutlines = String(accented);
-    // Ручки поверх изделий: на плотной схеме маркеры не должны закрывать
-    // место захвата ребра или вершины.
-    if (activeOutline) {
+    // Ручки только на рёбрах: вершины не редактируются.
+    canvas.dataset.edgeMidpoints = JSON.stringify(activeOutline?.length === 4 ? activeOutline.map((point, index) => {
+      const a = toScreen(...point, canvas), b = toScreen(...activeOutline[(index + 1) % 4], canvas);
+      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+    }) : []);
+    if (activeOutline?.length === 4) {
       const highlighted = drag?.kind === "edge" ? drag.index : hoverEdge;
       if (highlighted != null) {
         const a = toScreen(...activeOutline[highlighted], canvas);
@@ -301,7 +304,6 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
           ctx.strokeStyle = "#d65b16"; ctx.lineWidth = 1.5;
           ctx.fillRect(-6, -3.5, 12, 7); ctx.strokeRect(-6, -3.5, 12, 7); ctx.restore();
         }
-        ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.fillStyle = "#f07830"; ctx.fill();
       }
     }
     if (drag?.kind === "box") { ctx.strokeStyle = "#ef6b33"; ctx.setLineDash([5, 4]); ctx.strokeRect(drag.x, drag.y, drag.lastX - drag.x, drag.lastY - drag.y); ctx.setLineDash([]); }
@@ -309,16 +311,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
 
   function pointer(event) { const rect = event.currentTarget.getBoundingClientRect(); return [event.clientX - rect.left, event.clientY - rect.top]; }
-  function nearestVertex(x, y, canvas) {
-    const z = selected(); if (!draft || !canEdit || !z || (standFocus && z.category !== "Стоянка")) return null;
-    const level = z.levels[activeLevel]; if (!level) return null;
-    for (let i = 0; i < level.outline.length; i++) { const p = toScreen(...level.outline[i], canvas); if (Math.hypot(p[0] - x, p[1] - y) <= 8) return i; }
-    return null;
-  }
   function nearestEdge(x, y, canvas) {
     const z = selected(); if (!draft || !canEdit || !z || (standFocus && z.category !== "Стоянка")) return null;
-    const level = z.levels[activeLevel]; if (!level) return null;
-    return nearestEdgeIndex(level.outline, x, y, (point) => toScreen(...point, canvas));
+    const level = z.levels[activeLevel]; if (level?.outline?.length !== 4) return null;
+    return nearestEdgeIndex(level.outline, x, y, (point) => toScreen(...point, canvas), 9, 12);
   }
   function nearestElement(x, y, canvas) {
     let found = null, distance = 9;
@@ -349,10 +345,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const canvas = e.currentTarget, [x, y] = pointer(e);
     if (e.shiftKey || selectMode) drag = { kind: "box", x, y, lastX: x, lastY: y };
     else {
-      const vertex = nearestVertex(x, y, canvas);
-      const edge = vertex == null ? nearestEdge(x, y, canvas) : null;
-      if (vertex != null) drag = { kind: "vertex", index: vertex, x, y };
-      else if (edge != null) drag = { kind: "edge", index: edge, start: toWorld(x, y, canvas), outline: clone(selected().levels[activeLevel].outline), wasDirty: dirty, wasPreview: preview, moved: false };
+      const edge = nearestEdge(x, y, canvas);
+      if (edge != null) drag = { kind: "edge", index: edge, start: toWorld(x, y, canvas), outline: clone(selected().levels[activeLevel].outline), wasDirty: dirty, wasPreview: preview, moved: false };
       else drag = { kind: "pan", x, y, lastX: x, lastY: y, moved: false };
     }
     hoverEdge = drag.kind === "edge" ? drag.index : null;
@@ -361,22 +355,18 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function onMove(e) {
     const canvas = e.currentTarget, [x, y] = pointer(e);
     if (!drag) {
-      const edge = !selectMode && nearestVertex(x, y, canvas) == null ? nearestEdge(x, y, canvas) : null;
-      canvas.style.cursor = selectMode ? "crosshair" : edge != null ? "grab" : nearestVertex(x, y, canvas) != null ? "move" : "crosshair";
+      const edge = !selectMode ? nearestEdge(x, y, canvas) : null;
+      canvas.style.cursor = selectMode ? "crosshair" : edge != null ? "grab" : "crosshair";
       if (hoverEdge !== edge) { hoverEdge = edge; draw(); }
       return;
     }
-    if (drag.kind === "vertex") {
-      const level = selected()?.levels[activeLevel]; if (!level) return;
-      level.outline[drag.index] = toWorld(x, y, canvas).map(Math.round); markDirty();
-    } else if (drag.kind === "edge") {
+    if (drag.kind === "edge") {
       const level = selected()?.levels[activeLevel]; if (!level) return;
       const world = toWorld(x, y, canvas);
-      const endpoints = displacedEdgeEndpoints(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
-      if (!endpoints) return;
-      const nextIndex = (drag.index + 1) % level.outline.length;
-      if (level.outline[drag.index][0] !== endpoints[0][0] || level.outline[drag.index][1] !== endpoints[0][1]) {
-        level.outline[drag.index] = endpoints[0]; level.outline[nextIndex] = endpoints[1]; drag.moved = true; markDirty();
+      const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
+      if (!outline) return;
+      if (level.outline.some((point, i) => Math.hypot(point[0] - outline[i][0], point[1] - outline[i][1]) > 0.001)) {
+        level.outline = outline; drag.moved = true; markDirty();
       }
     } else if (drag.kind === "box") { drag.lastX = x; drag.lastY = y; draw(); }
     else { if (Math.hypot(x - drag.x, y - drag.y) > 3) drag.moved = true; view.x -= (x - drag.lastX) / view.scale; view.y += (y - drag.lastY) / view.scale; drag.lastX = x; drag.lastY = y; draw(); }
@@ -393,7 +383,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       if (element) selectedElements = new Set([element.id]);
       else if (zone) { selectedZone = zone.id; activeLevel = 0; }
       render();
-    } else if (move.kind === "vertex" || move.kind === "edge") render();
+    } else if (move.kind === "edge") render();
     drag = null;
   }
   function onCancel() {
@@ -403,18 +393,6 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       dirty = drag.wasDirty; preview = drag.wasPreview;
     }
     drag = null; hoverEdge = null; render();
-  }
-  function onDoubleClick(e) {
-    const z = selected(), level = z?.levels[activeLevel]; if (!draft || !canEdit || !level || (standFocus && z.category !== "Стоянка")) return;
-    const canvas = e.currentTarget, [x, y] = pointer(e), p = toWorld(x, y, canvas);
-    let best = -1, dist = 12;
-    for (let i = 0; i < level.outline.length; i++) {
-      const a = toScreen(...level.outline[i], canvas), b = toScreen(...level.outline[(i + 1) % level.outline.length], canvas);
-      const dx = b[0] - a[0], dy = b[1] - a[1], t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / (dx * dx + dy * dy || 1)));
-      const d = Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
-      if (d < dist) { dist = d; best = i; }
-    }
-    if (best >= 0) { level.outline.splice(best + 1, 0, p.map(Math.round)); markDirty(); render(); }
   }
   function bind() {
     $("#cz-version-select")?.addEventListener("change", async (e) => { if (dirty && !(await guardLeave())) { e.target.value = selectedVersionId || ""; return; } await loadVersion(e.target.value ? Number(e.target.value) : null); });
@@ -454,7 +432,6 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     }
     canvas?.addEventListener("pointerdown", onDown); canvas?.addEventListener("pointermove", onMove); canvas?.addEventListener("pointerup", onUp); canvas?.addEventListener("pointercancel", onCancel);
     canvas?.addEventListener("pointerleave", () => { if (!drag && hoverEdge != null) { hoverEdge = null; draw(); } });
-    canvas?.addEventListener("dblclick", onDoubleClick);
     canvas?.addEventListener("wheel", (e) => {
       e.preventDefault();
       const [x, y] = pointer(e);

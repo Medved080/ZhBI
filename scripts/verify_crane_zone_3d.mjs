@@ -51,6 +51,16 @@ try {
   console.log("PASS V2: в 2D нарисованы контуры изделий; переключатель 2D/3D виден и не сдвигается");
   await tap(browser, "#cz-add-crane");
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')");
+  const edge2d = JSON.parse(await browser.eval("document.querySelector('#cz-canvas').dataset.edgeMidpoints"))
+    .sort((a, b) => b.length - a.length)[0];
+  assert.ok(edge2d.length > 24);
+  const frame2d = await browser.rect("#cz-canvas");
+  const outlineBefore = await browser.eval("document.querySelector('.cz-point-list').textContent");
+  await browser.drag(frame2d.x + edge2d.x, frame2d.y + edge2d.y,
+    frame2d.x + edge2d.x + 15, frame2d.y + edge2d.y + 12);
+  assert.notEqual(await browser.eval("document.querySelector('.cz-point-list').textContent"), outlineBefore);
+  assert.equal(Number(await browser.eval("document.querySelectorAll('.cz-point-list span').length")), 4);
+  console.log("PASS V2: в 2D ребро двигает грань, число вершин остаётся четырьмя");
   await tap(browser, "#cz-view-3d");
   await browser.waitFor("!!document.querySelector('#cz-3d canvas') && document.querySelector('#cz-3d').dataset.editable === 'true'", 30000);
   assert.equal(await browser.eval("document.querySelector('#cz-view-3d').getAttribute('aria-pressed')"), "true");

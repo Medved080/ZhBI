@@ -1,7 +1,7 @@
 // Интерактивная 3D-схема черновика кранов и стоянок. Зоны показаны объёмными
-// призмами; правка вершины/ребра идёт в плоскости верхней грани. Высоту меняет
+// призмами; сдвиг боковой грани идёт за ребро в плоскости верхней грани. Высоту меняет
 // отдельное поле «Отметка». Сохранение и публикация остаются в редакторе.
-import { displacedEdgeEndpoints, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
 
 let libraries;
 function loadLibraries() {
@@ -129,12 +129,8 @@ export function createCraneZone3d(callbacks) {
   }
   function nearestHandle(x, y) {
     const level = activeLevel();
-    if (!data?.editable || !level?.outline?.length) return null;
-    for (let i = 0; i < level.outline.length; i++) {
-      const p = toScreen(level.outline[i]);
-      if (Math.hypot(p[0] - x, p[1] - y) <= 11) return { kind: "vertex", index: i };
-    }
-    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 10);
+    if (!data?.editable || level?.outline?.length !== 4) return null;
+    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 10, 12);
     return edge == null ? null : { kind: "edge", index: edge };
   }
   function nearestElement(x, y) {
@@ -188,13 +184,8 @@ export function createCraneZone3d(callbacks) {
     }
     if (drag.kind === "orbit") { if (Math.hypot(x - drag.x, y - drag.y) > 4) drag.moved = true; return; }
     const world = worldOnLevel(x, y); if (!world) return;
-    const outline = drag.outline.map((point) => [...point]);
-    if (drag.kind === "vertex") outline[drag.index] = world.map(Math.round);
-    else {
-      const endpoints = displacedEdgeEndpoints(outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
-      if (!endpoints) return;
-      outline[drag.index] = endpoints[0]; outline[(drag.index + 1) % outline.length] = endpoints[1];
-    }
+    const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
+    if (!outline) return;
     if (Math.hypot(x - drag.x, y - drag.y) > 2) drag.moved = true;
     if (drag.moved) callbacks.onOutline(outline);
   }
@@ -216,14 +207,6 @@ export function createCraneZone3d(callbacks) {
       else if (zone) callbacks.onSelectZone(zone.zoneId, zone.levelIndex);
     } else if (last.moved) callbacks.onCommit();
   }
-  function onDoubleClick(event) {
-    const [x, y] = pointer(event), handle = nearestHandle(x, y);
-    if (handle?.kind !== "edge") return;
-    const world = worldOnLevel(x, y); if (!world) return;
-    const outline = activeLevel().outline.map((point) => [...point]);
-    outline.splice(handle.index + 1, 0, world.map(Math.round));
-    callbacks.onOutline(outline); callbacks.onCommit();
-  }
   async function ensure() {
     if (r) return r;
     const { THREE, OrbitControls, LineSegments2, LineSegmentsGeometry, LineMaterial } = await loadLibraries();
@@ -231,7 +214,7 @@ export function createCraneZone3d(callbacks) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.setClearColor(0xeceff3);
-    renderer.domElement.setAttribute("aria-label", "3D-схема зон: перетаскивание — поворот, колесо — масштаб, ручки — редактирование контура");
+    renderer.domElement.setAttribute("aria-label", "3D-схема зон: перетаскивание вне граней — поворот, колесо — масштаб, ручки рёбер — параллельный сдвиг граней");
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, 1, 1, 100000000);
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -248,7 +231,6 @@ export function createCraneZone3d(callbacks) {
     renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("pointerup", onUp);
     renderer.domElement.addEventListener("pointercancel", onUp);
-    renderer.domElement.addEventListener("dblclick", onDoubleClick);
     return r;
   }
   function updateModel() {
@@ -365,19 +347,16 @@ export function createCraneZone3d(callbacks) {
         transparent: true, opacity: active ? 0.95 : quietStand ? 0 : 0.13, depthTest: false }));
       edges.rotation.x = -Math.PI / 2; edges.position.y = y; edges.renderOrder = active ? 5 : 2;
       group.add(edges);
-      if (active && data.editable) {
-        const vertices = [], edgeCenters = [];
+      if (active && data.editable && outline.length === 4) {
+        const edgeCenters = [];
         for (let i = 0; i < outline.length; i++) {
           const point = outline[i], next = outline[(i + 1) % outline.length];
-          vertices.push(point[0], top + 5, -point[1]);
           edgeCenters.push((point[0] + next[0]) / 2, top + 5, -(point[1] + next[1]) / 2);
         }
-        const vertexGeometry = new THREE.BufferGeometry(); vertexGeometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
         const edgeGeometry = new THREE.BufferGeometry(); edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edgeCenters, 3));
-        const vertexMarkers = new THREE.Points(vertexGeometry, new THREE.PointsMaterial({ color: 0xee7131, size: 13, sizeAttenuation: false, depthTest: false }));
         const edgeMarkers = new THREE.Points(edgeGeometry, new THREE.PointsMaterial({ color: 0xffffff, size: 10, sizeAttenuation: false, depthTest: false }));
-        vertexMarkers.renderOrder = 6; edgeMarkers.renderOrder = 6;
-        group.add(vertexMarkers, edgeMarkers);
+        edgeMarkers.renderOrder = 6;
+        group.add(edgeMarkers);
       }
     }
     r.group = group; r.scene.add(group); requestFrame();
