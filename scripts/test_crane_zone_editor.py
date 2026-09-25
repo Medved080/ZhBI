@@ -59,6 +59,39 @@ class CraneZoneDraftTest(unittest.TestCase):
         with self.assertRaisesRegex(ZoneDraftError, "повторяется"):
             validate_zones(draft, self.baseline)
 
+    def test_touching_peer_stance_is_allowed_but_overlap_is_not(self):
+        draft = copy.deepcopy(self.baseline)
+        draft.append({"id": -1, "category": "Стоянка", "number": 2,
+                      "name": "Стоянка 2", "parent_zone_id": 1,
+                      "levels": [{"elevation_mm": 0, "outline": square(5, 0, 5)}]})
+        validate_zones(draft, self.baseline)
+        draft[-1]["levels"][0]["outline"] = square(4, 0, 5)
+        with self.assertRaisesRegex(ZoneDraftError, "пересекаются"):
+            validate_zones(draft, self.baseline)
+
+    def test_existing_overlap_may_shrink_but_not_grow(self):
+        baseline = copy.deepcopy(self.baseline)
+        baseline.append({"id": 3, "category": "Стоянка", "number": 2,
+                         "name": "Стоянка 2", "parent_zone_id": 1,
+                         "levels": [{"elevation_mm": 0, "outline": square(4, 0, 5)}]})
+        validate_zones(baseline, baseline)
+        draft = copy.deepcopy(baseline)
+        draft[-1]["levels"][0]["outline"] = square(5, 0, 5)
+        validate_zones(draft, baseline)
+        draft[-1]["levels"][0]["outline"] = square(3, 0, 5)
+        with self.assertRaisesRegex(ZoneDraftError, "пересекаются"):
+            validate_zones(draft, baseline)
+
+    def test_stance_with_one_level_cannot_run_through_upper_peer(self):
+        baseline = copy.deepcopy(self.baseline)
+        baseline[1]["levels"].append({"elevation_mm": 3000, "outline": square(5, 0, 5)})
+        draft = copy.deepcopy(baseline)
+        draft.append({"id": -1, "category": "Стоянка", "number": 2,
+                      "name": "Новая стоянка", "parent_zone_id": 1,
+                      "levels": [{"elevation_mm": 0, "outline": square(5, 0, 5)}]})
+        with self.assertRaisesRegex(ZoneDraftError, "пересекаются"):
+            validate_zones(draft, baseline)
+
 
 if __name__ == "__main__":
     unittest.main()

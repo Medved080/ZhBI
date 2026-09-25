@@ -611,8 +611,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const m = sc.mfr;
     const sel = m.selected;
     if (!sel) {
-      return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
-        <p class="v2-muted">Нажмите на элемент или блок на плане. Ctrl (⌘) + щелчок добавляет блок к выбору.</p>
+      return `<div class="ws-pad ws-empty"><h3 class="ws-h">Объект целиком</h3>
+        <p class="v2-muted">План и факт неблочных работ — по текущему объекту. Нажмите на блок, чтобы перейти к его работам. Ctrl (⌘) + щелчок добавляет блок к выбору.</p>
         <dl class="ws-dl">${row("Элементов на плане", m.elements)}${row("Блоков", m.blocks || "")}${row("Отбор", m.filtersActive ? "задан" : "не задан")}</dl>${mbp ? mbp.blocksListHtml(m) : ""}</div>`;
     }
     const key = `${sel.kind}:${sel.id}`;
@@ -636,7 +636,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc(d["имя"] || d["название"] || d["категория"] || "Элемент модели")}</div><div class="ws-type">Элемент модели Revit</div></div>${actions}
       <h4>Свойства</h4><dl class="ws-dl">${cardRows(d)}</dl>
       ${shares.length ? `<h4>Доли по секциям</h4><dl class="ws-dl">${shares.map((x) => row(x["код"], x["доля"] != null ? `${x["доля"]}%` : "—")).join("")}</dl>` : ""}
-      ${params.length ? `<h4>Параметры Revit</h4><dl class="ws-dl">${params.map(([k, v]) => row(k, String(v))).join("")}</dl>` : ""}</div>`;
+      ${params.length ? `<h4>Параметры Revit</h4><dl class="ws-dl">${params.map(([k, v]) => row(k, String(v))).join("")}</dl>` : ""}
+      ${panelHtml("objectHtml")}</div>`;
   }
 
   function pills(items, kind) {

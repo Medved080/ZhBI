@@ -31,7 +31,7 @@ async function edgeCandidate() {
 }
 async function dragAndVerify(label) {
   const before = await edgeCandidate();
-  assert.ok(before.length > 25, `ребро слишком короткое на схеме: ${before.length}px`);
+  assert.ok(before.length > 15, `ребро слишком короткое на схеме: ${before.length}px`);
   await browser.drag(before.x, before.y, before.x + before.dx, before.y + before.dy);
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')");
   assert.match(await browser.eval("document.querySelector('#cz-status').textContent"), /несохранённые изменения/);

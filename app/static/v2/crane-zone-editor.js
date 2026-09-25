@@ -3,6 +3,7 @@
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { overlapArea, peerOverlap, polygonArea } from "./zone-overlap.js";
 import { createCraneZone3d } from "./crane-zone-3d.js";
 import { computeElementRenderHeights } from "./element-render-heights.js";
 
@@ -64,6 +65,17 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return new Set(elements.filter((element) => Number.isFinite(element.x) && Number.isFinite(element.y) && inside(outline, element.x, element.y)).map((element) => element.id));
   }
   function parentCrane() { const z = selected(); return z?.category === "Кран" ? z : zoneById(z?.parent_zone_id); }
+  function outlineAllowed(zone, elevation, outline, previous = null) {
+    if (zone.category === "Стоянка") {
+      const crane = zoneById(zone.parent_zone_id);
+      if (!crane?.levels?.some((level) =>
+        overlapArea(level.outline, outline) >= Math.abs(polygonArea(outline)) - 1)) return false;
+    }
+    const key = (other, level) => `${other.id}:${level}`;
+    const oldAreas = new Map(previous ? peerOverlap(zones(), zone, elevation, previous).map(({ other, elevation_mm, area }) => [key(other, elevation_mm), area]) : []);
+    return peerOverlap(zones(), zone, elevation, outline).every(({ other, elevation_mm, area }) =>
+      area <= (oldAreas.get(key(other, elevation_mm)) || 0) + 1);
+  }
   function markDirty() { dirty = true; preview = null; message = ""; messageTone = "info"; if (mode3d) viewer3d?.update(viewerData()); else draw(); updateStatus(); }
 
   function status(text, tone = "info") { message = text; messageTone = tone; updateStatus(); }
@@ -193,6 +205,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       onOutline(outline) {
         const level = selected()?.levels[activeLevel];
         if (!level || !draft || !canEdit) return;
+        if (!outlineAllowed(selected(), level.elevation_mm, outline, level.outline)) {
+          status("Грань достигла соседней зоны или границы крана: пересечение не допускается.", "error");
+          return;
+        }
         level.outline = outline; markDirty();
       },
       onCommit() { render(); },
@@ -346,7 +362,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function nearestEdge(x, y, canvas) {
     const z = selected(); if (!draft || !canEdit || !z || (standFocus && z.category !== "Стоянка")) return null;
     const level = z.levels[activeLevel]; if (level?.outline?.length !== 4) return null;
-    return nearestEdgeIndex(level.outline, x, y, (point) => toScreen(...point, canvas), 9, 12);
+    return nearestEdgeIndex(level.outline, x, y, (point) => toScreen(...point, canvas), 9, 4);
   }
   function nearestElement(x, y, canvas) {
     let found = null, distance = 9;
@@ -397,6 +413,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const world = toWorld(x, y, canvas);
       const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
       if (!outline) return;
+      if (!outlineAllowed(selected(), level.elevation_mm, outline, level.outline)) {
+        status("Грань достигла соседней зоны или границы крана: пересечение не допускается.", "error");
+        return;
+      }
       if (level.outline.some((point, i) => Math.hypot(point[0] - outline[i][0], point[1] - outline[i][1]) > 0.001)) {
         level.outline = outline; drag.moved = true; markDirty();
       }
@@ -479,23 +499,49 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       if (!(await createDraft())) return;
       if (parentId != null && zoneById(parentId)) selectedZone = parentId;
     }
-    addZone(category);
-    status(`Новая ${category === "Стоянка" ? "стоянка" : "зона крана"} добавлена в черновик. Задайте название и контур, затем сохраните черновик и проверьте предпросмотр.`);
+    if (addZone(category)) status(`Новая ${category === "Стоянка" ? "стоянка" : "зона крана"} добавлена рядом с существующей. Задайте название и контур, затем сохраните черновик и проверьте предпросмотр.`);
   }
   function addZone(category) {
     const all = zones(), id = Math.min(0, ...all.map((z) => z.id)) - 1;
     const parent = category === "Стоянка" ? (selected()?.category === "Кран" ? selectedZone : selected()?.parent_zone_id ?? all.find((z) => z.category === "Кран")?.id) : null;
-    if (category === "Стоянка" && !parent) return status("Сначала выберите кран для стоянки");
-    // Стартовый контур стоянки появляется возле выбранного крана, а не в центре всего объекта.
+    if (category === "Стоянка" && !parent) { status("Сначала выберите кран для стоянки"); return false; }
     const parentPoints = category === "Стоянка" ? zoneById(parent)?.levels?.[0]?.outline || [] : [];
-    const xs = parentPoints.map((p) => p[0]), ys = parentPoints.map((p) => p[1]);
-    const b = parentPoints.length ? { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2,
-      w: Math.max(1, Math.max(...xs) - Math.min(...xs)), h: Math.max(1, Math.max(...ys) - Math.min(...ys)) } : bounds();
-    const size = Math.max(10, Math.min(b.w, b.h) / 8), x = b.x, y = b.y;
+    const box = (points) => ({ x0: Math.min(...points.map((p) => p[0])), x1: Math.max(...points.map((p) => p[0])),
+      y0: Math.min(...points.map((p) => p[1])), y1: Math.max(...points.map((p) => p[1])) });
+    const parentBox = parentPoints.length ? box(parentPoints) : null;
+    const sceneBox = bounds();
+    const width = parentBox ? parentBox.x1 - parentBox.x0 : sceneBox.w;
+    const height = parentBox ? parentBox.y1 - parentBox.y0 : sceneBox.h;
+    const siblings = all.filter((z) => z.category === category &&
+      (category === "Кран" || z.parent_zone_id === parent));
+    const elevations = category === "Кран" ? [null] : [...new Set(siblings.flatMap((z) => z.levels.map((l) => l.elevation_mm)))].sort((a, b) => (a ?? 0) - (b ?? 0));
+    if (!elevations.length) elevations.push(0);
+    const candidateZone = { id, category, parent_zone_id: parent, levels: elevations.map((elevation_mm) => ({ elevation_mm })) };
+    const ordered = [selected(), ...siblings].filter((z, i, a) => z && siblings.includes(z) && a.indexOf(z) === i);
+    const rect = (x0, y0, w, h) => [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]].map((p) => p.map(Math.round));
+    const placement = (elevation) => {
+      for (const fraction of [1 / 6, 1 / 8, 1 / 12, 1 / 20, 1 / 32, 1 / 50]) {
+        const side = Math.max(100, Math.round(Math.min(width, height) * fraction));
+        const candidates = [];
+        for (const sibling of ordered) for (const level of sibling.levels.filter((l) => l.elevation_mm === elevation)) {
+          const b = box(level.outline), cy = (b.y0 + b.y1 - side) / 2, cx = (b.x0 + b.x1 - side) / 2;
+          candidates.push(rect(b.x1, cy, side, side), rect(b.x0 - side, cy, side, side),
+            rect(cx, b.y1, side, side), rect(cx, b.y0 - side, side, side));
+        }
+        if (!ordered.length && parentBox) candidates.push(rect(parentBox.x0, parentBox.y0, side, side));
+        if (!ordered.length && !parentBox) candidates.push(rect(sceneBox.x + sceneBox.w / 2, sceneBox.y - side / 2, side, side));
+        const outline = candidates.find((shape) => outlineAllowed(candidateZone, elevation, shape));
+        if (outline) return outline;
+      }
+      return null;
+    };
+    const levels = elevations.map((elevation_mm) => ({ elevation_mm, outline: placement(elevation_mm) }));
+    if (levels.some((level) => !level.outline)) { status("Нет свободного места рядом с существующими зонами на одном из ярусов. Сначала освободите участок или выберите другой кран.", "error"); return false; }
     const number = Math.max(0, ...all.filter((z) => z.category === category && z.parent_zone_id === parent).map((z) => z.number)) + 1;
     all.push({ id, category, number, name: `${category} ${number}`, parent_zone_id: parent,
-      levels: [{ elevation_mm: category === "Кран" ? null : 0, outline: [[x - size, y - size], [x + size, y - size], [x + size, y + size], [x - size, y + size]].map((p) => p.map(Math.round)) }] });
+      levels });
     selectedZone = id; activeLevel = 0; markDirty(); render();
+    return true;
   }
   function addLevel() { const z = selected(); if (!z) return; const last = z.levels[z.levels.length - 1]; z.levels.push({ elevation_mm: last.elevation_mm == null ? 0 : last.elevation_mm + 3000, outline: clone(last.outline) }); activeLevel = z.levels.length - 1; markDirty(); render(); }
   function assign(clear) {

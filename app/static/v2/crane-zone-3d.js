@@ -130,7 +130,9 @@ export function createCraneZone3d(callbacks) {
   function nearestHandle(x, y) {
     const level = activeLevel();
     if (!data?.editable || level?.outline?.length !== 4) return null;
-    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 10, 12);
+    // У соседней новой зоны на обзорном масштабе ребро может быть ~18 px:
+    // прежние 12 px отступа от каждой вершины перекрывали его целиком.
+    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 10, 4);
     return edge == null ? null : { kind: "edge", index: edge };
   }
   function nearestElement(x, y) {

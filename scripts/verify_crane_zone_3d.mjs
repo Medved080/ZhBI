@@ -53,13 +53,17 @@ try {
   console.log("PASS V2: в 2D нарисованы контуры изделий; переключатель 2D/3D виден и не сдвигается");
   await tap(browser, "#cz-add-crane");
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')");
-  const edge2d = JSON.parse(await browser.eval("document.querySelector('#cz-canvas').dataset.edgeMidpoints"))
-    .sort((a, b) => b.length - a.length)[0];
+  const edges2d = JSON.parse(await browser.eval("document.querySelector('#cz-canvas').dataset.edgeMidpoints"));
+  const edge2d = [...edges2d].sort((a, b) => b.length - a.length)[0];
   assert.ok(edge2d.length > 24);
+  const center2d = edges2d.reduce((sum, item) => [sum[0] + item.x / edges2d.length, sum[1] + item.y / edges2d.length], [0, 0]);
+  const inward2d = [center2d[0] - edge2d.x, center2d[1] - edge2d.y];
+  const inward2dLength = Math.hypot(...inward2d);
   const frame2d = await browser.rect("#cz-canvas");
   const outlineBefore = await browser.eval("document.querySelector('.cz-point-list').textContent");
   await browser.drag(frame2d.x + edge2d.x, frame2d.y + edge2d.y,
-    frame2d.x + edge2d.x + 15, frame2d.y + edge2d.y + 12);
+    frame2d.x + edge2d.x + inward2d[0] / inward2dLength * 12,
+    frame2d.y + edge2d.y + inward2d[1] / inward2dLength * 12);
   assert.notEqual(await browser.eval("document.querySelector('.cz-point-list').textContent"), outlineBefore);
   assert.equal(Number(await browser.eval("document.querySelectorAll('.cz-point-list span').length")), 4);
   console.log("PASS V2: в 2D ребро двигает грань, число вершин остаётся четырьмя");
@@ -91,10 +95,15 @@ try {
   await tap(browser, "#cz-save");
   await browser.waitFor("document.querySelector('#cz-status')?.textContent.startsWith('Черновик сохранён')");
   await browser.waitFor("!!document.querySelector('#cz-3d').dataset.edgeMidpoints", 5000);
-  const edge = JSON.parse(await browser.eval("document.querySelector('#cz-3d').dataset.edgeMidpoints"))
-    .sort((a, b) => b.length - a.length)[0];
-  assert.ok(edge.length > 20, `не хватает места для перетаскивания ребра: ${edge.length}`);
-  await browser.drag(frame.x + edge.x, frame.y + edge.y, frame.x + edge.x + 18, frame.y + edge.y + 14);
+  const edges3d = JSON.parse(await browser.eval("document.querySelector('#cz-3d').dataset.edgeMidpoints"));
+  const edge = [...edges3d].sort((a, b) => b.length - a.length)[0];
+  assert.ok(edge.length > 14, `не хватает места для перетаскивания ребра: ${edge.length}`);
+  const center3d = edges3d.reduce((sum, item) => [sum[0] + item.x / edges3d.length, sum[1] + item.y / edges3d.length], [0, 0]);
+  const inward3d = [center3d[0] - edge.x, center3d[1] - edge.y];
+  const inward3dLength = Math.hypot(...inward3d);
+  await browser.drag(frame.x + edge.x, frame.y + edge.y,
+    frame.x + edge.x + inward3d[0] / inward3dLength * 18,
+    frame.y + edge.y + inward3d[1] / inward3dLength * 18);
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')", 5000);
   console.log("PASS V2: контур изменён перетаскиванием в 3D");
   await tap(browser, "#cz-save");
@@ -119,12 +128,16 @@ try {
     console.log(`PASS V2: стоянка показывает только ${shown} изделий выбранного яруса в 2D и 3D`);
     assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.editable"), "true");
     await browser.waitFor("!!document.querySelector('#cz-3d').dataset.edgeMidpoints", 5000);
-    const standEdge = JSON.parse(await browser.eval("document.querySelector('#cz-3d').dataset.edgeMidpoints"))
-      .sort((a, b) => b.length - a.length)[0];
+    const standEdges = JSON.parse(await browser.eval("document.querySelector('#cz-3d').dataset.edgeMidpoints"));
+    const standEdge = [...standEdges].sort((a, b) => b.length - a.length)[0];
     const standFrame = await browser.rect("#cz-3d canvas");
     assert.ok(standEdge.length > 12);
+    const standCenter = standEdges.reduce((sum, item) => [sum[0] + item.x / standEdges.length, sum[1] + item.y / standEdges.length], [0, 0]);
+    const standInward = [standCenter[0] - standEdge.x, standCenter[1] - standEdge.y];
+    const standDistance = Math.hypot(...standInward);
     await browser.drag(standFrame.x + standEdge.x, standFrame.y + standEdge.y,
-      standFrame.x + standEdge.x + 12, standFrame.y + standEdge.y + 12);
+      standFrame.x + standEdge.x + standInward[0] / standDistance * 14,
+      standFrame.y + standEdge.y + standInward[1] / standDistance * 14);
     await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')", 5000);
     console.log("PASS V2: контур стоянки изменён перетаскиванием в 3D");
     await tap(browser, "#cz-save");

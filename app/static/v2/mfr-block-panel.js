@@ -5,6 +5,7 @@
 // Права и API — как у V1 (`blocks: read`, `work_progress`); запись — только через окна `mfr-dialogs.js` и шлюз `write-gate.js`.
 import { esc, errText, shortDate, canAccounting, closeAllModals, DEADLINE, WORK_STATUS } from "./mfr-common.js";
 import { openFactDialog, openZrDialog, openSettingsDialog, openBulkDatesDialog } from "./mfr-dialogs.js";
+import { openObjectWorkDialog } from "./mfr-object-dialog.js";
 import { newFilter, filterActive, periodIntersects } from "./blocks-screen.js";
 
 const devLabel = (d) => (d == null ? "" : d === 0 ? "±0 дн" : `${d > 0 ? "+" : ""}${d} дн`);
@@ -12,7 +13,7 @@ const devLabel = (d) => (d == null ? "" : d === 0 ? "±0 дн" : `${d > 0 ? "+" 
 export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
   let dead = false;
   const st = {
-    objectId: null, rights: null, blocks: null, blocksErr: "", counts: null,
+    objectId: null, rights: null, blocks: null, blocksErr: "", counts: null, objectWorks: null, objectWorksError: "", objectWorksLoading: false,
     progress: new Map(),            // blockId -> {loading, error, data, key}
     filter: newFilter(), chess: { tracks: [], track: null, mode: "progress", deadlineColors: {} }, dyn: { on: false, from: "", to: "" }, dynSnap: { blocks: 0 },
     open: new Set(["works", "status", "deadline", "period", "dynamics"]),   // как в V1: все группы развёрнуты, сворачиваются человеком
@@ -26,13 +27,14 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
   async function ensureBase() {
     const obj = getObjectId();
     if (baseBusy || (st.objectId === obj && st.blocks)) return;
-    if (st.objectId !== obj) { st.objectId = obj; st.rights = null; st.blocks = null; st.counts = null; st.progress.clear(); st.filter = newFilter(); st.dyn = { on: false, from: "", to: "" }; }
+    if (st.objectId !== obj) { st.objectId = obj; st.rights = null; st.blocks = null; st.counts = null; st.objectWorks = null; st.objectWorksError = ""; st.objectWorksLoading = false; st.progress.clear(); st.filter = newFilter(); st.dyn = { on: false, from: "", to: "" }; }
     if (!obj) return;
     baseBusy = true;
     try {
       try { st.rights = await api.get(`/me/permissions?object_id=${obj}`); } catch (e) { st.rights = null; }
       try { st.blocks = await api.get(`/objects/${obj}/blocks`); st.blocksErr = ""; } catch (e) { st.blocks = []; st.blocksErr = errText(e); }
       await loadCounts();
+      loadObjectWorks();
     } finally { baseBusy = false; }
     if (!dead && obj === st.objectId) repaint();
   }
@@ -41,6 +43,15 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
     const obj = st.objectId;
     try { const c = await api.get(`/objects/${obj}/block-works/active-counts`); if (obj === st.objectId) st.counts = c.counts || {}; }
     catch (e) { if (obj === st.objectId) st.counts = "error"; }
+  }
+  async function loadObjectWorks(force = false) {
+    if (!st.objectId || st.objectWorksLoading || (st.objectWorks && !force)) return;
+    const obj = st.objectId; st.objectWorksLoading = true;
+    try {
+      const data = await api.get(`/objects/${obj}/object-works`);
+      if (st.objectId === obj) { st.objectWorks = data; st.objectWorksError = ""; }
+    } catch (e) { if (st.objectId === obj) st.objectWorksError = errText(e); }
+    finally { if (st.objectId === obj) { st.objectWorksLoading = false; repaint(); } }
   }
   async function loadProgress(blockId, force = false) {
     const obj = st.objectId;
@@ -121,17 +132,32 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
       ${body}</div>`;
   }
 
-  // Пустой выбор: блоки текущего отбора (этаж/секция) со счётчиками ЗР — число работ видно до открытия блока
+  function objectHtml() {
+    ensureBase();
+      if (!st.objectWorks && !st.objectWorksLoading) loadObjectWorks();
+      if (st.objectWorksError) return `<p class="v2-muted" role="alert">Работы объекта недоступны: ${esc(st.objectWorksError)}</p>`;
+      if (!st.objectWorks) return `<p class="v2-muted" role="status">Загрузка работ объекта…</p>`;
+      const works = st.objectWorks.works || [];
+      return `<section class="mfr-wp"><h4>Работы всего объекта <span class="mfr-count" title="Операции с единицей измерения вне блока">${works.length}</span></h4>
+        <p class="v2-muted">Блок не выбран — показан план/факт текущего объекта. Состав работ блока здесь не меняется.</p>
+        <div class="mfr-wp-acts"><button type="button" class="v2-btn" data-mbp="object-settings">Состав работ</button>
+          <button type="button" class="v2-btn" data-mbp="object-dates">План и сроки</button>
+          <button type="button" class="v2-btn v2-primary" data-mbp="object-fact">Факт</button></div>
+        ${works.length ? `<div class="mfr-wp-tree">${works.map((w) => `<div class="mfr-wp-op"><div class="mfr-wp-name">${esc(w.path)} <span class="v2-muted">· ${esc(w.unit)}</span></div><div class="mfr-wp-bar" role="img" aria-label="Выполнено ${esc(w.percent)}%"><i style="width:${esc(w.percent)}%"></i></div><div class="mfr-wp-meta"><span>${esc(w.percent)}%</span><span>план ${esc(shortDate(w.plan_start))}–${esc(shortDate(w.plan_end))}</span><span>прогноз ${esc(shortDate(w.forecast_start))}–${esc(shortDate(w.forecast_end))}</span></div></div>`).join("")}</div>` : `<p class="v2-muted">Работы объекта не выбраны. Откройте «Состав работ».</p>`}</section>`;
+  }
+
+  // Пустой выбор: план/факт всего объекта и блоки текущего отбора со счётчиками ЗР.
   function blocksListHtml(m) {
     ensureBase();
-    if (st.blocks === null) return `<p class="v2-muted">Загрузка блоков…</p>`;
-    if (st.blocksErr) return `<p class="v2-muted">Список блоков недоступен: ${esc(st.blocksErr)}</p>`;
+    const objectSection = objectHtml();
+    if (st.blocks === null) return objectSection + `<p class="v2-muted">Загрузка блоков…</p>`;
+    if (st.blocksErr) return objectSection + `<p class="v2-muted">Список блоков недоступен: ${esc(st.blocksErr)}</p>`;
     const onIds = (arr) => new Set((arr || []).filter((x) => x.on).map((x) => String(x.id)));
     const lv = onIds(m?.levels), sc = onIds(m?.sections);
     const list = st.blocks.filter((b) => (!lv.size || lv.has(String(b.level_id))) && (!sc.size || sc.has(String(b.section_id))));
-    if (!list.length) return `<p class="v2-muted">В выбранных этажах и секциях блоков нет.</p>`;
+    if (!list.length) return objectSection + `<p class="v2-muted">В выбранных этажах и секциях блоков нет.</p>`;
     const cnt = (id) => (st.counts === null ? "…" : st.counts === "error" ? "?" : st.counts[id] || 0);
-    return `<h4>Блоки${lv.size || sc.size ? " выбранных этажей и секций" : ""} · ${list.length}</h4><p class="v2-muted">Справа — число активных ЗР. Щелчок выбирает блок на плане.</p>
+    return `${objectSection}<h4>Блоки${lv.size || sc.size ? " выбранных этажей и секций" : ""} · ${list.length}</h4><p class="v2-muted">Справа — число активных ЗР. Щелчок выбирает блок на плане.</p>
       <div class="mfr-wp-blocks">${list.slice(0, 300).map((b) => `<button type="button" class="mfr-blk" data-mbp="pick" data-id="${b.id}"><span>${esc(labelOf(b))}</span><span class="mfr-count${st.counts === "error" ? " error" : ""}">${esc(cnt(b.id))}</span></button>`).join("")}</div>
       ${list.length > 300 ? `<p class="v2-muted">Показаны первые 300 — сузьте отбор.</p>` : ""}`;
   }
@@ -186,6 +212,8 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
         else if (a === "toggle") { st.open.has(b.dataset.id) ? st.open.delete(b.dataset.id) : st.open.add(b.dataset.id); repaint(); }
         else if (a === "reset-filter") { st.filter = newFilter(); repaint(); }
         else if (a === "fact") openFactDialog({ api, objectId: st.objectId, blockId: id, blockLabel: labelsMap()[id] || `блок ${id}`, canWrite: canWrite(), onChanged: () => refreshAll(id) });
+        else if (a.startsWith("object-")) openObjectWorkDialog({ api, objectId: st.objectId, canWrite: canWrite(),
+          initialTab: a.slice(7), onChanged: () => loadObjectWorks(true) });
         else if (a === "settings") openSettingsDialog({ api, objectId: st.objectId, blocks: many.map((i) => ({ id: i, label: labelsMap()[i] || `блок ${i}` })), canWrite: canWrite(), onSaved: () => refreshAll(id) });
         else if (a === "dates") openDates(many);
       };
@@ -221,7 +249,7 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
   const alert_ = (t) => { import("./dialogs.js").then((m) => m.showInfoDialog(`Не удалось получить работы блоков: ${t}`)); };
 
   return {
-    blockHtml, blocksListHtml, filtersHtml, viewHtml, bind,
+    blockHtml, objectHtml, blocksListHtml, filtersHtml, viewHtml, bind,
     canWrite,
     // снимок сцены → состояние шахматки и динамики движка (источник истины — кадр)
     onScene(s) {
@@ -230,7 +258,7 @@ export function createMfrBlockPanel({ api, send, repaint, getObjectId }) {
       if (m.dynamics) { st.dyn.on = !!m.dynamics.active; st.dynSnap = { blocks: m.dynamics.blocks || 0 }; if (!st.dyn.on) { /* даты остаются в полях */ } }
     },
     summary() { return { chess: st.chess.tracks.find((t) => t.code === st.chess.track)?.name || null, mode: st.chess.mode, dyn: st.dyn.on ? { ...st.dyn } : null, filter: filterActive(st.filter) }; },
-    reset() { st.objectId = null; st.blocks = null; st.rights = null; st.progress.clear(); ensureBase(); },
+    reset() { st.objectId = null; st.blocks = null; st.rights = null; st.objectWorks = null; st.objectWorksError = ""; st.progress.clear(); ensureBase(); },
     // «Сбросить все» (V1: mfr-reset-all-filters) — вместе с этажами/секциями/категориями сбрасывает отбор работ и выключает динамику факта
     resetAll() {
       st.filter = newFilter();

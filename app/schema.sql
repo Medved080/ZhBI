@@ -1503,6 +1503,44 @@ CREATE TABLE IF NOT EXISTS work_fact_items (
     PRIMARY KEY (report_id, work_type_id)
 );
 
+-- Работы МФР, измеряемые не на блоке: план и факт на весь выбранный объект.
+-- Отдельный контур исключает фиктивный block_id и смешение с историей блоков.
+CREATE TABLE IF NOT EXISTS object_works (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    work_type_id INTEGER NOT NULL REFERENCES work_types (id) ON DELETE CASCADE,
+    plan_start TEXT,
+    plan_end TEXT,
+    forecast_start TEXT,
+    forecast_end TEXT,
+    note TEXT,
+    retired_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    UNIQUE (object_id, work_type_id)
+);
+CREATE INDEX IF NOT EXISTS idx_object_works_object ON object_works (object_id, retired_at);
+
+CREATE TABLE IF NOT EXISTS object_fact_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    report_date TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_object_fact_reports_object ON object_fact_reports (object_id, report_date);
+
+CREATE TABLE IF NOT EXISTS object_fact_items (
+    report_id INTEGER NOT NULL REFERENCES object_fact_reports (id) ON DELETE CASCADE,
+    object_work_id INTEGER NOT NULL REFERENCES object_works (id) ON DELETE CASCADE,
+    percent INTEGER NOT NULL CHECK (percent BETWEEN 0 AND 100),
+    PRIMARY KEY (report_id, object_work_id)
+);
+
 -- Внешние 3D-модели ОБЪЕКТА (kind: благоустройство/фасады) — см.
 -- Docs/fbx-ground-implementation-task.md §7 (решение пользователя
 -- 2026-09-10: модель принадлежит объекту, а не проекту — проект лишь

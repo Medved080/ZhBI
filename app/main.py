@@ -96,6 +96,7 @@ from app import revit_sections
 from app import work_progress as work_progress_mod
 from app import work_types_import
 from app import work_fact
+from app import object_works
 from app import block_works
 from app import chess_flat
 from app import block_bulk_edit
@@ -6936,6 +6937,120 @@ def set_work_progress_cell(object_id: int, body: WorkProgressCellIn,
                 new_value=body.status or "план",
                 details={"work_type_id": body.work_type_id, "block_id": body.block_id,
                         "section_id": body.section_id})
+    return {"ok": True}
+
+
+# -------- План/факт по объекту для операций с неблочной единицей. --------
+
+@app.get("/objects/{object_id}/object-works")
+def get_object_works(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        data = object_works.state(conn, object_id)
+        for work in data["works"]:
+            work["rev"] = object_works.work_rev(work)
+        return data
+    finally:
+        conn.close()
+
+
+class ObjectWorksSettingsIn(BaseModel):
+    work_type_ids: list[int]
+    expected_rev: str
+
+
+@app.put("/objects/{object_id}/object-works/settings")
+def put_object_works_settings(object_id: int, body: ObjectWorksSettingsIn,
+                              user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            object_works.save_settings(conn, object_id, user["id"], body.work_type_ids, body.expected_rev)
+        except object_works.ObjectWorkError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+class ObjectWorkDatesIn(BaseModel):
+    plan_start: Optional[str] = None
+    plan_end: Optional[str] = None
+    forecast_start: Optional[str] = None
+    forecast_end: Optional[str] = None
+    note: str = ""
+    expected_rev: str
+
+
+@app.patch("/objects/{object_id}/object-works/{work_id}")
+def patch_object_work(object_id: int, work_id: int, body: ObjectWorkDatesIn,
+                      user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            object_works.save_dates(conn, object_id, work_id, user["id"], body.model_dump(), body.expected_rev)
+        except object_works.ObjectWorkError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.get("/objects/{object_id}/object-fact-reports/{report_id}")
+def get_object_fact_report(object_id: int, report_id: int,
+                           user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "work_progress", "read")
+        try:
+            return object_works.report(conn, object_id, report_id)
+        except object_works.ObjectWorkError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    finally:
+        conn.close()
+
+
+class ObjectFactIn(BaseModel):
+    report_date: str
+    items: dict[int, int]
+    expected_rev: Optional[str] = None
+
+
+@app.post("/objects/{object_id}/object-fact-reports")
+def post_object_fact_report(object_id: int, body: ObjectFactIn,
+                            user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            report_id = object_works.save_report(conn, object_id, user["id"], None, body.report_date, body.items)
+        except object_works.ObjectWorkError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    finally:
+        conn.close()
+    return {"id": report_id}
+
+
+@app.put("/objects/{object_id}/object-fact-reports/{report_id}")
+def put_object_fact_report(object_id: int, report_id: int, body: ObjectFactIn,
+                           user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        assert_object_feature(conn, user, object_id, "work_progress", "write")
+        try:
+            object_works.save_report(conn, object_id, user["id"], report_id, body.report_date,
+                                     body.items, body.expected_rev)
+        except object_works.ObjectWorkError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    finally:
+        conn.close()
     return {"ok": True}
 
 

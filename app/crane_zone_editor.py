@@ -110,6 +110,49 @@ def validate_zones(zones: list[dict], base_zones: list[dict]) -> dict[int, dict]
             for level in zone["levels"]:
                 if not any(poly.covers(Point(p)) for poly in crane_polys for p in level["outline"]):
                     raise ZoneDraftError(f"Стоянка {zone_id} целиком вне зоны крана {parent}")
+    # Соседние зоны одного яруса могут касаться рёбрами, но не должны
+    # накладываться площадью. Исторические DXF-контуры местами уже имеют
+    # небольшие наложения: сохранять их без ухудшения разрешаем, увеличение
+    # площади пересечения (или новый конфликт) — нет. Стоянка и её кран
+    # намеренно вложены; стоянки разных кранов здесь не сопоставляются.
+    peers = list(by_id.values())
+    highest = max((level["elevation_mm"] or 0 for zone in peers for level in zone["levels"]), default=0) + 3000
+
+    def segments(zone):
+        ordered = sorted(zone["levels"], key=lambda item: item["elevation_mm"] or 0)
+        return [((level["elevation_mm"] or 0),
+                 (ordered[index + 1]["elevation_mm"] or 0) if index + 1 < len(ordered) else highest,
+                 Polygon(level["outline"])) for index, level in enumerate(ordered)]
+
+    def old_polygon_at(zone, elevation):
+        if zone is None:
+            return None
+        eligible = [level for level in zone["levels"] if (level["elevation_mm"] or 0) <= elevation]
+        if not eligible:
+            return None
+        return Polygon(max(eligible, key=lambda item: item["elevation_mm"] or 0)["outline"])
+
+    for index, zone in enumerate(peers):
+        for other in peers[index + 1:]:
+            if zone["category"] != other["category"] or (
+                zone["category"] == "Стоянка" and zone["parent_zone_id"] != other["parent_zone_id"]
+            ):
+                continue
+            old_zone, old_other = original.get(zone["id"]), original.get(other["id"])
+            for start, end, poly in segments(zone):
+                for peer_start, peer_end, peer_poly in segments(other):
+                    if max(start, peer_start) >= min(end, peer_end):
+                        continue  # грани на границе ярусов могут касаться
+                    area = poly.intersection(peer_poly).area
+                    midpoint = (max(start, peer_start) + min(end, peer_end)) / 2
+                    old_a, old_b = old_polygon_at(old_zone, midpoint), old_polygon_at(old_other, midpoint)
+                    baseline = old_a.intersection(old_b).area if old_a is not None and old_b is not None else 0
+                    if area > max(1, baseline + 1):
+                        raise ZoneDraftError(
+                            f"Зоны «{zone['name']}» и «{other['name']}» пересекаются на ярусе "
+                            f"{start if zone['category'] == 'Стоянка' else 'без отметки'}. "
+                            "Уменьшите контур до касания границ."
+                        )
     return by_id
 
 
