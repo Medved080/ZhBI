@@ -2,6 +2,7 @@
 // Все изменения до публикации живут только в локальном/серверном черновике.
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
+import { displacedEdgeEndpoints, nearestEdgeIndex } from "./zone-edge-geometry.js";
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const errText = (e) => String(e?.detail || e?.message || e);
@@ -15,7 +16,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let selectedVersionId = null;
   let selectedElements = new Set(), dirty = false, preview = null, message = "";
   let effectiveDate = today();
-  let view = null, drag = null, activeLevel = 0;
+  let view = null, drag = null, hoverEdge = null, activeLevel = 0;
   const $ = (s) => root.querySelector(s);
 
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
@@ -63,8 +64,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}">${l.elevation_mm == null ? "Без отметки" : `+${l.elevation_mm} мм`} · ${l.outline.length} точек</button>`).join("")}</div>
       ${can ? `<button type="button" class="v2-btn" id="cz-add-level">Добавить ярус</button>` : ""}
       ${level ? `<label>Отметка, мм<input id="cz-elevation" type="number" step="1" value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label>
-        <p class="cz-hint">Точки контура можно перетаскивать на схеме. Двойной щелчок по ребру добавляет точку.</p>
-        <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Math.round(p[0])}; ${Math.round(p[1])}</span>`).join("")}</div>` : ""}
+        <p class="cz-hint">Тяните вершину для её перемещения или середину ребра, чтобы сдвинуть его параллельно себе. Двойной щелчок по ребру добавляет точку.</p>
+        <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Number(p[0].toFixed(1))}; ${Number(p[1].toFixed(1))}</span>`).join("")}</div>` : ""}
       <div class="cz-subtitle">Выбрано изделий: ${selectedElements.size}</div>
       ${can ? `<div class="cz-actions"><button type="button" class="v2-btn" id="cz-assign" ${selectedElements.size ? "" : "disabled"}>Назначить выбранные сюда</button><button type="button" class="v2-btn" id="cz-clear" ${selectedElements.size ? "" : "disabled"}>Без зоны</button></div>` : ""}
       <p class="cz-hint">Shift + протяжка на схеме выделяет группу изделий. Обычный щелчок выбирает одно изделие.</p>`;
@@ -118,6 +119,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     drawing = true;
     const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#f8fafb"; ctx.fillRect(0, 0, w, h);
+    let activeOutline = null;
     for (const z of visibleZones()) for (const [li, level] of z.levels.entries()) {
       if (!level.outline?.length) continue;
       ctx.beginPath(); level.outline.forEach((p, i) => { const [sx, sy] = toScreen(p[0], p[1], canvas); if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy); }); ctx.closePath();
@@ -125,7 +127,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ctx.fillStyle = z.category === "Кран" ? "rgba(44,137,83,.08)" : "rgba(42,105,176,.08)"; ctx.fill();
       ctx.strokeStyle = active ? "#f07830" : z.category === "Кран" ? "#2c8953" : "#4682b4";
       ctx.lineWidth = active ? 2.7 : z.category === "Кран" ? 1.5 : 1; ctx.stroke();
-      if (active && draft && canEdit) for (const p of level.outline) { const [sx, sy] = toScreen(p[0], p[1], canvas); ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.fillStyle = "#f07830"; ctx.fill(); }
+      if (active && draft && canEdit) activeOutline = level.outline;
     }
     for (const e of scene) {
       if (!Number.isFinite(e.x) || !Number.isFinite(e.y)) continue;
@@ -134,6 +136,28 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const active = selectedElements.has(e.id);
       ctx.beginPath(); ctx.arc(x, y, active ? 4.5 : 2.2, 0, Math.PI * 2);
       ctx.fillStyle = active ? "#ef6b33" : "rgba(43,65,84,.55)"; ctx.fill();
+    }
+    // Ручки поверх изделий: на плотной схеме маркеры не должны закрывать
+    // место захвата ребра или вершины.
+    if (activeOutline) {
+      const highlighted = drag?.kind === "edge" ? drag.index : hoverEdge;
+      if (highlighted != null) {
+        const a = toScreen(...activeOutline[highlighted], canvas);
+        const b = toScreen(...activeOutline[(highlighted + 1) % activeOutline.length], canvas);
+        ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.strokeStyle = "#d65b16"; ctx.lineWidth = 4; ctx.stroke();
+      }
+      for (let i = 0; i < activeOutline.length; i++) {
+        const p = activeOutline[i], next = activeOutline[(i + 1) % activeOutline.length];
+        const [sx, sy] = toScreen(p[0], p[1], canvas);
+        const [nx, ny] = toScreen(next[0], next[1], canvas);
+        if (Math.hypot(nx - sx, ny - sy) >= 22) {
+          ctx.save(); ctx.translate((sx + nx) / 2, (sy + ny) / 2); ctx.rotate(Math.atan2(ny - sy, nx - sx));
+          ctx.fillStyle = i === highlighted ? "#d65b16" : "#fff";
+          ctx.strokeStyle = "#d65b16"; ctx.lineWidth = 1.5;
+          ctx.fillRect(-6, -3.5, 12, 7); ctx.strokeRect(-6, -3.5, 12, 7); ctx.restore();
+        }
+        ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.fillStyle = "#f07830"; ctx.fill();
+      }
     }
     if (drag?.kind === "box") { ctx.strokeStyle = "#ef6b33"; ctx.setLineDash([5, 4]); ctx.strokeRect(drag.x, drag.y, drag.lastX - drag.x, drag.lastY - drag.y); ctx.setLineDash([]); }
     drawing = false;
@@ -145,6 +169,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const level = z.levels[activeLevel]; if (!level) return null;
     for (let i = 0; i < level.outline.length; i++) { const p = toScreen(...level.outline[i], canvas); if (Math.hypot(p[0] - x, p[1] - y) <= 8) return i; }
     return null;
+  }
+  function nearestEdge(x, y, canvas) {
+    const z = selected(); if (!draft || !canEdit || !z || (standFocus && z.category !== "Стоянка")) return null;
+    const level = z.levels[activeLevel]; if (!level) return null;
+    return nearestEdgeIndex(level.outline, x, y, (point) => toScreen(...point, canvas));
   }
   function nearestElement(x, y, canvas) {
     let found = null, distance = 9;
@@ -170,16 +199,37 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
   function onDown(e) {
     const canvas = e.currentTarget, [x, y] = pointer(e);
-    const vertex = nearestVertex(x, y, canvas);
-    drag = vertex != null && !selectMode ? { kind: "vertex", index: vertex, x, y } : e.shiftKey || selectMode ? { kind: "box", x, y, lastX: x, lastY: y } : { kind: "pan", x, y, lastX: x, lastY: y, moved: false };
+    if (e.shiftKey || selectMode) drag = { kind: "box", x, y, lastX: x, lastY: y };
+    else {
+      const vertex = nearestVertex(x, y, canvas);
+      const edge = vertex == null ? nearestEdge(x, y, canvas) : null;
+      if (vertex != null) drag = { kind: "vertex", index: vertex, x, y };
+      else if (edge != null) drag = { kind: "edge", index: edge, start: toWorld(x, y, canvas), outline: clone(selected().levels[activeLevel].outline), wasDirty: dirty, wasPreview: preview, moved: false };
+      else drag = { kind: "pan", x, y, lastX: x, lastY: y, moved: false };
+    }
+    hoverEdge = drag.kind === "edge" ? drag.index : null;
     canvas.setPointerCapture(e.pointerId);
   }
   function onMove(e) {
-    if (!drag) return;
     const canvas = e.currentTarget, [x, y] = pointer(e);
+    if (!drag) {
+      const edge = !selectMode && nearestVertex(x, y, canvas) == null ? nearestEdge(x, y, canvas) : null;
+      canvas.style.cursor = selectMode ? "crosshair" : edge != null ? "grab" : nearestVertex(x, y, canvas) != null ? "move" : "crosshair";
+      if (hoverEdge !== edge) { hoverEdge = edge; draw(); }
+      return;
+    }
     if (drag.kind === "vertex") {
       const level = selected()?.levels[activeLevel]; if (!level) return;
       level.outline[drag.index] = toWorld(x, y, canvas).map(Math.round); markDirty();
+    } else if (drag.kind === "edge") {
+      const level = selected()?.levels[activeLevel]; if (!level) return;
+      const world = toWorld(x, y, canvas);
+      const endpoints = displacedEdgeEndpoints(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
+      if (!endpoints) return;
+      const nextIndex = (drag.index + 1) % level.outline.length;
+      if (level.outline[drag.index][0] !== endpoints[0][0] || level.outline[drag.index][1] !== endpoints[0][1]) {
+        level.outline[drag.index] = endpoints[0]; level.outline[nextIndex] = endpoints[1]; drag.moved = true; markDirty();
+      }
     } else if (drag.kind === "box") { drag.lastX = x; drag.lastY = y; draw(); }
     else { if (Math.hypot(x - drag.x, y - drag.y) > 3) drag.moved = true; view.x -= (x - drag.lastX) / view.scale; view.y += (y - drag.lastY) / view.scale; drag.lastX = x; drag.lastY = y; draw(); }
   }
@@ -195,8 +245,16 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       if (element) selectedElements = new Set([element.id]);
       else if (zone) { selectedZone = zone.id; activeLevel = 0; }
       render();
-    } else if (move.kind === "vertex") render();
+    } else if (move.kind === "vertex" || move.kind === "edge") render();
     drag = null;
+  }
+  function onCancel() {
+    if (drag?.kind === "edge" && drag.moved) {
+      const level = selected()?.levels[activeLevel];
+      if (level) level.outline = drag.outline;
+      dirty = drag.wasDirty; preview = drag.wasPreview;
+    }
+    drag = null; hoverEdge = null; render();
   }
   function onDoubleClick(e) {
     const z = selected(), level = z?.levels[activeLevel]; if (!draft || !canEdit || !level || (standFocus && z.category !== "Стоянка")) return;
@@ -233,7 +291,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-assign")?.addEventListener("click", () => assign(false));
     $("#cz-clear")?.addEventListener("click", () => assign(true));
     const canvas = $("#cz-canvas");
-    canvas?.addEventListener("pointerdown", onDown); canvas?.addEventListener("pointermove", onMove); canvas?.addEventListener("pointerup", onUp);
+    canvas?.addEventListener("pointerdown", onDown); canvas?.addEventListener("pointermove", onMove); canvas?.addEventListener("pointerup", onUp); canvas?.addEventListener("pointercancel", onCancel);
+    canvas?.addEventListener("pointerleave", () => { if (!drag && hoverEdge != null) { hoverEdge = null; draw(); } });
     canvas?.addEventListener("dblclick", onDoubleClick);
     canvas?.addEventListener("wheel", (e) => { e.preventDefault(); const [x, y] = pointer(e), before = toWorld(x, y, canvas); view.scale = Math.max(0.0001, Math.min(view.scale * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 100)); const after = toWorld(x, y, canvas); view.x += before[0] - after[0]; view.y += before[1] - after[1]; draw(); }, { passive: false });
   }
