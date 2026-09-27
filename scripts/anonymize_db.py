@@ -158,6 +158,107 @@ def _blank_json_strings(raw: str | None, placeholder: str = "скрыто") -> s
     return json.dumps(walk(data), ensure_ascii=False)
 
 
+def anonymize_crane_zone_history(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
+    """Scrub denormalized zone snapshots and free text in versioned data."""
+    present = {row["name"] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    file_names = mapping.groups.get("source_file", {})
+    stats: dict[str, int] = {}
+
+    def remap_snapshot(raw):
+        if not raw:
+            return raw
+        data = json.loads(raw)
+
+        def remap(value):
+            if isinstance(value, list):
+                return [remap(item) for item in value]
+            if isinstance(value, dict):
+                return {
+                    key: file_names.get(item, item) if key == "source_file"
+                    and isinstance(item, str) else remap(item)
+                    for key, item in value.items()
+                }
+            return value
+
+        return json.dumps(remap(data), ensure_ascii=False)
+
+    for table in ("crane_zone_versions", "crane_zone_drafts"):
+        if table not in present:
+            continue
+        rows = conn.execute(
+            f"SELECT id, zones_json, author_name, note FROM {table}"
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                f"UPDATE {table} SET zones_json=?, author_name=?, note=? WHERE id=?",
+                (remap_snapshot(row["zones_json"]),
+                 "Автор скрыт" if row["author_name"] else None,
+                 COMMENT_PLACEHOLDER if row["note"] else None, row["id"]),
+            )
+        stats[f"{table} (снимки и текст)"] = len(rows)
+
+    if "crane_zone_drafts" in present:
+        rows = conn.execute(
+            "SELECT id, overrides_json FROM crane_zone_drafts"
+        ).fetchall()
+        for row in rows:
+            overrides = json.loads(row["overrides_json"])
+            for item in overrides.values():
+                if isinstance(item, dict) and item.get("reason"):
+                    item["reason"] = COMMENT_PLACEHOLDER
+            conn.execute(
+                "UPDATE crane_zone_drafts SET overrides_json=? WHERE id=?",
+                (json.dumps(overrides, ensure_ascii=False), row["id"]),
+            )
+        stats["crane_zone_drafts (причины исключений)"] = len(rows)
+
+    if "crane_zone_version_assignments" in present and "reason" in {
+        row["name"] for row in conn.execute(
+            "PRAGMA table_info(crane_zone_version_assignments)"
+        )
+    }:
+        stats["crane_zone_version_assignments.reason"] = conn.execute(
+            "UPDATE crane_zone_version_assignments SET reason=? "
+            "WHERE reason IS NOT NULL AND reason <> ''",
+            (COMMENT_PLACEHOLDER,),
+        ).rowcount
+
+    if "crane_zone_transition" in present:
+        rows = conn.execute(
+            "SELECT object_id, last_error, summary_json FROM crane_zone_transition"
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE crane_zone_transition SET last_error=?, summary_json=? "
+                "WHERE object_id=?",
+                (COMMENT_PLACEHOLDER if row["last_error"] else None,
+                 _blank_json_strings(row["summary_json"]), row["object_id"]),
+            )
+        stats["crane_zone_transition (текст)"] = len(rows)
+    return stats
+
+
+def zone_snapshot_source_files(raw: str) -> set[str]:
+    """Include files mentioned only by historical zone revisions."""
+    found: set[str] = set()
+
+    def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if key == "source_file" and isinstance(item, str):
+                    found.add(item)
+                else:
+                    visit(item)
+
+    visit(json.loads(raw))
+    return found
+
+
 def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     stats: dict[str, int] = {}
 
@@ -370,6 +471,13 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             f"SELECT DISTINCT source_file FROM {table} WHERE source_file IS NOT NULL"
         ):
             files.add(row["source_file"])
+    present = {row["name"] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    for table in ("crane_zone_versions", "crane_zone_drafts"):
+        if table in present:
+            for row in conn.execute(f"SELECT zones_json FROM {table}"):
+                files.update(zone_snapshot_source_files(row["zones_json"]))
     for n, original in enumerate(sorted(files), start=1):
         replacement = f"Чертёж-{n}.dxf"
         mapping.put("source_file", original, replacement)
@@ -378,6 +486,9 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
                 f"UPDATE {table} SET source_file=? WHERE source_file=?", (replacement, original)
             )
     count("source_file (имён чертежей)", len(files))
+
+    for name, n in anonymize_crane_zone_history(conn, mapping).items():
+        count(name, n)
 
     # ------------------------------------------- свободные комментарии
     for table in ("elements", "status_history"):
@@ -527,6 +638,7 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
 # ложное срабатывание на КАЖДОЙ таблице, где есть `element_type` — это
 # не общий заказчиком реквизит, а термин самой предметной области.
 _ENUM_COLUMNS = {"element_type"}
+_RELEASE_TASK_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$")
 
 
 def find_leaks(conn: sqlite3.Connection, needles: list[tuple[str, str]]) -> list[tuple[str, str, str]]:
@@ -561,6 +673,9 @@ def find_leaks(conn: sqlite3.Connection, needles: list[tuple[str, str]]) -> list
                 value = row[column]
                 if not isinstance(value, str) or not value:
                     continue
+                if (table, column) == ("release_tasks", "name") and \
+                        _RELEASE_TASK_NAME.fullmatch(value):
+                    continue  # идентификатор из реестра кода, не клиентский текст
                 for group, pattern in compiled:
                     if pattern.search(value):
                         leaks.append((table, column, group))
