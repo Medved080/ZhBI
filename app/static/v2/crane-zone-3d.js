@@ -19,6 +19,7 @@ export function preloadCraneZone3d() { return loadLibraries(); }
 
 export function createCraneZone3d(callbacks) {
   let r = null, host = null, data = null, disposed = false, framed = false;
+  let showToken = 0;
   let homeDistance = 0, frame = null, observer = null, drag = null, box = null;
   let meshes = [], sceneBounds = null, modelSignature = null;
   let gripLayer = null, outlineFrame = null, pendingOutline = null;
@@ -41,6 +42,8 @@ export function createCraneZone3d(callbacks) {
     if (!r || !host) return;
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
+    if (r.viewportWidth === w && r.viewportHeight === h) return;
+    r.viewportWidth = w; r.viewportHeight = h;
     r.renderer.setSize(w, h, false);
     if (r.edgeMaterial) r.edgeMaterial.resolution.set(w, h);
     r.camera.aspect = w / h; r.camera.updateProjectionMatrix();
@@ -325,9 +328,11 @@ export function createCraneZone3d(callbacks) {
       group.add(r.modelEdges);
     }
     r.modelGroup = group; modelSignature = data.modelKey;
+    r.modelBuildCount = (r.modelBuildCount || 0) + 1;
     updateModelColors();
     if (host) { host.dataset.modelKind = "extrusions"; host.dataset.modelCount = String(data.modelElements.length);
-      host.dataset.modelBuildMs = String(Math.round(performance.now() - buildStarted)); }
+      host.dataset.modelBuildMs = String(Math.round(performance.now() - buildStarted));
+      host.dataset.modelBuildCount = String(r.modelBuildCount); }
     r.scene.add(group); requestFrame();
   }
   function updateModelColors() {
@@ -440,9 +445,10 @@ export function createCraneZone3d(callbacks) {
   return {
     async show(nextHost, nextData) {
       if (disposed || !nextHost) return;
+      const token = ++showToken;
       data = nextData;
       await ensure();
-      if (disposed) return;
+      if (disposed || token !== showToken) return;
       host = nextHost;
       if (!gripLayer || gripLayer.parentNode !== host) {
         gripLayer?.remove();
@@ -456,8 +462,10 @@ export function createCraneZone3d(callbacks) {
       observer = new ResizeObserver(resize); observer.observe(host);
       resize(); rebuild();
       if (!framed) fit();
+      updateHandlePositions();
     },
-    update(nextData) { data = nextData; rebuild(); },
+    isReady(nextHost) { return !!r && !!host && host === nextHost && r.renderer.domElement.parentNode === host; },
+    update(nextData) { data = nextData; resize(); rebuild(); updateHandlePositions(); },
     updateOutline,
     screenPoint(point) { return r && point ? toScreen(point) : null; },
     fit, zoom, zoomPercent,

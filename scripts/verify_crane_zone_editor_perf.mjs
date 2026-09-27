@@ -28,11 +28,13 @@ try {
   await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'", 30000);
   console.log(`2D → 3D с изделиями: ${Date.now() - t} мс`);
   console.log(`Первая сборка геометрии: ${await browser.eval("document.querySelector('#cz-3d').dataset.modelBuildMs")} мс`);
+  const buildCount = Number(await browser.eval("document.querySelector('#cz-3d').dataset.modelBuildCount"));
   t = Date.now();
   await tap(browser, `.cz-stand[data-zone-id="${stands[1].id}"]`);
   await browser.waitFor(`document.querySelector('.cz-stand[data-zone-id="${stands[1].id}"]')?.classList.contains('active') && document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'`, 30000);
   console.log(`Выбор соседней стоянки в 3D: ${Date.now() - t} мс`);
-  console.log(`Сборка после выбора: ${await browser.eval("document.querySelector('#cz-3d').dataset.modelBuildMs")} мс`);
+  assert.equal(Number(await browser.eval("document.querySelector('#cz-3d').dataset.modelBuildCount")), buildCount,
+    "при выборе стоянки того же яруса модель собрана повторно");
   const handles = await browser.eval("JSON.parse(document.querySelector('#cz-3d').dataset.edgeMidpoints || '[]')");
   assert.equal(await browser.eval("document.querySelectorAll('#cz-3d .cz-3d-grip').length"), 4);
   assert.equal(await browser.eval("getComputedStyle(document.querySelector('#cz-3d .cz-3d-grip')).backgroundColor"), "rgb(239, 107, 51)");

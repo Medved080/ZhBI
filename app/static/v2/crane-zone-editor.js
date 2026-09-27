@@ -46,7 +46,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let drag = null, hoverEdge = null, activeLevel = 0, craneLevel = null;
   let canvasResizeObserver = null;
   let viewer3d = null, renderGeneration = 0;
-  let model3d = null, modelById = new Map(), modelPromise = null, pendingModelFit = false;
+  let model3d = null, modelById = new Map(), modelPromise = null;
   let liveCounts = new Map(), liveCountsReady = false;
   let assignedCounts = new Map(), countedScene = null;
   const expandedCraneIds = new Set();
@@ -320,6 +320,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function render() {
     if (dead) return;
+    const previous3dHost = $("#cz-3d");
+    previous3dHost?.remove();
     const treeScroll = $(".cz-tree")?.scrollTop ?? 0;
     const propertiesScroll = $(".cz-properties")?.scrollTop ?? 0;
     if (!liveCountsReady) {
@@ -340,6 +342,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><button type="button" class="v2-btn" id="cz-exceptions-toggle" aria-expanded="${exceptionsOpen}" aria-controls="cz-exceptions">Исключения · ${Object.keys(draft.overrides || {}).length}</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}, статус: ${preview.counts.status || 0}, ярус: ${preview.counts.tier || 0}; ручных: ${preview.counts.manual || 0}, исключений переноса: ${preview.counts.conversion_exceptions || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>${exceptionsHtml()}` : ""}`;
+    if (previous3dHost) {
+      previous3dHost.hidden = !mode3d;
+      $("#cz-3d")?.replaceWith(previous3dHost);
+    }
+    const ready3d = mode3d && viewer3d?.isReady($("#cz-3d"));
+    if (ready3d) viewer3d.update(viewerData());
     if (collisionNotice?.expires > Date.now()) placeCollision(collisionNotice.x, collisionNotice.y);
     else collisionNotice = null;
     const controlHelp = {
@@ -358,7 +366,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     bind();
     updateStatus();
     const generation = ++renderGeneration;
-    requestAnimationFrame(() => { if (dead || generation !== renderGeneration) return; if (mode3d) render3d(generation); else draw(); });
+    requestAnimationFrame(() => {
+      if (dead || generation !== renderGeneration) return;
+      if (mode3d) { if (!ready3d) render3d(generation); }
+      else draw();
+    });
   }
 
   function viewerData() {
@@ -388,7 +400,6 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function toggleElements(on) {
     showElements = on;
     if (!on) selectMode = false;
-    if (mode3d && on) pendingModelFit = true;
     render();
   }
   async function render3d(generation) {
@@ -414,8 +425,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       onViewChange() { if (mode3d) { updateZoomControls(); repositionCollision3d(); } },
     });
     try {
+      await ensureModelData().catch(() => null);
+      if (dead || !mode3d || generation !== renderGeneration) return;
       await viewer3d.show($("#cz-3d"), viewerData());
-      if (pendingModelFit && !dead && mode3d && generation === renderGeneration) { pendingModelFit = false; viewer3d.fit(); }
       if (!dead && mode3d && generation === renderGeneration) updateZoomControls();
     } catch (e) {
       if (dead || generation !== renderGeneration) return;
@@ -940,12 +952,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     requestAnimationFrame(() => setTimeout(() => {
       if (dead) return;
       preloadCraneZone3d().catch(() => {});
-      ensureModelData().then(() => {
-        if (dead || !mode3d) return;
-        viewer3d?.update(viewerData());
-        if (pendingModelFit) { pendingModelFit = false; viewer3d?.fit(); }
-        updateZoomControls();
-      }).catch(() => {});
+      ensureModelData().catch(() => {});
     }, 0));
   }).catch((e) => { if (!dead) root.innerHTML = `<div class="v2-callout v2-callout-bad">${esc(errText(e))}</div>`; });
   return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; hideCollision(); canvasResizeObserver?.disconnect(); viewer3d?.dispose(); } };
