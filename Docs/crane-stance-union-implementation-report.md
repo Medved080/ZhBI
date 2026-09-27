@@ -115,8 +115,13 @@ DXF-контур крана используется для определени
 текущих изделий. Снятые изделия остаются в старом снимке и отсутствуют
 в новом черновике, включая черновик DXF. Если тот же ID/UID снова стал
 текущим с неизменной привязкой, последнее историческое исключение
-восстанавливается. При публикации сохранённый физический ярус снятого
-изделия перепривязывается к новому ID уровня, если этот ярус остался.
+восстанавливается. При публикации последняя проверенная отчётная отметка
+снятого изделия, включая `NULL`, сохраняется в `report_levels`, даже если
+её рабочий контур удалён. Снятое изделие перепривязывается к новому ID
+этого ссылочного уровня; снимок новой геометрии остаётся согласованным.
+Проверены цепочки «снятие → изменение рабочего яруса → публикация →
+возвращение → новая публикация» для ручного и конверсионного исключений,
+а также публикация черновика DXF между снятием и возвращением.
 Новый ID изделия проходит как новое поступление без автоматического
 наследования старого исключения. Синтетическая база со старой схемой
 таблиц редакций подтвердила сохранность ручного назначения и будущей
@@ -134,7 +139,7 @@ DXF-контур крана используется для определени
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_stance_union.py` | 6 групп геометрии прошли |
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_zone_editor.py` | 10 тестов прошли |
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_zone_versions.py` | 7 тестов границ периода прошли |
-| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_zone_service.py` | 30 тестов, включая DXF, исторические отчёты, снятие изделия и старую схему, прошли |
+| `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_zone_service.py` | 32 теста, включая DXF, исторические отчёты, снятие и возвращение изделия с изменённым ярусом, `NULL`-отметку и старую схему, прошли |
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_zone_transition.py data/zhbi.baseline.db` | откат в двух точках, повтор, ожидание будущей редакции и активация прошли |
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/test_crane_zone_exceptions.py data/zhbi.anon.db` | 3 публикации, явное снятие и ручное переназначение прошли |
 | `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. .venv/bin/python scripts/dry_run_migration.py data/zhbi.baseline.db` | два прохода, сверка содержимого и внешних ключей, расхождений нет |

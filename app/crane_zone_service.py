@@ -151,6 +151,24 @@ def _inherited_overrides(conn: sqlite3.Connection, object_id: int, version_id: i
     }
 
 
+def _retired_saved_assignments(conn: sqlite3.Connection, object_id: int) -> list[sqlite3.Row]:
+    """Last immutable assignment for each retired row with the same UID."""
+    return conn.execute(
+        "WITH ranked AS ("
+        "SELECT a.element_id, a.stance_zone_id, a.stance_elevation_mm, "
+        "e.zone_stance_id AS current_stance_id, "
+        "ROW_NUMBER() OVER (PARTITION BY a.element_id "
+        "ORDER BY v.revision_no DESC) AS rank_no "
+        "FROM elements e JOIN crane_zone_version_assignments a "
+        "ON a.element_id = e.id AND a.element_uid IS e.element_uid "
+        "JOIN crane_zone_versions v ON v.id = a.version_id "
+        "WHERE e.object_id = ? AND e.is_current = 0 AND v.object_id = ?) "
+        "SELECT element_id, stance_zone_id, stance_elevation_mm, current_stance_id "
+        "FROM ranked WHERE rank_no = 1",
+        (object_id, object_id),
+    ).fetchall()
+
+
 def register_import_membership(conn: sqlite3.Connection, object_id: int) -> int:
     """Зарегистрировать новые изделия отдельно, НЕ меняя опубликованные снимки.
 
@@ -336,14 +354,7 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
     }
     if not alive.issubset(expected):
         raise ZoneDraftError("Текущие зоны изменены вне редакции; активация остановлена")
-    retired_levels = [
-        (row["id"], row["zone_stance_id"], row["elevation_mm"])
-        for row in conn.execute(
-            "SELECT e.id, e.zone_stance_id, l.elevation_mm FROM elements e "
-            "JOIN zone_levels l ON l.id = e.zone_stance_level_id "
-            "WHERE e.object_id = ? AND e.is_current = 0", (object_id,),
-        )
-    ]
+    retired_assignments = _retired_saved_assignments(conn, object_id)
     for zone in zones:
         first = zone["levels"][0] if zone["levels"] else None
         conn.execute(
@@ -380,15 +391,17 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             "AND z.category = 'Стоянка'", (object_id,),
         )
     }
-    # Rebuilding zone_levels invalidates old IDs. Keep a retired row's
-    # assignment usable if its saved physical level still exists; an import
-    # can later reactivate that same element row.
-    for element_id, stance_id, elevation in retired_levels:
-        level_id = levels.get((stance_id, elevation))
-        if level_id is not None:
+    # Rebuilding zone_levels invalidates old IDs. Retired elements retain
+    # their last verified assignment through a reference level, even if its
+    # working polygon was removed while they were absent.
+    for retired in retired_assignments:
+        stance_id = retired["stance_zone_id"]
+        level_id = levels.get((stance_id, retired["stance_elevation_mm"]))
+        if (stance_id is not None and retired["current_stance_id"] == stance_id
+                and level_id is not None):
             conn.execute(
                 "UPDATE elements SET zone_stance_level_id = ? WHERE id = ?",
-                (level_id, element_id),
+                (level_id, retired["element_id"]),
             )
     assignments = conn.execute(
         "SELECT * FROM crane_zone_version_assignments WHERE version_id = ?",
@@ -528,9 +541,19 @@ def publish_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
             json.loads(draft["overrides_json"]),
         )["assignments"]
         by_id = {z["id"]: z for z in zones}
-        for assignment in assignments:
+        for zone in zones:
+            if zone["category"] != "Стоянка":
+                continue
+            working = {level["elevation_mm"] for level in zone["levels"]}
+            references = [level for level in zone.get("report_levels", [])
+                          if level not in working]
+            if references:
+                zone["report_levels"] = references
+            else:
+                zone.pop("report_levels", None)
+        for assignment in [*assignments, *_retired_saved_assignments(conn, object_id)]:
             stance_id = assignment["stance_zone_id"]
-            if stance_id is None:
+            if stance_id is None or stance_id not in by_id:
                 continue
             zone = by_id[stance_id]
             elevation = assignment["stance_elevation_mm"]
