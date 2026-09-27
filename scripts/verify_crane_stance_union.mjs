@@ -62,6 +62,7 @@ try {
   browser = await session(base, "admin", { objectId: 1, width: 1920, height: 1080 });
   await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Захватка]')");
   await tap(browser, '[data-cat="Кран"]');
+  await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.renderedOutlines) > 9000", 10000);
   await browser.shot(join(shots, "editor-2d-1920.png"));
   check("Редактор помещается на 1920×1080", await browser.eval(
     "document.documentElement.scrollHeight <= innerHeight + 1 && document.documentElement.scrollWidth <= innerWidth + 1"));

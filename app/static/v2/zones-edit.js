@@ -67,13 +67,14 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   wireTabs();
 
   function paintTabInfo() {
+    el.classList.toggle("cz-editor-active", st.category !== "Захватка");
     el.querySelectorAll("[data-cat]").forEach((b) => { b.setAttribute("aria-selected", String(b.dataset.cat === st.category)); });
     const text = {
       "Захватка": "Захватки — самостоятельные участки объекта. Их геометрия редактируется отдельно от редакций кранов.",
       "Кран": "Здесь показаны только зоны кранов. Стоянки находятся на соседней вкладке; изменения обоих видов зон публикуются одной редакцией.",
       "Стоянка": "Стоянка — зона внутри выбранного крана. Чтобы добавить стоянку, выберите кран слева и нажмите «Добавить стоянку»; до публикации изменение остаётся в черновике.",
     };
-    $("#ze-context").textContent = text[st.category];
+    $("#ze-context").textContent = st.category === "Захватка" ? text[st.category] : "";
   }
 
   function dirty() {

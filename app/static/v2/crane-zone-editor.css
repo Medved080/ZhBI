@@ -3,62 +3,65 @@
 .cz-page .v2-crumbs, .cz-page .v2-screen-head, .cz-page .ze-tabs, .cz-page .ze-context { flex: none; }
 .cz-page .ze-tabs { margin: 8px 0 0; min-height: 43px; align-items: center; }
 .cz-page .ze-context { min-height: 36px; margin: 0; display: flex; align-items: center; font-size: 12px; line-height: 1.3; }
+.cz-page.cz-editor-active .v2-crumbs, .cz-page.cz-editor-active .v2-screen-head, .cz-page.cz-editor-active .ze-context { display: none; }
+.cz-page.cz-editor-active .ze-tabs { margin-top: 0; min-height: 36px; }
 .cz-page #ze-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cz-page #ze-body > .v2-read-table { overflow: auto; min-height: 0; }
 .cz-page #ze-crane-editor { min-height: 0; display: flex; flex: 1; margin: 0 -16px; }
 .cz-root { min-height: 0; flex: 1; display: flex; flex-direction: column; color: #273d4b; background: #f5f7f8; }
-.cz-toolbar { min-height: 54px; display: flex; align-items: center; gap: 9px; padding: 8px 16px; border-bottom: 1px solid #dce3e7; background: #fff; flex-wrap: wrap; }
-.cz-toolbar strong { font-size: 17px; margin-right: 8px; }
-.cz-feedback { flex: none; padding: 7px 16px; border-bottom: 1px solid #e6dfd2; background: #fff8ec; color: #69480e; font-size: 12px; line-height: 1.35; }
+.cz-toolbar { min-height: 42px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid #dce3e7; background: #fff; flex-wrap: nowrap; overflow-x: auto; }
+.cz-toolbar strong { font-size: 14px; margin-right: 3px; white-space: nowrap; }
+.cz-feedback { flex: none; padding: 3px 10px; border-bottom: 1px solid #e6dfd2; background: #fff8ec; color: #69480e; font-size: 11px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cz-feedback[data-tone="success"] { background: #eaf6ee; border-color: #c8e5d0; color: #22643a; }
 .cz-feedback[data-tone="error"] { background: #fff0ee; border-color: #edcbc6; color: #9d2f25; }
 .cz-feedback[data-tone="warning"] { background: #fff4d9; border-color: #e7c782; color: #69480e; }
 .cz-root .v2-btn.v2-primary:hover:not(:disabled) { background: #236f43; border-color: #236f43; color: #fff; }
 .cz-root .v2-btn.v2-primary:disabled,
 .cz-root .v2-btn.v2-primary:disabled:hover { background: #eef2ef; border-color: #ccd7cf; color: #4d6355; opacity: 1; cursor: not-allowed; }
-.cz-revision { font-size: 12px; color: #617784; margin-right: auto; white-space: nowrap; }
-.cz-toolbar select { min-width: 195px; max-width: 255px; }
+.cz-revision { font-size: 11px; color: #617784; margin-right: auto; white-space: nowrap; }
+.cz-toolbar select { min-width: 125px; max-width: 200px; }
 .cz-history-note { background: #edf4f8; color: #425f6e; border-bottom: 1px solid #d5e4eb; padding: 6px 16px; font-size: 12px; line-height: 1.3; }
 .cz-body { display: grid; grid-template-columns: minmax(190px, 245px) minmax(360px, 1fr) minmax(255px, 310px); flex: 1; min-height: 0; }
-.cz-tree, .cz-properties { overflow: auto; background: #fff; padding: 14px; min-width: 0; }
+.cz-tree, .cz-properties { overflow: auto; background: #fff; padding: 8px; min-width: 0; }
 .cz-tree { border-right: 1px solid #dce3e7; }
-.cz-tree-head { position: sticky; top: 0; z-index: 3; display: flex; flex-direction: column; gap: 6px; margin: -14px -14px 12px; padding: 14px; background: #fff; border-bottom: 1px solid #e3e9ec; box-shadow: 0 4px 8px rgb(32 55 66 / 5%); }
+.cz-tree-head { position: sticky; top: 0; z-index: 3; display: flex; flex-direction: column; gap: 4px; margin: -8px -8px 6px; padding: 7px 8px; background: #fff; border-bottom: 1px solid #e3e9ec; }
 .cz-tree-head .cz-title { margin: 0; }
-.cz-tree-intro { margin: 0; color: #627782; font-size: 12px; line-height: 1.35; }
-.cz-tree-add { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 4px 0 0; }
+.cz-tree-add { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
 .cz-tree-add .v2-btn { white-space: normal; text-align: left; }
 .cz-tree-add .v2-primary { font-weight: 650; }
 .cz-parent-hint { color: #627782; font-size: 11px; line-height: 1.3; }
 .cz-properties { border-left: 1px solid #dce3e7; display: flex; flex-direction: column; gap: 9px; }
-.cz-title { color: #657884; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+.cz-title { color: #657884; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
 .cz-crane { margin-bottom: 5px; }
 .cz-tree-item { display: flex; gap: 7px; align-items: center; width: 100%; border: 0; background: transparent; text-align: left; color: #273d4b; padding: 7px 9px; border-radius: 7px; cursor: pointer; font: inherit; }
 .cz-tree-item:hover { background: #eef4f7; }
 .cz-tree-item.active { background: #e5f0e9; color: #236747; font-weight: 700; }
-.cz-tree-item > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.cz-tree-item > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .cz-tree-item b { flex: none; white-space: nowrap; font-size: 11px; color: #71818a; font-weight: 500; }
 .cz-tree-icon { color: #4b9870; }
+.cz-tree-chevron { color: #607782; width: 10px; flex: none; }
+.cz-crane-stands[hidden] { display: none; }
 .cz-stand { padding-left: 23px; }
 .cz-stand .cz-tree-icon { color: #6185a5; }
 .cz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .cz-map { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.cz-map-bar, .cz-map-foot { min-height: 34px; background: #fff; padding: 4px 10px; font-size: 12px; color: #607782; }
+.cz-map-bar, .cz-map-foot { min-height: 30px; background: #fff; padding: 3px 8px; font-size: 12px; color: #607782; }
 .cz-map-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px 8px; }
 .cz-map-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: #344e5f; }
 .cz-map-controls { display: flex; align-items: center; justify-self: end; gap: 7px; flex: none; white-space: nowrap; }
-.cz-map-hint { grid-column: 1 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #607782; }
+.cz-map-hint { display: none; }
 .cz-map-bar .cz-mode-active { background: #e5f0e9; border-color: #49976d; color: #236747; }
 .cz-view-switch { display: flex; flex: none; gap: 2px; padding: 2px; border: 1px solid #dce3e7; border-radius: 7px; }
 .cz-view-switch .v2-btn { min-width: 36px; padding: 4px 7px; }
 .cz-elements-layer { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; color: #425b68; }
 .cz-elements-layer input { margin: 0; accent-color: #2c8953; }
-.cz-map-foot { display: flex; align-items: center; border-top: 1px solid #dce3e7; min-height: 31px; }
+.cz-map-foot { display: flex; align-items: center; border-top: 1px solid #dce3e7; min-height: 24px; }
 #cz-canvas { display: block; width: 100%; flex: 1; min-height: 0; touch-action: none; cursor: crosshair; }
 #cz-canvas[hidden], #cz-3d[hidden] { display: none; }
 #cz-3d { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #f8fafb; }
 #cz-3d canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .cz-3d-selection { position: absolute; border: 1px dashed #ef6b33; background: rgb(239 107 51 / 10%); pointer-events: none; }
-.cz-zoom-controls { position: absolute; right: 12px; bottom: 42px; z-index: 2; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid #cbd8df; border-radius: 8px; background: #fff; box-shadow: 0 2px 8px rgb(25 50 65 / 13%); }
+.cz-zoom-controls { position: absolute; right: 12px; bottom: 34px; z-index: 2; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid #cbd8df; border-radius: 8px; background: #fff; box-shadow: 0 2px 8px rgb(25 50 65 / 13%); }
 .cz-zoom-controls button { width: 30px; height: 29px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #294254; font-family: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
 .cz-zoom-controls button:hover:not(:disabled) { background: #eaf1f5; }
 .cz-zoom-controls button:disabled { opacity: .35; cursor: not-allowed; }

@@ -18,8 +18,8 @@ try {
     await browser.waitFor("!!document.querySelector('#cz-canvas')");
     const crane = await browser.rect(".ze-tabs");
     const pageCrane = await browser.rect(".v2-screen");
-    check(`${width}: вкладки и ширина формы неподвижны при переходе к кранам`,
-      Math.abs(before.y - crane.y) <= 1 && Math.abs(pageBefore.x - pageCrane.x) <= 1 && Math.abs(pageBefore.w - pageCrane.w) <= 1,
+    check(`${width}: форма кранов освобождает место над схемой`,
+      crane.y < before.y && Math.abs(pageBefore.x - pageCrane.x) <= 1 && Math.abs(pageBefore.w - pageCrane.w) <= 1,
       `${JSON.stringify({ before, crane, pageBefore, pageCrane })}`);
     check(`${width}: зона крана названа отдельно`, await browser.eval("document.querySelector('.cz-toolbar strong')?.textContent === 'Зоны кранов'"));
     check(`${width}: в зонах кранов нет стоянок и команды их добавления`, await browser.eval("!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-stand') && document.querySelector('.cz-prop-head span')?.textContent === 'Кран'"));
@@ -28,10 +28,10 @@ try {
     await browser.waitFor("document.querySelector('.cz-toolbar strong')?.textContent === 'Стоянки кранов'");
     const stand = await browser.rect(".ze-tabs");
     const pageStand = await browser.rect(".v2-screen");
-    check(`${width}: вкладки и ширина формы неподвижны при переходе к стоянкам`,
-      Math.abs(before.y - stand.y) <= 1 && Math.abs(pageBefore.x - pageStand.x) <= 1 && Math.abs(pageBefore.w - pageStand.w) <= 1);
-    check(`${width}: объяснены вложенность и действие`, await browser.eval("document.querySelector('#ze-context')?.textContent.includes('внутри выбранного крана') && document.querySelector('.cz-tree-intro')?.textContent.includes('Выберите кран')"));
-    check(`${width}: стоянки видны только в своём разделе`, await browser.eval("!!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-crane') && document.querySelector('.cz-prop-head span')?.textContent === 'Стоянка'"));
+    check(`${width}: вкладки и ширина компактной формы стабильны`,
+      Math.abs(crane.y - stand.y) <= 1 && Math.abs(pageBefore.x - pageStand.x) <= 1 && Math.abs(pageBefore.w - pageStand.w) <= 1);
+    check(`${width}: объяснение добавления перенесено в подсказку`, await browser.eval("!document.querySelector('.cz-tree-intro') && !document.querySelector('#ze-context')?.textContent && document.querySelector('#cz-add-stand')?.dataset.tooltip.includes('Выберите кран')"));
+    check(`${width}: стоянки сгруппированы по свёрнутым кранам`, await browser.eval("!!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-crane') && [...document.querySelectorAll('.cz-crane-toggle')].every(b => b.getAttribute('aria-expanded') === 'false') && document.querySelector('.cz-prop-head span')?.textContent === 'Кран-владелец'"));
     const add = await browser.rect("#cz-add-stand");
     check(`${width}: добавление стоянки видно без прокрутки`, !!add && add.y >= 0 && add.y + add.h <= height && await browser.eval("!document.querySelector('#cz-add-stand').disabled"));
     check(`${width}: нет прокрутки страницы`, await noPageScroll(browser));

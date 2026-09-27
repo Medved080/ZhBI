@@ -15,6 +15,7 @@ function loadLibraries() {
     .catch((error) => { libraries = null; throw error; });
   return libraries;
 }
+export function preloadCraneZone3d() { return loadLibraries(); }
 
 export function createCraneZone3d(callbacks) {
   let r = null, host = null, data = null, disposed = false, framed = false;
@@ -206,7 +207,7 @@ export function createCraneZone3d(callbacks) {
       const element = nearestElement(x, y), zone = element ? null : pickZone(x, y);
       if (element) callbacks.onSelectElements([element.id]);
       else if (zone) callbacks.onSelectZone(zone.zoneId, zone.levelIndex);
-    } else if (last.moved) callbacks.onCommit();
+    } else if (last.kind !== "orbit" && last.moved) callbacks.onCommit();
   }
   async function ensure() {
     if (r) return r;
@@ -220,9 +221,12 @@ export function createCraneZone3d(callbacks) {
     const camera = new THREE.PerspectiveCamera(45, 1, 1, 100000000);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = false;
-    controls.zoomSpeed = 0.45;
-    controls.maxPolarAngle = Math.PI * 0.46;
-    controls.addEventListener("change", () => { requestFrame(); callbacks.onViewChange?.(); });
+    controls.zoomSpeed = 0.7;
+    controls.maxPolarAngle = Math.PI * 0.62;
+    controls.addEventListener("change", () => {
+      if (host) host.dataset.cameraPolarDeg = String(Math.round(controls.getPolarAngle() * 180 / Math.PI));
+      requestFrame(); callbacks.onViewChange?.();
+    });
     scene.add(new THREE.HemisphereLight(0xffffff, 0x505050, 1.3));
     const light = new THREE.DirectionalLight(0xffffff, 0.9); light.position.set(1, 2, 1); scene.add(light);
     const ray = new THREE.Raycaster();
@@ -378,20 +382,20 @@ export function createCraneZone3d(callbacks) {
     r.controls.target.set(cx, cy, cz);
     r.camera.position.set(cx + homeDistance * 0.58, cy + homeDistance * 0.66, cz + homeDistance * 0.47);
     homeDistance = r.camera.position.distanceTo(r.controls.target);
-    r.controls.maxDistance = homeDistance;
+    r.controls.maxDistance = homeDistance * 2;
     r.controls.minDistance = homeDistance / 100;
     r.controls.update(); framed = true; requestFrame();
   }
   function zoom(factor) {
     if (!r || !homeDistance) return;
     const offset = r.camera.position.clone().sub(r.controls.target);
-    const next = Math.max(homeDistance / 100, Math.min(homeDistance, offset.length() / factor));
+    const next = Math.max(homeDistance / 100, Math.min(homeDistance * 2, offset.length() / factor));
     offset.setLength(next); r.camera.position.copy(r.controls.target).add(offset);
     r.controls.update(); requestFrame();
   }
   function zoomPercent() {
     if (!r || !homeDistance) return 100;
-    return Math.max(100, Math.round(homeDistance / r.camera.position.distanceTo(r.controls.target) * 100));
+    return Math.max(50, Math.round(homeDistance / r.camera.position.distanceTo(r.controls.target) * 100));
   }
   return {
     async show(nextHost, nextData) {
@@ -400,6 +404,7 @@ export function createCraneZone3d(callbacks) {
       await ensure();
       if (disposed) return;
       host = nextHost;
+      host.dataset.cameraPolarDeg = String(Math.round(r.controls.getPolarAngle() * 180 / Math.PI));
       if (r.renderer.domElement.parentNode !== host) host.appendChild(r.renderer.domElement);
       observer?.disconnect();
       observer = new ResizeObserver(resize); observer.observe(host);

@@ -64,6 +64,7 @@ try {
   await browser.waitFor("!!document.querySelector('#cz-add-stand')", 30000);
   await tap(browser, "#cz-new");
   await browser.waitFor("!!document.querySelector('#cz-draft-select')?.value", 15000);
+  await tap(browser, '.cz-crane-toggle');
   const stand = await browser.eval("document.querySelector('.cz-tree-item.cz-stand')?.dataset.zoneId || null");
   if (stand) {
     await tap(browser, `.cz-tree-item.cz-stand[data-zone-id="${stand}"]`);

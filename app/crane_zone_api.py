@@ -91,7 +91,7 @@ def zone_scene(object_id: int, version_id: Optional[int] = None,
             ).fetchone() is None:
                 raise HTTPException(status_code=404, detail="Редакция не найдена")
             rows = conn.execute(
-                "SELECT e.id, e.element_uid, e.element_type, e.mark, e.x, e.y, "
+                "SELECT e.id, e.element_uid, e.element_type, e.mark, e.x, e.y, e.outline_json, "
                 "e.elevation_mm, a.crane_zone_id AS zone_crane_id, "
                 "a.stance_zone_id AS zone_stance_id, e.current_status, e.is_current "
                 "FROM crane_zone_version_assignments a "
@@ -101,7 +101,7 @@ def zone_scene(object_id: int, version_id: Optional[int] = None,
             )
         else:
             rows = conn.execute(
-                "SELECT id, element_uid, element_type, mark, x, y, elevation_mm, "
+                "SELECT id, element_uid, element_type, mark, x, y, outline_json, elevation_mm, "
                 "zone_crane_id, zone_stance_id, current_status, is_current "
                 "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id",
                 (object_id,),
@@ -110,7 +110,12 @@ def zone_scene(object_id: int, version_id: Optional[int] = None,
             "SELECT name, color FROM zone_colors WHERE object_id = ? AND category = 'Кран'",
             (object_id,),
         )}
-        return {"elements": [dict(row) for row in rows], "crane_colors": colors,
+        elements = []
+        for row in rows:
+            element = dict(row)
+            element["outline"] = json.loads(element.pop("outline_json") or "null")
+            elements.append(element)
+        return {"elements": elements, "crane_colors": colors,
                 "coordinates_note": "Координаты изделий показаны по текущей схеме"}
     finally:
         conn.close()
