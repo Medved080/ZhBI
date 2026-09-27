@@ -22,6 +22,13 @@
   `app/static/crane-zone-v1.js`). Новый DXF отправляет контуры в
   черновик (`app/crane_zone_import.py`), не меняя действующие зоны;
   подробности и границы готовности — `Docs/crane-zone-versions-design.md`.
+- **Переход к зоне крана как объединению стоянок** (локальная ветка
+  `codex/crane-stance-union`, до интеграции): новое ядро привязки
+  `scripts/zone_binding.py`, материализация `app/crane_zone_conversion.py`,
+  транзакционный переход и повтор `app/crane_zone_transition.py`,
+  DXF-черновик `app/crane_zone_import.py`, общий редактор V1/V2 и
+  виртуальные крановые объёмы на основной схеме. Сверка и интеграция —
+  `Docs/crane-stance-union-implementation-report.md`.
 - Удаление любой записи справочника с переводом ссылок на замену
   (`app/dict_delete.py`, только администратор сервиса).
 - Вложения к проекту/объекту/изделию и комментарий к изделию
