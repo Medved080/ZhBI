@@ -69,14 +69,12 @@ export function createCraneZone3d(callbacks) {
   }
   function zoneTop(zone, levelIndex, bounds) {
     const base = levelY(zone.levels[levelIndex]);
-    const higher = zone.levels.map(levelY).filter((value) => value > base).sort((a, b) => a - b);
+    const higher = (data?.zones || []).filter((item) => item.category === "Стоянка" || item.virtual_stance_box)
+      .flatMap((item) => item.levels.map(levelY)).filter((value) => value > base).sort((a, b) => a - b);
     if (higher.length) return higher[0];
-    if (zone.category === "Кран") return Math.max(base + 3000, bounds.maxZ);
-    const sorted = zone.levels.map(levelY).sort((a, b) => a - b);
-    const gaps = sorted.slice(1).map((value, index) => value - sorted[index]).filter((value) => value > 0);
-    return data?.showElements && data.modelElements?.length
-      ? Math.max(base + 1, bounds.maxZ)
-      : Math.max(base + 1, bounds.maxZ, base + (gaps.length ? Math.min(...gaps) : 3000));
+    if (zone.category === "Кран" && !zone.virtual_stance_box) return Math.max(base + 3000, data?.modelTop ?? bounds.maxZ);
+    return Number.isFinite(data?.modelTop) ? Math.max(base + 1, data.modelTop) :
+      Math.max(base + 3000, bounds.maxZ);
   }
   function activeTop() {
     const zone = data?.zones.find((item) => item.id === data.selectedZone);
@@ -96,6 +94,7 @@ export function createCraneZone3d(callbacks) {
     }
     for (const element of data?.elements || []) add(element.x, element.y, Number(element.elevation_mm) || 0);
     for (const element of data?.modelElements || []) add(element.x, element.y, (Number(element.elevation_mm) || 0) + element.renderHeight);
+    if (Number.isFinite(data?.modelTop)) minZ = Math.min(minZ, data.modelTop), maxZ = Math.max(maxZ, data.modelTop);
     if (!Number.isFinite(minX)) return { minX: -500, maxX: 500, minY: -500, maxY: 500, minZ: 0, maxZ: 1000 };
     return { minX, maxX, minY, maxY, minZ, maxZ };
   }
@@ -325,6 +324,9 @@ export function createCraneZone3d(callbacks) {
     const { THREE } = r, group = new THREE.Group();
     sceneBounds = extent();
     const bounds = sceneBounds;
+    if (host) host.dataset.zoneBands = JSON.stringify(data.zones.flatMap((zone) =>
+      zone.levels.map((level, index) => ({ zoneId: zone.id, stanceId: zone.stance_id || null,
+        base: levelY(level), top: zoneTop(zone, index, bounds) }))));
     const span = Math.max(1000, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
     const grid = new THREE.GridHelper(span * 1.2, 10, 0xc8d8df, 0xe4ecf0);
     grid.position.set((bounds.minX + bounds.maxX) / 2, bounds.minZ - Math.max(20, span * 0.005), -(bounds.minY + bounds.maxY) / 2);
@@ -334,7 +336,9 @@ export function createCraneZone3d(callbacks) {
       if (!outline || outline.length < 3) continue;
       const y = levelY(level), top = zoneTop(zone, levelIndex, bounds);
       const active = zone.id === data.selectedZone && levelIndex === data.activeLevel;
-      const color = zone.category === "Кран" ? 0x2c8953 : 0x4682b4;
+      const colorName = zone.category === "Стоянка" ? data.zones.find((item) => item.id === zone.parent_zone_id)?.name : zone.name;
+      const colorCode = data.craneColors?.[colorName];
+      const color = colorCode ? Number(`0x${colorCode.replace("#", "")}`) : zone.category === "Кран" ? 0x2c8953 : 0x4682b4;
       const quietStand = data.selectedCategory === "Стоянка" && zone.category === "Стоянка" && !active;
       const shape = new THREE.Shape(outline.map((point) => new THREE.Vector2(point[0], point[1])));
       const geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(100, top - y), bevelEnabled: false, steps: 1 });

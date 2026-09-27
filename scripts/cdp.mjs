@@ -33,7 +33,12 @@ export async function launch({ width = 1920, height = 1080, dpr = 1, args = [] }
     const m = JSON.parse(ev.data);
     if (m.id && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); m.error ? p.rej(new Error(m.error.message)) : p.res(m.result); return; }
     if (m.method === "Runtime.consoleAPICalled") consoleLog.push({ type: m.params.type, text: m.params.args.map((a) => a.value ?? a.description ?? "").join(" ") });
-    else if (m.method === "Runtime.exceptionThrown") exceptions.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text);
+    else if (m.method === "Runtime.exceptionThrown") exceptions.push({
+      message: m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text,
+      url: m.params.exceptionDetails.url,
+      line: m.params.exceptionDetails.lineNumber,
+      column: m.params.exceptionDetails.columnNumber,
+    });
     else if (m.method === "Network.requestWillBeSent") requests.push({ id: m.params.requestId, method: m.params.request.method, url: m.params.request.url, body: m.params.request.postData });
     else if (m.method === "Network.responseReceived") { const r = requests.find((x) => x.id === m.params.requestId); if (r) r.status = m.params.response.status; }
     else if (m.method === "Network.loadingFailed") { const r = requests.find((x) => x.id === m.params.requestId); if (r) { r.status = 0; r.error = m.params.errorText; } }

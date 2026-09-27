@@ -8,13 +8,14 @@ from datetime import datetime, time, timedelta
 
 from app import activity
 from app.crane_zone_service import activate_due
+from app.crane_zone_transition import TransitionIncomplete, transition_pending
 from app.crane_zone_versions import BUSINESS_TZ
 from app.db import get_connection
 
 _log = logging.getLogger(__name__)
 
 
-def activate_now() -> list[int]:
+def activate_now(*, retry_transition: bool = True) -> list[int]:
     """Идемпотентно применить наступившие редакции; ошибку не скрывать."""
     conn = get_connection()
     try:
@@ -26,6 +27,25 @@ def activate_now() -> list[int]:
             "crane_zone_version_activate", source="system", entity_type="crane_zone_version",
             entity_id=version_id, new_value=str(version_id),
         )
+    if retry_transition:
+        conn = get_connection()
+        try:
+            try:
+                transition_pending(conn)
+                pending_release = conn.execute(
+                    "SELECT status FROM release_tasks WHERE name = ?",
+                    ("2026-09-27-crane-stance-union",),
+                ).fetchone()
+            except TransitionIncomplete as exc:
+                _log.info("Крановый переход ожидает повторения: %s", exc)
+            else:
+                if pending_release and pending_release["status"] != "ok":
+                    # Старый error у обработки релиза должен стать ok после
+                    # автоматического перехода ожидавшего будущую редакцию.
+                    from app.release_tasks import run_by_name
+                    run_by_name("2026-09-27-crane-stance-union")
+        finally:
+            conn.close()
     return ids
 
 
@@ -41,16 +61,12 @@ def start_worker() -> threading.Event:
 
     def run():
         while not stop.is_set():
-            if stop.wait(_seconds_to_next_day() + 0.1):
+            if stop.wait(min(_seconds_to_next_day() + 0.1, 300)):
                 return
-            while not stop.is_set():
-                try:
-                    activate_now()
-                    break
-                except Exception:
-                    _log.exception("Не удалось активировать крановые зоны; повтор через минуту")
-                    if stop.wait(60):
-                        return
+            try:
+                activate_now()
+            except Exception:
+                _log.exception("Не удалось активировать крановые зоны; повтор в следующем цикле")
 
     threading.Thread(target=run, name="crane-zone-activation", daemon=True).start()
     return stop

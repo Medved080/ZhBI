@@ -68,6 +68,14 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
             raise ZoneDraftError(f"Кран {zone_id} — справочник; рабочие контуры задаются стоянками")
         if category == "Стоянка" and not levels:
             raise ZoneDraftError(f"У стоянки {zone_id} нужен хотя бы один рабочий ярус")
+        references = zone.get("report_levels", [])
+        if not isinstance(references, list) or len(references) > 100 or any(
+            v is not None and (isinstance(v, bool) or not isinstance(v, int))
+            for v in references
+        ) or len(references) != len(set(references)):
+            raise ZoneDraftError(f"У зоны {zone_id} неверные служебные отметки")
+        if category == "Кран" and references:
+            raise ZoneDraftError(f"Кран {zone_id} не имеет отчётных ярусов")
         elevations = set()
         for level in levels:
             if not isinstance(level, dict):
@@ -133,7 +141,8 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
     return by_id
 
 
-def validate_overrides(overrides: dict, by_id: dict[int, dict], element_ids: set[int]) -> dict[int, dict]:
+def validate_overrides(overrides: dict, by_id: dict[int, dict],
+                       current: dict[int, dict]) -> dict[int, dict]:
     if not isinstance(overrides, dict):
         raise ZoneDraftError("Ручные назначения должны быть объектом")
     normalized = {}
@@ -142,7 +151,7 @@ def validate_overrides(overrides: dict, by_id: dict[int, dict], element_ids: set
             element_id = int(raw_id)
         except (TypeError, ValueError) as exc:
             raise ZoneDraftError("Недопустимый id изделия в назначении") from exc
-        if str(element_id) != str(raw_id) or element_id not in element_ids:
+        if str(element_id) != str(raw_id) or element_id not in current:
             raise ZoneDraftError(f"Изделие {raw_id} не входит в текущий объект")
         if not isinstance(item, dict):
             raise ZoneDraftError(f"Назначение изделия {raw_id} должно быть объектом")
@@ -153,7 +162,32 @@ def validate_overrides(overrides: dict, by_id: dict[int, dict], element_ids: set
             raise ZoneDraftError(f"Неизвестная стоянка у изделия {raw_id}")
         if stance_id is not None and by_id[stance_id]["parent_zone_id"] != crane_id:
             raise ZoneDraftError(f"Стоянка изделия {raw_id} не принадлежит его крану")
-        normalized[element_id] = {"crane_zone_id": crane_id, "stance_zone_id": stance_id}
+        source = item.get("source", "manual")
+        if source not in ("manual", "conversion"):
+            raise ZoneDraftError(f"Неизвестный источник назначения изделия {raw_id}")
+        normalized_item = {"crane_zone_id": crane_id, "stance_zone_id": stance_id,
+                           "source": source}
+        full_fields = ("crane_zone_id", "crane_status", "stance_zone_id",
+                       "stance_status", "stance_elevation_mm")
+        has_full = all(field in item for field in full_fields)
+        if source == "conversion" and not has_full:
+            raise ZoneDraftError(f"Исключение изделия {raw_id} потеряло сохранённые поля")
+        if has_full:
+            saved = {field: item[field] for field in full_fields}
+            matches_current = all(saved[field] == current[element_id][field] for field in full_fields)
+            if source == "conversion" and not matches_current:
+                raise ZoneDraftError(
+                    f"Исключение изделия {raw_id} изменено: снимите его явно или переназначьте вручную"
+                )
+            if matches_current:
+                normalized_item.update(saved)
+                normalized_item["preserve_full"] = True
+                if source == "conversion":
+                    reason = item.get("reason")
+                    if not isinstance(reason, str) or not reason or len(reason) > 500:
+                        raise ZoneDraftError(f"У исключения изделия {raw_id} отсутствует причина")
+                    normalized_item["reason"] = reason
+        normalized[element_id] = normalized_item
     return normalized
 
 
@@ -194,11 +228,14 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
     """Все привязки новой редакции; без INSERT/UPDATE/COMMIT."""
     by_id = validate_zones(zones, base_zones)
     elements = conn.execute(
-        "SELECT id, element_uid, element_type, x, y, outline_json, elevation_mm, "
-        "zone_crane_id, zone_crane_status, zone_stance_id, zone_stance_status "
-        "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id", (object_id,),
+        "SELECT e.id, e.element_uid, e.element_type, e.x, e.y, e.outline_json, e.elevation_mm, "
+        "e.zone_crane_id AS crane_zone_id, e.zone_crane_status AS crane_status, "
+        "e.zone_stance_id AS stance_zone_id, e.zone_stance_status AS stance_status, "
+        "l.elevation_mm AS stance_elevation_mm "
+        "FROM elements e LEFT JOIN zone_levels l ON l.id = e.zone_stance_level_id "
+        "WHERE e.object_id = ? AND e.is_current = 1 ORDER BY e.id", (object_id,),
     ).fetchall()
-    manual = validate_overrides(overrides, by_id, {e["id"] for e in elements})
+    manual = validate_overrides(overrides, by_id, {e["id"]: dict(e) for e in elements})
     records = _records(zones)
     changed = Counter()
     assignments = []
@@ -212,15 +249,23 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
         crane_id, _, crane_status = _resolved(bound["Кран"], by_id)
         stance_id, stance_elevation, stance_status = _resolved(bound["Стоянка"], by_id)
         source = "geometry"
+        reason = None
         if element["id"] in manual:
-            source = "manual"
-            crane_id = manual[element["id"]]["crane_zone_id"]
-            stance_id = manual[element["id"]]["stance_zone_id"]
-            crane_status = "matched" if crane_id is not None else "unmatched"
-            stance_status = "matched" if stance_id is not None else "unmatched"
+            override = manual[element["id"]]
+            source = override["source"]
+            crane_id = override["crane_zone_id"]
+            stance_id = override["stance_zone_id"]
+            if override.get("preserve_full"):
+                crane_status = override["crane_status"]
+                stance_status = override["stance_status"]
+                stance_elevation = override["stance_elevation_mm"]
+                reason = override.get("reason")
+            else:
+                crane_status = "matched" if crane_id is not None else "unmatched"
+                stance_status = "matched" if stance_id is not None else "unmatched"
             # Ярус ручной стоянки определяется отметкой изделия отдельно от
             # геометрии. Без однозначной отметки не обещаем точный отчёт.
-            if stance_id is not None:
+            if stance_id is not None and not override.get("preserve_full"):
                 strict_below = element["element_type"] in TIER_CAPPING_TYPES
                 levels = object_stance_levels(records)
                 if element["elevation_mm"] is None or not levels:
@@ -228,18 +273,42 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
                 eligible = [l for l in levels if (l < element["elevation_mm"] if strict_below
                                                   else l <= element["elevation_mm"])]
                 stance_elevation = eligible[-1] if eligible else levels[0]
-            else:
+            elif stance_id is None and not override.get("preserve_full"):
                 stance_elevation = None
-        if crane_id != element["zone_crane_id"]:
+            if stance_id is not None and override.get("preserve_full") and stance_elevation not in (
+                {l["elevation_mm"] for l in by_id[stance_id]["levels"]} |
+                set(by_id[stance_id].get("report_levels", []))
+            ):
+                raise ZoneDraftError(
+                    f"У стоянки изделия {element['id']} нет сохранённой отчётной отметки "
+                    f"{stance_elevation}; восстановите ссылку или снимите исключение"
+                )
+        if crane_id != element["crane_zone_id"]:
             changed["crane"] += 1
-        if stance_id != element["zone_stance_id"]:
+        if stance_id != element["stance_zone_id"]:
             changed["stance"] += 1
+        if crane_status != element["crane_status"] or stance_status != element["stance_status"]:
+            changed["status"] += 1
+        if stance_elevation != element["stance_elevation_mm"]:
+            changed["tier"] += 1
         if crane_status == "needs_review" or stance_status == "needs_review":
             changed["needs_review"] += 1
+        if source == "conversion":
+            changed["conversion_exceptions"] += 1
+        if source == "manual":
+            changed["manual"] += 1
         assignments.append({
             "element_id": element["id"], "element_uid": element["element_uid"],
             "crane_zone_id": crane_id, "crane_status": crane_status,
             "stance_zone_id": stance_id, "stance_status": stance_status,
             "stance_elevation_mm": stance_elevation, "source": source,
+            "reason": reason,
         })
-    return {"assignments": assignments, "counts": dict(changed), "total": len(assignments)}
+    zone_counts = Counter()
+    for assignment in assignments:
+        if assignment["crane_zone_id"] is not None:
+            zone_counts[str(assignment["crane_zone_id"])] += 1
+        if assignment["stance_zone_id"] is not None:
+            zone_counts[str(assignment["stance_zone_id"])] += 1
+    return {"assignments": assignments, "counts": dict(changed),
+            "zone_counts": dict(zone_counts), "total": len(assignments)}

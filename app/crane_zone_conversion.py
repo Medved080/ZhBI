@@ -65,7 +65,7 @@ def materialize_snapshot(zones: list[dict], elements: list[dict],
     for crane in candidate:
         if crane["category"] == "Кран":
             crane["levels"] = []
-            crane["report_levels"] = []
+            crane.pop("report_levels", None)
     if not stances:
         return candidate, {"empty_windows": 0, "working_levels": 0}
     # Build each crane's actual old windows first. Other cranes may introduce
@@ -142,7 +142,7 @@ def materialize_snapshot(zones: list[dict], elements: list[dict],
             continue
         if zone.get("parent_zone_id") not in cranes:
             raise ConversionError(f"У стоянки {zone['id']} отсутствует родительский кран")
-        zone["report_levels"] = []
+        zone.pop("report_levels", None)
     working = {l["elevation_mm"] for z in candidate if z["category"] == "Стоянка"
                for l in z["levels"]}
     return candidate, {"empty_windows": empty_windows, "working_levels": len(working)}
@@ -193,7 +193,11 @@ def build_conversion(zones: list[dict], elements: list[dict], axes: dict | None,
             continue
         working = {l["elevation_mm"] for l in zone["levels"]}
         reports = {a["stance_elevation_mm"] for a in assignments
-                   if a["stance_zone_id"] == zone["id"] and a["stance_elevation_mm"] is not None}
-        zone["report_levels"] = sorted(reports - working)
+                   if a["stance_zone_id"] == zone["id"]}
+        references = sorted(reports - working, key=lambda v: (v is not None, v or 0))
+        if references:
+            zone["report_levels"] = references
+        else:
+            zone.pop("report_levels", None)
     return {"zones": candidate, "assignments": assignments,
             "overrides": overrides, "reasons": dict(reasons), "geometry": geometry}

@@ -782,6 +782,13 @@ def on_startup():
     if копия:
         activity.log("backup_before_update", source="system", new_value=копия["name"])
 
+    # Сначала вступают в силу редакции, дата которых наступила, пока сервер
+    # был выключен. Крановая конверсия ниже должна видеть именно их снимок.
+    from app.crane_zone_activation import activate_now
+    activated_zones = activate_now(retry_transition=False)
+    if activated_zones:
+        print(f"[startup] активировано редакций крановых зон: {len(activated_zones)}")
+
     # Обработки релиза — то, что новая версия делает с уже накопленными
     # данными. Здесь, а не раньше: им нужны и мигрированная схема, и живой
     # писатель журнала. Упавшая обработка НЕ роняет старт (решение
@@ -790,13 +797,6 @@ def on_startup():
     выполнено = release_tasks.run_pending()
     if выполнено:
         print(f"[startup] обработок релиза выполнено: {len(выполнено)}")
-
-    # Редакция с наступившей датой должна вступить в силу до первого
-    # пользовательского запроса, включая рестарт после полуночи.
-    from app.crane_zone_activation import activate_now
-    activated_zones = activate_now()
-    if activated_zones:
-        print(f"[startup] активировано редакций крановых зон: {len(activated_zones)}")
 
     # Подложка карты из интернета: настройка читается в память один раз, её
     # значение нужно КАЖДОМУ ответу сервера (политика безопасности строится
@@ -1123,7 +1123,7 @@ def element_context(element_id: int, user: sqlite3.Row = Depends(get_current_use
             """
             SELECT z.id, z.category, z.name, l.elevation_mm, l.outline_json
             FROM zones z JOIN zone_levels l ON l.zone_id = z.id
-            WHERE z.object_id = ? AND z.is_current = 1
+            WHERE z.object_id = ? AND z.is_current = 1 AND l.is_reference = 0
             """,
             (row["object_id"],),
         ):
@@ -1865,7 +1865,7 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
         uses_zones = bool(set(body.group_by or []) & {"crane", "stance"})
         version = None
         if uses_zones and object_id is not None and conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
             (object_id,),
         ).fetchone():
             if not body.date_from or not body.date_to:
@@ -1875,7 +1875,7 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
                 )
             version = crane_zone_period_version(conn, object_id, body.date_from, body.date_to)
         elif uses_zones and object_id is None and conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE revision_no > 0 LIMIT 1"
+            "SELECT 1 FROM crane_zone_versions WHERE kind = 'published' LIMIT 1"
         ).fetchone():
             raise ValueError("Для группировки по кранам и стоянкам выберите один объект")
         if version is not None:
@@ -2069,7 +2069,7 @@ def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
         object_id = _report_object_id(conn, body)
         if object_id is None:
             if conn.execute(
-                "SELECT 1 FROM crane_zone_versions WHERE revision_no > 0 LIMIT 1"
+                "SELECT 1 FROM crane_zone_versions WHERE kind = 'published' LIMIT 1"
             ).fetchone():
                 raise ValueError(
                     "После корректировки зон график строится по одному объекту. "
@@ -2077,7 +2077,7 @@ def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
                 )
             return report
         if not conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
             (object_id,),
         ).fetchone():
             return report
@@ -2124,14 +2124,14 @@ def report_delivery_schedule_cell(body: DeliveryCellIn,
         object_id = _report_object_id(conn, body)
         version = None
         if object_id is not None and conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
             (object_id,),
         ).fetchone():
             if not body.date_from or not body.date_to:
                 raise ValueError("Не задан период отчёта")
             version = crane_zone_period_version(conn, object_id, body.date_from, body.date_to)
         elif object_id is None and conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE revision_no > 0 LIMIT 1"
+            "SELECT 1 FROM crane_zone_versions WHERE kind = 'published' LIMIT 1"
         ).fetchone():
             raise ValueError("Выберите один объект для разбора графика после корректировки зон")
         def build_cell():
@@ -3417,7 +3417,7 @@ def list_zones(
         levels_by_zone = {}
         for r in conn.execute(
             "SELECT id, zone_id, elevation_mm, source_file, outline_json FROM zone_levels "
-            "ORDER BY elevation_mm"
+            "WHERE is_reference = 0 ORDER BY elevation_mm"
         ):
             levels_by_zone.setdefault(r["zone_id"], []).append(ZoneLevelOut(
                 id=r["id"], elevation_mm=r["elevation_mm"],
@@ -3470,7 +3470,7 @@ def zone_geometry(zone_id: int, user: sqlite3.Row = Depends(get_current_user)):
                  "outline": json.loads(r["outline_json"])}
                 for r in conn.execute(
                     "SELECT id, elevation_mm, outline_json FROM zone_levels WHERE zone_id = ? "
-                    "ORDER BY elevation_mm", (zid,))
+                    "AND is_reference = 0 ORDER BY elevation_mm", (zid,))
             ]
 
         levels = levels_of(zone_id)
@@ -3478,7 +3478,8 @@ def zone_geometry(zone_id: int, user: sqlite3.Row = Depends(get_current_user)):
         for row in conn.execute(
             "SELECT z.id, z.name, l.elevation_mm, l.outline_json FROM zones z "
             "JOIN zone_levels l ON l.zone_id = z.id "
-            "WHERE z.object_id = ? AND z.category = ? AND z.id <> ? AND z.is_current = 1",
+            "WHERE z.object_id = ? AND z.category = ? AND z.id <> ? AND z.is_current = 1 "
+            "AND l.is_reference = 0",
             (zone["object_id"], zone["category"], zone_id),
         ):
             siblings.append({
@@ -3500,7 +3501,7 @@ def zone_geometry(zone_id: int, user: sqlite3.Row = Depends(get_current_user)):
         xs, ys = [], []
         for row in conn.execute(
             "SELECT l.outline_json FROM zone_levels l JOIN zones z ON z.id = l.zone_id "
-            "WHERE z.object_id = ?", (zone["object_id"],),
+            "WHERE z.object_id = ? AND l.is_reference = 0", (zone["object_id"],),
         ):
             for point in json.loads(row["outline_json"]):
                 xs.append(point[0])
@@ -5552,12 +5553,35 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, "
                 "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
                 "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
-                "WHERE l.source_file = ? AND z.object_id IS ? AND z.is_current = 1",
+                "WHERE l.source_file = ? AND z.object_id IS ? AND z.is_current = 1 "
+                "AND l.is_reference = 0",
                 (item.source_file, item_object_id),
             ).fetchall():
                 z = dict(r)
                 z["outline"] = json.loads(z.pop("outline_json"))
                 file_zones.append(z)
+
+            crane_meta = {r["id"]: dict(r) for r in conn.execute(
+                "SELECT id, name, number, match_status FROM zones "
+                "WHERE object_id = ? AND is_current = 1 AND category = 'Кран'",
+                (item_object_id,),
+            )}
+            ready = conn.execute(
+                "SELECT 1 FROM crane_zone_transition WHERE object_id = ? AND state = 'ready'",
+                (item_object_id,),
+            ).fetchone() is not None
+            if ready:
+                # Display-only crane boxes are the union of stance boxes.
+                # There is no crane polygon or crane zone_level in storage.
+                file_zones.extend({
+                    "id": parent["id"], "category": "Кран", "name": parent["name"],
+                    "number": parent["number"], "match_status": parent["match_status"],
+                    "parent_zone_id": None, "parent_match_status": "not_applicable",
+                    "level_id": -stance["level_id"],
+                    "virtual_stance_box": True,
+                    "elevation_mm": stance["elevation_mm"], "outline": stance["outline"],
+                } for stance in list(file_zones) if stance["category"] == "Стоянка"
+                  if (parent := crane_meta.get(stance["parent_zone_id"])) is not None)
 
             # Цвет — персонально на каждый КРАН (см. Docs/backlog.md, item 7),
             # стоянки наследуют цвет своего крана через parent_zone_id (связь
@@ -5574,7 +5598,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                     (item_object_id,),
                 ).fetchall()
             }
-            crane_name_by_id = {z["id"]: z["name"] for z in file_zones if z["category"] == "Кран"}
+            crane_name_by_id = {zone_id: z["name"] for zone_id, z in crane_meta.items()}
             for z in file_zones:
                 if z["category"] == "Кран":
                     z["color"] = crane_colors_by_name.get(z["name"])

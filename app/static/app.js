@@ -2261,6 +2261,7 @@ function zoneNameById(zoneId) {
 // одной стоянки могут оказаться совсем рядом.
 function zoneDisplayName(zone) {
   const base = zone.name || (zone.match_status === "unmatched" ? "название не найдено" : "требует проверки");
+  if (zone.virtual_stance_box && zone.elevation_mm != null) return `${base} +${zone.elevation_mm}`;
   if (zone.category === "Стоянка" && zone.elevation_mm != null) return `${base} +${zone.elevation_mm}`;
   return base;
 }
@@ -26483,14 +26484,16 @@ function build3DZoneMesh(zone, heightRange, stanceTiers) {
   const shape = new THREE.Shape(points);
 
   let geometry, positionY, opacity;
-  if (zone.category === "Захватка" || zone.category === "Кран") {
+  if (zone.category === "Захватка" || (zone.category === "Кран" && !zone.virtual_stance_box)) {
     geometry = new THREE.ExtrudeGeometry(shape, { depth: heightRange.top - heightRange.bottom, bevelEnabled: false, steps: 1 });
     geometry.rotateX(-Math.PI / 2);
     positionY = heightRange.bottom;
     opacity = 0.07; // как у 2D-подложки (fill-opacity:.07) — элементы внутри не теряются
-  } else if (zone.category === "Стоянка" && stanceTiers.length > 1 && zone.elevation_mm != null) {
+  } else if ((zone.category === "Стоянка" || zone.virtual_stance_box) &&
+             stanceTiers.length && zone.elevation_mm != null) {
     const idx = stanceTiers.indexOf(zone.elevation_mm);
-    const top = idx !== -1 && idx < stanceTiers.length - 1 ? stanceTiers[idx + 1] : heightRange.top;
+    const top = idx !== -1 && idx < stanceTiers.length - 1 ? stanceTiers[idx + 1] :
+      heightRange.hasModel ? heightRange.top : Math.max(heightRange.top, zone.elevation_mm + 3000);
     const height = Math.max(top - zone.elevation_mm, 1);
     geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
     geometry.rotateX(-Math.PI / 2);
@@ -27281,6 +27284,7 @@ function build3DScene(preserveCamera = false) {
   // по потолку верхнего яруса колонн: ригели и плиты сверху лежат над ним.
   const heightRange = computeBuildingHeightRange();
   const modelTop = computeModelTopY(levels, columnTops);
+  heightRange.hasModel = modelTop !== null;
   if (modelTop !== null && modelTop > heightRange.top) heightRange.top = modelTop;
   const stanceTiers = stanceTierElevations();
   // По записи на ЯРУС (см. zoneMeshByLevel): у стоянки ярусов несколько, и
@@ -27294,7 +27298,8 @@ function build3DScene(preserveCamera = false) {
     v3.zoneMeshByLevel.set(levelKey, mesh);
 
     if (zone.category === "Кран" || zone.category === "Стоянка") {
-      const baseY = zone.category === "Кран" ? heightRange.bottom : (zone.elevation_mm ?? heightRange.bottom);
+      const baseY = zone.category === "Кран" && !zone.virtual_stance_box ?
+        heightRange.bottom : (zone.elevation_mm ?? heightRange.bottom);
       const labelSprite = build3DZoneLabelSprite(zone, baseY);
       if (labelSprite) {
         labelSprite.visible = mesh.visible;

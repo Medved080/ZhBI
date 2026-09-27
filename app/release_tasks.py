@@ -77,6 +77,7 @@ from app.access import require_service_feature
 from app.auth import get_current_user
 from app.changelog import CHANGELOG
 from app.crane_zone_versions import ensure_baselines as _ensure_crane_zone_baselines
+from app.crane_zone_transition import transition_pending as _transition_crane_stances
 from app.db import get_connection
 
 router = APIRouter(tags=["release"])
@@ -1117,6 +1118,15 @@ RELEASE_TASKS = [
                "нельзя терять или выдавать за достоверное прошлое до ввода версионности",
         "kind": KIND_DATA,
         "run": _ensure_crane_zone_baselines,
+    },
+    {
+        "name": "2026-09-27-crane-stance-union",
+        "version": "0.85",
+        "date": "2026-09-27",
+        "title": "Перевести крановые зоны на рабочие ярусы стоянок",
+        "why": "геометрия крана выводится из стоянок, а прежние назначения сохраняются",
+        "kind": KIND_DATA,
+        "run": _transition_crane_stances,
     },
 ]
 

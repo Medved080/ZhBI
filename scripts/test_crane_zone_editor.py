@@ -14,7 +14,7 @@ class CraneZoneDraftTest(unittest.TestCase):
     def setUp(self):
         self.baseline = [
             {"id": 1, "category": "Кран", "number": 1, "name": "Кран 1",
-             "parent_zone_id": None, "levels": [{"elevation_mm": None, "outline": square(0, 0, 10)}]},
+             "parent_zone_id": None, "levels": []},
             {"id": 2, "category": "Стоянка", "number": 1, "name": "Стоянка 1",
              "parent_zone_id": 1, "levels": [{"elevation_mm": 0, "outline": square(0, 0, 5)}]},
         ]
@@ -23,7 +23,7 @@ class CraneZoneDraftTest(unittest.TestCase):
         draft = copy.deepcopy(self.baseline)
         draft.extend([
             {"id": -1, "category": "Кран", "number": 2, "name": "Кран 2",
-             "parent_zone_id": None, "levels": [{"elevation_mm": None, "outline": square(20, 0, 10)}]},
+             "parent_zone_id": None, "levels": []},
             {"id": -2, "category": "Стоянка", "number": 1, "name": "Стоянка 1",
              "parent_zone_id": -1, "levels": [{"elevation_mm": 0, "outline": square(20, 0, 5)}]},
         ])
@@ -82,13 +82,21 @@ class CraneZoneDraftTest(unittest.TestCase):
         with self.assertRaisesRegex(ZoneDraftError, "пересекаются"):
             validate_zones(draft, baseline)
 
-    def test_stance_with_one_level_cannot_run_through_upper_peer(self):
+    def test_crane_geometry_is_refused(self):
+        draft = copy.deepcopy(self.baseline)
+        draft[0]["levels"] = [{"elevation_mm": 0, "outline": square(0, 0, 10)}]
+        with self.assertRaisesRegex(ZoneDraftError, "справочник"):
+            validate_zones(draft, self.baseline)
+
+    def test_stance_level_ends_at_next_object_level(self):
         baseline = copy.deepcopy(self.baseline)
         baseline[1]["levels"].append({"elevation_mm": 3000, "outline": square(5, 0, 5)})
         draft = copy.deepcopy(baseline)
         draft.append({"id": -1, "category": "Стоянка", "number": 2,
                       "name": "Новая стоянка", "parent_zone_id": 1,
                       "levels": [{"elevation_mm": 0, "outline": square(5, 0, 5)}]})
+        validate_zones(draft, baseline)
+        draft[-1]["levels"][0]["elevation_mm"] = 3000
         with self.assertRaisesRegex(ZoneDraftError, "пересекаются"):
             validate_zones(draft, baseline)
 

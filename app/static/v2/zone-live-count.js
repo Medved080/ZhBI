@@ -12,28 +12,36 @@ function inside(outline, x, y) {
   return hit;
 }
 
-function stanceLevel(zone, element) {
+function stanceLevel(zone, element, objectLevels) {
   const elevation = element.elevation_mm;
   if (!Number.isFinite(elevation)) return null;
   const strict = CAPPING_TYPES.has(element.element_type);
-  let chosen = null;
-  for (const level of zone.levels) {
-    if (!Number.isFinite(level.elevation_mm) ||
-        !(strict ? level.elevation_mm < elevation : level.elevation_mm <= elevation)) continue;
-    if (!chosen || level.elevation_mm > chosen.elevation_mm) chosen = level;
-  }
-  return chosen;
+  const eligible = objectLevels.filter((v) => strict ? v < elevation : v <= elevation);
+  const selected = eligible.length ? eligible[eligible.length - 1] : objectLevels[0];
+  return zone.levels.find((level) => level.elevation_mm === selected) || null;
 }
 
-export function countElementsInZone(zone, elements) {
+export function countElementsInZone(zone, elements, zones = [zone], overrides = {}) {
+  const stances = zones.filter((item) => item.category === "Стоянка");
+  const objectLevels = [...new Set(stances.flatMap((item) => item.levels.map((level) => level.elevation_mm)))]
+    .filter(Number.isFinite).sort((a, b) => a - b);
   let count = 0;
   for (const element of elements) {
     if (!Number.isFinite(element.x) || !Number.isFinite(element.y)) continue;
-    if (zone.category === "Стоянка") {
-      const outline = stanceLevel(zone, element)?.outline;
-      if (outline?.length && inside(outline, element.x, element.y)) count++;
-    } else if (zone.levels.some((level) => level.outline?.length &&
-      inside(level.outline, element.x, element.y))) count++;
+    const override = overrides[String(element.id)];
+    if (override) {
+      if (zone.category === "Кран" && override.crane_zone_id === zone.id) count++;
+      if (zone.category === "Стоянка" && override.stance_zone_id === zone.id) count++;
+      continue;
+    }
+    if (!objectLevels.length || !Number.isFinite(element.elevation_mm)) continue;
+    const matched = stances.filter((stance) => {
+      const outline = stanceLevel(stance, element, objectLevels)?.outline;
+      return outline?.length && inside(outline, element.x, element.y);
+    });
+    if (matched.length !== 1) continue;
+    if (zone.category === "Стоянка" && matched[0].id === zone.id) count++;
+    if (zone.category === "Кран" && matched[0].parent_zone_id === zone.id) count++;
   }
   return count;
 }

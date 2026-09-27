@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi import HTTPException
 
@@ -20,6 +21,7 @@ from app.crane_zone_editor import preview_assignments
 from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_import import build_candidate, stage_import_draft
 from app.crane_zone_versions import business_date, ensure_baselines, snapshot_zones
+from app.crane_zone_transition import transition_pending
 from zone_parser import ZoneRecord
 
 
@@ -81,6 +83,7 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.conn.commit()
         ensure_baselines(self.conn)
         self.conn.commit()
+        transition_pending(self.conn)
 
     def tearDown(self):
         self.conn.close()
@@ -95,7 +98,7 @@ class CraneZoneServiceTest(unittest.TestCase):
         zones.extend([
             {"id": -1, "category": "Кран", "number": 2, "name": "Кран 2",
              "parent_zone_id": None,
-             "levels": [{"elevation_mm": None, "outline": square(20, 0, 10)}]},
+             "levels": []},
             {"id": -2, "category": "Стоянка", "number": 1, "name": "Стоянка 1",
              "parent_zone_id": -1,
              "levels": [{"elevation_mm": 0, "outline": square(20, 0, 5)},
@@ -136,24 +139,24 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(old[0], self.crane_id)
 
-    def test_temporary_outside_stance_can_be_saved_but_not_published(self):
+    def test_temporary_invalid_stance_can_be_saved_but_not_published(self):
         draft_id = create_draft(self.conn, self.object_id, None, "Тест")
         zones = json.loads(self.conn.execute(
             "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone()[0])
-        next(z for z in zones if z["id"] == self.crane_id)["levels"][0]["outline"] = square(20, 0, 10)
+        next(z for z in zones if z["id"] == self.stance_id)["levels"][0]["outline"] = [[0, 0], [5, 5], [5, 0], [0, 5]]
         token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {}, "Промежуточное положение")
         self.assertEqual(token, 2)
         stored = json.loads(self.conn.execute(
             "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone()[0])
         self.assertEqual(stored, zones)
-        with self.assertRaisesRegex(ZoneDraftError, "Стоянка 1.*Кран 1.*Расширьте"):
+        with self.assertRaisesRegex(ZoneDraftError, "самопересекается"):
             preview_draft(self.conn, self.object_id, draft_id)
-        with self.assertRaisesRegex(ZoneDraftError, "Стоянка 1.*Кран 1.*Расширьте"):
+        with self.assertRaisesRegex(ZoneDraftError, "самопересекается"):
             publish_draft(self.conn, self.object_id, draft_id, token, business_date(), None, "Тест")
         self.assertEqual(self.conn.execute(
-            "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
             (self.object_id,),
         ).fetchone()[0], 0)
 
@@ -358,7 +361,7 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone()
         zones = json.loads(draft[0])
-        self.assertEqual(zones[0]["levels"][0]["outline"], square(0, 0, 12))
+        self.assertEqual(zones[0]["levels"], [])
         self.assertEqual(zones[1]["levels"][0]["outline"], square(0, 0, 6))
         self.assertIsNone(stage_import_draft(
             self.conn, self.object_id,
@@ -433,6 +436,57 @@ class CraneZoneServiceTest(unittest.TestCase):
             (self.object_id,),
         ).fetchone()[0], 1, "Неудачная загрузка не должна создавать черновик")
 
+    def test_first_dxf_import_of_empty_object_starts_new_format(self):
+        import ezdxf
+        from app.dxf_import import analyze_drawing, apply_drawing, parse_drawing
+        from scripts import generate_test_zones_dxf
+
+        object_id = self.conn.execute(
+            "INSERT INTO objects (name, kind) VALUES ('Новый объект', 'zhbi')"
+        ).lastrowid
+        self.conn.commit()
+        path = Path(self.temp.name) / "first_import.dxf"
+        with patch.object(generate_test_zones_dxf, "OUTPUT_PATH", str(path)):
+            generate_test_zones_dxf.main()
+        drawing = ezdxf.readfile(path)
+        for entity in drawing.modelspace().query("TEXT"):
+            if entity.dxf.text == "Стоянка A":
+                entity.dxf.text = "Стоянка 1"
+            elif entity.dxf.text == "Стоянка B":
+                entity.dxf.text = "Стоянка 2"
+        drawing.saveas(path)
+        parsed = parse_drawing(path, path.name, object_id)
+        result = apply_drawing(parsed, analyze_drawing(parsed, object_id))
+        self.assertEqual(result.inserted, 3)
+        self.assertEqual(self.conn.execute(
+            "SELECT state FROM crane_zone_transition WHERE object_id = ?", (object_id,)
+        ).fetchone()[0], "ready")
+        baseline = self.conn.execute(
+            "SELECT zones_json FROM crane_zone_versions WHERE object_id = ? AND kind = 'baseline'",
+            (object_id,),
+        ).fetchone()
+        self.assertEqual(json.loads(baseline[0]), [])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_drafts WHERE object_id = ?", (object_id,),
+        ).fetchone()[0], 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM elements WHERE object_id = ? AND zone_crane_id IS NOT NULL",
+            (object_id,),
+        ).fetchone()[0], 0)
+
+    def test_single_physical_stance_import_materializes_column_levels(self):
+        records = [
+            ZoneRecord("C1", "Кран", None, square(0, 0, 10), "Кран 1", "matched"),
+            ZoneRecord("S1", "Стоянка", 0, square(0, 0, 5), "Стоянка 1", "matched",
+                       "C1", "matched"),
+        ]
+        elements = [SimpleNamespace(element_type="Колонна", elevation_mm=level)
+                    for level in (0, 3000)]
+        zones = build_candidate([], records, "test.dxf", element_records=elements)
+        self.assertEqual(next(z for z in zones if z["category"] == "Кран")["levels"], [])
+        self.assertEqual([l["elevation_mm"] for z in zones if z["category"] == "Стоянка"
+                          for l in z["levels"]], [0, 3000])
+
     def test_renaming_stance_migrates_schedule_flow_atomically(self):
         self.conn.execute(
             "INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) "
@@ -458,8 +512,9 @@ class CraneZoneServiceTest(unittest.TestCase):
 
     def test_crane_color_survives_rename_and_new_crane_gets_color(self):
         self.conn.execute(
-            "INSERT INTO zone_colors (object_id, category, name, color) "
-            "VALUES (?, 'Кран', 'Кран 1', '#abcdef')", (self.object_id,),
+            "UPDATE zone_colors SET color = '#abcdef' "
+            "WHERE object_id = ? AND category = 'Кран' AND name = 'Кран 1'",
+            (self.object_id,),
         )
         self.conn.commit()
         draft_id, token = self._draft_with_new_crane()
@@ -495,7 +550,7 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM zones").fetchone()[0], before_zones)
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ?", (self.object_id,),
-        ).fetchone()[0], 1)
+        ).fetchone()[0], 2)
         self.assertIsNotNone(self.conn.execute(
             "SELECT id FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone())
@@ -540,19 +595,12 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertIsNone(row[0])
 
-    def test_single_stance_tier_uses_import_binder(self):
+    def test_single_stance_tier_uses_union_binder_without_axes(self):
         self.conn.execute(
             "DELETE FROM zone_levels WHERE zone_id = ? AND elevation_mm = 10000",
             (self.stance_id,),
         )
         zones = snapshot_zones(self.conn, self.object_id)
-        with self.assertRaisesRegex(ZoneDraftError, "сетк"):
-            preview_assignments(self.conn, self.object_id, zones, zones, {})
-        self.conn.executemany(
-            "INSERT INTO axis_lines (source_file, kind, label, coord) VALUES ('test.dxf', ?, ?, ?)",
-            [("numeric", "1", 0), ("numeric", "2", 10),
-             ("letter", "А", 0), ("letter", "Б", 10)],
-        )
         result = preview_assignments(self.conn, self.object_id, zones, zones, {})
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["counts"], {})

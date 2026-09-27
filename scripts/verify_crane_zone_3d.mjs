@@ -37,6 +37,7 @@ try {
   const switch3d = await browser.rect("#cz-view-2d");
   assert.ok(Math.abs(switch2d.x - switch3d.x) < 1, "переключатель 2D/3D сдвинулся при смене режима");
   const craneOneHighlighted = Number(await browser.eval("document.querySelector('#cz-3d').dataset.highlightedElements"));
+  const count = Number(await browser.eval("document.querySelector('#cz-3d').dataset.visibleElements"));
   assert.ok(craneOneHighlighted > 0);
   if (process.env.ZONE_CRANE_SHOT) await browser.shot(process.env.ZONE_CRANE_SHOT);
   const secondCrane = await browser.eval("document.querySelectorAll('.cz-tree-item:not(.cz-stand)')[1]?.dataset.zoneId");
@@ -51,65 +52,18 @@ try {
   await browser.waitFor("document.querySelector('#cz-canvas')?.dataset.highlightColor === '#ff6a00'", 5000);
   assert.equal(await browser.eval("document.querySelector('#cz-canvas').dataset.highlightColor"), "#ff6a00");
   console.log("PASS V2: в 2D нарисованы контуры изделий; переключатель 2D/3D виден и не сдвигается");
-  await tap(browser, "#cz-add-crane");
-  await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')");
-  const edges2d = JSON.parse(await browser.eval("document.querySelector('#cz-canvas').dataset.edgeMidpoints"));
-  const edge2d = [...edges2d].sort((a, b) => b.length - a.length)[0];
-  assert.ok(edge2d.length > 24);
-  const center2d = edges2d.reduce((sum, item) => [sum[0] + item.x / edges2d.length, sum[1] + item.y / edges2d.length], [0, 0]);
-  const inward2d = [center2d[0] - edge2d.x, center2d[1] - edge2d.y];
-  const inward2dLength = Math.hypot(...inward2d);
-  const frame2d = await browser.rect("#cz-canvas");
-  const outlineBefore = await browser.eval("document.querySelector('.cz-point-list').textContent");
-  await browser.drag(frame2d.x + edge2d.x, frame2d.y + edge2d.y,
-    frame2d.x + edge2d.x + inward2d[0] / inward2dLength * 12,
-    frame2d.y + edge2d.y + inward2d[1] / inward2dLength * 12);
-  assert.notEqual(await browser.eval("document.querySelector('.cz-point-list').textContent"), outlineBefore);
-  assert.equal(Number(await browser.eval("document.querySelectorAll('.cz-point-list span').length")), 4);
-  console.log("PASS V2: в 2D ребро двигает грань, число вершин остаётся четырьмя");
-  await tap(browser, "#cz-view-3d");
-  await browser.waitFor("!!document.querySelector('#cz-3d canvas') && document.querySelector('#cz-3d').dataset.editable === 'true'", 30000);
-  assert.equal(await browser.eval("document.querySelector('#cz-view-3d').getAttribute('aria-pressed')"), "true");
-  const count = Number(await browser.eval("document.querySelector('#cz-3d').dataset.visibleElements"));
   assert.ok(count > 0);
-  const frame = await browser.rect("#cz-3d canvas");
-  if (process.env.ZONE_3D_SHOT) await browser.shot(process.env.ZONE_3D_SHOT);
-  assert.ok(frame.w > 300 && frame.h > 200);
-  await tap(browser, "#cz-zoom-in");
-  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "110%");
-  await tap(browser, "#cz-zoom-out");
-  assert.equal(await browser.eval("document.querySelector('#cz-zoom-value').textContent"), "100%");
-  console.log("PASS V2: 3D-схема открылась, доступна правка и масштаб 100–110%");
-
-  assert.equal(await browser.eval("document.querySelector('#cz-3d').dataset.modelKind"), "extrusions");
+  await tap(browser, "#cz-view-3d");
+  await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'", 30000);
   await tap(browser, "#cz-show-elements");
   await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'hidden'", 10000);
   await tap(browser, "#cz-show-elements");
   await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'extrusions'", 60000);
-  assert.equal(Number(await browser.eval("document.querySelector('#cz-3d').dataset.modelCount")), count);
-  if (process.env.ZONE_MODEL_SHOT) await browser.shot(process.env.ZONE_MODEL_SHOT);
-  console.log(`PASS V2: слой из ${count} полупрозрачных объёмных изделий включается и выключается`);
-  await tap(browser, "#cz-show-elements");
-  await browser.waitFor("document.querySelector('#cz-3d')?.dataset.modelKind === 'hidden'", 10000);
-
-  await tap(browser, "#cz-save");
-  await browser.waitFor("document.querySelector('#cz-status')?.textContent.startsWith('Черновик сохранён')");
-  await browser.waitFor("!!document.querySelector('#cz-3d').dataset.edgeMidpoints", 5000);
-  const edges3d = JSON.parse(await browser.eval("document.querySelector('#cz-3d').dataset.edgeMidpoints"));
-  const edge = [...edges3d].sort((a, b) => b.length - a.length)[0];
-  assert.ok(edge.length > 14, `не хватает места для перетаскивания ребра: ${edge.length}`);
-  const center3d = edges3d.reduce((sum, item) => [sum[0] + item.x / edges3d.length, sum[1] + item.y / edges3d.length], [0, 0]);
-  const inward3d = [center3d[0] - edge.x, center3d[1] - edge.y];
-  const inward3dLength = Math.hypot(...inward3d);
-  await browser.drag(frame.x + edge.x, frame.y + edge.y,
-    frame.x + edge.x + inward3d[0] / inward3dLength * 18,
-    frame.y + edge.y + inward3d[1] / inward3dLength * 18);
-  await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')", 5000);
-  console.log("PASS V2: контур изменён перетаскиванием в 3D");
-  await tap(browser, "#cz-save");
-  await browser.waitFor("document.querySelector('#cz-status')?.textContent.startsWith('Черновик сохранён')");
+  console.log("PASS V2: объёмные изделия включаются и выключаются отдельно от зон кранов");
   await tap(browser, '[data-cat="Стоянка"]');
   await browser.waitFor("!!document.querySelector('#cz-add-stand')", 30000);
+  await tap(browser, "#cz-new");
+  await browser.waitFor("!!document.querySelector('#cz-draft-select')?.value", 15000);
   const stand = await browser.eval("document.querySelector('.cz-tree-item.cz-stand')?.dataset.zoneId || null");
   if (stand) {
     await tap(browser, `.cz-tree-item.cz-stand[data-zone-id="${stand}"]`);

@@ -418,7 +418,7 @@ def gantt_tree(conn: sqlite3.Connection, object_id: int,
     effective_from = date_from or (min(all_dates) if all_dates else None)
     effective_to = date_to or (max(all_dates) if all_dates else None)
     if effective_from and effective_to and conn.execute(
-        "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0 LIMIT 1",
+        "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND kind = 'published' LIMIT 1",
         (object_id,),
     ).fetchone():
         revision = crane_zone_period_version(conn, object_id, effective_from, effective_to)
