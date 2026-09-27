@@ -45,3 +45,48 @@ export function countElementsInZone(zone, elements, zones = [zone], overrides = 
   }
   return count;
 }
+
+// Один проход по изделиям для всего дерева редакции. Предыдущая схема вызывала
+// countElementsInZone для каждой зоны и повторяла поиск среди всех стоянок
+// десятки раз при каждом выборе строки дерева.
+export function countElementsByZones(zones, elements, overrides = {}) {
+  const counts = new Map(zones.map((zone) => [zone.id, 0]));
+  const stances = zones.filter((zone) => zone.category === "Стоянка");
+  const objectLevels = [...new Set(stances.flatMap((zone) => zone.levels.map((level) => level.elevation_mm)))]
+    .filter(Number.isFinite).sort((a, b) => a - b);
+  const byLevel = new Map(objectLevels.map((elevation) => [elevation, []]));
+  const seenLevels = new Set();
+  for (const stance of stances) for (const level of stance.levels) {
+    const key = `${stance.id}:${level.elevation_mm}`;
+    if (seenLevels.has(key)) continue;
+    seenLevels.add(key);
+    if (!byLevel.has(level.elevation_mm) || !level.outline?.length) continue;
+    const xs = level.outline.map((point) => point[0]);
+    const ys = level.outline.map((point) => point[1]);
+    byLevel.get(level.elevation_mm).push({ stance, outline: level.outline,
+      minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
+  }
+  const increment = (id) => { if (counts.has(id)) counts.set(id, counts.get(id) + 1); };
+  for (const element of elements) {
+    if (!Number.isFinite(element.x) || !Number.isFinite(element.y)) continue;
+    const override = overrides[String(element.id)];
+    if (override) { increment(override.crane_zone_id); increment(override.stance_zone_id); continue; }
+    if (!objectLevels.length || !Number.isFinite(element.elevation_mm)) continue;
+    const strict = CAPPING_TYPES.has(element.element_type);
+    let elevation = objectLevels[0];
+    for (const value of objectLevels) {
+      if (strict ? value < element.elevation_mm : value <= element.elevation_mm) elevation = value;
+      else break;
+    }
+    let match = null, ambiguous = false;
+    for (const item of byLevel.get(elevation) || []) {
+      if (element.x < item.minX || element.x > item.maxX ||
+          element.y < item.minY || element.y > item.maxY ||
+          !inside(item.outline, element.x, element.y)) continue;
+      if (match) { ambiguous = true; break; }
+      match = item.stance;
+    }
+    if (match && !ambiguous) { increment(match.id); increment(match.parent_zone_id); }
+  }
+  return counts;
+}

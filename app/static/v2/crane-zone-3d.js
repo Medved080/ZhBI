@@ -21,6 +21,7 @@ export function createCraneZone3d(callbacks) {
   let r = null, host = null, data = null, disposed = false, framed = false;
   let homeDistance = 0, frame = null, observer = null, drag = null, box = null;
   let meshes = [], sceneBounds = null, modelSignature = null;
+  let gripLayer = null, outlineFrame = null, pendingOutline = null;
 
   function requestFrame() {
     if (!r || frame != null) return;
@@ -53,7 +54,7 @@ export function createCraneZone3d(callbacks) {
       if (Array.isArray(object.material)) object.material.forEach((material) => material.dispose());
       else object.material?.dispose();
     });
-    r.group = null; meshes = [];
+    r.group = null; r.activeVolume = null; r.activeEdges = null; meshes = [];
   }
   function disposeModel() {
     if (!r?.modelGroup) return;
@@ -111,10 +112,22 @@ export function createCraneZone3d(callbacks) {
   function updateHandlePositions() {
     if (!host) return;
     const outline = activeLevel()?.outline || [];
-    host.dataset.edgeMidpoints = JSON.stringify(outline.map((point, index) => {
+    const midpoints = outline.map((point, index) => {
       const a = toScreen(point), b = toScreen(outline[(index + 1) % outline.length]);
       return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]) };
-    }));
+    });
+    host.dataset.edgeMidpoints = JSON.stringify(midpoints);
+    if (!gripLayer) return;
+    gripLayer.replaceChildren();
+    if (!data?.editable || outline.length !== 4) return;
+    for (const midpoint of midpoints) {
+      const grip = document.createElement("span");
+      grip.className = "cz-3d-grip";
+      grip.style.left = `${midpoint.x}px`;
+      grip.style.top = `${midpoint.y}px`;
+      grip.setAttribute("aria-hidden", "true");
+      gripLayer.appendChild(grip);
+    }
   }
   function pointer(event) {
     const rect = r.renderer.domElement.getBoundingClientRect();
@@ -130,9 +143,12 @@ export function createCraneZone3d(callbacks) {
   function nearestHandle(x, y) {
     const level = activeLevel();
     if (!data?.editable || level?.outline?.length !== 4) return null;
+    const midpoints = JSON.parse(host?.dataset.edgeMidpoints || "[]");
+    const grip = midpoints.find((point) => Math.hypot(point.x - x, point.y - y) <= 17);
+    if (grip) return { kind: "edge", index: grip.index };
     // У соседней новой зоны на обзорном масштабе ребро может быть ~18 px:
     // прежние 12 px отступа от каждой вершины перекрывали его целиком.
-    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 10, 4);
+    const edge = nearestEdgeIndex(level.outline, x, y, toScreen, 15, 2);
     return edge == null ? null : { kind: "edge", index: edge };
   }
   function nearestElement(x, y) {
@@ -189,7 +205,14 @@ export function createCraneZone3d(callbacks) {
     const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
     if (!outline) return;
     if (Math.hypot(x - drag.x, y - drag.y) > 2) drag.moved = true;
-    if (drag.moved) callbacks.onOutline(outline);
+    if (drag.moved) {
+      pendingOutline = outline;
+      if (outlineFrame == null) outlineFrame = requestAnimationFrame(() => {
+        outlineFrame = null;
+        const next = pendingOutline; pendingOutline = null;
+        if (next) callbacks.onOutline(next);
+      });
+    }
   }
   function onUp(event) {
     if (!drag) return;
@@ -207,7 +230,13 @@ export function createCraneZone3d(callbacks) {
       const element = nearestElement(x, y), zone = element ? null : pickZone(x, y);
       if (element) callbacks.onSelectElements([element.id]);
       else if (zone) callbacks.onSelectZone(zone.zoneId, zone.levelIndex);
-    } else if (last.kind !== "orbit" && last.moved) callbacks.onCommit();
+    } else if (last.kind !== "orbit" && last.moved) {
+      if (outlineFrame != null) cancelAnimationFrame(outlineFrame);
+      outlineFrame = null;
+      const next = pendingOutline; pendingOutline = null;
+      if (next) callbacks.onOutline(next);
+      callbacks.onCommit();
+    }
   }
   async function ensure() {
     if (r) return r;
@@ -245,6 +274,7 @@ export function createCraneZone3d(callbacks) {
       if (host) { host.dataset.modelKind = "extrusions"; host.dataset.modelCount = String(data.modelElements.length); }
       return;
     }
+    const buildStarted = performance.now();
     disposeModel();
     const { THREE } = r, positions = [], normals = [], edgeChunks = [], colorRanges = [];
     let faceLength = 0, edgeLength = 0;
@@ -296,7 +326,8 @@ export function createCraneZone3d(callbacks) {
     }
     r.modelGroup = group; modelSignature = data.modelKey;
     updateModelColors();
-    if (host) { host.dataset.modelKind = "extrusions"; host.dataset.modelCount = String(data.modelElements.length); }
+    if (host) { host.dataset.modelKind = "extrusions"; host.dataset.modelCount = String(data.modelElements.length);
+      host.dataset.modelBuildMs = String(Math.round(performance.now() - buildStarted)); }
     r.scene.add(group); requestFrame();
   }
   function updateModelColors() {
@@ -323,8 +354,12 @@ export function createCraneZone3d(callbacks) {
     if (!r || !data) return;
     if (host) { host.dataset.visibleElements = String(data.elements.length); host.dataset.editable = String(!!data.editable);
       if (!data.showElements) { host.dataset.modelKind = "hidden"; host.dataset.modelCount = "0"; } }
-    disposeGroup();
     updateModel();
+    rebuildZones();
+  }
+  function rebuildZones() {
+    if (!r || !data) return;
+    disposeGroup();
     const { THREE } = r, group = new THREE.Group();
     sceneBounds = extent();
     const bounds = sceneBounds;
@@ -357,19 +392,24 @@ export function createCraneZone3d(callbacks) {
         transparent: true, opacity: active ? 0.95 : quietStand ? 0 : 0.13, depthTest: false }));
       edges.rotation.x = -Math.PI / 2; edges.position.y = y; edges.renderOrder = active ? 5 : 2;
       group.add(edges);
-      if (active && data.editable && outline.length === 4) {
-        const edgeCenters = [];
-        for (let i = 0; i < outline.length; i++) {
-          const point = outline[i], next = outline[(i + 1) % outline.length];
-          edgeCenters.push((point[0] + next[0]) / 2, top + 5, -(point[1] + next[1]) / 2);
-        }
-        const edgeGeometry = new THREE.BufferGeometry(); edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edgeCenters, 3));
-        const edgeMarkers = new THREE.Points(edgeGeometry, new THREE.PointsMaterial({ color: 0xffffff, size: 10, sizeAttenuation: false, depthTest: false }));
-        edgeMarkers.renderOrder = 6;
-        group.add(edgeMarkers);
-      }
+      if (active) { r.activeVolume = volume; r.activeEdges = edges; }
     }
     r.group = group; r.scene.add(group); requestFrame();
+  }
+  function updateOutline(outline) {
+    if (!r?.activeVolume || !r.activeEdges || outline?.length !== 4) return;
+    const zone = data.zones.find((item) => item.id === data.selectedZone);
+    if (!zone) return;
+    const y = levelY(zone.levels[data.activeLevel]);
+    const top = zoneTop(zone, data.activeLevel, sceneBounds || extent());
+    const geometry = new r.THREE.ExtrudeGeometry(
+      new r.THREE.Shape(outline.map((point) => new r.THREE.Vector2(point[0], point[1]))),
+      { depth: Math.max(100, top - y), bevelEnabled: false, steps: 1 });
+    const oldVolume = r.activeVolume.geometry, oldEdges = r.activeEdges.geometry;
+    r.activeVolume.geometry = geometry;
+    r.activeEdges.geometry = new r.THREE.EdgesGeometry(geometry);
+    oldVolume.dispose(); oldEdges.dispose();
+    requestFrame();
   }
   function fit() {
     if (!r || !data) return;
@@ -404,6 +444,12 @@ export function createCraneZone3d(callbacks) {
       await ensure();
       if (disposed) return;
       host = nextHost;
+      if (!gripLayer || gripLayer.parentNode !== host) {
+        gripLayer?.remove();
+        gripLayer = document.createElement("div");
+        gripLayer.className = "cz-3d-grips";
+        host.appendChild(gripLayer);
+      }
       host.dataset.cameraPolarDeg = String(Math.round(r.controls.getPolarAngle() * 180 / Math.PI));
       if (r.renderer.domElement.parentNode !== host) host.appendChild(r.renderer.domElement);
       observer?.disconnect();
@@ -412,10 +458,13 @@ export function createCraneZone3d(callbacks) {
       if (!framed) fit();
     },
     update(nextData) { data = nextData; rebuild(); },
+    updateOutline,
     fit, zoom, zoomPercent,
     info() { return { elements: data?.elements.length || 0, zones: data?.zones.length || 0, percent: zoomPercent(), editable: !!data?.editable }; },
     dispose() {
       disposed = true; observer?.disconnect(); removeBox();
+      if (outlineFrame != null) cancelAnimationFrame(outlineFrame);
+      gripLayer?.remove(); gripLayer = null;
       if (frame != null) cancelAnimationFrame(frame);
       if (!r) return;
       disposeGroup(); disposeModel(); r.controls.dispose(); r.renderer.dispose();

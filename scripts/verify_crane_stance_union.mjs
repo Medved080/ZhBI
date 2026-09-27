@@ -44,6 +44,8 @@ try {
   await tap(browser, '[data-cat="Стоянка"]');
   await browser.waitFor("!!document.querySelector('#cz-new')");
   await tap(browser, "#cz-new");
+  await browser.waitFor("!!document.querySelector('#cz-exceptions-toggle')", 15000);
+  await tap(browser, "#cz-exceptions-toggle");
   await browser.waitFor("!!document.querySelector('.cz-exception-item')", 15000);
   const exceptionCount = await browser.eval("document.querySelector('.cz-exceptions')?.textContent.match(/Исключения назначений\\s*·\\s*(\\d+)/)?.[1]");
   check("Исключения переноса видны в черновике", Number(exceptionCount) === 4115);

@@ -8,7 +8,7 @@
 .cz-page #ze-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cz-page #ze-body > .v2-read-table { overflow: auto; min-height: 0; }
 .cz-page #ze-crane-editor { min-height: 0; display: flex; flex: 1; margin: 0 -16px; }
-.cz-root { min-height: 0; flex: 1; display: flex; flex-direction: column; color: #273d4b; background: #f5f7f8; }
+.cz-root { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; color: #273d4b; background: #f5f7f8; }
 .cz-toolbar { min-height: 42px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid #dce3e7; background: #fff; flex-wrap: nowrap; overflow-x: auto; }
 .cz-toolbar strong { font-size: 14px; margin-right: 3px; white-space: nowrap; }
 .cz-feedback { flex: none; padding: 3px 10px; border-bottom: 1px solid #e6dfd2; background: #fff8ec; color: #69480e; font-size: 11px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -60,6 +60,9 @@
 #cz-canvas[hidden], #cz-3d[hidden] { display: none; }
 #cz-3d { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: #f8fafb; }
 #cz-3d canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.cz-3d-grips { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.cz-3d-grip { position: absolute; width: 26px; height: 26px; box-sizing: border-box; transform: translate(-50%, -50%); border: 3px solid #fff; border-radius: 50%; background: #ef6b33; box-shadow: 0 1px 8px rgb(25 50 65 / 65%); }
+.cz-3d-grip::after { content: "↔"; display: block; color: #fff; font-size: 16px; font-weight: 700; line-height: 18px; text-align: center; }
 .cz-3d-selection { position: absolute; border: 1px dashed #ef6b33; background: rgb(239 107 51 / 10%); pointer-events: none; }
 .cz-zoom-controls { position: absolute; right: 12px; bottom: 34px; z-index: 2; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid #cbd8df; border-radius: 8px; background: #fff; box-shadow: 0 2px 8px rgb(25 50 65 / 13%); }
 .cz-zoom-controls button { width: 30px; height: 29px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #294254; font-family: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
@@ -78,11 +81,14 @@
 .cz-hint { margin: 3px 0; font-size: 11px; line-height: 1.4; color: #758792; }
 .cz-point-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 7px; font: 11px ui-monospace, monospace; color: #586e7b; max-height: 100px; overflow: auto; }
 .cz-empty { color: #758792; padding: 25px 3px; font-size: 13px; }
-.cz-bottom { background: #fff; border-top: 1px solid #dce3e7; display: flex; gap: 12px; align-items: end; padding: 8px 15px; min-height: 55px; }
+.cz-bottom { background: #fff; border-top: 1px solid #dce3e7; display: flex; gap: 8px; align-items: center; padding: 4px 10px; min-height: 42px; }
+.cz-bottom label { flex-direction: row; align-items: center; white-space: nowrap; gap: 6px; }
 .cz-bottom label:first-child { flex: 1; }
-.cz-bottom label:nth-child(2) { width: 160px; }
-.cz-bottom #cz-preview-result { font-size: 12px; color: #496474; max-width: 380px; line-height: 1.35; }
-.cz-exceptions { background: #fff; border-top: 1px solid #dce3e7; padding: 8px 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.cz-bottom label:first-child input { flex: 1; min-width: 80px; }
+.cz-bottom label:nth-child(2) { flex: none; }
+.cz-bottom input { padding: 5px 7px; }
+.cz-bottom #cz-preview-result { font-size: 12px; color: #496474; max-width: 290px; line-height: 1.35; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cz-exceptions { position: absolute; z-index: 7; right: 10px; bottom: 49px; width: min(720px, calc(100% - 20px)); box-sizing: border-box; background: #fff; border: 1px solid #cbd8df; border-radius: 9px; box-shadow: 0 5px 24px rgb(25 50 65 / 20%); padding: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
 .cz-exceptions select, .cz-exceptions input { border: 1px solid #cdd9df; border-radius: 7px; padding: 6px 8px; font: inherit; }
 .cz-exception-list { width: 100%; max-height: 140px; overflow: auto; }
 .cz-exception-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px solid #eef1f3; }
