@@ -78,6 +78,13 @@ def materialize_snapshot(zones: list[dict], elements: list[dict],
     legacy = _legacy_records(zones)
     source_windows = {}
     all_levels = set()
+    # The old pipeline enabled the stair builder only when *all* stance
+    # records in the drawing shared one physical elevation. A crane with one
+    # elevation inside a multi-elevation object used direct crane-wide snap.
+    physical_elevations = {level["elevation_mm"] for stance in stances
+                           for level in stance["levels"]
+                           if level["elevation_mm"] is not None}
+    use_staircase = len(physical_elevations) <= 1
     for crane_id in cranes:
         members = [s for s in stances if s.get("parent_zone_id") == crane_id]
         if not members:
@@ -86,7 +93,7 @@ def materialize_snapshot(zones: list[dict], elements: list[dict],
                                if l["elevation_mm"] is not None})
         if not crane_levels:
             raise ConversionError(f"У стоянок крана {crane_id} нет числовых отметок")
-        if len(crane_levels) == 1:
+        if use_staircase:
             if len(column_tiers) > 1 and len(members) > 1 and (
                 not axes or not axes.get("numeric") or not axes.get("letter")
             ):

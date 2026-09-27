@@ -11,6 +11,7 @@ import json
 import sqlite3
 
 from app.crane_zone_editor import ZoneDraftError, validate_zones
+from app.crane_zone_service import _assert_current_matches_version, _inherited_overrides
 from app.db import parse_zone_number
 from scripts.zone_binding import build_stance_level_polygons, compute_column_tier_elevations
 
@@ -92,12 +93,26 @@ def build_candidate(base_zones: list[dict], records: list, source_file: str,
         else:
             result[zone_id]["name"] = record.name
     incoming_stances = [r for r in records if r.category == "Стоянка"]
+    physical_elevations = {r.elevation_mm for r in incoming_stances
+                           if r.elevation_mm is not None}
+    use_staircase = len(physical_elevations) <= 1
     by_crane = {}
     for record in incoming_stances:
         by_crane.setdefault(record.parent_zone_handle, []).append(record)
+        zone_id = stances[(handle_to_crane[record.parent_zone_handle],
+                           parse_zone_number(record.name))]
+        if zone_id not in touched:
+            # Even an entirely empty upper stair window replaces the old
+            # imported polygon. The absence must not revive old geometry.
+            result[zone_id]["levels"] = []
+            touched.add(zone_id)
+    source_grids = {}
     for parent_handle, members in by_crane.items():
-        physical = {r.elevation_mm for r in members}
-        if len(physical) == 1:
+        crane_physical = sorted({r.elevation_mm for r in members
+                                 if r.elevation_mm is not None})
+        if not crane_physical:
+            raise ZoneDraftError("У стоянок крана нет числовой отметки")
+        if use_staircase:
             numeric = (getattr(axis_grid, "numeric_axes", None) if axis_grid is not None
                        else None)
             letter = (getattr(axis_grid, "letter_axes", None) if axis_grid is not None
@@ -116,6 +131,9 @@ def build_candidate(base_zones: list[dict], records: list, source_file: str,
             except (IndexError, ValueError, KeyError, ZeroDivisionError) as exc:
                 raise ZoneDraftError(f"Не удалось построить лесенку стоянок: {exc}") from exc
             for record in members:
+                zone_id = stances[(handle_to_crane[parent_handle],
+                                   parse_zone_number(record.name))]
+                source_grids[zone_id] = sorted(set(tiers))
                 for elevation, polygon in zip(tiers, windows[record.handle]):
                     if polygon is None or polygon.is_empty:
                         continue
@@ -128,8 +146,35 @@ def build_candidate(base_zones: list[dict], records: list, source_file: str,
                               materialized)
         else:
             for record in members:
-                add_level(stances[(handle_to_crane[parent_handle], parse_zone_number(record.name))],
-                          record)
+                zone_id = stances[(handle_to_crane[parent_handle],
+                                   parse_zone_number(record.name))]
+                source_grids[zone_id] = crane_physical
+                add_level(zone_id, record)
+
+    # The binder selects a level from the whole object, while the old direct
+    # binder snapped within a crane. Split every existing source window at
+    # levels introduced by another crane, copying its last active polygon;
+    # an absent window stays absent. Untouched zones use the old object's
+    # complete level grid so their gaps remain explicit.
+    old_grid = sorted({level["elevation_mm"] for zone in base_zones
+                       if zone["category"] == "Стоянка" for level in zone["levels"]})
+    object_grid = sorted({level["elevation_mm"] for zone in result.values()
+                          if zone["category"] == "Стоянка" for level in zone["levels"]})
+    for zone in result.values():
+        if zone["category"] != "Стоянка":
+            continue
+        grid = source_grids.get(zone["id"], old_grid)
+        if not grid:
+            continue
+        by_elevation = {level["elevation_mm"]: level for level in zone["levels"]}
+        expanded = []
+        for elevation in object_grid:
+            below = [value for value in grid if value <= elevation]
+            active = below[-1] if below else grid[0]
+            source = by_elevation.get(active)
+            if source is not None:
+                expanded.append({**source, "elevation_mm": elevation})
+        zone["levels"] = expanded
 
     for zone in result.values():
         zone["levels"].sort(key=lambda l: (
@@ -185,6 +230,7 @@ def stage_import_draft(conn: sqlite3.Connection, object_id: int, records: list,
     if expected_base_version_id is not None and base["id"] != expected_base_version_id:
         raise ZoneDraftError("За время импорта опубликована другая редакция зон; "
                              "повторите загрузку чертежа")
+    reappeared = _assert_current_matches_version(conn, object_id, base)
     base_zones = json.loads(base["zones_json"])
     candidate = build_candidate(base_zones, records, source_file,
                                 axis_grid, element_records)
@@ -197,23 +243,7 @@ def stage_import_draft(conn: sqlite3.Connection, object_id: int, records: list,
 
     if logical(candidate) == logical(base_zones):
         return None
-    overrides = {
-        str(r["element_id"]): {
-            "crane_zone_id": r["crane_zone_id"],
-            "crane_status": r["crane_status"],
-            "stance_zone_id": r["stance_zone_id"],
-            "stance_status": r["stance_status"],
-            "stance_elevation_mm": r["stance_elevation_mm"],
-            "source": r["source"],
-            **({"reason": r["reason"]} if r["source"] == "conversion" else {}),
-        }
-        for r in conn.execute(
-            "SELECT element_id, crane_zone_id, crane_status, stance_zone_id, "
-            "stance_status, stance_elevation_mm, source, reason "
-            "FROM crane_zone_version_assignments "
-            "WHERE version_id = ? AND source IN ('manual', 'conversion')", (base["id"],),
-        )
-    }
+    overrides = _inherited_overrides(conn, object_id, base["id"], reappeared)
     cur = conn.execute(
         "INSERT INTO crane_zone_drafts "
         "(object_id, base_version_id, zones_json, overrides_json, note, created_by, author_name) "

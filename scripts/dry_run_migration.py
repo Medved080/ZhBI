@@ -24,6 +24,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
 # Корень репозитория — от расположения самого скрипта, а не жёстким
 # путём: скрипт запускают и на Mac разработчика, и на сервере, где
@@ -318,6 +319,11 @@ def главное(src):
     sys.path.insert(0, REPO)
     os.environ["ZHBI_DB_PATH"] = work
     from app.db import init_db
+    from app import backups
+
+    # The release task creates its own safety backup. Keep that backup next
+    # to the disposable DB, never in the checkout's service backup directory.
+    backups.BACKUP_DIR = Path(work).parent / "dry_run_backups"
 
     print("\n" + "=" * 78)
     print("ПРОГОН init_db() — ровно то, что сделает сервер при старте")

@@ -643,6 +643,214 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
         ).fetchone()[0], current)
 
+    def test_historical_reports_resolve_reference_levels_once(self):
+        from app.main import ReportRequestIn, _analytics, _delivery_schedule
+
+        zones = snapshot_zones(self.conn, self.object_id)
+        stance = next(zone for zone in zones if zone["id"] == self.stance_id)
+        stance["levels"] = [level for level in stance["levels"]
+                            if level["elevation_mm"] == 10000]
+        stance["report_levels"] = [0, 0, None]
+        self.conn.execute(
+            "UPDATE elements SET planned_delivery_date = ? WHERE id = ?",
+            (business_date(), self.element_id),
+        )
+        revision_no = self.conn.execute(
+            "SELECT MAX(revision_no) + 1 FROM crane_zone_versions WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0]
+        version_id = self.conn.execute(
+            "INSERT INTO crane_zone_versions (object_id, revision_no, kind, "
+            "effective_date, known_from, activated_at, zones_json, assignment_count) "
+            "VALUES (?, ?, 'published', ?, ?, datetime('now'), ?, 1)",
+            (self.object_id, revision_no, business_date(), business_date(), json.dumps(zones)),
+        ).lastrowid
+        self.conn.execute(
+            "INSERT INTO crane_zone_version_assignments "
+            "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
+            "stance_zone_id, stance_status, stance_elevation_mm, source) "
+            "VALUES (?, ?, 'test-element-uid', ?, 'matched', ?, 'matched', 0, 'conversion')",
+            (version_id, self.element_id, self.crane_id, self.stance_id),
+        )
+        self.conn.commit()
+        version = self.conn.execute(
+            "SELECT * FROM crane_zone_versions WHERE id = ?", (version_id,),
+        ).fetchone()
+        with historical_zone_overlay(self.conn, version, business_date()):
+            row = self.conn.execute(
+                "SELECT e.zone_stance_level_id, l.elevation_mm, l.is_reference "
+                "FROM elements e JOIN zone_levels l ON l.id = e.zone_stance_level_id "
+                "WHERE e.id = ?", (self.element_id,),
+            ).fetchone()
+            self.assertEqual((row["elevation_mm"], row["is_reference"]), (0, 1))
+            self.assertIsNotNone(row["zone_stance_level_id"])
+            self.assertEqual(self.conn.execute(
+                "SELECT COUNT(*) FROM elements WHERE id = ?", (self.element_id,),
+            ).fetchone()[0], 1)
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        analytics = _analytics(self.conn, admin, ReportRequestIn(
+            object_id=self.object_id, source_file="test.dxf",
+            report_date=business_date(), horizon_days=14,
+        ))
+        self.assertEqual(analytics["unmapped"]["no_level"], 0)
+        delivery = _delivery_schedule(self.conn, admin, ReportRequestIn(
+            object_id=self.object_id, source_file="test.dxf",
+            date_from=business_date(), date_to=business_date(), group_by=["stance"],
+        ))
+        self.assertEqual(delivery["rows"][0]["label"], "Кран 1 · Стоянка 1")
+        self.assertEqual(delivery["total"]["total"][0], 1)
+        # NULL is a retained reference elevation, not an unknown level.
+        self.conn.execute(
+            "UPDATE crane_zone_version_assignments SET stance_elevation_mm = NULL "
+            "WHERE version_id = ?", (version_id,),
+        )
+        with historical_zone_overlay(self.conn, version, business_date()):
+            row = self.conn.execute(
+                "SELECT e.zone_stance_level_id, l.is_reference FROM elements e "
+                "JOIN zone_levels l ON l.id = e.zone_stance_level_id WHERE e.id = ?",
+                (self.element_id,),
+            ).fetchone()
+            self.assertEqual(row["is_reference"], 1)
+
+    def test_retirement_excludes_override_and_same_row_reappearance_restores_it(self):
+        zones = snapshot_zones(self.conn, self.object_id)
+        preserved = {str(self.element_id): {
+            "crane_zone_id": self.crane_id, "crane_status": "matched",
+            "stance_zone_id": self.stance_id, "stance_status": "matched",
+            "stance_elevation_mm": 0, "source": "conversion",
+            "reason": "Проверка унаследованного исключения",
+        }}
+        first = create_draft(self.conn, self.object_id, None, "Тест")
+        token = update_draft(self.conn, self.object_id, first, 1, zones, preserved,
+                             "Сохранено исключение")
+        first_version = publish_draft(self.conn, self.object_id, first, token,
+                                      business_date(), None, "Тест")["version_id"]
+        self.conn.execute("UPDATE elements SET is_current = 0 WHERE id = ?",
+                          (self.element_id,))
+        self.conn.commit()
+        retired = create_draft(self.conn, self.object_id, None, "Тест")
+        retired_row = self.conn.execute(
+            "SELECT zones_json, overrides_json FROM crane_zone_drafts WHERE id = ?",
+            (retired,),
+        ).fetchone()
+        self.assertEqual(json.loads(retired_row["overrides_json"]), {})
+        self.assertEqual(preview_draft(self.conn, self.object_id, retired)["total"], 0)
+        token = update_draft(self.conn, self.object_id, retired, 1,
+                             json.loads(retired_row["zones_json"]), {},
+                             "Изделие снято с чертежа")
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            retired_version = publish_draft(
+                self.conn, self.object_id, retired, token, tomorrow, None, "Тест",
+            )["version_id"]
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_version_assignments WHERE version_id = ?",
+            (retired_version,),
+        ).fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT source FROM crane_zone_version_assignments WHERE version_id = ?",
+            (first_version,),
+        ).fetchone()[0], "conversion")
+        imported = stage_import_draft(self.conn, self.object_id, [
+            ZoneRecord("C-next", "Кран", None, square(0, 0, 12),
+                       "Кран 1", "matched"),
+            ZoneRecord("S-next-0", "Стоянка", 0, square(0, 0, 6),
+                       "Стоянка 1", "matched", "C-next", "matched"),
+            ZoneRecord("S-next-1", "Стоянка", 10000, square(0, 0, 6),
+                       "Стоянка 1", "matched", "C-next", "matched"),
+        ], "next.dxf", None, "Импорт")
+        self.assertIsNotNone(imported)
+        self.assertEqual(json.loads(self.conn.execute(
+            "SELECT overrides_json FROM crane_zone_drafts WHERE id = ?",
+            (imported,),
+        ).fetchone()[0]), {})
+        self.assertEqual(preview_draft(self.conn, self.object_id, imported)["total"], 0)
+        self.conn.execute("UPDATE elements SET is_current = 1 WHERE id = ?",
+                          (self.element_id,))
+        self.conn.commit()
+        revived = create_draft(self.conn, self.object_id, None, "Тест")
+        row = self.conn.execute(
+            "SELECT overrides_json FROM crane_zone_drafts WHERE id = ?", (revived,),
+        ).fetchone()
+        self.assertEqual(json.loads(row["overrides_json"]), preserved)
+        self.assertEqual(preview_draft(self.conn, self.object_id, revived)["total"], 1)
+
+    def test_old_version_schema_migrates_manual_assignment_and_future_publication(self):
+        zones_json = json.dumps(snapshot_zones(self.conn, self.object_id))
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        self.conn.execute("DELETE FROM crane_zone_transition WHERE object_id = ?",
+                          (self.object_id,))
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        self.conn.executescript("""
+            DROP TABLE crane_zone_version_assignments;
+            DROP TABLE crane_zone_versions;
+            CREATE TABLE crane_zone_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+                revision_no INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('baseline','published','rollback')),
+                effective_date TEXT, known_from TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), activated_at TEXT,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                author_name TEXT, note TEXT, zones_json TEXT NOT NULL,
+                assignment_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(object_id, revision_no)
+            );
+            CREATE TABLE crane_zone_version_assignments (
+                version_id INTEGER NOT NULL REFERENCES crane_zone_versions(id) ON DELETE CASCADE,
+                element_id INTEGER NOT NULL, element_uid TEXT,
+                crane_zone_id INTEGER, crane_status TEXT,
+                stance_zone_id INTEGER, stance_status TEXT, stance_elevation_mm INTEGER,
+                source TEXT NOT NULL CHECK (source IN ('geometry','manual','legacy')),
+                PRIMARY KEY(version_id, element_id)
+            );
+        """)
+        self.conn.execute(
+            "INSERT INTO crane_zone_versions "
+            "(id, object_id, revision_no, kind, known_from, activated_at, zones_json, assignment_count) "
+            "VALUES (100, ?, 0, 'baseline', ?, datetime('now'), ?, 1)",
+            (self.object_id, business_date(), zones_json),
+        )
+        self.conn.execute(
+            "INSERT INTO crane_zone_versions "
+            "(id, object_id, revision_no, kind, effective_date, known_from, zones_json, assignment_count) "
+            "VALUES (101, ?, 1, 'published', ?, ?, ?, 1)",
+            (self.object_id, tomorrow, business_date(), zones_json),
+        )
+        for version_id in (100, 101):
+            self.conn.execute(
+                "INSERT INTO crane_zone_version_assignments "
+                "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
+                "stance_zone_id, stance_status, stance_elevation_mm, source) "
+                "VALUES (?, ?, 'test-element-uid', ?, 'matched', ?, 'matched', 0, 'manual')",
+                (version_id, self.element_id, self.crane_id, self.stance_id),
+            )
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        changes = db.init_db()
+        self.assertTrue(any("ограничения крановых редакций" in item for item in changes))
+        self.assertEqual([tuple(row) for row in self.conn.execute(
+            "SELECT version_id, element_id, source FROM crane_zone_version_assignments "
+            "ORDER BY version_id")], [(100, self.element_id, "manual"),
+                                      (101, self.element_id, "manual")])
+        self.assertIsNone(self.conn.execute(
+            "SELECT activated_at FROM crane_zone_versions WHERE id = 101",
+        ).fetchone()[0])
+        with self.assertRaisesRegex(Exception, "ожидают 1 объектов"):
+            transition_pending(self.conn)
+        self.assertEqual(self.conn.execute(
+            "SELECT state FROM crane_zone_transition WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0], "waiting")
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            self.assertEqual(activate_due(self.conn), [101])
+        self.assertEqual(self.conn.execute(
+            "SELECT source FROM crane_zone_version_assignments WHERE version_id = 101",
+        ).fetchone()[0], "manual")
+
     def test_history_scene_shows_saved_assignments_not_current(self):
         from app.crane_zone_api import zone_scene
 

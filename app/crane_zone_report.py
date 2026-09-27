@@ -45,20 +45,35 @@ def historical_zone_overlay(conn: sqlite3.Connection, version, as_of: str):
         conn.execute(
             "CREATE TEMP TABLE crane_hist_levels "
             "(id INTEGER PRIMARY KEY, zone_id INTEGER, elevation_mm INTEGER, "
-            "outline_json TEXT, source_file TEXT, dxf_handle TEXT)"
+            "outline_json TEXT, source_file TEXT, dxf_handle TEXT, "
+            "is_reference INTEGER NOT NULL DEFAULT 0)"
         )
-        levels = [
-            (-index, z["id"], level["elevation_mm"], json.dumps(level["outline"]),
-             level.get("source_file"), level.get("dxf_handle"))
-            for index, (z, level) in enumerate(
-                ((z, level) for z in zones if z["category"] == "Стоянка"
-                 for level in z["levels"]), start=1,
-            )
-        ]
+        levels = []
+        for zone in zones:
+            if zone["category"] != "Стоянка":
+                continue
+            seen = set()
+            for level in zone["levels"]:
+                elevation = level["elevation_mm"]
+                if elevation in seen:
+                    continue
+                seen.add(elevation)
+                levels.append((-(len(levels) + 1), zone["id"], elevation,
+                               json.dumps(level["outline"]), level.get("source_file"),
+                               level.get("dxf_handle"), 0))
+            # Assignment elevations without a working polygon are retained
+            # in the historical snapshot. NULL is an elevation value here:
+            # the join below deliberately uses IS rather than =.
+            for elevation in zone.get("report_levels", []):
+                if elevation in seen:
+                    continue
+                seen.add(elevation)
+                levels.append((-(len(levels) + 1), zone["id"], elevation,
+                               "[]", None, None, 1))
         conn.executemany(
             "INSERT INTO crane_hist_levels "
-            "(id, zone_id, elevation_mm, outline_json, source_file, dxf_handle) "
-            "VALUES (?, ?, ?, ?, ?, ?)", levels,
+            "(id, zone_id, elevation_mm, outline_json, source_file, dxf_handle, is_reference) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)", levels,
         )
         cols = [row["name"] for row in conn.execute("PRAGMA main.table_info(elements)")]
         overrides = {
