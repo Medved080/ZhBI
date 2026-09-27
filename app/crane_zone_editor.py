@@ -11,14 +11,11 @@ import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
-from types import SimpleNamespace
-
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from zone_binding import (  # noqa: E402
-    TIER_CAPPING_TYPES, bind_element_to_zones, build_stance_level_polygons,
-    compute_column_tier_elevations,
+    TIER_CAPPING_TYPES, bind_element_to_zones, object_stance_levels,
 )
 from zone_parser import ZoneRecord  # noqa: E402
 
@@ -33,30 +30,8 @@ def _zone_id(value):
     return value
 
 
-def stance_containment_issues(zones: list[dict]) -> list[str]:
-    """Понятные оператору причины, мешающие публикации черновика."""
-    by_id = {zone["id"]: zone for zone in zones}
-    issues = []
-    for zone in zones:
-        if zone["category"] != "Стоянка":
-            continue
-        crane = by_id.get(zone["parent_zone_id"])
-        if crane is None or crane["category"] != "Кран":
-            continue
-        crane_polys = [Polygon(level["outline"]) for level in crane["levels"]]
-        for level in zone["levels"]:
-            if not any(poly.covers(Point(point)) for poly in crane_polys for point in level["outline"]):
-                tier = (f" на ярусе +{level['elevation_mm']} мм"
-                        if level["elevation_mm"] is not None else "")
-                issues.append(
-                    f"«{zone['name']}»{tier} оказалась вне зоны «{crane['name']}». "
-                    "Расширьте кран или переместите стоянку внутрь него, затем проверьте редакцию."
-                )
-    return issues
-
-
 def validate_zones(zones: list[dict], base_zones: list[dict], *,
-                   allow_outside_stances: bool = False) -> dict[int, dict]:
+                   allow_geometry_errors: bool = False) -> dict[int, dict]:
     """Сверяет весь снимок; старые зоны нельзя молча потерять из черновика."""
     if not isinstance(zones, list):
         raise ZoneDraftError("Список зон должен быть массивом")
@@ -87,14 +62,26 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
         if not isinstance(name, str) or not name.strip() or len(name) > 200:
             raise ZoneDraftError(f"У зоны {zone_id} нужно название до 200 знаков")
         levels = zone.get("levels")
-        if not isinstance(levels, list) or not levels or len(levels) > 100:
-            raise ZoneDraftError(f"У зоны {zone_id} нужен хотя бы один ярус")
+        if not isinstance(levels, list) or len(levels) > 100:
+            raise ZoneDraftError(f"У зоны {zone_id} неверный список ярусов")
+        if category == "Кран" and levels:
+            raise ZoneDraftError(f"Кран {zone_id} — справочник; рабочие контуры задаются стоянками")
+        if category == "Стоянка" and not levels:
+            raise ZoneDraftError(f"У стоянки {zone_id} нужен хотя бы один рабочий ярус")
+        references = zone.get("report_levels", [])
+        if not isinstance(references, list) or len(references) > 100 or any(
+            v is not None and (isinstance(v, bool) or not isinstance(v, int))
+            for v in references
+        ) or len(references) != len(set(references)):
+            raise ZoneDraftError(f"У зоны {zone_id} неверные служебные отметки")
+        if category == "Кран" and references:
+            raise ZoneDraftError(f"Кран {zone_id} не имеет отчётных ярусов")
         elevations = set()
         for level in levels:
             if not isinstance(level, dict):
                 raise ZoneDraftError(f"Ярус зоны {zone_id} должен быть объектом")
             elevation = level.get("elevation_mm")
-            if elevation is not None and (isinstance(elevation, bool) or not isinstance(elevation, int)):
+            if elevation is None or isinstance(elevation, bool) or not isinstance(elevation, int):
                 raise ZoneDraftError(f"Отметка яруса зоны {zone_id} должна быть целым числом")
             if elevation in elevations:
                 raise ZoneDraftError(f"У зоны {zone_id} повторяется отметка {elevation}")
@@ -108,7 +95,7 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
                             not math.isfinite(v) for v in point)):
                     raise ZoneDraftError(f"У яруса зоны {zone_id} недопустимая координата")
             polygon = Polygon(outline)
-            if not polygon.is_valid or polygon.area <= 0:
+            if not allow_geometry_errors and (not polygon.is_valid or polygon.area <= 0):
                 raise ZoneDraftError(f"Контур яруса зоны {zone_id} самопересекается или пуст")
         by_id[zone_id] = zone
     missing = set(original) - set(by_id)
@@ -128,57 +115,34 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
         if key in names:
             raise ZoneDraftError(f"Номер {zone['number']} повторяется в одном кране")
         names.add(key)
-    if not allow_outside_stances:
-        issues = stance_containment_issues(zones)
-        if issues:
-            raise ZoneDraftError(issues[0])
-    # Соседние зоны одного яруса могут касаться рёбрами, но не должны
-    # накладываться площадью. Исторические DXF-контуры местами уже имеют
-    # небольшие наложения: сохранять их без ухудшения разрешаем, увеличение
-    # площади пересечения (или новый конфликт) — нет. Стоянка и её кран
-    # намеренно вложены; стоянки разных кранов здесь не сопоставляются.
-    peers = list(by_id.values())
-    highest = max((level["elevation_mm"] or 0 for zone in peers for level in zone["levels"]), default=0) + 3000
-
-    def segments(zone):
-        ordered = sorted(zone["levels"], key=lambda item: item["elevation_mm"] or 0)
-        return [((level["elevation_mm"] or 0),
-                 (ordered[index + 1]["elevation_mm"] or 0) if index + 1 < len(ordered) else highest,
-                 Polygon(level["outline"])) for index, level in enumerate(ordered)]
-
-    def old_polygon_at(zone, elevation):
-        if zone is None:
-            return None
-        eligible = [level for level in zone["levels"] if (level["elevation_mm"] or 0) <= elevation]
-        if not eligible:
-            return None
-        return Polygon(max(eligible, key=lambda item: item["elevation_mm"] or 0)["outline"])
-
-    for index, zone in enumerate(peers):
-        for other in peers[index + 1:]:
-            if zone["category"] != other["category"] or (
-                zone["category"] == "Стоянка" and zone["parent_zone_id"] != other["parent_zone_id"]
-            ):
-                continue
-            old_zone, old_other = original.get(zone["id"]), original.get(other["id"])
-            for start, end, poly in segments(zone):
-                for peer_start, peer_end, peer_poly in segments(other):
-                    if max(start, peer_start) >= min(end, peer_end):
-                        continue  # грани на границе ярусов могут касаться
-                    area = poly.intersection(peer_poly).area
-                    midpoint = (max(start, peer_start) + min(end, peer_end)) / 2
-                    old_a, old_b = old_polygon_at(old_zone, midpoint), old_polygon_at(old_other, midpoint)
-                    baseline = old_a.intersection(old_b).area if old_a is not None and old_b is not None else 0
-                    if area > max(1, baseline + 1):
-                        raise ZoneDraftError(
-                            f"Зоны «{zone['name']}» и «{other['name']}» пересекаются на ярусе "
-                            f"{start if zone['category'] == 'Стоянка' else 'без отметки'}. "
-                            "Уменьшите контур до касания границ."
-                        )
+    if allow_geometry_errors:
+        return by_id
+    # Каждый ярус действует только до следующего уровня ВСЕГО объекта.
+    # Сравнение включает стоянки разных кранов; касание не даёт площадь.
+    peers = [z for z in by_id.values() if z["category"] == "Стоянка"]
+    levels = sorted({l["elevation_mm"] for z in peers for l in z["levels"]})
+    for level in levels:
+        present = [(z, Polygon(l["outline"])) for z in peers
+                   for l in z["levels"] if l["elevation_mm"] == level]
+        for index, (zone, poly) in enumerate(present):
+            for other, peer_poly in present[index + 1:]:
+                area = poly.intersection(peer_poly).area
+                old_a = next((l for l in original.get(zone["id"], {}).get("levels", [])
+                              if l["elevation_mm"] == level), None)
+                old_b = next((l for l in original.get(other["id"], {}).get("levels", [])
+                              if l["elevation_mm"] == level), None)
+                baseline = (Polygon(old_a["outline"]).intersection(Polygon(old_b["outline"])).area
+                            if old_a and old_b else 0)
+                if area > max(1, baseline + 1):
+                    raise ZoneDraftError(
+                        f"Стоянки «{zone['name']}» и «{other['name']}» пересекаются "
+                        f"на рабочем уровне {level} мм. Уменьшите контуры до касания."
+                    )
     return by_id
 
 
-def validate_overrides(overrides: dict, by_id: dict[int, dict], element_ids: set[int]) -> dict[int, dict]:
+def validate_overrides(overrides: dict, by_id: dict[int, dict],
+                       current: dict[int, dict]) -> dict[int, dict]:
     if not isinstance(overrides, dict):
         raise ZoneDraftError("Ручные назначения должны быть объектом")
     normalized = {}
@@ -187,7 +151,7 @@ def validate_overrides(overrides: dict, by_id: dict[int, dict], element_ids: set
             element_id = int(raw_id)
         except (TypeError, ValueError) as exc:
             raise ZoneDraftError("Недопустимый id изделия в назначении") from exc
-        if str(element_id) != str(raw_id) or element_id not in element_ids:
+        if str(element_id) != str(raw_id) or element_id not in current:
             raise ZoneDraftError(f"Изделие {raw_id} не входит в текущий объект")
         if not isinstance(item, dict):
             raise ZoneDraftError(f"Назначение изделия {raw_id} должно быть объектом")
@@ -198,7 +162,32 @@ def validate_overrides(overrides: dict, by_id: dict[int, dict], element_ids: set
             raise ZoneDraftError(f"Неизвестная стоянка у изделия {raw_id}")
         if stance_id is not None and by_id[stance_id]["parent_zone_id"] != crane_id:
             raise ZoneDraftError(f"Стоянка изделия {raw_id} не принадлежит его крану")
-        normalized[element_id] = {"crane_zone_id": crane_id, "stance_zone_id": stance_id}
+        source = item.get("source", "manual")
+        if source not in ("manual", "conversion"):
+            raise ZoneDraftError(f"Неизвестный источник назначения изделия {raw_id}")
+        normalized_item = {"crane_zone_id": crane_id, "stance_zone_id": stance_id,
+                           "source": source}
+        full_fields = ("crane_zone_id", "crane_status", "stance_zone_id",
+                       "stance_status", "stance_elevation_mm")
+        has_full = all(field in item for field in full_fields)
+        if source == "conversion" and not has_full:
+            raise ZoneDraftError(f"Исключение изделия {raw_id} потеряло сохранённые поля")
+        if has_full:
+            saved = {field: item[field] for field in full_fields}
+            matches_current = all(saved[field] == current[element_id][field] for field in full_fields)
+            if source == "conversion" and not matches_current:
+                raise ZoneDraftError(
+                    f"Исключение изделия {raw_id} изменено: снимите его явно или переназначьте вручную"
+                )
+            if matches_current:
+                normalized_item.update(saved)
+                normalized_item["preserve_full"] = True
+                if source == "conversion":
+                    reason = item.get("reason")
+                    if not isinstance(reason, str) or not reason or len(reason) > 500:
+                        raise ZoneDraftError(f"У исключения изделия {raw_id} отсутствует причина")
+                    normalized_item["reason"] = reason
+        normalized[element_id] = normalized_item
     return normalized
 
 
@@ -206,7 +195,12 @@ def _records(zones: list[dict]) -> list[ZoneRecord]:
     first_crane_level = {
         z["id"]: f"{z['id']}:0" for z in zones if z["category"] == "Кран"
     }
-    return [
+    records = [ZoneRecord(
+        handle=handle, category="Кран", elevation_mm=None, outline=[],
+        name=next(z["name"] for z in zones if z["id"] == zone_id),
+        match_status="matched",
+    ) for zone_id, handle in first_crane_level.items()]
+    records.extend([
         ZoneRecord(
             handle=f"{z['id']}:{index}", category=z["category"],
             elevation_mm=level["elevation_mm"],
@@ -215,67 +209,34 @@ def _records(zones: list[dict]) -> list[ZoneRecord]:
             parent_zone_handle=first_crane_level.get(z.get("parent_zone_id")),
             parent_match_status="matched" if z["category"] == "Стоянка" else "not_applicable",
         )
-        for z in zones for index, level in enumerate(z["levels"])
-    ]
+        for z in zones if z["category"] == "Стоянка"
+        for index, level in enumerate(z["levels"])
+    ])
+    return records
 
 
 def _resolved(result, by_id):
     if not result.zone_handle:
         return None, None, result.status
     zone_id, level_index = map(int, result.zone_handle.split(":"))
-    return zone_id, by_id[zone_id]["levels"][level_index]["elevation_mm"], result.status
+    levels = by_id[zone_id]["levels"]
+    return zone_id, levels[level_index]["elevation_mm"] if levels else None, result.status
 
 
 def preview_assignments(conn: sqlite3.Connection, object_id: int,
                         zones: list[dict], base_zones: list[dict], overrides: dict) -> dict:
-    """Все привязки для будущей редакции; без INSERT/UPDATE/COMMIT.
-
-    Для одного физического яруса используем ТУ ЖЕ «лесенку» по осям,
-    что импорт чертежа; если сетка отсутствует, даём явный отказ.
-    """
+    """Все привязки новой редакции; без INSERT/UPDATE/COMMIT."""
     by_id = validate_zones(zones, base_zones)
-    stance_elevations = {
-        l["elevation_mm"] for z in zones if z["category"] == "Стоянка"
-        for l in z["levels"] if l["elevation_mm"] is not None
-    }
     elements = conn.execute(
-        "SELECT id, element_uid, element_type, x, y, outline_json, elevation_mm, "
-        "zone_crane_id, zone_crane_status, zone_stance_id, zone_stance_status "
-        "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id", (object_id,),
+        "SELECT e.id, e.element_uid, e.element_type, e.x, e.y, e.outline_json, e.elevation_mm, "
+        "e.zone_crane_id AS crane_zone_id, e.zone_crane_status AS crane_status, "
+        "e.zone_stance_id AS stance_zone_id, e.zone_stance_status AS stance_status, "
+        "l.elevation_mm AS stance_elevation_mm "
+        "FROM elements e LEFT JOIN zone_levels l ON l.id = e.zone_stance_level_id "
+        "WHERE e.object_id = ? AND e.is_current = 1 ORDER BY e.id", (object_id,),
     ).fetchall()
-    manual = validate_overrides(overrides, by_id, {e["id"] for e in elements})
+    manual = validate_overrides(overrides, by_id, {e["id"]: dict(e) for e in elements})
     records = _records(zones)
-    stance_level_polys = tier_elevations = None
-    if len(stance_elevations) <= 1 and any(z["category"] == "Стоянка" for z in zones):
-        drawing = conn.execute(
-            "SELECT source_file FROM object_drawings WHERE object_id = ? "
-            "AND is_current = 1 LIMIT 1", (object_id,),
-        ).fetchone()
-        source_file = drawing["source_file"] if drawing else next(
-            (z.get("source_file") for z in zones if z.get("source_file")), None
-        )
-        axes = {"numeric": {}, "letter": {}}
-        if source_file:
-            for axis in conn.execute(
-                "SELECT kind, label, coord FROM axis_lines WHERE source_file = ?", (source_file,),
-            ):
-                if axis["kind"] in axes:
-                    axes[axis["kind"]][axis["label"]] = axis["coord"]
-        if not axes["numeric"] or not axes["letter"]:
-            raise ZoneDraftError(
-                "У чертежа с одним ярусом стоянок нет полной сетки осей; "
-                "невозможно надёжно пересчитать «лесенку» стоянок."
-            )
-        tier_elevations = compute_column_tier_elevations([
-            SimpleNamespace(element_type=e["element_type"], elevation_mm=e["elevation_mm"])
-            for e in elements
-        ])
-        try:
-            stance_level_polys = build_stance_level_polygons(
-                records, axes["numeric"], axes["letter"], tier_elevations,
-            )
-        except (IndexError, ValueError, KeyError, ZeroDivisionError) as exc:
-            raise ZoneDraftError("Не удалось построить ярусы стоянок по сетке осей") from exc
     changed = Counter()
     assignments = []
     for element in elements:
@@ -283,41 +244,71 @@ def preview_assignments(conn: sqlite3.Connection, object_id: int,
         bound = bind_element_to_zones(
             element["element_type"], element["x"], element["y"], outline,
             element["elevation_mm"], records,
-            stance_level_polys=stance_level_polys, tier_elevations=tier_elevations,
+            stance_mode="union",
         )
         crane_id, _, crane_status = _resolved(bound["Кран"], by_id)
         stance_id, stance_elevation, stance_status = _resolved(bound["Стоянка"], by_id)
         source = "geometry"
+        reason = None
         if element["id"] in manual:
-            source = "manual"
-            crane_id = manual[element["id"]]["crane_zone_id"]
-            stance_id = manual[element["id"]]["stance_zone_id"]
-            crane_status = "matched" if crane_id is not None else "unmatched"
-            stance_status = "matched" if stance_id is not None else "unmatched"
+            override = manual[element["id"]]
+            source = override["source"]
+            crane_id = override["crane_zone_id"]
+            stance_id = override["stance_zone_id"]
+            if override.get("preserve_full"):
+                crane_status = override["crane_status"]
+                stance_status = override["stance_status"]
+                stance_elevation = override["stance_elevation_mm"]
+                reason = override.get("reason")
+            else:
+                crane_status = "matched" if crane_id is not None else "unmatched"
+                stance_status = "matched" if stance_id is not None else "unmatched"
             # Ярус ручной стоянки определяется отметкой изделия отдельно от
             # геометрии. Без однозначной отметки не обещаем точный отчёт.
-            if stance_id is not None:
+            if stance_id is not None and not override.get("preserve_full"):
                 strict_below = element["element_type"] in TIER_CAPPING_TYPES
-                levels = [l["elevation_mm"] for l in by_id[stance_id]["levels"]
-                          if l["elevation_mm"] is not None and
-                          element["elevation_mm"] is not None and
-                          (l["elevation_mm"] < element["elevation_mm"] if strict_below
-                           else l["elevation_mm"] <= element["elevation_mm"])]
-                if not levels:
-                    raise ZoneDraftError(f"Нет подходящего яруса у стоянки изделия {element['id']}")
-                stance_elevation = max(levels)
-            else:
+                levels = object_stance_levels(records)
+                if element["elevation_mm"] is None or not levels:
+                    raise ZoneDraftError(f"Нет рабочего уровня для изделия {element['id']}")
+                eligible = [l for l in levels if (l < element["elevation_mm"] if strict_below
+                                                  else l <= element["elevation_mm"])]
+                stance_elevation = eligible[-1] if eligible else levels[0]
+            elif stance_id is None and not override.get("preserve_full"):
                 stance_elevation = None
-        if crane_id != element["zone_crane_id"]:
+            if stance_id is not None and override.get("preserve_full") and stance_elevation not in (
+                {l["elevation_mm"] for l in by_id[stance_id]["levels"]} |
+                set(by_id[stance_id].get("report_levels", []))
+            ):
+                raise ZoneDraftError(
+                    f"У стоянки изделия {element['id']} нет сохранённой отчётной отметки "
+                    f"{stance_elevation}; восстановите ссылку или снимите исключение"
+                )
+        if crane_id != element["crane_zone_id"]:
             changed["crane"] += 1
-        if stance_id != element["zone_stance_id"]:
+        if stance_id != element["stance_zone_id"]:
             changed["stance"] += 1
+        if crane_status != element["crane_status"] or stance_status != element["stance_status"]:
+            changed["status"] += 1
+        if stance_elevation != element["stance_elevation_mm"]:
+            changed["tier"] += 1
         if crane_status == "needs_review" or stance_status == "needs_review":
             changed["needs_review"] += 1
+        if source == "conversion":
+            changed["conversion_exceptions"] += 1
+        if source == "manual":
+            changed["manual"] += 1
         assignments.append({
             "element_id": element["id"], "element_uid": element["element_uid"],
             "crane_zone_id": crane_id, "crane_status": crane_status,
             "stance_zone_id": stance_id, "stance_status": stance_status,
             "stance_elevation_mm": stance_elevation, "source": source,
+            "reason": reason,
         })
-    return {"assignments": assignments, "counts": dict(changed), "total": len(assignments)}
+    zone_counts = Counter()
+    for assignment in assignments:
+        if assignment["crane_zone_id"] is not None:
+            zone_counts[str(assignment["crane_zone_id"])] += 1
+        if assignment["stance_zone_id"] is not None:
+            zone_counts[str(assignment["stance_zone_id"])] += 1
+    return {"assignments": assignments, "counts": dict(changed),
+            "zone_counts": dict(zone_counts), "total": len(assignments)}

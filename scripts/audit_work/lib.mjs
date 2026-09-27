@@ -7,7 +7,7 @@ import { launch } from "../cdp.mjs";
 
 export const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 export const SP = process.env.AUDIT_SP || "/private/tmp/claude-501/-Users-max-zhbi-tool/788b45dd-b72e-49d3-ba64-2491a0ac0e5a/scratchpad";
-export const BASE_DB = `${ROOT}/data/zhbi.anon.db`;
+export const BASE_DB = process.env.AUDIT_BASE_DB || `${ROOT}/data/zhbi.anon.db`;
 export const PASS = "Test-Pass-1234!";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,7 +82,7 @@ export async function openScreen(b, id, waitExpr, timeout = 30000) {
 }
 // Щелчок настоящим событием по элементу, предварительно прокрутив его в видимую область
 export async function tap(b, sel, o) {
-  await b.eval(`document.querySelector(${JSON.stringify(sel)})?.scrollIntoView({block:'center',inline:'nearest'})`);
+  await b.eval(`(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return;el.scrollIntoView({block:'center',inline:'nearest'});const r=el.getBoundingClientRect();if(!el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))el.scrollIntoView({block:'end',inline:'nearest'});})()`);
   await sleep(150);
   await b.clickSel(sel, o);
 }

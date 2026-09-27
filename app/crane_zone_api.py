@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from app import activity
 from app.access import assert_object_feature
 from app.auth import format_display_name, get_current_user
-from app.crane_zone_editor import ZoneDraftError, stance_containment_issues
+from app.crane_zone_editor import ZoneDraftError
 from app.crane_zone_service import (
     create_draft, preview_draft, publish_draft, update_draft,
 )
@@ -59,6 +59,19 @@ def list_versions(object_id: int, user: sqlite3.Row = Depends(get_current_user))
         conn.close()
 
 
+@router.get("/transition")
+def transition_status(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        _check(conn, user, object_id, "read")
+        row = conn.execute("SELECT * FROM crane_zone_transition WHERE object_id = ?",
+                           (object_id,)).fetchone()
+        return dict(row) if row else {"object_id": object_id, "state": "legacy",
+                                      "last_error": None, "conversion_version_id": None}
+    finally:
+        conn.close()
+
+
 @router.get("/scene")
 def zone_scene(object_id: int, version_id: Optional[int] = None,
                user: sqlite3.Row = Depends(get_current_user)):
@@ -93,7 +106,11 @@ def zone_scene(object_id: int, version_id: Optional[int] = None,
                 "FROM elements WHERE object_id = ? AND is_current = 1 ORDER BY id",
                 (object_id,),
             )
-        return {"elements": [dict(row) for row in rows],
+        colors = {r["name"]: r["color"] for r in conn.execute(
+            "SELECT name, color FROM zone_colors WHERE object_id = ? AND category = 'Кран'",
+            (object_id,),
+        )}
+        return {"elements": [dict(row) for row in rows], "crane_colors": colors,
                 "coordinates_note": "Координаты изделий показаны по текущей схеме"}
     finally:
         conn.close()
@@ -161,7 +178,7 @@ def get_draft(object_id: int, draft_id: int,
         result = dict(row)
         result["zones"] = json.loads(result.pop("zones_json"))
         result["overrides"] = json.loads(result.pop("overrides_json"))
-        result["warnings"] = stance_containment_issues(result["zones"])
+        result["warnings"] = []
         return result
     finally:
         conn.close()
@@ -179,7 +196,7 @@ def patch_draft(object_id: int, draft_id: int, body: DraftPatch,
         except ZoneDraftError as exc:
             _public_error(exc)
         return {"draft_id": draft_id, "edit_token": token,
-                "warnings": stance_containment_issues(body.zones)}
+                "warnings": []}
     finally:
         conn.close()
 
@@ -196,7 +213,8 @@ def preview(object_id: int, draft_id: int,
             _public_error(exc)
         # 10 тыс. строк назначений не нужны панели предпросмотра; они заново
         # рассчитываются под блокировкой при публикации.
-        return {"total": result["total"], "counts": result["counts"]}
+        return {"total": result["total"], "counts": result["counts"],
+                "zone_counts": result["zone_counts"]}
     finally:
         conn.close()
 

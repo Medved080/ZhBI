@@ -41,20 +41,29 @@ def snapshot_zones(conn: sqlite3.Connection, object_id: int) -> list[dict]:
         (object_id,),
     ).fetchall()
     levels = {}
+    references = {}
+    has_reference = any(r["name"] == "is_reference" for r in conn.execute(
+        "PRAGMA table_info(zone_levels)"))
     for row in conn.execute(
-        "SELECT l.zone_id, l.elevation_mm, l.outline_json, l.source_file, l.dxf_handle "
+        "SELECT l.zone_id, l.elevation_mm, l.outline_json, l.source_file, l.dxf_handle, "
+        + ("l.is_reference" if has_reference else "0 AS is_reference") + " "
         "FROM zone_levels l JOIN zones z ON z.id = l.zone_id "
         "WHERE z.object_id = ? AND z.is_current = 1 AND z.category IN ('Кран', 'Стоянка') "
         "ORDER BY l.zone_id, l.elevation_mm, l.id",
         (object_id,),
     ):
+        if row["is_reference"]:
+            references.setdefault(row["zone_id"], []).append(row["elevation_mm"])
+            continue
         levels.setdefault(row["zone_id"], []).append({
             "elevation_mm": row["elevation_mm"],
             "outline": json.loads(row["outline_json"]),
             "source_file": row["source_file"],
             "dxf_handle": row["dxf_handle"],
         })
-    return [{**dict(row), "levels": levels.get(row["id"], [])} for row in rows]
+    return [{**dict(row), "levels": levels.get(row["id"], []),
+             **({"report_levels": references[row["id"]]} if row["id"] in references else {})}
+            for row in rows]
 
 
 def snapshot_assignments(conn: sqlite3.Connection, object_id: int, version_id: int,
@@ -135,7 +144,7 @@ def period_corrections(conn: sqlite3.Connection, object_id: int,
         raise ValueError("Конец периода раньше начала")
     return [dict(row) for row in conn.execute(
         "SELECT id, revision_no, effective_date FROM crane_zone_versions "
-        "WHERE object_id = ? AND kind <> 'baseline' "
+        "WHERE object_id = ? AND kind NOT IN ('baseline', 'conversion') "
         "AND effective_date > ? AND effective_date <= ? ORDER BY effective_date",
         (object_id, start.isoformat(), end.isoformat()),
     )]

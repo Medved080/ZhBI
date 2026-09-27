@@ -32,6 +32,7 @@ from app import activity, element_sync, zone_sync
 from app.crane_zone_editor import ZoneDraftError
 from app.crane_zone_import import preflight_import_draft, stage_import_draft
 from app.crane_zone_service import register_import_membership
+from app.crane_zone_transition import TransitionIncomplete, prepare_new_object
 from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 from app.db import get_connection, init_db
 from app.models import DxfImportResult, ZoneImportSummary
@@ -386,6 +387,12 @@ def apply_drawing(
     conn = get_connection()
     try:
         versioned_zones = has_crane_zone_versioning(conn, object_id)
+        if not versioned_zones:
+            try:
+                prepare_new_object(conn, object_id)
+            except TransitionIncomplete as exc:
+                raise DxfProcessingError(409, str(exc)) from exc
+            versioned_zones = has_crane_zone_versioning(conn, object_id)
         import_zone_base = None
         if versioned_zones:
             # ПРЕЖДЕ записи изделий: если DXF невозможно безопасно превратить
@@ -393,6 +400,7 @@ def apply_drawing(
             try:
                 import_zone_base = preflight_import_draft(
                     conn, object_id, parsed.zones, parsed.source_file,
+                    parsed.grid, parsed.new_records,
                 )
             except ZoneDraftError as exc:
                 raise DxfProcessingError(409, str(exc)) from exc
@@ -469,6 +477,7 @@ def apply_drawing(
                     conn, object_id, parsed.zones, parsed.source_file,
                     user["id"] if user is not None else None, "Импорт DXF",
                     expected_base_version_id=import_zone_base,
+                    axis_grid=parsed.grid, element_records=parsed.new_records,
                 )
             except ZoneDraftError as exc:
                 raise DxfProcessingError(409, str(exc)) from exc

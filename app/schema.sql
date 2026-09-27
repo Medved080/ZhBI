@@ -559,7 +559,7 @@ CREATE TABLE IF NOT EXISTS zones (
     category TEXT NOT NULL CHECK (category IN ('Захватка', 'Кран', 'Стоянка')),
     elevation_mm INTEGER,
     name TEXT,
-    outline_json TEXT NOT NULL,
+    outline_json TEXT,
     match_status TEXT NOT NULL DEFAULT 'unmatched' CHECK (match_status IN ('matched', 'unmatched', 'ambiguous')),
     UNIQUE (source_file, dxf_handle)
 );
@@ -588,7 +588,8 @@ CREATE TABLE IF NOT EXISTS zone_levels (
     elevation_mm INTEGER,
     outline_json TEXT NOT NULL,
     source_file TEXT,
-    dxf_handle TEXT
+    dxf_handle TEXT,
+    is_reference INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_zone_levels_zone ON zone_levels (zone_id);
@@ -624,7 +625,7 @@ CREATE TABLE IF NOT EXISTS crane_zone_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     revision_no INTEGER NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('baseline', 'published', 'rollback')),
+    kind TEXT NOT NULL CHECK (kind IN ('baseline', 'published', 'rollback', 'conversion')),
     effective_date TEXT,
     known_from TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -641,7 +642,10 @@ CREATE TABLE IF NOT EXISTS crane_zone_versions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_crane_zone_versions_baseline
     ON crane_zone_versions (object_id) WHERE kind = 'baseline';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_crane_zone_versions_effective
-    ON crane_zone_versions (object_id, effective_date) WHERE effective_date IS NOT NULL;
+    ON crane_zone_versions (object_id, effective_date)
+    WHERE effective_date IS NOT NULL AND kind <> 'conversion';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crane_zone_versions_conversion
+    ON crane_zone_versions (object_id) WHERE kind = 'conversion';
 
 -- Полный снимок назначений изделий В КАЖДОЙ редакции: отчёт за прошлый
 -- период не должен группировать старые события по сегодняшнему крану.
@@ -656,7 +660,8 @@ CREATE TABLE IF NOT EXISTS crane_zone_version_assignments (
     stance_zone_id INTEGER,
     stance_status TEXT,
     stance_elevation_mm INTEGER,
-    source TEXT NOT NULL CHECK (source IN ('geometry', 'manual', 'legacy')),
+    source TEXT NOT NULL CHECK (source IN ('geometry', 'manual', 'legacy', 'conversion')),
+    reason TEXT,
     PRIMARY KEY (version_id, element_id)
 );
 CREATE INDEX IF NOT EXISTS idx_crane_zone_version_assignments_element
@@ -692,6 +697,17 @@ CREATE TABLE IF NOT EXISTS crane_zone_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_crane_zone_drafts_object
     ON crane_zone_drafts (object_id, updated_at);
+
+-- Переход объект за объектом: ready фиксируется вместе с редакцией
+-- конверсии. waiting/error остаются старым читаемым форматом.
+CREATE TABLE IF NOT EXISTS crane_zone_transition (
+    object_id INTEGER PRIMARY KEY REFERENCES objects (id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('legacy', 'waiting', 'error', 'ready')),
+    conversion_version_id INTEGER REFERENCES crane_zone_versions (id),
+    last_error TEXT,
+    summary_json TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Цвет зоны — персонально на каждый КРАН (не общий на категорию, как
 -- раньше — см. Docs/backlog.md, item 7), его стоянки наследуют цвет

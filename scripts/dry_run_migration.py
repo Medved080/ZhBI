@@ -18,10 +18,13 @@
 """
 
 import os
+import hashlib
+import json
 import shutil
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
 # Корень репозитория — от расположения самого скрипта, а не жёстким
 # путём: скрипт запускают и на Mac разработчика, и на сервере, где
@@ -48,6 +51,35 @@ COUNTED = [
 OBJECT_SCOPED = ["allowed_subtypes", "label_visibility", "zone_colors", "report_notes",
                  "default_contracts", "app_settings"]
 
+# Equality of the subject data between the first and second release passes.
+# release_tasks/activity_log are attempt journals, so their expected retry
+# entries are intentionally outside this comparison.
+CONTENT_TABLES = [
+    "zones", "zone_levels", "elements", "crane_zone_versions",
+    "crane_zone_version_assignments", "crane_zone_import_arrivals",
+    "crane_zone_drafts", "crane_zone_transition", "schedule_flow",
+]
+
+
+def content_digests(path):
+    conn = connect(path)
+    try:
+        present = tables(conn)
+        result = {}
+        for table in CONTENT_TABLES:
+            if table not in present:
+                result[table] = None
+                continue
+            digest = hashlib.sha256()
+            for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+                digest.update(json.dumps(tuple(row), ensure_ascii=False,
+                                         separators=(",", ":")).encode())
+                digest.update(b"\n")
+            result[table] = digest.hexdigest()
+        return result
+    finally:
+        conn.close()
+
 
 def copy_db(src, dst):
     """Снять копию базы штатным механизмом SQLite, а не `shutil.copyfile`.
@@ -69,6 +101,7 @@ def copy_db(src, dst):
     # Поэтому запасной путь: побайтовая копия снимка вместе со спутниками,
     # и уже она открывается на запись. Обещание «исходный файл не
     # изменяется» при этом остаётся в силе — копируем, а не правим.
+    сырой = None
     try:
         src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
         # Обращение ОБЯЗАТЕЛЬНО здесь: sqlite3.connect файл не открывает,
@@ -102,6 +135,10 @@ def copy_db(src, dst):
             dst_conn.close()
     finally:
         src_conn.close()
+        if сырой:
+            for хвост in ("", "-wal", "-shm"):
+                if os.path.exists(сырой + хвост):
+                    os.remove(сырой + хвост)
 
 
 def connect(path):
@@ -207,6 +244,7 @@ def прогон_обработок(work):
         print("  (незавершённых обработок нет — все уже выполнены на этой базе)")
 
     до_повтора = counts(connect(work))
+    содержание_до = content_digests(work)
     print("\n  повторный прогон всех обработок данных (проверка идемпотентности):")
     повторы = []
     for name in data_task_names():
@@ -215,6 +253,7 @@ def прогон_обработок(work):
         метка = "✓" if r["status"] == "ok" else "✗"
         print(f"    {метка} {name}: {r['note']}")
     после_повтора = counts(connect(work))
+    содержание_после = content_digests(work)
     расхождения = [(t, до_повтора[t], после_повтора[t])
                    for t in COUNTED if до_повтора[t] != после_повтора[t]]
     if расхождения:
@@ -222,6 +261,12 @@ def прогон_обработок(work):
             print(f"    ВНИМАНИЕ: повтор изменил {t}: {b} -> {a}")
     else:
         print("    строки не изменились — обработки идемпотентны")
+    изменилось_содержание = [table for table in CONTENT_TABLES
+                             if содержание_до[table] != содержание_после[table]]
+    if изменилось_содержание:
+        print("    ВНИМАНИЕ: изменилось содержимое: " + ", ".join(изменилось_содержание))
+    else:
+        print("    содержимое зон, изделий, редакций, назначений и черновиков совпало")
 
     conn = connect(work)
     print(f"\n  версия базы после обработок : {db_version(conn) or 'не проставлена'}"
@@ -238,6 +283,7 @@ def прогон_обработок(work):
         "первый": результаты,
         "повторы": повторы,
         "расхождения": расхождения,
+        "изменилось_содержание": изменилось_содержание,
         "версия_совпала": (lambda c: db_version(c) == code_version())(connect(work)),
     }
 
@@ -273,6 +319,11 @@ def главное(src):
     sys.path.insert(0, REPO)
     os.environ["ZHBI_DB_PATH"] = work
     from app.db import init_db
+    from app import backups
+
+    # The release task creates its own safety backup. Keep that backup next
+    # to the disposable DB, never in the checkout's service backup directory.
+    backups.BACKUP_DIR = Path(work).parent / "dry_run_backups"
 
     print("\n" + "=" * 78)
     print("ПРОГОН init_db() — ровно то, что сделает сервер при старте")
@@ -354,6 +405,8 @@ def главное(src):
             проблемы.append(f"обработка «{r['name']}» упала: {r['note']}")
     for t, b, a in обработки["расхождения"]:
         проблемы.append(f"повтор обработок изменил {t}: {b} -> {a} — обработка не идемпотентна")
+    for table in обработки["изменилось_содержание"]:
+        проблемы.append(f"повтор обработок изменил содержимое {table}")
     if not обработки["версия_совпала"]:
         проблемы.append("версия базы не догнала версию кода — часть обработок не завершилась")
 

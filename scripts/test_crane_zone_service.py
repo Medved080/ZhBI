@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi import HTTPException
 
@@ -20,6 +21,7 @@ from app.crane_zone_editor import preview_assignments
 from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_import import build_candidate, stage_import_draft
 from app.crane_zone_versions import business_date, ensure_baselines, snapshot_zones
+from app.crane_zone_transition import transition_pending
 from zone_parser import ZoneRecord
 
 
@@ -81,6 +83,7 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.conn.commit()
         ensure_baselines(self.conn)
         self.conn.commit()
+        transition_pending(self.conn)
 
     def tearDown(self):
         self.conn.close()
@@ -95,7 +98,7 @@ class CraneZoneServiceTest(unittest.TestCase):
         zones.extend([
             {"id": -1, "category": "Кран", "number": 2, "name": "Кран 2",
              "parent_zone_id": None,
-             "levels": [{"elevation_mm": None, "outline": square(20, 0, 10)}]},
+             "levels": []},
             {"id": -2, "category": "Стоянка", "number": 1, "name": "Стоянка 1",
              "parent_zone_id": -1,
              "levels": [{"elevation_mm": 0, "outline": square(20, 0, 5)},
@@ -136,24 +139,24 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(old[0], self.crane_id)
 
-    def test_temporary_outside_stance_can_be_saved_but_not_published(self):
+    def test_temporary_invalid_stance_can_be_saved_but_not_published(self):
         draft_id = create_draft(self.conn, self.object_id, None, "Тест")
         zones = json.loads(self.conn.execute(
             "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone()[0])
-        next(z for z in zones if z["id"] == self.crane_id)["levels"][0]["outline"] = square(20, 0, 10)
+        next(z for z in zones if z["id"] == self.stance_id)["levels"][0]["outline"] = [[0, 0], [5, 5], [5, 0], [0, 5]]
         token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {}, "Промежуточное положение")
         self.assertEqual(token, 2)
         stored = json.loads(self.conn.execute(
             "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone()[0])
         self.assertEqual(stored, zones)
-        with self.assertRaisesRegex(ZoneDraftError, "Стоянка 1.*Кран 1.*Расширьте"):
+        with self.assertRaisesRegex(ZoneDraftError, "самопересекается"):
             preview_draft(self.conn, self.object_id, draft_id)
-        with self.assertRaisesRegex(ZoneDraftError, "Стоянка 1.*Кран 1.*Расширьте"):
+        with self.assertRaisesRegex(ZoneDraftError, "самопересекается"):
             publish_draft(self.conn, self.object_id, draft_id, token, business_date(), None, "Тест")
         self.assertEqual(self.conn.execute(
-            "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ? AND revision_no > 0",
+            "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
             (self.object_id,),
         ).fetchone()[0], 0)
 
@@ -358,7 +361,7 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone()
         zones = json.loads(draft[0])
-        self.assertEqual(zones[0]["levels"][0]["outline"], square(0, 0, 12))
+        self.assertEqual(zones[0]["levels"], [])
         self.assertEqual(zones[1]["levels"][0]["outline"], square(0, 0, 6))
         self.assertIsNone(stage_import_draft(
             self.conn, self.object_id,
@@ -433,6 +436,57 @@ class CraneZoneServiceTest(unittest.TestCase):
             (self.object_id,),
         ).fetchone()[0], 1, "Неудачная загрузка не должна создавать черновик")
 
+    def test_first_dxf_import_of_empty_object_starts_new_format(self):
+        import ezdxf
+        from app.dxf_import import analyze_drawing, apply_drawing, parse_drawing
+        from scripts import generate_test_zones_dxf
+
+        object_id = self.conn.execute(
+            "INSERT INTO objects (name, kind) VALUES ('Новый объект', 'zhbi')"
+        ).lastrowid
+        self.conn.commit()
+        path = Path(self.temp.name) / "first_import.dxf"
+        with patch.object(generate_test_zones_dxf, "OUTPUT_PATH", str(path)):
+            generate_test_zones_dxf.main()
+        drawing = ezdxf.readfile(path)
+        for entity in drawing.modelspace().query("TEXT"):
+            if entity.dxf.text == "Стоянка A":
+                entity.dxf.text = "Стоянка 1"
+            elif entity.dxf.text == "Стоянка B":
+                entity.dxf.text = "Стоянка 2"
+        drawing.saveas(path)
+        parsed = parse_drawing(path, path.name, object_id)
+        result = apply_drawing(parsed, analyze_drawing(parsed, object_id))
+        self.assertEqual(result.inserted, 3)
+        self.assertEqual(self.conn.execute(
+            "SELECT state FROM crane_zone_transition WHERE object_id = ?", (object_id,)
+        ).fetchone()[0], "ready")
+        baseline = self.conn.execute(
+            "SELECT zones_json FROM crane_zone_versions WHERE object_id = ? AND kind = 'baseline'",
+            (object_id,),
+        ).fetchone()
+        self.assertEqual(json.loads(baseline[0]), [])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_drafts WHERE object_id = ?", (object_id,),
+        ).fetchone()[0], 1)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM elements WHERE object_id = ? AND zone_crane_id IS NOT NULL",
+            (object_id,),
+        ).fetchone()[0], 0)
+
+    def test_single_physical_stance_import_materializes_column_levels(self):
+        records = [
+            ZoneRecord("C1", "Кран", None, square(0, 0, 10), "Кран 1", "matched"),
+            ZoneRecord("S1", "Стоянка", 0, square(0, 0, 5), "Стоянка 1", "matched",
+                       "C1", "matched"),
+        ]
+        elements = [SimpleNamespace(element_type="Колонна", elevation_mm=level)
+                    for level in (0, 3000)]
+        zones = build_candidate([], records, "test.dxf", element_records=elements)
+        self.assertEqual(next(z for z in zones if z["category"] == "Кран")["levels"], [])
+        self.assertEqual([l["elevation_mm"] for z in zones if z["category"] == "Стоянка"
+                          for l in z["levels"]], [0, 3000])
+
     def test_renaming_stance_migrates_schedule_flow_atomically(self):
         self.conn.execute(
             "INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) "
@@ -458,8 +512,9 @@ class CraneZoneServiceTest(unittest.TestCase):
 
     def test_crane_color_survives_rename_and_new_crane_gets_color(self):
         self.conn.execute(
-            "INSERT INTO zone_colors (object_id, category, name, color) "
-            "VALUES (?, 'Кран', 'Кран 1', '#abcdef')", (self.object_id,),
+            "UPDATE zone_colors SET color = '#abcdef' "
+            "WHERE object_id = ? AND category = 'Кран' AND name = 'Кран 1'",
+            (self.object_id,),
         )
         self.conn.commit()
         draft_id, token = self._draft_with_new_crane()
@@ -495,7 +550,7 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM zones").fetchone()[0], before_zones)
         self.assertEqual(self.conn.execute(
             "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ?", (self.object_id,),
-        ).fetchone()[0], 1)
+        ).fetchone()[0], 2)
         self.assertIsNotNone(self.conn.execute(
             "SELECT id FROM crane_zone_drafts WHERE id = ?", (draft_id,),
         ).fetchone())
@@ -540,19 +595,12 @@ class CraneZoneServiceTest(unittest.TestCase):
         ).fetchone()
         self.assertIsNone(row[0])
 
-    def test_single_stance_tier_uses_import_binder(self):
+    def test_single_stance_tier_uses_union_binder_without_axes(self):
         self.conn.execute(
             "DELETE FROM zone_levels WHERE zone_id = ? AND elevation_mm = 10000",
             (self.stance_id,),
         )
         zones = snapshot_zones(self.conn, self.object_id)
-        with self.assertRaisesRegex(ZoneDraftError, "сетк"):
-            preview_assignments(self.conn, self.object_id, zones, zones, {})
-        self.conn.executemany(
-            "INSERT INTO axis_lines (source_file, kind, label, coord) VALUES ('test.dxf', ?, ?, ?)",
-            [("numeric", "1", 0), ("numeric", "2", 10),
-             ("letter", "А", 0), ("letter", "Б", 10)],
-        )
         result = preview_assignments(self.conn, self.object_id, zones, zones, {})
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["counts"], {})
@@ -594,6 +642,355 @@ class CraneZoneServiceTest(unittest.TestCase):
         self.assertEqual(self.conn.execute(
             "SELECT zone_crane_id FROM elements WHERE id = ?", (self.element_id,),
         ).fetchone()[0], current)
+
+    def test_historical_reports_resolve_reference_levels_once(self):
+        from app.main import ReportRequestIn, _analytics, _delivery_schedule
+
+        zones = snapshot_zones(self.conn, self.object_id)
+        stance = next(zone for zone in zones if zone["id"] == self.stance_id)
+        stance["levels"] = [level for level in stance["levels"]
+                            if level["elevation_mm"] == 10000]
+        stance["report_levels"] = [0, 0, None]
+        self.conn.execute(
+            "UPDATE elements SET planned_delivery_date = ? WHERE id = ?",
+            (business_date(), self.element_id),
+        )
+        revision_no = self.conn.execute(
+            "SELECT MAX(revision_no) + 1 FROM crane_zone_versions WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0]
+        version_id = self.conn.execute(
+            "INSERT INTO crane_zone_versions (object_id, revision_no, kind, "
+            "effective_date, known_from, activated_at, zones_json, assignment_count) "
+            "VALUES (?, ?, 'published', ?, ?, datetime('now'), ?, 1)",
+            (self.object_id, revision_no, business_date(), business_date(), json.dumps(zones)),
+        ).lastrowid
+        self.conn.execute(
+            "INSERT INTO crane_zone_version_assignments "
+            "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
+            "stance_zone_id, stance_status, stance_elevation_mm, source) "
+            "VALUES (?, ?, 'test-element-uid', ?, 'matched', ?, 'matched', 0, 'conversion')",
+            (version_id, self.element_id, self.crane_id, self.stance_id),
+        )
+        self.conn.commit()
+        version = self.conn.execute(
+            "SELECT * FROM crane_zone_versions WHERE id = ?", (version_id,),
+        ).fetchone()
+        with historical_zone_overlay(self.conn, version, business_date()):
+            row = self.conn.execute(
+                "SELECT e.zone_stance_level_id, l.elevation_mm, l.is_reference "
+                "FROM elements e JOIN zone_levels l ON l.id = e.zone_stance_level_id "
+                "WHERE e.id = ?", (self.element_id,),
+            ).fetchone()
+            self.assertEqual((row["elevation_mm"], row["is_reference"]), (0, 1))
+            self.assertIsNotNone(row["zone_stance_level_id"])
+            self.assertEqual(self.conn.execute(
+                "SELECT COUNT(*) FROM elements WHERE id = ?", (self.element_id,),
+            ).fetchone()[0], 1)
+        admin = self.conn.execute(
+            "SELECT * FROM users WHERE domain_login = 'admin'"
+        ).fetchone()
+        analytics = _analytics(self.conn, admin, ReportRequestIn(
+            object_id=self.object_id, source_file="test.dxf",
+            report_date=business_date(), horizon_days=14,
+        ))
+        self.assertEqual(analytics["unmapped"]["no_level"], 0)
+        delivery = _delivery_schedule(self.conn, admin, ReportRequestIn(
+            object_id=self.object_id, source_file="test.dxf",
+            date_from=business_date(), date_to=business_date(), group_by=["stance"],
+        ))
+        self.assertEqual(delivery["rows"][0]["label"], "Кран 1 · Стоянка 1")
+        self.assertEqual(delivery["total"]["total"][0], 1)
+        # NULL is a retained reference elevation, not an unknown level.
+        self.conn.execute(
+            "UPDATE crane_zone_version_assignments SET stance_elevation_mm = NULL "
+            "WHERE version_id = ?", (version_id,),
+        )
+        with historical_zone_overlay(self.conn, version, business_date()):
+            row = self.conn.execute(
+                "SELECT e.zone_stance_level_id, l.is_reference FROM elements e "
+                "JOIN zone_levels l ON l.id = e.zone_stance_level_id WHERE e.id = ?",
+                (self.element_id,),
+            ).fetchone()
+            self.assertEqual(row["is_reference"], 1)
+
+    def _check_retirement_across_removed_levels(self, source):
+        zones = snapshot_zones(self.conn, self.object_id)
+        preserved = {str(self.element_id): {
+            "crane_zone_id": self.crane_id, "crane_status": "matched",
+            "stance_zone_id": self.stance_id, "stance_status": "matched",
+            "stance_elevation_mm": 0, "source": source,
+            **({"reason": "Проверка унаследованного исключения"}
+               if source == "conversion" else {}),
+        }}
+        first = create_draft(self.conn, self.object_id, None, "Тест")
+        token = update_draft(self.conn, self.object_id, first, 1, zones, preserved,
+                             "Сохранено исключение")
+        first_version = publish_draft(self.conn, self.object_id, first, token,
+                                      business_date(), None, "Тест")["version_id"]
+        self.conn.execute("UPDATE elements SET is_current = 0 WHERE id = ?",
+                          (self.element_id,))
+        self.conn.commit()
+        retired = create_draft(self.conn, self.object_id, None, "Тест")
+        retired_row = self.conn.execute(
+            "SELECT zones_json, overrides_json FROM crane_zone_drafts WHERE id = ?",
+            (retired,),
+        ).fetchone()
+        self.assertEqual(json.loads(retired_row["overrides_json"]), {})
+        self.assertEqual(preview_draft(self.conn, self.object_id, retired)["total"], 0)
+        retired_zones = json.loads(retired_row["zones_json"])
+        stance = next(zone for zone in retired_zones if zone["id"] == self.stance_id)
+        next(level for level in stance["levels"]
+             if level["elevation_mm"] == 0)["elevation_mm"] = 1000
+        token = update_draft(self.conn, self.object_id, retired, 1,
+                             retired_zones, {},
+                             "Изделие снято с чертежа; нижний ярус изменён")
+        self.assertEqual(preview_draft(self.conn, self.object_id, retired)["total"], 0)
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            retired_version = publish_draft(
+                self.conn, self.object_id, retired, token, tomorrow, None, "Тест",
+            )["version_id"]
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_version_assignments WHERE version_id = ?",
+            (retired_version,),
+        ).fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT source FROM crane_zone_version_assignments WHERE version_id = ?",
+            (first_version,),
+        ).fetchone()[0], source)
+        retired_snapshot = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_versions WHERE id = ?",
+            (retired_version,),
+        ).fetchone()[0])
+        self.assertIn(0, next(zone for zone in retired_snapshot
+                              if zone["id"] == self.stance_id)["report_levels"])
+        saved_level = self.conn.execute(
+            "SELECT l.elevation_mm, l.is_reference FROM elements e "
+            "JOIN zone_levels l ON l.id = e.zone_stance_level_id WHERE e.id = ?",
+            (self.element_id,),
+        ).fetchone()
+        self.assertEqual(tuple(saved_level), (0, 1))
+        imported = stage_import_draft(self.conn, self.object_id, [
+            ZoneRecord("C-next", "Кран", None, square(0, 0, 12),
+                       "Кран 1", "matched"),
+            ZoneRecord("S-next-0", "Стоянка", 2000, square(0, 0, 6),
+                       "Стоянка 1", "matched", "C-next", "matched"),
+            ZoneRecord("S-next-1", "Стоянка", 10000, square(0, 0, 6),
+                       "Стоянка 1", "matched", "C-next", "matched"),
+        ], "next.dxf", None, "Импорт")
+        self.assertIsNotNone(imported)
+        self.assertEqual(json.loads(self.conn.execute(
+            "SELECT overrides_json FROM crane_zone_drafts WHERE id = ?",
+            (imported,),
+        ).fetchone()[0]), {})
+        self.assertEqual(preview_draft(self.conn, self.object_id, imported)["total"], 0)
+        imported_zones = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?",
+            (imported,),
+        ).fetchone()[0])
+        token = update_draft(self.conn, self.object_id, imported, 1,
+                             imported_zones, {}, "Уточнение DXF без снятого изделия")
+        day_after = (date.fromisoformat(tomorrow) + timedelta(days=1)).isoformat()
+        with patch("app.crane_zone_service.business_date", return_value=day_after):
+            imported_version = publish_draft(
+                self.conn, self.object_id, imported, token, day_after, None, "Тест",
+            )["version_id"]
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_version_assignments WHERE version_id = ?",
+            (imported_version,),
+        ).fetchone()[0], 0)
+        saved_level = self.conn.execute(
+            "SELECT l.elevation_mm, l.is_reference FROM elements e "
+            "JOIN zone_levels l ON l.id = e.zone_stance_level_id WHERE e.id = ?",
+            (self.element_id,),
+        ).fetchone()
+        self.assertEqual(tuple(saved_level), (0, 1))
+        self.conn.execute("UPDATE elements SET is_current = 1 WHERE id = ?",
+                          (self.element_id,))
+        self.conn.commit()
+        revived = create_draft(self.conn, self.object_id, None, "Тест")
+        row = self.conn.execute(
+            "SELECT overrides_json FROM crane_zone_drafts WHERE id = ?", (revived,),
+        ).fetchone()
+        self.assertEqual(json.loads(row["overrides_json"]), preserved)
+        self.assertEqual(preview_draft(self.conn, self.object_id, revived)["total"], 1)
+        revived_zones = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (revived,),
+        ).fetchone()[0])
+        third_day = (date.fromisoformat(day_after) + timedelta(days=1)).isoformat()
+        token = update_draft(self.conn, self.object_id, revived, 1,
+                             revived_zones, preserved, "Изделие снова в чертеже")
+        with patch("app.crane_zone_service.business_date", return_value=third_day):
+            restored_version = publish_draft(
+                self.conn, self.object_id, revived, token, third_day, None, "Тест",
+            )["version_id"]
+        restored = self.conn.execute(
+            "SELECT source, stance_elevation_mm FROM crane_zone_version_assignments "
+            "WHERE version_id = ? AND element_id = ?",
+            (restored_version, self.element_id),
+        ).fetchone()
+        self.assertEqual(tuple(restored), (source, 0))
+        self.assertEqual(self.conn.execute(
+            "SELECT source FROM crane_zone_version_assignments WHERE version_id = ?",
+            (first_version,),
+        ).fetchone()[0], source)
+
+    def test_conversion_override_survives_retirement_and_removed_levels(self):
+        self._check_retirement_across_removed_levels("conversion")
+
+    def test_manual_override_survives_retirement_and_removed_levels(self):
+        self._check_retirement_across_removed_levels("manual")
+
+    def test_null_reference_level_survives_retirement_and_level_change(self):
+        base = self.conn.execute(
+            "SELECT id FROM crane_zone_versions WHERE object_id = ? "
+            "ORDER BY revision_no DESC LIMIT 1", (self.object_id,),
+        ).fetchone()[0]
+        reference_id = self.conn.execute(
+            "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, is_reference) "
+            "VALUES (?, NULL, '[]', 1)", (self.stance_id,),
+        ).lastrowid
+        self.conn.execute(
+            "UPDATE elements SET zone_stance_level_id = ? WHERE id = ?",
+            (reference_id, self.element_id),
+        )
+        self.conn.execute(
+            "UPDATE crane_zone_version_assignments SET stance_elevation_mm = NULL, "
+            "source = 'conversion', reason = 'Сохранённая пустая отметка' "
+            "WHERE version_id = ? AND element_id = ?", (base, self.element_id),
+        )
+        self.conn.execute(
+            "UPDATE crane_zone_versions SET zones_json = ? WHERE id = ?",
+            (json.dumps(snapshot_zones(self.conn, self.object_id)), base),
+        )
+        self.conn.commit()
+        self.conn.execute("UPDATE elements SET is_current = 0 WHERE id = ?",
+                          (self.element_id,))
+        self.conn.commit()
+        draft = create_draft(self.conn, self.object_id, None, "Тест")
+        zones = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_drafts WHERE id = ?", (draft,),
+        ).fetchone()[0])
+        stance = next(zone for zone in zones if zone["id"] == self.stance_id)
+        next(level for level in stance["levels"]
+             if level["elevation_mm"] == 0)["elevation_mm"] = 1000
+        token = update_draft(self.conn, self.object_id, draft, 1, zones, {},
+                             "Изменён рабочий ярус без изделия")
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            published = publish_draft(
+                self.conn, self.object_id, draft, token, tomorrow, None, "Тест",
+            )["version_id"]
+        saved = json.loads(self.conn.execute(
+            "SELECT zones_json FROM crane_zone_versions WHERE id = ?", (published,),
+        ).fetchone()[0])
+        self.assertIn(None, next(zone for zone in saved
+                                 if zone["id"] == self.stance_id)["report_levels"])
+        level = self.conn.execute(
+            "SELECT l.elevation_mm, l.is_reference FROM elements e "
+            "JOIN zone_levels l ON l.id = e.zone_stance_level_id WHERE e.id = ?",
+            (self.element_id,),
+        ).fetchone()
+        self.assertEqual(tuple(level), (None, 1))
+        self.conn.execute("UPDATE elements SET is_current = 1 WHERE id = ?",
+                          (self.element_id,))
+        self.conn.commit()
+        revived = create_draft(self.conn, self.object_id, None, "Тест")
+        overrides = json.loads(self.conn.execute(
+            "SELECT overrides_json FROM crane_zone_drafts WHERE id = ?", (revived,),
+        ).fetchone()[0])
+        self.assertEqual(overrides[str(self.element_id)]["stance_elevation_mm"], None)
+        self.assertEqual(preview_draft(self.conn, self.object_id, revived)["total"], 1)
+        token = update_draft(self.conn, self.object_id, revived, 1,
+                             json.loads(self.conn.execute(
+                                 "SELECT zones_json FROM crane_zone_drafts WHERE id = ?",
+                                 (revived,),
+                             ).fetchone()[0]), overrides, "Возврат изделия")
+        day_after = (date.fromisoformat(tomorrow) + timedelta(days=1)).isoformat()
+        with patch("app.crane_zone_service.business_date", return_value=day_after):
+            restored = publish_draft(
+                self.conn, self.object_id, revived, token, day_after, None, "Тест",
+            )["version_id"]
+        row = self.conn.execute(
+            "SELECT source, stance_elevation_mm FROM crane_zone_version_assignments "
+            "WHERE version_id = ? AND element_id = ?", (restored, self.element_id),
+        ).fetchone()
+        self.assertEqual(tuple(row), ("conversion", None))
+
+    def test_old_version_schema_migrates_manual_assignment_and_future_publication(self):
+        zones_json = json.dumps(snapshot_zones(self.conn, self.object_id))
+        tomorrow = (date.fromisoformat(business_date()) + timedelta(days=1)).isoformat()
+        self.conn.execute("DELETE FROM crane_zone_transition WHERE object_id = ?",
+                          (self.object_id,))
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        self.conn.executescript("""
+            DROP TABLE crane_zone_version_assignments;
+            DROP TABLE crane_zone_versions;
+            CREATE TABLE crane_zone_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+                revision_no INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('baseline','published','rollback')),
+                effective_date TEXT, known_from TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), activated_at TEXT,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                author_name TEXT, note TEXT, zones_json TEXT NOT NULL,
+                assignment_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(object_id, revision_no)
+            );
+            CREATE TABLE crane_zone_version_assignments (
+                version_id INTEGER NOT NULL REFERENCES crane_zone_versions(id) ON DELETE CASCADE,
+                element_id INTEGER NOT NULL, element_uid TEXT,
+                crane_zone_id INTEGER, crane_status TEXT,
+                stance_zone_id INTEGER, stance_status TEXT, stance_elevation_mm INTEGER,
+                source TEXT NOT NULL CHECK (source IN ('geometry','manual','legacy')),
+                PRIMARY KEY(version_id, element_id)
+            );
+        """)
+        self.conn.execute(
+            "INSERT INTO crane_zone_versions "
+            "(id, object_id, revision_no, kind, known_from, activated_at, zones_json, assignment_count) "
+            "VALUES (100, ?, 0, 'baseline', ?, datetime('now'), ?, 1)",
+            (self.object_id, business_date(), zones_json),
+        )
+        self.conn.execute(
+            "INSERT INTO crane_zone_versions "
+            "(id, object_id, revision_no, kind, effective_date, known_from, zones_json, assignment_count) "
+            "VALUES (101, ?, 1, 'published', ?, ?, ?, 1)",
+            (self.object_id, tomorrow, business_date(), zones_json),
+        )
+        for version_id in (100, 101):
+            self.conn.execute(
+                "INSERT INTO crane_zone_version_assignments "
+                "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
+                "stance_zone_id, stance_status, stance_elevation_mm, source) "
+                "VALUES (?, ?, 'test-element-uid', ?, 'matched', ?, 'matched', 0, 'manual')",
+                (version_id, self.element_id, self.crane_id, self.stance_id),
+            )
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        changes = db.init_db()
+        self.assertTrue(any("ограничения крановых редакций" in item for item in changes))
+        self.assertEqual([tuple(row) for row in self.conn.execute(
+            "SELECT version_id, element_id, source FROM crane_zone_version_assignments "
+            "ORDER BY version_id")], [(100, self.element_id, "manual"),
+                                      (101, self.element_id, "manual")])
+        self.assertIsNone(self.conn.execute(
+            "SELECT activated_at FROM crane_zone_versions WHERE id = 101",
+        ).fetchone()[0])
+        with self.assertRaisesRegex(Exception, "ожидают 1 объектов"):
+            transition_pending(self.conn)
+        self.assertEqual(self.conn.execute(
+            "SELECT state FROM crane_zone_transition WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0], "waiting")
+        with patch("app.crane_zone_service.business_date", return_value=tomorrow):
+            self.assertEqual(activate_due(self.conn), [101])
+        self.assertEqual(self.conn.execute(
+            "SELECT source FROM crane_zone_version_assignments WHERE version_id = 101",
+        ).fetchone()[0], "manual")
 
     def test_history_scene_shows_saved_assignments_not_current(self):
         from app.crane_zone_api import zone_scene

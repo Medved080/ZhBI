@@ -48,6 +48,23 @@ class CraneZonePeriodTest(unittest.TestCase):
     def test_object_isolation(self):
         self.assertIsNone(version_for_date(self.conn, 2, "2026-10-10"))
 
+    def test_conversion_does_not_split_report_period(self):
+        self.conn.execute(
+            "INSERT INTO crane_zone_versions VALUES (4, 1, 3, 'conversion', '2026-09-27', '2026-09-27')"
+        )
+        self.assertEqual(period_version(self.conn, 1, "2026-09-24", "2026-09-30")["id"], 1)
+        self.assertEqual(period_version(self.conn, 1, "2026-09-27", "2026-09-30")["id"], 4)
+        with self.assertRaisesRegex(ValueError, "2026-10-01"):
+            period_version(self.conn, 1, "2026-09-30", "2026-10-01")
+
+    def test_same_day_conversion_preserves_published_boundary(self):
+        self.conn.execute(
+            "INSERT INTO crane_zone_versions VALUES (4, 1, 3, 'conversion', '2026-10-01', '2026-10-01')"
+        )
+        self.assertEqual(period_version(self.conn, 1, "2026-10-01", "2026-10-02")["id"], 4)
+        with self.assertRaisesRegex(ValueError, "2026-10-01"):
+            period_version(self.conn, 1, "2026-09-30", "2026-10-01")
+
 
 if __name__ == "__main__":
     unittest.main()

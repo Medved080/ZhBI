@@ -92,18 +92,18 @@ def _zone_records(conn: sqlite3.Connection, object_id: int) -> list:
     crane_handle_by_zone = {}
     for row in conn.execute(
         "SELECT z.id AS zone_id, MIN(l.id) AS level_id FROM zones z "
-        "JOIN zone_levels l ON l.zone_id = z.id "
+        "LEFT JOIN zone_levels l ON l.zone_id = z.id AND l.is_reference = 0 "
         "WHERE z.object_id = ? AND z.category = 'Кран' AND z.is_current = 1 GROUP BY z.id",
         (object_id,),
     ):
-        crane_handle_by_zone[row["zone_id"]] = _handle(row["zone_id"], row["level_id"])
+        crane_handle_by_zone[row["zone_id"]] = _handle(row["zone_id"], row["level_id"] or 0)
 
     records = []
     for row in conn.execute(
         "SELECT z.id AS zone_id, z.category, z.name, z.match_status, z.parent_zone_id, "
         "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
         "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
-        "WHERE z.object_id = ? AND z.is_current = 1",
+        "WHERE z.object_id = ? AND z.is_current = 1 AND l.is_reference = 0",
         (object_id,),
     ):
         records.append(ZoneRecord(
@@ -116,6 +116,13 @@ def _zone_records(conn: sqlite3.Connection, object_id: int) -> list:
             parent_zone_handle=crane_handle_by_zone.get(row["parent_zone_id"]),
             parent_match_status=row["parent_match_status"] or "not_applicable",
         ))
+    present = {record.handle for record in records}
+    for zone_id, handle in crane_handle_by_zone.items():
+        if handle not in present:
+            records.append(ZoneRecord(
+                handle=handle, category="Кран", elevation_mm=None, outline=[],
+                match_status="matched",
+            ))
     return records
 
 

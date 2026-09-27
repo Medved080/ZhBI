@@ -304,6 +304,44 @@ def _tier_index(elevation_mm, tier_elevations, strict_below=False):
     return idx
 
 
+def object_stance_levels(zones):
+    """Рабочие уровни объекта: только геометрические ярусы стоянок.
+
+    Служебные отчётные ссылки не передаются в binder и не создают полос.
+    """
+    return sorted({
+        z.elevation_mm for z in zones
+        if z.category == "Стоянка" and z.elevation_mm is not None and z.outline
+    })
+
+
+def bind_stance_union(element_type, x, y, outline, elevation_mm, zones):
+    """Привязка в новом формате: стоянка на уровне объекта, затем её кран."""
+    none = ZoneBindingResult(None, "not_applicable")
+    if elevation_mm is None:
+        return none, none
+    levels = object_stance_levels(zones)
+    if not levels:
+        empty = ZoneBindingResult(None, "unmatched")
+        return empty, empty
+    index = _tier_index(elevation_mm, levels, element_type in TIER_CAPPING_TYPES)
+    level = levels[index]
+    at_level = [z for z in zones if z.category == "Стоянка" and z.elevation_mm == level]
+    polygons = [(z.handle, _to_valid_polygon(z.outline)) for z in at_level]
+    candidates = [(h, p) for h, p in polygons if p is not None and not p.is_empty]
+    use_point = element_type in POINT_BASED_TYPES or not outline
+    stance = (_bind_point_polys(x, y, candidates) if use_point
+              else _bind_overlap_polys(outline, candidates))
+    if stance.status == "matched":
+        parent = next(z.parent_zone_handle for z in at_level if z.handle == stance.zone_handle)
+        crane = ZoneBindingResult(parent, "matched" if parent else "unmatched")
+    elif stance.status == "needs_review":
+        crane = ZoneBindingResult(None, "needs_review")
+    else:
+        crane = ZoneBindingResult(None, stance.status)
+    return crane, stance
+
+
 def _stance_row_axis(stance_polys):
     """('x'|'y') — ось, вдоль которой физически расположен ряд стоянок
     этого крана (числовая ось сетки — координата X, буквенная — Y, см.
@@ -434,7 +472,8 @@ def build_stance_level_polygons(zones, numeric_axes, letter_axes, tier_elevation
 
 
 def bind_element_to_zones(
-    element_type, x, y, outline, elevation_mm, zones, stance_level_polys=None, tier_elevations=None
+    element_type, x, y, outline, elevation_mm, zones, stance_level_polys=None,
+    tier_elevations=None, *, stance_mode="legacy"
 ):
     """
     element_type — "Колонна"/"Ригель"/"Плита перекрытия"/"Панель" (определяет метод:
@@ -454,6 +493,16 @@ def bind_element_to_zones(
 
     Возвращает {"Захватка": ZoneBindingResult, "Кран": ..., "Стоянка": ...}.
     """
+    if stance_mode not in ("legacy", "union"):
+        raise ValueError(f"Неизвестный режим стоянок: {stance_mode}")
+    if stance_mode == "union":
+        use_point = element_type in POINT_BASED_TYPES or not outline
+        captures = _candidates_for_category(zones, "Захватка", elevation_mm)
+        zakhvatka = (_bind_point(x, y, captures) if use_point
+                     else _bind_by_overlap(outline, captures))
+        crane, stance = bind_stance_union(element_type, x, y, outline, elevation_mm, zones)
+        return {"Захватка": zakhvatka, "Кран": crane, "Стоянка": stance}
+
     use_point = element_type in POINT_BASED_TYPES or not outline
     use_tiered_stances = stance_level_polys is not None and tier_elevations is not None
     strict_below = element_type in TIER_CAPPING_TYPES

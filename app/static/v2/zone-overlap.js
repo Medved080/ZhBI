@@ -33,18 +33,10 @@ export function overlapArea(subject, clip) {
 }
 
 export function peerOverlap(zones, zone, elevation, outline) {
-  const top = Math.max(0, ...zones.flatMap((item) => item.levels.map((level) => Number(level.elevation_mm) || 0))) + 3000;
-  const interval = (levels, value) => {
-    const base = Number(value) || 0;
-    const later = levels.map((level) => Number(level.elevation_mm) || 0).filter((n) => n > base);
-    return [base, later.length ? Math.min(...later) : top];
-  };
-  const [start, end] = interval(zone.levels || [{ elevation_mm: elevation }], elevation);
-  return zones.filter((other) => other.id !== zone.id && other.category === zone.category &&
-    (zone.category === "Кран" || other.parent_zone_id === zone.parent_zone_id))
-    .flatMap((other) => other.levels.filter((level) => {
-      const [otherStart, otherEnd] = interval(other.levels, level.elevation_mm);
-      return Math.max(start, otherStart) < Math.min(end, otherEnd);
-    }).map((level) => ({ other, elevation_mm: level.elevation_mm, area: overlapArea(level.outline, outline) })))
+  if (zone.category !== "Стоянка") return [];
+  return zones.filter((other) => other.id !== zone.id && other.category === "Стоянка")
+    .flatMap((other) => other.levels.filter((level) => level.elevation_mm === elevation)
+      .map((level) => ({ other, elevation_mm: level.elevation_mm,
+        area: overlapArea(level.outline, outline) })))
     .filter(({ area }) => area > 1);
 }

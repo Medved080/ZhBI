@@ -10,6 +10,8 @@ from app.access import assert_object_feature
 from app.backups import backup_before_import
 from app.db import get_connection, touch_elements
 from app import zone_recalc
+from app.crane_zone_service import register_import_membership
+from app.crane_zone_versions import has_versioning
 from app.shaft_panels import DrawingError, TYPE
 from app.shaft_panels.api import build_router
 
@@ -24,12 +26,15 @@ def backup(user,object_id):
 
 def before_commit(conn,user,object_id,changed_ids,summary):
     conn.execute('INSERT OR IGNORE INTO label_visibility (object_id,element_type,visible) VALUES (?,?,0)',(object_id,TYPE))
+    versioned = has_versioning(conn, object_id)
+    if versioned:
+        register_import_membership(conn, object_id)
     # Reuse the existing zone algorithm, touching ONLY newly imported/changed
     # shaft elements. zone_recalc.recalculate() commits and updates the whole
     # building, so it cannot be called from this transaction.
     zones=zone_recalc._zone_records(conn,object_id)
     if zones:
-        if any(z.category=='Стоянка' for z in zones):
+        if not versioned and any(z.category=='Стоянка' for z in zones):
             reason=zone_recalc.can_recalculate(conn,object_id)
             if reason:
                 raise DrawingError('Привязка панелей к зонам требует поддержки схемы «лесенкой»: '+reason)
@@ -41,6 +46,8 @@ def before_commit(conn,user,object_id,changed_ids,summary):
                 json.loads(row['outline_json']),row['elevation_mm'],zones)
             updates={}
             for category,result in bindings.items():
+                if versioned and category in ('Кран', 'Стоянка'):
+                    continue
                 id_col,status_col=zone_recalc._CATEGORY_COLUMNS[category]
                 zone_id,level_id=zone_recalc._parse_handle(result.zone_handle)
                 updates[id_col]=zone_id;updates[status_col]=result.status

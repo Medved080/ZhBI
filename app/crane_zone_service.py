@@ -27,6 +27,19 @@ def _latest(conn: sqlite3.Connection, object_id: int):
     ).fetchone()
 
 
+def _require_ready(conn: sqlite3.Connection, object_id: int) -> None:
+    state = conn.execute(
+        "SELECT state, last_error FROM crane_zone_transition WHERE object_id = ?",
+        (object_id,),
+    ).fetchone()
+    if state is None or state["state"] != "ready":
+        detail = state["last_error"] if state and state["last_error"] else (
+            "ожидается вступление опубликованной редакции" if state and
+            state["state"] == "waiting" else "ожидается безопасная конверсия объекта"
+        )
+        raise ZoneDraftError(f"Новый редактор крановых зон пока недоступен: {detail}")
+
+
 def _draft(conn: sqlite3.Connection, object_id: int, draft_id: int):
     row = conn.execute(
         "SELECT * FROM crane_zone_drafts WHERE id = ? AND object_id = ?",
@@ -37,7 +50,8 @@ def _draft(conn: sqlite3.Connection, object_id: int, draft_id: int):
     return row
 
 
-def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, version) -> None:
+def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int,
+                                    version) -> dict[int, sqlite3.Row]:
     """Старые пути записи не вправе тихо обойти исторический снимок."""
     if snapshot_zones(conn, object_id) != json.loads(version["zones_json"]):
         raise ZoneDraftError(
@@ -53,6 +67,7 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
             (version["id"],),
         )
     }
+    reappeared = {}
     for row in conn.execute(
         "SELECT e.id, e.element_uid, e.zone_crane_id, e.zone_crane_status, "
         "e.zone_stance_id, e.zone_stance_status, l.elevation_mm "
@@ -60,6 +75,25 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
         "WHERE e.object_id = ? AND e.is_current = 1", (object_id,),
     ):
         old = saved.get(row["id"])
+        if old is None:
+            # A retired element is absent from newer snapshots. If the same
+            # row becomes current again, accept only its last verified
+            # historical assignment with the same stable UID and all five
+            # fields unchanged. A newly inserted replacement has a new ID
+            # and remains an unassigned import arrival.
+            old = conn.execute(
+                "SELECT a.element_id, a.element_uid, a.crane_zone_id, a.crane_status, "
+                "a.stance_zone_id, a.stance_status, a.stance_elevation_mm, "
+                "a.source, a.reason "
+                "FROM crane_zone_version_assignments a "
+                "JOIN crane_zone_versions v ON v.id = a.version_id "
+                "WHERE v.object_id = ? AND v.revision_no < ? "
+                "AND a.element_id = ? AND a.element_uid IS ? "
+                "ORDER BY v.revision_no DESC LIMIT 1",
+                (object_id, version["revision_no"], row["id"], row["element_uid"]),
+            ).fetchone()
+            if old is not None:
+                reappeared[row["id"]] = old
         if old is None:
             arrival = conn.execute(
                 "SELECT 1 FROM crane_zone_import_arrivals WHERE object_id = ? AND element_id = ?",
@@ -86,6 +120,53 @@ def _assert_current_matches_version(conn: sqlite3.Connection, object_id: int, ve
             )
     # Снятые чертежом изделия остаются в историческом снимке, но больше не
     # участвуют в текущей редакции. Их нельзя удалять ради равенства счётчиков.
+    return reappeared
+
+
+def _inherited_overrides(conn: sqlite3.Connection, object_id: int, version_id: int,
+                         reappeared: dict[int, sqlite3.Row]) -> dict[str, dict]:
+    """Inherit only current exceptions; old snapshots retain retired ones."""
+    rows = conn.execute(
+        "SELECT a.element_id, a.crane_zone_id, a.crane_status, a.stance_zone_id, "
+        "a.stance_status, a.stance_elevation_mm, a.source, a.reason "
+        "FROM crane_zone_version_assignments a "
+        "JOIN elements e ON e.id = a.element_id AND e.element_uid IS a.element_uid "
+        "WHERE a.version_id = ? AND e.object_id = ? AND e.is_current = 1 "
+        "AND a.source IN ('manual', 'conversion')",
+        (version_id, object_id),
+    ).fetchall()
+    rows.extend(row for row in reappeared.values()
+                if row["source"] in ("manual", "conversion"))
+    return {
+        str(row["element_id"]): {
+            "crane_zone_id": row["crane_zone_id"],
+            "crane_status": row["crane_status"],
+            "stance_zone_id": row["stance_zone_id"],
+            "stance_status": row["stance_status"],
+            "stance_elevation_mm": row["stance_elevation_mm"],
+            "source": row["source"],
+            **({"reason": row["reason"]} if row["source"] == "conversion" else {}),
+        }
+        for row in rows
+    }
+
+
+def _retired_saved_assignments(conn: sqlite3.Connection, object_id: int) -> list[sqlite3.Row]:
+    """Last immutable assignment for each retired row with the same UID."""
+    return conn.execute(
+        "WITH ranked AS ("
+        "SELECT a.element_id, a.stance_zone_id, a.stance_elevation_mm, "
+        "e.zone_stance_id AS current_stance_id, "
+        "ROW_NUMBER() OVER (PARTITION BY a.element_id "
+        "ORDER BY v.revision_no DESC) AS rank_no "
+        "FROM elements e JOIN crane_zone_version_assignments a "
+        "ON a.element_id = e.id AND a.element_uid IS e.element_uid "
+        "JOIN crane_zone_versions v ON v.id = a.version_id "
+        "WHERE e.object_id = ? AND e.is_current = 0 AND v.object_id = ?) "
+        "SELECT element_id, stance_zone_id, stance_elevation_mm, current_stance_id "
+        "FROM ranked WHERE rank_no = 1",
+        (object_id, object_id),
+    ).fetchall()
 
 
 def register_import_membership(conn: sqlite3.Connection, object_id: int) -> int:
@@ -128,24 +209,15 @@ def create_draft(conn: sqlite3.Connection, object_id: int, user_id: int | None,
     """Открыть редактирование только от активной последней редакции."""
     conn.execute("BEGIN IMMEDIATE")
     try:
+        _require_ready(conn, object_id)
         base = _latest(conn, object_id)
         if base is None:
             raise ZoneDraftError("Для объекта ещё не создана исходная редакция")
         if base["activated_at"] is None:
             raise ZoneDraftError("Есть опубликованная будущая редакция; дождитесь её действия")
-        _assert_current_matches_version(conn, object_id, base)
+        reappeared = _assert_current_matches_version(conn, object_id, base)
         current = snapshot_zones(conn, object_id)
-        overrides = {
-            str(row["element_id"]): {
-                "crane_zone_id": row["crane_zone_id"],
-                "stance_zone_id": row["stance_zone_id"],
-            }
-            for row in conn.execute(
-                "SELECT element_id, crane_zone_id, stance_zone_id "
-                "FROM crane_zone_version_assignments "
-                "WHERE version_id = ? AND source = 'manual'", (base["id"],),
-            )
-        }
+        overrides = _inherited_overrides(conn, object_id, base["id"], reappeared)
         cur = conn.execute(
             "INSERT INTO crane_zone_drafts "
             "(object_id, base_version_id, zones_json, overrides_json, created_by, author_name) "
@@ -164,6 +236,7 @@ def update_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
     """Оптимистическая блокировка защищает от перезаписи другого оператора."""
     conn.execute("BEGIN IMMEDIATE")
     try:
+        _require_ready(conn, object_id)
         draft = _draft(conn, object_id, draft_id)
         if draft["edit_token"] != edit_token:
             raise ZoneDraftError("Черновик изменён в другой вкладке; обновите его")
@@ -176,7 +249,7 @@ def update_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         # Промежуточный черновик может временно оставить стоянку вне крана:
         # оператору нужно сохранить сдвиг крана до перемещения стоянки.
         # Предпросмотр и публикация по-прежнему требуют корректной геометрии.
-        validate_zones(zones, json.loads(base["zones_json"]), allow_outside_stances=True)
+        validate_zones(zones, json.loads(base["zones_json"]), allow_geometry_errors=True)
         if not isinstance(overrides, dict) or len(overrides) > 100000:
             raise ZoneDraftError("Слишком много ручных назначений")
         if not isinstance(note, str) or len(note) > 2000:
@@ -196,6 +269,7 @@ def update_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
 
 
 def preview_draft(conn: sqlite3.Connection, object_id: int, draft_id: int) -> dict:
+    _require_ready(conn, object_id)
     draft = _draft(conn, object_id, draft_id)
     base = _latest(conn, object_id)
     if base is None or base["id"] != draft["base_version_id"] or base["activated_at"] is None:
@@ -213,13 +287,14 @@ def _reserve_new_zones(conn: sqlite3.Connection, object_id: int,
     mapping = {}
     for zone in zones:
         if zone["id"] < 0:
-            first = zone["levels"][0]
+            first = zone["levels"][0] if zone["levels"] else None
             cur = conn.execute(
                 "INSERT INTO zones (source_file, dxf_handle, category, elevation_mm, "
                 "name, outline_json, match_status, parent_match_status, object_id, number, is_current) "
                 "VALUES (?, ?, ?, ?, ?, ?, 'matched', ?, ?, ?, 0)",
                 (f"manual-zone:{object_id}", uuid.uuid4().hex, zone["category"],
-                 first["elevation_mm"], zone["name"], _json(first["outline"]),
+                 first["elevation_mm"] if first else None, zone["name"],
+                 _json(first["outline"]) if first else None,
                  "matched" if zone["category"] == "Стоянка" else "not_applicable",
                  object_id, zone["number"]),
             )
@@ -255,6 +330,9 @@ def _reserve_new_zones(conn: sqlite3.Connection, object_id: int,
             for level in zone["levels"]
         ], key=lambda item: (item["elevation_mm"] is not None,
                              item["elevation_mm"] if item["elevation_mm"] is not None else 0))
+        if zone.get("report_levels"):
+            resolved["report_levels"] = sorted(zone["report_levels"],
+                                                key=lambda v: (v is not None, v or 0))
         result.append(resolved)
     result.sort(key=lambda z: (z["category"] != "Кран", z["parent_zone_id"] or 0,
                                z["number"], z["id"]))
@@ -276,24 +354,34 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
     }
     if not alive.issubset(expected):
         raise ZoneDraftError("Текущие зоны изменены вне редакции; активация остановлена")
+    retired_assignments = _retired_saved_assignments(conn, object_id)
     for zone in zones:
-        first = zone["levels"][0]
+        first = zone["levels"][0] if zone["levels"] else None
         conn.execute(
             "UPDATE zones SET number = ?, name = ?, parent_zone_id = ?, "
-            "parent_match_status = ?, elevation_mm = ?, outline_json = ?, is_current = 1 "
+            "match_status = ?, parent_match_status = ?, elevation_mm = ?, "
+            "outline_json = ?, is_current = 1 "
             "WHERE id = ? AND object_id = ?",
             (zone["number"], zone["name"], zone.get("parent_zone_id"),
-             zone.get("parent_match_status"), first["elevation_mm"],
-             _json(first["outline"]), zone["id"], object_id),
+             zone.get("match_status") or "matched", zone.get("parent_match_status"),
+             first["elevation_mm"] if first else None,
+             _json(first["outline"]) if first else None, zone["id"], object_id),
         )
         conn.execute("DELETE FROM zone_levels WHERE zone_id = ?", (zone["id"],))
         for level in zone["levels"]:
             conn.execute(
-                "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, source_file, dxf_handle) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, source_file, dxf_handle, is_reference) "
+                "VALUES (?, ?, ?, ?, ?, 0)",
                 (zone["id"], level["elevation_mm"], _json(level["outline"]),
                  level.get("source_file") or zone.get("source_file"),
                  level.get("dxf_handle") or zone.get("dxf_handle")),
+            )
+        for elevation in zone.get("report_levels", []):
+            if elevation in {level["elevation_mm"] for level in zone["levels"]}:
+                continue
+            conn.execute(
+                "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, is_reference) "
+                "VALUES (?, ?, '[]', 1)", (zone["id"], elevation),
             )
     levels = {
         (row["zone_id"], row["elevation_mm"]): row["id"]
@@ -303,6 +391,18 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             "AND z.category = 'Стоянка'", (object_id,),
         )
     }
+    # Rebuilding zone_levels invalidates old IDs. Retired elements retain
+    # their last verified assignment through a reference level, even if its
+    # working polygon was removed while they were absent.
+    for retired in retired_assignments:
+        stance_id = retired["stance_zone_id"]
+        level_id = levels.get((stance_id, retired["stance_elevation_mm"]))
+        if (stance_id is not None and retired["current_stance_id"] == stance_id
+                and level_id is not None):
+            conn.execute(
+                "UPDATE elements SET zone_stance_level_id = ? WHERE id = ?",
+                (level_id, retired["element_id"]),
+            )
     assignments = conn.execute(
         "SELECT * FROM crane_zone_version_assignments WHERE version_id = ?",
         (version["id"],),
@@ -418,6 +518,7 @@ def publish_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         raise ZoneDraftError("Задняя дата пока запрещена: она изменит уже выданные отчёты")
     conn.execute("BEGIN IMMEDIATE")
     try:
+        _require_ready(conn, object_id)
         draft = _draft(conn, object_id, draft_id)
         if draft["edit_token"] != edit_token:
             raise ZoneDraftError("Черновик изменён; проверьте его перед публикацией")
@@ -427,7 +528,10 @@ def publish_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         if base["activated_at"] is None:
             raise ZoneDraftError("На объекте уже ожидает применения будущая редакция")
         _assert_current_matches_version(conn, object_id, base)
-        if base["effective_date"] and effective_date <= base["effective_date"]:
+        if base["effective_date"] and (
+            effective_date < base["effective_date"] or
+            effective_date == base["effective_date"] and base["kind"] != "conversion"
+        ):
             raise ZoneDraftError("Дата действия должна быть позже предыдущей редакции")
         if not draft["note"] or not draft["note"].strip():
             raise ZoneDraftError("Укажите причину корректировки зон")
@@ -436,6 +540,27 @@ def publish_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
             conn, object_id, zones, json.loads(base["zones_json"]),
             json.loads(draft["overrides_json"]),
         )["assignments"]
+        by_id = {z["id"]: z for z in zones}
+        for zone in zones:
+            if zone["category"] != "Стоянка":
+                continue
+            working = {level["elevation_mm"] for level in zone["levels"]}
+            references = [level for level in zone.get("report_levels", [])
+                          if level not in working]
+            if references:
+                zone["report_levels"] = references
+            else:
+                zone.pop("report_levels", None)
+        for assignment in [*assignments, *_retired_saved_assignments(conn, object_id)]:
+            stance_id = assignment["stance_zone_id"]
+            if stance_id is None or stance_id not in by_id:
+                continue
+            zone = by_id[stance_id]
+            elevation = assignment["stance_elevation_mm"]
+            if elevation not in {l["elevation_mm"] for l in zone["levels"]}:
+                references = zone.setdefault("report_levels", [])
+                if elevation not in references:
+                    references.append(elevation)
         zones, mapping = _reserve_new_zones(conn, object_id, zones)
         cur = conn.execute(
             "INSERT INTO crane_zone_versions "
@@ -449,13 +574,13 @@ def publish_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         conn.executemany(
             "INSERT INTO crane_zone_version_assignments "
             "(version_id, element_id, element_uid, crane_zone_id, crane_status, "
-            "stance_zone_id, stance_status, stance_elevation_mm, source) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "stance_zone_id, stance_status, stance_elevation_mm, source, reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (version_id, a["element_id"], a["element_uid"],
                  mapping.get(a["crane_zone_id"], a["crane_zone_id"]), a["crane_status"],
                  mapping.get(a["stance_zone_id"], a["stance_zone_id"]),
-                 a["stance_status"], a["stance_elevation_mm"], a["source"])
+                 a["stance_status"], a["stance_elevation_mm"], a["source"], a.get("reason"))
                 for a in assignments
             ],
         )

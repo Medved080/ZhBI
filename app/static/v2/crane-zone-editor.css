@@ -79,4 +79,11 @@
 .cz-bottom label:first-child { flex: 1; }
 .cz-bottom label:nth-child(2) { width: 160px; }
 .cz-bottom #cz-preview-result { font-size: 12px; color: #496474; max-width: 380px; line-height: 1.35; }
+.cz-exceptions { background: #fff; border-top: 1px solid #dce3e7; padding: 8px 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.cz-exceptions select, .cz-exceptions input { border: 1px solid #cdd9df; border-radius: 7px; padding: 6px 8px; font: inherit; }
+.cz-exception-list { width: 100%; max-height: 140px; overflow: auto; }
+.cz-exception-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px solid #eef1f3; }
+.cz-crane-color { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.cz-crane-color span { width: 16px; height: 16px; border: 1px solid #aab8bd; border-radius: 4px; }
+.cz-crane-stand { font-size: 12px; padding: 4px 0; border-bottom: 1px solid #edf1f3; }
 @media (max-width: 1050px) { .cz-body { grid-template-columns: 170px minmax(260px, 1fr) 240px; } .cz-toolbar { min-height: 48px; } .cz-revision { display: none; } .cz-map-hint { display: none; } .cz-map-bar { grid-template-columns: 1fr; } .cz-map-controls { justify-self: start; } }

@@ -242,6 +242,9 @@ _COLUMN_MIGRATIONS = [
     # (см. scripts/layer_naming.py, Docs/backlog.md, "Свойство 'этаж'").
     # NULL у элементов, чьи слои этот суффикс ещё не проставляют.
     ("elements", "floor", "INTEGER"),
+    # Служебная ссылка на прежнюю отчётную отметку без рабочего контура.
+    # Binder и рабочие уровни используют только is_reference = 0.
+    ("zone_levels", "is_reference", "INTEGER NOT NULL DEFAULT 0"),
     # "Контрактация 2.0" (см. Docs/backlog.md) — четыре независимые шкалы
     # дат поставки элемента. planned/actual пишутся индивидуально на каждый
     # физический элемент (не на партию, партии убраны); project_* —
@@ -606,6 +609,122 @@ def _apply_migrations(conn: sqlite3.Connection, changes: list) -> None:
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
             changes.append(f"добавлена колонка {table}.{column}")
+
+
+def _migrate_crane_zone_conversion_constraints(conn: sqlite3.Connection, changes: list) -> None:
+    """Expand CHECK constraints without changing IDs or dependent FK targets.
+
+    Build new tables under temporary names, drop old, then rename new. This
+    avoids SQLite's RENAME rewriting foreign keys to a soon-deleted old name.
+    The whole rebuild is one transaction with a post-copy FK check.
+    """
+    schemas = {r["name"]: r["sql"] for r in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('crane_zone_versions', 'crane_zone_version_assignments')"
+    )}
+    if all("'conversion'" in schemas.get(name, "") for name in (
+        "crane_zone_versions", "crane_zone_version_assignments"
+    )):
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("""CREATE TABLE crane_zone_versions_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+            revision_no INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('baseline','published','rollback','conversion')),
+            effective_date TEXT, known_from TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')), activated_at TEXT,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            author_name TEXT, note TEXT, zones_json TEXT NOT NULL,
+            assignment_count INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(object_id, revision_no),
+            CHECK ((kind = 'baseline' AND effective_date IS NULL) OR
+                   (kind <> 'baseline' AND effective_date IS NOT NULL))
+        )""")
+        cols = ("id, object_id, revision_no, kind, effective_date, known_from, "
+                "created_at, activated_at, created_by, author_name, note, zones_json, assignment_count")
+        conn.execute(f"INSERT INTO crane_zone_versions_new ({cols}) "
+                     f"SELECT {cols} FROM crane_zone_versions")
+        conn.execute("""CREATE TABLE crane_zone_version_assignments_new (
+            version_id INTEGER NOT NULL REFERENCES crane_zone_versions(id) ON DELETE CASCADE,
+            element_id INTEGER NOT NULL, element_uid TEXT,
+            crane_zone_id INTEGER, crane_status TEXT,
+            stance_zone_id INTEGER, stance_status TEXT, stance_elevation_mm INTEGER,
+            source TEXT NOT NULL CHECK (source IN ('geometry','manual','legacy','conversion')),
+            reason TEXT, PRIMARY KEY(version_id, element_id)
+        )""")
+        acols = ("version_id, element_id, element_uid, crane_zone_id, crane_status, "
+                 "stance_zone_id, stance_status, stance_elevation_mm, source")
+        conn.execute(f"INSERT INTO crane_zone_version_assignments_new ({acols}) "
+                     f"SELECT {acols} FROM crane_zone_version_assignments")
+        conn.execute("DROP TABLE crane_zone_version_assignments")
+        conn.execute("DROP TABLE crane_zone_versions")
+        conn.execute("ALTER TABLE crane_zone_versions_new RENAME TO crane_zone_versions")
+        conn.execute("ALTER TABLE crane_zone_version_assignments_new "
+                     "RENAME TO crane_zone_version_assignments")
+        conn.execute("CREATE UNIQUE INDEX idx_crane_zone_versions_baseline "
+                     "ON crane_zone_versions(object_id) WHERE kind = 'baseline'")
+        conn.execute("CREATE UNIQUE INDEX idx_crane_zone_versions_effective "
+                     "ON crane_zone_versions(object_id, effective_date) "
+                     "WHERE effective_date IS NOT NULL AND kind <> 'conversion'")
+        conn.execute("CREATE UNIQUE INDEX idx_crane_zone_versions_conversion "
+                     "ON crane_zone_versions(object_id) WHERE kind = 'conversion'")
+        conn.execute("CREATE INDEX idx_crane_zone_version_assignments_element "
+                     "ON crane_zone_version_assignments(element_id, version_id)")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"FK после пересборки крановых редакций: {len(violations)}")
+        conn.commit()
+        changes.append("расширены ограничения крановых редакций для технической конверсии")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _allow_cranes_without_outline(conn: sqlite3.Connection, changes: list) -> None:
+    """Make the catalog crane outline nullable without changing zone IDs."""
+    info = {r["name"]: r for r in conn.execute("PRAGMA table_info(zones)")}
+    if not info["outline_json"]["notnull"]:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("""CREATE TABLE zones_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_file TEXT NOT NULL, dxf_handle TEXT NOT NULL,
+            category TEXT NOT NULL CHECK (category IN ('Захватка','Кран','Стоянка')),
+            elevation_mm INTEGER, name TEXT, outline_json TEXT,
+            match_status TEXT NOT NULL DEFAULT 'unmatched'
+                CHECK (match_status IN ('matched','unmatched','ambiguous')),
+            parent_zone_id INTEGER REFERENCES zones(id) ON DELETE SET NULL,
+            parent_match_status TEXT, object_id INTEGER REFERENCES objects(id) ON DELETE SET NULL,
+            number INTEGER, is_current INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(source_file, dxf_handle)
+        )""")
+        cols = ("id, source_file, dxf_handle, category, elevation_mm, name, outline_json, "
+                "match_status, parent_zone_id, parent_match_status, object_id, number, is_current")
+        conn.execute(f"INSERT INTO zones_new ({cols}) SELECT {cols} FROM zones")
+        conn.execute("DROP TABLE zones")
+        conn.execute("ALTER TABLE zones_new RENAME TO zones")
+        conn.execute("CREATE INDEX idx_zones_source_file ON zones(source_file)")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"FK после изменения справочника зон: {len(violations)}")
+        conn.commit()
+        changes.append("контур крана в справочнике допускает NULL")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _migrate_contracts_structure(conn: sqlite3.Connection) -> None:
@@ -2024,8 +2143,9 @@ def _heal_zone_stance_levels(conn: sqlite3.Connection, changes: list) -> int:
     if not conn.execute("SELECT 1 FROM zone_levels LIMIT 1").fetchone():
         return 0
     rows = conn.execute(
-        "SELECT id, element_type, elevation_mm, zone_stance_id FROM elements "
-        "WHERE zone_stance_id IS NOT NULL AND zone_stance_level_id IS NULL"
+        "SELECT e.id, e.element_type, e.elevation_mm, e.zone_stance_id FROM elements e "
+        "WHERE e.zone_stance_id IS NOT NULL AND e.zone_stance_level_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM crane_zone_versions v WHERE v.object_id = e.object_id)"
     ).fetchall()
     if not rows:
         return 0
@@ -2441,6 +2561,7 @@ def init_db() -> list:
                            f"WAL недоступен (сетевая ФС?), читатели будут ждать пишущих")
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         _apply_migrations(conn, changes)
+        _migrate_crane_zone_conversion_constraints(conn, changes)
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)
@@ -2483,6 +2604,7 @@ def init_db() -> list:
         # Строго ПОСЛЕ бутстрапа объекта: миграция зон опирается на
         # object_drawings, чтобы понять, какой чертёж актуален.
         _migrate_zones_to_catalog(conn, changes)
+        _allow_cranes_without_outline(conn, changes)
         _ensure_zone_level_index(conn)
         # Не часть одноразовой миграции: чинит частичное состояние, если
         # миграция зон отработала промежуточной версией кода (см. docstring).

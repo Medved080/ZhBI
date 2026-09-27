@@ -117,7 +117,7 @@ COLUMNS = [
      "schedule_flow",
      # Редакции зон кранов и стоянок (2026-09-24): опубликованные снимки, назначения, черновики.
      "crane_zone_versions", "crane_zone_version_assignments", "crane_zone_import_arrivals",
-     "crane_zone_drafts"],
+     "crane_zone_drafts", "crane_zone_transition"],
     # Элементы ЖБИ с историей плюс справочники и настройки, от которых
     # зависит их отображение (цвета, формы, подписи, подтипы).
     ["elements", "status_history", "axis_lines", "marks", "mark_type_prefixes",
@@ -125,7 +125,7 @@ COLUMNS = [
      "app_settings", "report_notes", "shaft_panel_geometry", "shaft_panel_imports"],
     # Контрактация: от контрагента и договора до документов смены поставщика.
     ["counterparties", "counterparty_capacity", "agreements", "specifications", "contracts",
-     "contract_lines", "contract_capacity", "contract_incidents", "default_contracts",
+     "batches", "batch_lines", "contract_lines", "contract_capacity", "contract_incidents", "default_contracts",
      "supplier_change_docs", "supplier_change_items", "supplier_change_history_moves"],
 ]
 
