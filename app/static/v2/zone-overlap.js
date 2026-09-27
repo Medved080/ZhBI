@@ -10,10 +10,10 @@ export function polygonArea(points) {
   return area / 2;
 }
 
-export function overlapArea(subject, clip) {
-  if (!subject?.length || !clip?.length) return 0;
+export function overlapPolygon(subject, clip) {
+  if (!subject?.length || !clip?.length) return [];
   const sign = Math.sign(polygonArea(clip));
-  if (!sign) return 0;
+  if (!sign) return [];
   let result = subject.map((p) => [...p]);
   for (let i = 0; i < clip.length && result.length; i++) {
     const a = clip[i], b = clip[(i + 1) % clip.length];
@@ -29,14 +29,38 @@ export function overlapArea(subject, clip) {
       }
     }
   }
-  return result.length < 3 ? 0 : Math.abs(polygonArea(result));
+  return result.length < 3 ? [] : result;
+}
+
+export function overlapArea(subject, clip) {
+  return Math.abs(polygonArea(overlapPolygon(subject, clip)));
+}
+
+function closestPointOnBoundary(outline, point) {
+  let closest = point, best = Infinity;
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i], b = outline[(i + 1) % outline.length];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const length2 = dx * dx + dy * dy;
+    const t = length2 ? Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length2)) : 0;
+    const candidate = [a[0] + t * dx, a[1] + t * dy];
+    const gap = (candidate[0] - point[0]) ** 2 + (candidate[1] - point[1]) ** 2;
+    if (gap < best) { closest = candidate; best = gap; }
+  }
+  return closest;
 }
 
 export function peerOverlap(zones, zone, elevation, outline) {
   if (zone.category !== "Стоянка") return [];
   return zones.filter((other) => other.id !== zone.id && other.category === "Стоянка")
     .flatMap((other) => other.levels.filter((level) => level.elevation_mm === elevation)
-      .map((level) => ({ other, elevation_mm: level.elevation_mm,
-        area: overlapArea(level.outline, outline) })))
+      .map((level) => {
+        const polygon = overlapPolygon(level.outline, outline);
+        const area = Math.abs(polygonArea(polygon));
+        const center = polygon.length ? [polygon.reduce((sum, p) => sum + p[0], 0) / polygon.length,
+          polygon.reduce((sum, p) => sum + p[1], 0) / polygon.length] : null;
+        return { other, elevation_mm: level.elevation_mm, area,
+          contact: center ? closestPointOnBoundary(level.outline, center) : null };
+      }))
     .filter(({ area }) => area > 1);
 }

@@ -459,6 +459,7 @@ export function createCraneZone3d(callbacks) {
     },
     update(nextData) { data = nextData; rebuild(); },
     updateOutline,
+    screenPoint(point) { return r && point ? toScreen(point) : null; },
     fit, zoom, zoomPercent,
     info() { return { elements: data?.elements.length || 0, zones: data?.zones.length || 0, percent: zoomPercent(), editable: !!data?.editable }; },
     dispose() {

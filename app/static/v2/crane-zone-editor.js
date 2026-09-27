@@ -144,12 +144,77 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return moveMembers(zone).map((item) => ({ id: item.id,
       outlines: item.levels.map((level) => clone(level.outline)) }));
   }
-  function outlineAllowed(zone, elevation, outline, previous = null) {
-    if (zone.category !== "Стоянка") return false;
+  function blockingOverlap(zone, elevation, outline, previous = null) {
+    if (zone.category !== "Стоянка") return { contact: null };
     const key = (other, level) => `${other.id}:${level}`;
     const oldAreas = new Map(previous ? peerOverlap(zones(), zone, elevation, previous).map(({ other, elevation_mm, area }) => [key(other, elevation_mm), area]) : []);
-    return peerOverlap(zones(), zone, elevation, outline).every(({ other, elevation_mm, area }) =>
-      area <= (oldAreas.get(key(other, elevation_mm)) || 0) + 1);
+    return peerOverlap(zones(), zone, elevation, outline).find(({ other, elevation_mm, area }) =>
+      area > (oldAreas.get(key(other, elevation_mm)) || 0) + 1) || null;
+  }
+  function outlineAllowed(zone, elevation, outline, previous = null) {
+    return !blockingOverlap(zone, elevation, outline, previous);
+  }
+  let collisionNotice = null, collisionTimer = null;
+  const collisionText = "Грань достигла соседней стоянки: пересечение не допускается.";
+  function placeCollision(x, y, animate = false) {
+    const map = $(".cz-map"), bubble = $("#cz-collision"), tail = $("#cz-collision-tail");
+    if (!map || !bubble || !tail) return;
+    const mapRect = map.getBoundingClientRect();
+    const width = Math.min(270, Math.max(180, mapRect.width - 16));
+    bubble.style.width = `${width}px`;
+    x = Math.max(8, Math.min(mapRect.width - 8, x));
+    y = Math.max(38, Math.min(mapRect.height - 28, y));
+    const left = Math.max(8, Math.min(mapRect.width - width - 8, x - 28));
+    const below = y < 92;
+    bubble.style.left = `${left}px`;
+    const top = below ? y + 15 : y - bubble.offsetHeight - 15;
+    bubble.style.top = `${top}px`;
+    const baseX = Math.max(left + 17, Math.min(left + width - 17, x));
+    const baseY = below ? top : top + bubble.offsetHeight;
+    tail.querySelector("polygon").setAttribute("points", `${baseX - 9},${baseY} ${x},${y} ${baseX + 9},${baseY}`);
+    tail.dataset.contactX = String(x);
+    tail.dataset.contactY = String(y);
+    bubble.classList.toggle("cz-collision-below", below);
+    bubble.setAttribute("aria-hidden", "false");
+    if (animate && !bubble.classList.contains("is-visible")) requestAnimationFrame(() => {
+      bubble.classList.add("is-visible"); tail.classList.add("is-visible");
+    });
+    else { bubble.classList.add("is-visible"); tail.classList.add("is-visible"); }
+  }
+  function showCollision(contact, surface, screenPoint) {
+    const map = $(".cz-map");
+    if (!map || !surface || !screenPoint) return;
+    const mapRect = map.getBoundingClientRect(), surfaceRect = surface.getBoundingClientRect();
+    const x = surfaceRect.left - mapRect.left + screenPoint[0];
+    const y = surfaceRect.top - mapRect.top + screenPoint[1];
+    placeCollision(x, y, true);
+    collisionNotice = { contact, mode3d, x, y, expires: Date.now() + 60000 };
+    clearTimeout(collisionTimer);
+    collisionTimer = setTimeout(hideCollision, 60000);
+  }
+  function finishCollisionDrag() {
+    if (!collisionNotice) return;
+    collisionNotice.expires = Date.now() + 1900;
+    clearTimeout(collisionTimer);
+    collisionTimer = setTimeout(hideCollision, 1900);
+  }
+  function repositionCollision3d() {
+    if (!collisionNotice?.mode3d || !collisionNotice.contact) return;
+    const surface = $("#cz-3d"), map = $(".cz-map");
+    const point = viewer3d?.screenPoint(collisionNotice.contact);
+    if (!surface || !map || !point) return;
+    const surfaceRect = surface.getBoundingClientRect(), mapRect = map.getBoundingClientRect();
+    collisionNotice.x = surfaceRect.left - mapRect.left + point[0];
+    collisionNotice.y = surfaceRect.top - mapRect.top + point[1];
+    placeCollision(collisionNotice.x, collisionNotice.y);
+  }
+  function hideCollision() {
+    clearTimeout(collisionTimer); collisionTimer = null;
+    collisionNotice = null;
+    const bubble = $("#cz-collision");
+    bubble?.classList.remove("is-visible");
+    $("#cz-collision-tail")?.classList.remove("is-visible");
+    bubble?.setAttribute("aria-hidden", "true");
   }
   function markDirty(geometry = true) {
     dirty = true; preview = null; message = ""; messageTone = "info";
@@ -272,9 +337,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
       <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${!standFocus && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
-      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
+      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><button type="button" class="v2-btn" id="cz-exceptions-toggle" aria-expanded="${exceptionsOpen}" aria-controls="cz-exceptions">Исключения · ${Object.keys(draft.overrides || {}).length}</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}, статус: ${preview.counts.status || 0}, ярус: ${preview.counts.tier || 0}; ручных: ${preview.counts.manual || 0}, исключений переноса: ${preview.counts.conversion_exceptions || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>${exceptionsHtml()}` : ""}`;
+    if (collisionNotice?.expires > Date.now()) placeCollision(collisionNotice.x, collisionNotice.y);
+    else collisionNotice = null;
     const controlHelp = {
       "cz-view-2d": "Показать вид сверху: внутри зоны можно переместить её целиком, за ребро — изменить размер. Данные черновика при переключении сохраняются.",
       "cz-view-3d": "Показать объёмные зоны и полупрозрачные изделия. Грань зоны можно сдвигать параллельно самой себе.",
@@ -329,20 +396,22 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       onOutline(outline) {
         const zone = selected(), level = zone?.levels[activeLevel];
         if (!level || !draft || !canEdit) return;
-        if (!outlineAllowed(zone, level.elevation_mm, outline, level.outline)) {
-          status("Грань достигла соседней стоянки: пересечение не допускается.", "error");
+        const blocked = blockingOverlap(zone, level.elevation_mm, outline, level.outline);
+        if (blocked) {
+          showCollision(blocked.contact, $("#cz-3d"), viewer3d?.screenPoint(blocked.contact));
           return;
         }
+        hideCollision();
         level.outline = outline;
         dirty = true; preview = null; message = ""; messageTone = "info";
         liveCountsReady = false;
         viewer3d?.updateOutline(outline);
         updateStatus();
       },
-      onCommit() { refreshLiveCounts(); render(); },
-      onSelectElements(ids) { selectedElements = new Set(ids); render(); },
-      onSelectZone(id, levelIndex) { selectedZone = id; activeLevel = levelIndex; selectedElements.clear(); render(); },
-      onViewChange() { if (mode3d) updateZoomControls(); },
+      onCommit() { finishCollisionDrag(); refreshLiveCounts(); render(); },
+      onSelectElements(ids) { hideCollision(); selectedElements = new Set(ids); render(); },
+      onSelectZone(id, levelIndex) { hideCollision(); selectedZone = id; activeLevel = levelIndex; selectedElements.clear(); render(); },
+      onViewChange() { if (mode3d) { updateZoomControls(); repositionCollision3d(); } },
     });
     try {
       await viewer3d.show($("#cz-3d"), viewerData());
@@ -380,6 +449,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (zoomIn) zoomIn.disabled = !!view && view.scale >= (fitScale || 0) * 100 * (1 - 1e-8);
   }
   function fit() {
+    hideCollision();
     if (mode3d) { viewer3d?.fit(); updateZoomControls(); return; }
     const canvas = $("#cz-canvas"); if (!canvas) return;
     const b = bounds(), w = canvas.clientWidth || 600, h = canvas.clientHeight || 400;
@@ -389,6 +459,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     draw();
   }
   function zoom(factor, x, y, canvas) {
+    if (!mode3d) hideCollision();
     if (mode3d) { viewer3d?.zoom(factor); updateZoomControls(); return; }
     if (!view) fit();
     if (!view || !fitScale) return;
@@ -550,12 +621,14 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const zone = zoneById(move.zoneId);
     // Перемещается только стоянка; кран — справочник без контура.
     const main = shifted[0];
-    if (!main.outlines.every((outline, index) => outlineAllowed(
-      zone, zone.levels[index].elevation_mm, outline, move.members[0].outlines[index],
-    ))) {
-      status("Стоянка упирается в соседнюю стоянку. Перемещение остановлено.", "error");
-      return;
+    for (const [index, outline] of main.outlines.entries()) {
+      const blocked = blockingOverlap(zone, zone.levels[index].elevation_mm, outline, move.members[0].outlines[index]);
+      if (blocked) {
+        showCollision(blocked.contact, canvas, toScreen(...blocked.contact, canvas));
+        return;
+      }
     }
+    hideCollision();
     if (!main.outlines.some((outline, index) => outline.some((point, p) =>
       Math.hypot(point[0] - zone.levels[index].outline[p][0], point[1] - zone.levels[index].outline[p][1]) > 0.001))) return;
     for (const item of shifted) {
@@ -566,6 +639,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     move.moved = true; markDirty();
   }
   function onDown(e) {
+    hideCollision();
     const canvas = e.currentTarget, [x, y] = pointer(e);
     if (e.shiftKey || selectMode) drag = { kind: "box", x, y, lastX: x, lastY: y };
     else {
@@ -597,10 +671,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const world = toWorld(x, y, canvas);
       const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
       if (!outline) return;
-      if (!outlineAllowed(selected(), level.elevation_mm, outline, drag.outline)) {
-        status("Грань достигла соседней стоянки: пересечение не допускается.", "error");
+      const blocked = blockingOverlap(selected(), level.elevation_mm, outline, drag.outline);
+      if (blocked) {
+        showCollision(blocked.contact, canvas, toScreen(...blocked.contact, canvas));
         return;
       }
+      hideCollision();
       if (level.outline.some((point, i) => Math.hypot(point[0] - outline[i][0], point[1] - outline[i][1]) > 0.001)) {
         level.outline = outline;
         drag.moved = true; markDirty();
@@ -611,6 +687,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
   function onUp(e) {
     if (!drag) return;
+    finishCollisionDrag();
     const canvas = e.currentTarget, [x, y] = pointer(e), move = drag;
     if (move.kind === "box") {
       const x0 = Math.min(move.x, x), x1 = Math.max(move.x, x), y0 = Math.min(move.y, y), y1 = Math.max(move.y, y);
@@ -625,6 +702,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     drag = null;
   }
   function onCancel() {
+    hideCollision();
     if (drag?.kind === "edge" && drag.moved) {
       for (const item of drag.members) item.outlines.forEach((outline, index) => {
         zoneById(item.id).levels[index].outline = outline;
@@ -655,14 +733,15 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-fit")?.addEventListener("click", fit);
     $("#cz-zoom-in")?.addEventListener("click", () => { const canvas = $("#cz-canvas"); zoom(BUTTON_ZOOM_STEP, canvas.clientWidth / 2, canvas.clientHeight / 2, canvas); });
     $("#cz-zoom-out")?.addEventListener("click", () => { const canvas = $("#cz-canvas"); zoom(1 / BUTTON_ZOOM_STEP, canvas.clientWidth / 2, canvas.clientHeight / 2, canvas); });
-    $("#cz-view-2d")?.addEventListener("click", () => { if (mode3d) { mode3d = false; render(); } });
-    $("#cz-view-3d")?.addEventListener("click", () => { if (!mode3d) { mode3d = true; render(); } });
+    $("#cz-view-2d")?.addEventListener("click", () => { if (mode3d) { hideCollision(); mode3d = false; render(); } });
+    $("#cz-view-3d")?.addEventListener("click", () => { if (!mode3d) { hideCollision(); mode3d = true; render(); } });
     $("#cz-show-elements")?.addEventListener("change", (e) => toggleElements(e.target.checked));
     $("#cz-select-mode")?.addEventListener("click", () => {
       if (!showElements) showElements = true;
       selectMode = !selectMode; render();
     });
     root.querySelectorAll("[data-zone-id]").forEach((b) => b.addEventListener("click", () => {
+      hideCollision();
       selectedZone = Number(b.dataset.zoneId);
       if (b.dataset.craneToggle) {
         if (expandedCraneIds.has(selectedZone)) expandedCraneIds.delete(selectedZone);
@@ -670,7 +749,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       } else if (zoneById(selectedZone)?.parent_zone_id != null) expandedCraneIds.add(zoneById(selectedZone).parent_zone_id);
       activeLevel = 0; selectedElements.clear(); view = null; render();
     }));
-    root.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => { activeLevel = Number(b.dataset.level); selectedElements.clear(); view = null; render(); }));
+    root.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => { hideCollision(); activeLevel = Number(b.dataset.level); selectedElements.clear(); view = null; render(); }));
     $("#cz-number")?.addEventListener("change", (e) => { selected().number = Number(e.target.value); markDirty(false); render(); });
     $("#cz-name")?.addEventListener("change", (e) => { selected().name = e.target.value; markDirty(false); render(); });
     $("#cz-parent")?.addEventListener("change", (e) => { selected().parent_zone_id = Number(e.target.value); markDirty(); render(); });
@@ -869,5 +948,5 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       }).catch(() => {});
     }, 0));
   }).catch((e) => { if (!dead) root.innerHTML = `<div class="v2-callout v2-callout-bad">${esc(errText(e))}</div>`; });
-  return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; canvasResizeObserver?.disconnect(); viewer3d?.dispose(); } };
+  return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; hideCollision(); canvasResizeObserver?.disconnect(); viewer3d?.dispose(); } };
 }
