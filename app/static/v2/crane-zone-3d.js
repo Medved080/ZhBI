@@ -2,6 +2,7 @@
 // призмами; сдвиг боковой грани идёт за ребро в плоскости верхней грани. Высоту меняет
 // отдельное поле «Отметка». Сохранение и публикация остаются в редакторе.
 import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { edgeResizeAngle, edgeResizeCursor } from "./zone-resize-direction.js";
 
 let libraries;
 function loadLibraries() {
@@ -117,7 +118,8 @@ export function createCraneZone3d(callbacks) {
     const outline = activeLevel()?.outline || [];
     const midpoints = outline.map((point, index) => {
       const a = toScreen(point), b = toScreen(outline[(index + 1) % outline.length]);
-      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]),
+        angle: edgeResizeAngle(outline, index, toScreen) };
     });
     host.dataset.edgeMidpoints = JSON.stringify(midpoints);
     if (!gripLayer) return;
@@ -128,6 +130,7 @@ export function createCraneZone3d(callbacks) {
       grip.className = "cz-3d-grip";
       grip.style.left = `${midpoint.x}px`;
       grip.style.top = `${midpoint.y}px`;
+      grip.style.setProperty("--cz-resize-angle", `${midpoint.angle}rad`);
       grip.setAttribute("aria-hidden", "true");
       gripLayer.appendChild(grip);
     }
@@ -194,7 +197,9 @@ export function createCraneZone3d(callbacks) {
   function onMove(event) {
     const [x, y] = pointer(event);
     if (!drag) {
-      r.renderer.domElement.style.cursor = data?.selectMode && data?.showElements ? "crosshair" : nearestHandle(x, y) ? "move" : "grab";
+      const handle = nearestHandle(x, y);
+      r.renderer.domElement.style.cursor = data?.selectMode && data?.showElements ? "crosshair" : handle ?
+        edgeResizeCursor(edgeResizeAngle(activeLevel().outline, handle.index, toScreen)) : "grab";
       return;
     }
     if (drag.kind === "box") {

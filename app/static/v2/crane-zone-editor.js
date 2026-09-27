@@ -3,6 +3,7 @@
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { edgeResizeAngle, edgeResizeCursor } from "./zone-resize-direction.js";
 import { peerOverlap } from "./zone-overlap.js";
 import { countElementsByZones } from "./zone-live-count.js";
 import { createCraneZone3d, preloadCraneZone3d } from "./crane-zone-3d.js";
@@ -546,7 +547,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     // Ручки только на рёбрах: вершины не редактируются.
     canvas.dataset.edgeMidpoints = JSON.stringify(activeOutline?.length === 4 ? activeOutline.map((point, index) => {
       const a = toScreen(...point, canvas), b = toScreen(...activeOutline[(index + 1) % 4], canvas);
-      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]),
+        angle: edgeResizeAngle(activeOutline, index, (p) => toScreen(...p, canvas)) };
     }) : []);
     if (activeOutline?.length === 4) {
       const highlighted = drag?.kind === "edge" ? drag.index : hoverEdge;
@@ -560,10 +562,15 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         const [sx, sy] = toScreen(p[0], p[1], canvas);
         const [nx, ny] = toScreen(next[0], next[1], canvas);
         if (Math.hypot(nx - sx, ny - sy) >= 22) {
-          ctx.save(); ctx.translate((sx + nx) / 2, (sy + ny) / 2); ctx.rotate(Math.atan2(ny - sy, nx - sx));
-          ctx.fillStyle = i === highlighted ? "#d65b16" : "#fff";
-          ctx.strokeStyle = "#d65b16"; ctx.lineWidth = 1.5;
-          ctx.fillRect(-6, -3.5, 12, 7); ctx.strokeRect(-6, -3.5, 12, 7); ctx.restore();
+          const angle = edgeResizeAngle(activeOutline, i, (point) => toScreen(...point, canvas));
+          ctx.save(); ctx.translate((sx + nx) / 2, (sy + ny) / 2); ctx.rotate(angle);
+          ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2);
+          ctx.fillStyle = i === highlighted ? "#d65b16" : "#ef6b33"; ctx.fill();
+          ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(8, 0);
+          ctx.moveTo(-8, 0); ctx.lineTo(-4, -4); ctx.moveTo(-8, 0); ctx.lineTo(-4, 4);
+          ctx.moveTo(8, 0); ctx.lineTo(4, -4); ctx.moveTo(8, 0); ctx.lineTo(4, 4);
+          ctx.lineWidth = 1.8; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(); ctx.restore();
         }
       }
     }
@@ -575,6 +582,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function nearestEdge(x, y, canvas) {
     const z = selected(); if (!draft || !canEdit || !z || (standFocus && z.category !== "Стоянка")) return null;
     const level = z.levels[activeLevel]; if (level?.outline?.length !== 4) return null;
+    const grip = JSON.parse(canvas.dataset.edgeMidpoints || "[]")
+      .find((point) => Math.hypot(point.x - x, point.y - y) <= 14);
+    if (grip) return grip.index;
     return nearestEdgeIndex(level.outline, x, y, (point) => toScreen(...point, canvas), 9, 4);
   }
   function nearestElement(x, y, canvas) {
@@ -673,7 +683,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (!drag) {
       const edge = !selectMode ? nearestEdge(x, y, canvas) : null;
       const hit = !selectMode && edge == null ? hitZone(x, y, canvas) : null;
-      canvas.style.cursor = selectMode ? "crosshair" : edge != null ? "grab" :
+      canvas.style.cursor = selectMode ? "crosshair" : edge != null ?
+        edgeResizeCursor(edgeResizeAngle(selected().levels[activeLevel].outline, edge, (p) => toScreen(...p, canvas))) :
         hit && draft && canEdit && hit.zone.category === "Стоянка" ? "move" : "crosshair";
       if (hoverEdge !== edge) { hoverEdge = edge; draw(); }
       return;

@@ -68,7 +68,7 @@
 @media (prefers-reduced-motion: reduce) { .cz-collision, .cz-collision-tail { transition: none; } }
 .cz-3d-grips { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
 .cz-3d-grip { position: absolute; width: 26px; height: 26px; box-sizing: border-box; transform: translate(-50%, -50%); border: 3px solid #fff; border-radius: 50%; background: #ef6b33; box-shadow: 0 1px 8px rgb(25 50 65 / 65%); }
-.cz-3d-grip::after { content: "↔"; display: block; color: #fff; font-size: 16px; font-weight: 700; line-height: 18px; text-align: center; }
+.cz-3d-grip::after { content: "↔"; display: block; color: #fff; font-size: 16px; font-weight: 700; line-height: 18px; text-align: center; transform: rotate(var(--cz-resize-angle, 0rad)); }
 .cz-3d-selection { position: absolute; border: 1px dashed #ef6b33; background: rgb(239 107 51 / 10%); pointer-events: none; }
 .cz-zoom-controls { position: absolute; right: 12px; bottom: 34px; z-index: 2; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid #cbd8df; border-radius: 8px; background: #fff; box-shadow: 0 2px 8px rgb(25 50 65 / 13%); }
 .cz-zoom-controls button { width: 30px; height: 29px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #294254; font-family: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
