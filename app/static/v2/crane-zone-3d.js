@@ -2,7 +2,7 @@
 // призмами; сдвиг боковой грани идёт за ребро в плоскости верхней грани. Высоту меняет
 // отдельное поле «Отметка». Сохранение и публикация остаются в редакторе.
 import { displacedZoneEdge, nearestEdgeIndex } from "./zone-edge-geometry.js";
-import { edgeResizeAngle, edgeResizeCursor } from "./zone-resize-direction.js";
+import { edgeResizeAngle, edgeResizeCursor, edgeResizeHandles } from "./zone-resize-direction.js";
 
 let libraries;
 function loadLibraries() {
@@ -118,17 +118,20 @@ export function createCraneZone3d(callbacks) {
   function updateHandlePositions() {
     if (!host) return;
     const outline = activeLevel()?.outline || [];
-    const midpoints = outline.map((point, index) => {
-      const a = toScreen(point), b = toScreen(outline[(index + 1) % outline.length]);
-      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]),
-        angle: edgeResizeAngle(outline, index, toScreen) };
-    });
+    const midpoints = edgeResizeHandles(outline, toScreen, host.clientWidth, host.clientHeight);
     host.dataset.edgeMidpoints = JSON.stringify(midpoints);
     if (!gripLayer) return;
     gripLayer.replaceChildren();
     if (!data?.editable || outline.length < 3) return;
+    const leaders = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    leaders.classList.add("cz-3d-grip-leaders");
     for (const midpoint of midpoints) {
-      if (outline.length > 4 && midpoint.length < 18) continue;
+      if (Math.hypot(midpoint.x - midpoint.anchorX, midpoint.y - midpoint.anchorY) > 4) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", midpoint.anchorX); line.setAttribute("y1", midpoint.anchorY);
+        line.setAttribute("x2", midpoint.x); line.setAttribute("y2", midpoint.y);
+        leaders.appendChild(line);
+      }
       const grip = document.createElement("span");
       grip.className = "cz-3d-grip";
       grip.style.left = `${midpoint.x}px`;
@@ -137,6 +140,7 @@ export function createCraneZone3d(callbacks) {
       grip.setAttribute("aria-hidden", "true");
       gripLayer.appendChild(grip);
     }
+    if (leaders.childNodes.length) gripLayer.prepend(leaders);
   }
   function pointer(event) {
     const rect = r.renderer.domElement.getBoundingClientRect();
@@ -153,7 +157,7 @@ export function createCraneZone3d(callbacks) {
     const level = activeLevel();
     if (!data?.editable || (level?.outline?.length || 0) < 3) return null;
     const midpoints = JSON.parse(host?.dataset.edgeMidpoints || "[]");
-    const grip = midpoints.find((point) => (level.outline.length === 4 || point.length >= 18) && Math.hypot(point.x - x, point.y - y) <= 17);
+    const grip = midpoints.find((point) => Math.hypot(point.x - x, point.y - y) <= 17);
     if (grip) return { kind: "edge", index: grip.index };
     // У соседней новой зоны на обзорном масштабе ребро может быть ~18 px:
     // прежние 12 px отступа от каждой вершины перекрывали его целиком.

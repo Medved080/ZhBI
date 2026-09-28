@@ -69,6 +69,8 @@
 .cz-collision-tail polygon { fill: #fff; stroke: #c65c43; stroke-width: 1.2; stroke-linejoin: round; }
 @media (prefers-reduced-motion: reduce) { .cz-collision, .cz-collision-tail { transition: none; } }
 .cz-3d-grips { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.cz-3d-grip-leaders { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.cz-3d-grip-leaders line { stroke: #ef6b33; stroke-width: 2; stroke-linecap: round; }
 .cz-3d-grip { position: absolute; width: 26px; height: 26px; box-sizing: border-box; transform: translate(-50%, -50%); border: 3px solid #fff; border-radius: 50%; background: #ef6b33; box-shadow: 0 1px 8px rgb(25 50 65 / 65%); }
 .cz-3d-grip::after { content: "↔"; display: block; color: #fff; font-size: 16px; font-weight: 700; line-height: 18px; text-align: center; transform: rotate(var(--cz-resize-angle, 0rad)); }
 .cz-3d-selection { position: absolute; border: 1px dashed #ef6b33; background: rgb(239 107 51 / 10%); pointer-events: none; }

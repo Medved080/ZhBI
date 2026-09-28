@@ -33,10 +33,13 @@ try {
     const points2d = JSON.parse(await browser.eval("document.querySelector('#cz-canvas').dataset.edgeMidpoints"));
     assert.equal(points2d.length, expectedEdges, "2D не показывает рёбра сложной стоянки");
     const canvas = await browser.rect('#cz-canvas');
+    assert.ok(points2d.every((point) => point.x >= 14 && point.x <= canvas.w - 14 &&
+      point.y >= 14 && point.y <= canvas.h - 14), "не все ручки выбранной стоянки видны в 2D");
     const edge = [...points2d].sort((a, b) => b.length - a.length)[0];
     await browser.move(canvas.x + edge.x, canvas.y + edge.y);
     assert.match(await browser.eval("document.querySelector('#cz-canvas').style.cursor"), /data:image\/svg\+xml/);
   }
+  if (process.env.POLYGON_HANDLES_SHOT) await browser.shot(process.env.POLYGON_HANDLES_SHOT);
   const points = JSON.parse(await browser.eval("document.querySelector('#cz-canvas').dataset.edgeMidpoints"));
   const edge = [...points].sort((a, b) => b.length - a.length)[0];
   const center = points.reduce((sum, point) => [sum[0] + point.x / points.length, sum[1] + point.y / points.length], [0, 0]);
@@ -54,8 +57,8 @@ try {
     await browser.waitFor(`JSON.parse(document.querySelector('#cz-3d')?.dataset.edgeMidpoints || '[]').length === ${expectedEdges}`, 10000);
     const points3d = JSON.parse(await browser.eval("document.querySelector('#cz-3d').dataset.edgeMidpoints"));
     assert.equal(points3d.length, expectedEdges, "3D потерял рёбра сложной стоянки");
-    assert.ok(await browser.eval("document.querySelectorAll('#cz-3d .cz-3d-grip').length > 0"),
-      "в 3D не появились стрелки выбранной стоянки");
+    assert.equal(await browser.eval("document.querySelectorAll('#cz-3d .cz-3d-grip').length"), expectedEdges,
+      "в 3D показаны не все стрелки выбранной стоянки");
     const visibleGrip = await browser.eval(`(() => {
       const host = document.querySelector('#cz-3d');
       return [...host.querySelectorAll('.cz-3d-grip')].some(grip => {
@@ -65,6 +68,7 @@ try {
     })()`);
     assert.equal(visibleGrip, true, "стрелки созданы за пределами видимой 3D-схемы");
   }
+  if (process.env.POLYGON_3D_SHOT) await browser.shot(process.env.POLYGON_3D_SHOT);
   assert.equal(browser.exceptions.length, 0, browser.exceptions.join("\n"));
   console.log("PASS: стоянки 10 и 11 крана 3 показывают стрелки изменения размера в 2D и 3D");
 } finally {

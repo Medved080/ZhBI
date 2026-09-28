@@ -3,7 +3,7 @@
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { displacedZoneEdge, nearestEdgeIndex } from "./zone-edge-geometry.js";
-import { edgeResizeAngle, edgeResizeCursor } from "./zone-resize-direction.js";
+import { edgeResizeAngle, edgeResizeCursor, edgeResizeHandles } from "./zone-resize-direction.js";
 import { peerOverlap } from "./zone-overlap.js";
 import { countElementsByZones } from "./zone-live-count.js";
 import { createCraneZone3d, preloadCraneZone3d } from "./crane-zone-3d.js";
@@ -496,9 +496,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function bounds() {
     const pts = [];
-    const focusZones = standFocus ? zones().filter((zone) =>
-      zone.category === "Стоянка" && zone.parent_zone_id === viewedCraneId()) : visibleZones();
-    for (const z of focusZones) for (const l of z.levels) pts.push(...l.outline);
+    const elevation = standFocus && selected()?.category === "Стоянка"
+      ? selected().levels[activeLevel]?.elevation_mm : null;
+    for (const z of visibleZones()) for (const l of z.levels)
+      if (elevation == null || l.elevation_mm === elevation) pts.push(...l.outline);
     if (!standFocus || !pts.length) for (const e of visibleElements())
       if (Number.isFinite(e.x) && Number.isFinite(e.y)) pts.push([e.x, e.y]);
     if (!pts.length) return { x: 0, y: 0, w: 100, h: 100 };
@@ -607,11 +608,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     canvas.dataset.highlightedOutlines = String(accented);
     // Ручки только на рёбрах: вершины не редактируются.
     const resizable = draftWritable() && standFocus && selected()?.category === "Стоянка" && activeOutline?.length >= 3;
-    canvas.dataset.edgeMidpoints = JSON.stringify(resizable ? activeOutline.map((point, index) => {
-      const a = toScreen(...point, canvas), b = toScreen(...activeOutline[(index + 1) % activeOutline.length], canvas);
-      return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]),
-        angle: edgeResizeAngle(activeOutline, index, (p) => toScreen(...p, canvas)) };
-    }) : []);
+    const handles = resizable ? edgeResizeHandles(activeOutline,
+      (point) => toScreen(...point, canvas), w, h) : [];
+    canvas.dataset.edgeMidpoints = JSON.stringify(handles);
     if (resizable) {
       const highlighted = drag?.kind === "edge" ? drag.index : hoverEdge;
       if (highlighted != null) {
@@ -619,21 +618,19 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         const b = toScreen(...activeOutline[(highlighted + 1) % activeOutline.length], canvas);
         ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.strokeStyle = "#d65b16"; ctx.lineWidth = 4; ctx.stroke();
       }
-      for (let i = 0; i < activeOutline.length; i++) {
-        const p = activeOutline[i], next = activeOutline[(i + 1) % activeOutline.length];
-        const [sx, sy] = toScreen(p[0], p[1], canvas);
-        const [nx, ny] = toScreen(next[0], next[1], canvas);
-        if (Math.hypot(nx - sx, ny - sy) >= 22) {
-          const angle = edgeResizeAngle(activeOutline, i, (point) => toScreen(...point, canvas));
-          ctx.save(); ctx.translate((sx + nx) / 2, (sy + ny) / 2); ctx.rotate(angle);
+      for (const handle of handles) {
+          if (Math.hypot(handle.x - handle.anchorX, handle.y - handle.anchorY) > 4) {
+            ctx.beginPath(); ctx.moveTo(handle.anchorX, handle.anchorY); ctx.lineTo(handle.x, handle.y);
+            ctx.strokeStyle = "#d65b16"; ctx.lineWidth = 1.5; ctx.stroke();
+          }
+          ctx.save(); ctx.translate(handle.x, handle.y); ctx.rotate(handle.angle);
           ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2);
-          ctx.fillStyle = i === highlighted ? "#d65b16" : "#ef6b33"; ctx.fill();
+          ctx.fillStyle = handle.index === highlighted ? "#d65b16" : "#ef6b33"; ctx.fill();
           ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
           ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(8, 0);
           ctx.moveTo(-8, 0); ctx.lineTo(-4, -4); ctx.moveTo(-8, 0); ctx.lineTo(-4, 4);
           ctx.moveTo(8, 0); ctx.lineTo(4, -4); ctx.moveTo(8, 0); ctx.lineTo(4, 4);
           ctx.lineWidth = 1.8; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.stroke(); ctx.restore();
-        }
       }
     }
     if (drag?.kind === "box") { ctx.strokeStyle = "#ef6b33"; ctx.setLineDash([5, 4]); ctx.strokeRect(drag.x, drag.y, drag.lastX - drag.x, drag.lastY - drag.y); ctx.setLineDash([]); }
