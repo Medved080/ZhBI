@@ -494,10 +494,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const version = displayVersion();
     const parent = parentCrane();
     const primaryAdd = `<button type="button" class="v2-btn v2-primary" id="cz-add-stand" data-tooltip="${staleDraft() ? STALE_DRAFT_MESSAGE : "Добавить стоянку выбранному крану. Её границы, нижнюю и верхнюю отметки можно уточнить в черновике."}" ${parent && !staleDraft() ? "" : "disabled"}>+ Добавить стоянку</button><button type="button" class="v2-btn" id="cz-add-crane" data-tooltip="Создать кран; его рабочая зона образуется из стоянок." ${staleDraft() ? "disabled" : ""}>+ Добавить кран</button>`;
-    root.innerHTML = `<div class="cz-toolbar"><strong>${standFocus ? "Стоянки кранов" : "Зоны кранов"}</strong><span class="cz-revision">${version ? `Редакция №${version.revision_no}${version.effective_date ? ` · с ${esc(version.effective_date)}` : " · исходная"}` : "Нет редакции"}</span>
-      <select id="cz-version-select" aria-label="История редакций" data-tooltip="Открывает опубликованную редакцию для просмотра. Назначения изделий показываются на дату этой редакции; изменить её нельзя."><option value="">Действующая редакция</option>${versions.map((v) => `<option value="${v.id}" ${selectedVersionId === v.id ? "selected" : ""}>№${v.revision_no} · ${v.effective_date || `исходная с ${v.known_from}`}${v.activated_at ? "" : " · ожидает"}</option>`).join("")}</select>
-      ${standFocus ? `<select id="cz-draft-select" aria-label="Черновик" data-tooltip="Переключает сохранённые незавершённые редакции. Черновик не меняет действующие зоны до публикации."><option value="">Действующая редакция</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id}${d.base_version_id !== currentVersion()?.id ? " · устарел, только просмотр" : ""} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select>` : ""}
-      ${canEdit && standFocus ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn" id="cz-delete-draft">Удалить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>${restoreButton()}` : ""}</div>
+    root.innerHTML = `<div class="cz-toolbar ${standFocus ? "cz-toolbar-stands" : ""}"><strong>${standFocus ? "Стоянки кранов" : "Зоны кранов"}</strong><span class="cz-revision">${version ? `Редакция №${version.revision_no}${version.effective_date ? ` · с ${esc(version.effective_date)}` : " · исходная"}` : "Нет редакции"}</span>
+      <label class="cz-select-label"><span>Просмотр редакции</span><select id="cz-version-select" data-tooltip="Показать на схеме любую опубликованную редакцию только для просмотра: назначения изделий — на дату этой редакции. Изменить её нельзя; для правки откройте черновик."><option value="">Действующая${currentVersion() ? ` (№${currentVersion().revision_no})` : ""}</option>${versions.map((v) => `<option value="${v.id}" ${selectedVersionId === v.id ? "selected" : ""}>№${v.revision_no} · ${esc(versionDate(v))}</option>`).join("")}</select></label>
+      ${standFocus ? `<label class="cz-select-label"><span>Черновик</span><select id="cz-draft-select" data-tooltip="Открыть сохранённую незавершённую редакцию для правки. Черновик не меняет действующие зоны до публикации."><option value="">не открыт</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id}${d.base_version_id !== currentVersion()?.id ? " · устарел, только просмотр" : ""} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select></label>` : ""}
+      ${canEdit && standFocus ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn" id="cz-delete-draft">Удалить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}${rollbackButton()}</div>
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
       <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit && standFocus ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${(!standFocus || selected()?.category === "Кран") && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
@@ -1117,7 +1117,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-view-2d")?.addEventListener("click", () => { if (mode3d) { hideCollision(); mode3d = false; render(); } });
     $("#cz-view-3d")?.addEventListener("click", () => { if (!mode3d) { hideCollision(); mode3d = true; render(); } });
     $("#cz-show-elements")?.addEventListener("change", (e) => toggleElements(e.target.checked));
-    $("#cz-restore")?.addEventListener("click", restoreVersion);
+    $("#cz-rollback")?.addEventListener("click", rollbackVersion);
     const conflictButton = $("#cz-conflict-count"), conflictBox = $("#cz-conflict-list");
     conflictListPinned = false;
     conflictButton?.addEventListener("mouseenter", () => showConflictList());
@@ -1388,41 +1388,107 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     } catch (e) { status(errText(e), "error"); }
     finally { busy = false; updateStatus(); }
   }
-  // Снятие публикации (2026-09-28): вернуться к выбранной в истории редакции либо, на действующей схеме, снять
-  // последнюю публикацию. Все более поздние редакции становятся черновиками, изделия возвращаются к назначениям
-  // целевой (withdraw_versions на сервере). Служебные редакции — исходная и конверсия — не снимаются.
+  // Откат редакции (2026-09-28, решение пользователя): одна кнопка «Откат редакции» открывает окно со списком
+  // редакций; выбранная становится действующей, все более поздние снимаются с публикации и становятся черновиками,
+  // изделия возвращаются к её назначениям (withdraw_versions на сервере). Служебные редакции — исходная и перенос
+  // на новую модель — не снимаются, поэтому откатиться «через» них нельзя.
   const WITHDRAWABLE = new Set(["published", "rollback"]);
-  function restoreTarget() {
-    if (draft || !versions.length) return null;
+  const KIND_LABEL = { conversion: "перенос на новую модель зон" }; // исходная уже названа в дате
+  function rollbackOptions() {
     const latest = versions[0];
-    const target = selectedVersionId ? versions.find((v) => v.id === selectedVersionId) : versions[1];
-    if (!target || target.id === latest.id || !target.activated_at) return null;
-    const later = versions.filter((v) => v.revision_no > target.revision_no);
-    return later.every((v) => WITHDRAWABLE.has(v.kind)) ? { target, later } : null;
+    return versions.map((version) => {
+      const later = versions.filter((v) => v.revision_no > version.revision_no);
+      const blocker = later.find((v) => !WITHDRAWABLE.has(v.kind));
+      const reason = version.id === latest?.id ? "последняя редакция"
+        : !version.activated_at ? "ещё не вступила в силу"
+        : blocker ? `после неё служебная редакция №${blocker.revision_no}` : null;
+      return { version, later, reason };
+    });
   }
-  function restoreButton() {
-    const plan = restoreTarget();
-    if (!plan) return "";
-    const label = selectedVersionId ? `Вернуться к №${plan.target.revision_no}` : `Снять публикацию №${versions[0].revision_no}`;
-    return `<button type="button" class="v2-btn" id="cz-restore" data-tooltip="Снимает с публикации ${plan.later.length > 1 ? "редакции" : "редакцию"} ${plan.later.map((v) => `№${v.revision_no}`).join(", ")}: ${plan.later.length > 1 ? "они станут черновиками" : "она станет черновиком"}, изделия вернутся к назначениям редакции №${plan.target.revision_no}.">${label}</button>`;
+  function versionDate(v) {
+    if (!v.effective_date) return `исходная с ${v.known_from}`;
+    return v.activated_at ? `с ${v.effective_date}` : `вступит в силу ${v.effective_date}`;
   }
-  async function restoreVersion() {
-    const plan = restoreTarget();
-    if (!plan || busy || !canEdit) return;
+  function rollbackButton() {
+    if (!canEdit || !standFocus || versions.length < 2) return "";
+    const any = rollbackOptions().some((option) => !option.reason);
+    return `<button type="button" class="v2-btn" id="cz-rollback" ${any ? "" : "disabled"} data-tooltip="${any
+      ? "Выбрать прежнюю редакцию: она станет действующей, все более поздние снимутся с публикации и станут черновиками."
+      : "Откатываться некуда: нет прежней действовавшей редакции без служебных редакций после неё."}">Откат редакции</button>`;
+  }
+  function rollbackConsequences(option) {
+    const { version, later } = option;
+    const active = later.some((v) => v.activated_at);
+    return `<p><b>Станут черновиками:</b> ${later.map((v) => `№${v.revision_no} (${esc(versionDate(v))})`).join(", ")}.</p>`
+      + `<p>${active ? `Назначения изделий вернутся к редакции №${version.revision_no}; изделия, загруженные после неё, останутся без зоны до следующей публикации.`
+        : "Назначения изделий не изменятся: снимаемые редакции ещё не вступили в силу."}</p>`
+      + `<p>Отчёты за период снятых редакций будут строиться по редакции №${version.revision_no}. Перед откатом будет сделана резервная копия базы.</p>`;
+  }
+  function showRollbackDialog() {
+    const options = rollbackOptions();
+    const first = options.find((option) => !option.reason);
+    return new Promise((resolve) => {
+      const previouslyFocused = document.activeElement;
+      const backdrop = document.createElement("div");
+      backdrop.className = "v2-dialog-backdrop";
+      backdrop.innerHTML = `<div class="v2-dialog cz-rollback-dialog" role="dialog" aria-modal="true" aria-labelledby="cz-rollback-title">
+        <h3 id="cz-rollback-title">Откат редакции</h3>
+        <p>Выберите редакцию, которая снова станет действующей.</p>
+        <div class="cz-rollback-list" role="radiogroup" aria-label="Редакции">${options.map(({ version: v, reason }) => `<label class="cz-rollback-row ${reason ? "cz-rollback-disabled" : ""}">
+          <input type="radio" name="cz-rollback-target" value="${v.id}" ${reason ? "disabled" : ""} ${first && first.version.id === v.id ? "checked" : ""}>
+          <span><b>№${v.revision_no}</b> · ${esc(versionDate(v))}${v.id === currentVersion()?.id ? " · <em>действует</em>" : ""}${KIND_LABEL[v.kind] ? ` · ${KIND_LABEL[v.kind]}` : ""}
+            <small>${esc(v.author_name || "")}${v.note ? `${v.author_name ? " — " : ""}${esc(v.note.length > 140 ? `${v.note.slice(0, 140)}…` : v.note)}` : ""}${reason ? `<i>нельзя выбрать: ${esc(reason)}</i>` : ""}</small></span></label>`).join("")}</div>
+        <div class="cz-rollback-effect" aria-live="polite"></div>
+        <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-choice="cancel">Отмена</button><button type="button" class="v2-btn v2-primary" data-choice="confirm"></button></div>
+      </div>`;
+      const dialog = backdrop.querySelector(".v2-dialog");
+      const confirm = backdrop.querySelector('[data-choice="confirm"]');
+      function update() {
+        const id = Number(backdrop.querySelector('input[name="cz-rollback-target"]:checked')?.value);
+        const option = options.find((item) => item.version.id === id);
+        confirm.disabled = !option;
+        confirm.textContent = option ? `Откатить к №${option.version.revision_no}` : "Откатить";
+        backdrop.querySelector(".cz-rollback-effect").innerHTML = option ? rollbackConsequences(option) : "<p>Выберите редакцию.</p>";
+      }
+      function close(value) {
+        document.removeEventListener("keydown", onKeydown, true);
+        backdrop.remove();
+        if (previouslyFocused?.isConnected) previouslyFocused.focus?.();
+        resolve(value);
+      }
+      function onKeydown(e) {
+        if (e.key === "Escape") { e.preventDefault(); close(null); return; }
+        if (e.key !== "Tab") return;
+        const items = [...dialog.querySelectorAll("input:not(:disabled), button:not(:disabled)")];
+        const firstItem = items[0], lastItem = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === firstItem) { e.preventDefault(); lastItem.focus(); }
+        else if (!e.shiftKey && document.activeElement === lastItem) { e.preventDefault(); firstItem.focus(); }
+      }
+      backdrop.addEventListener("change", update);
+      backdrop.addEventListener("click", (e) => {
+        const choice = e.target.closest("[data-choice]")?.dataset.choice;
+        if (choice === "cancel" || e.target === backdrop) close(null);
+        else if (choice === "confirm" && !confirm.disabled)
+          close(options.find((item) => item.version.id === Number(backdrop.querySelector('input[name="cz-rollback-target"]:checked')?.value)) || null);
+      });
+      document.addEventListener("keydown", onKeydown, true);
+      document.body.appendChild(backdrop);
+      update();
+      (backdrop.querySelector('input[name="cz-rollback-target"]:checked') || backdrop.querySelector('[data-choice="cancel"]')).focus();
+    });
+  }
+  async function rollbackVersion() {
+    if (busy || !canEdit || !standFocus) return;
     if (dirty && !(await guardLeave())) return;
-    const names = plan.later.map((v) => `№${v.revision_no}${v.effective_date ? ` (с ${v.effective_date})` : ""}`).join(", ");
-    if (!(await showConfirmDialog(`Снять с публикации ${names} и вернуться к редакции №${plan.target.revision_no}? `
-      + `${plan.later.length > 1 ? "Снятые редакции станут черновиками" : "Снятая редакция станет черновиком"} для доработки. `
-      + `Назначения изделий вернутся к редакции №${plan.target.revision_no}; изделия, появившиеся после неё, останутся без зоны до следующей публикации. `
-      + `Отчёты за период снятых редакций будут строиться по редакции №${plan.target.revision_no}. Перед снятием будет сделана резервная копия базы.`,
-      { confirmLabel: "Снять с публикации" }))) return;
+    const option = await showRollbackDialog();
+    if (!option) return;
     busy = true; message = ""; updateStatus();
     try {
-      const r = await api.post(`${prefix}/${plan.target.id}/restore`, { latest_version_id: versions[0].id });
+      const r = await api.post(`${prefix}/${option.version.id}/restore`, { latest_version_id: versions[0].id });
       selectedVersionId = null; draft = null; dirty = false; preview = null;
       await refresh();
       if (r.drafts?.length) await loadDraft(r.drafts[0].draft_id);
-      status(`Снято: ${r.withdrawn.map((v) => `№${v.revision_no}`).join(", ")}. Действует редакция №${r.target_revision_no}; изменено назначений изделий: ${r.changed_elements}. `
+      status(`Откат выполнен: действует редакция №${r.target_revision_no}. Сняты ${r.withdrawn.map((v) => `№${v.revision_no}`).join(", ")}; изменено назначений изделий: ${r.changed_elements}. `
         + `${r.drafts.length > 1 ? `Черновики ${r.drafts.map((d) => `№${d.draft_id}`).join(", ")}` : `Черновик №${r.drafts[0]?.draft_id}`} открыт${r.drafts.length > 1 ? "ы" : ""} для доработки.`, "success");
       onPublished?.(r);
     } catch (e) { status(`${errText(e)} Состояние перечитайте перед повтором.`, "error"); await refresh(); }

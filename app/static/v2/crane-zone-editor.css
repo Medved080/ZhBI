@@ -134,3 +134,26 @@
 .cz-conflict-row > span small { display: inline; color: #6b7c86; }
 .cz-conflict-row > small { display: block; color: #6b7c86; }
 .cz-conflict-more, .cz-conflict-empty, .cz-conflict-hint { margin: 4px 6px; color: #6b7c86; }
+/* Окно «Откат редакции» (2026-09-28): список редакций с выбором, последствия выбранного отката. */
+.v2-dialog.cz-rollback-dialog { width: 620px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.cz-rollback-dialog h3 { margin: 0 0 8px; font-size: 16px; }
+.cz-rollback-dialog p { margin: 0 0 8px; }
+.cz-rollback-list { flex: 1 1 auto; min-height: 80px; overflow: auto; margin-bottom: 10px; border: 1px solid #dce3e7; border-radius: 8px; }
+.cz-rollback-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-bottom: 1px solid #edf1f3; cursor: pointer; }
+.cz-rollback-row:last-child { border-bottom: 0; }
+.cz-rollback-row:hover:not(.cz-rollback-disabled) { background: #f2f7f9; }
+.cz-rollback-row input { margin-top: 3px; }
+.cz-rollback-row > span { display: block; min-width: 0; }
+.cz-rollback-row small { display: block; color: #6b7c86; overflow-wrap: anywhere; }
+.cz-rollback-row small i { display: block; font-style: normal; color: #9aa7ae; }
+.cz-rollback-row em { font-style: normal; font-weight: 600; color: #2c8953; }
+.cz-rollback-disabled { cursor: default; color: #9aa7ae; }
+.cz-rollback-effect { padding: 8px 10px; margin-bottom: 12px; border-radius: 8px; background: #fbf4e8; font-size: 13px; }
+.cz-rollback-effect p:last-child { margin-bottom: 0; }
+/* Подписи двух списков панели редакций (2026-09-28): просмотр опубликованной редакции и открытый черновик. */
+.cz-select-label { display: inline-grid; gap: 1px; white-space: nowrap; }
+.cz-select-label > span { font-size: 10px; line-height: 1.1; color: #5d707b; padding-left: 2px; }
+.cz-select-label select { padding-top: 4px; padding-bottom: 4px; }
+/* Во вкладке стоянок номер действующей редакции написан в самом списке «Просмотр редакции». */
+.cz-toolbar-stands .cz-revision { display: none; }
+.cz-toolbar-stands .cz-select-label:first-of-type { margin-left: auto; }
