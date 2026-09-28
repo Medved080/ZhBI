@@ -20,20 +20,22 @@ const errText = (e) => (e instanceof ApiError ? e.detail : String(e?.message || 
 const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString("ru-RU"));
 const fmtSize = (n) => { const v = Number(n); if (!Number.isFinite(v)) return "—"; if (v >= 1 << 30) return `${(v / (1 << 30)).toFixed(1)} ГБ`; if (v >= 1 << 20) return `${(v / (1 << 20)).toFixed(1)} МБ`; if (v >= 1 << 10) return `${Math.round(v / (1 << 10))} КБ`; return `${v} Б`; };
 
-export function mountDbTransfer(el, { screen, structure, objectId, api, rights, groupTitle }) {
-  el.className = "v2-page";
+// embedded — режим внутри «Массовой правки через Excel» (как четвёртый режим V1, 2026-09-28): без своей шапки,
+// хлебных крошек и ссылок раздела — их показывает экран массовой правки.
+export function mountDbTransfer(el, { screen, structure, objectId, api, rights, groupTitle, embedded = false }) {
+  if (!embedded) el.className = "v2-page";
   const canWrite = !!rights?.system_admin || rights?.features?.db_transfer === "write";
   let dead = false, busy = false;
   const st = { current: null, currentError: "", token: null, stage: null, file: null, confirmWord: "", status: "" };
 
   el.innerHTML = `
-    <div class="v2-container v2-screen">
-      <div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
+    <div class="${embedded ? "v2-dt-embedded" : "v2-container v2-screen"}">
+      ${embedded ? "" : `<div class="v2-crumbs"><a href="#/" class="v2-link">Начало</a> › ${esc(groupTitle)}</div>
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
-      <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout v2-callout-bad" role="note"><strong>Необратимо через интерфейс.</strong> Замена стирает ВСЮ текущую базу и вложения содержимым снимка. Перед заменой сервер ВСЕГДА снимает служебную резервную копию текущего состояния — вернуться можно только через неё.
-        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
+      <p class="v2-muted">${esc(screen.summary || "")}</p>`}
+      <div class="v2-callout v2-callout-bad" role="note"><strong>${embedded ? "Критическая операция: замена всей базы." : "Необратимо через интерфейс."}</strong> Замена стирает ВСЮ текущую базу и вложения содержимым снимка${embedded ? " другого сервера — все изделия, историю статусов, контракты, <b>всех пользователей и пароли</b>, настройки. Не дополняет — замещает. Раздел нужен ровно для одного: привезти боевые данные на тестовый или девелоперский сервер. <b>На боевом сервере загружать снимок нельзя.</b>" : "."} Перед заменой сервер ВСЕГДА снимает служебную резервную копию текущего состояния — вернуться можно только через неё.
+        ${embedded ? "" : `<div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div>`}</div>
       ${canWrite ? `<section class="v2-result"><h3>1. Выгрузить снимок этой базы</h3>
         <p class="v2-muted">Снимок — файл базы целиком плюс папка вложений, одним архивом. Перенесите файл на сервер-приёмник и загрузите его там в этом же разделе.</p>
         <button type="button" class="v2-btn" id="dt-export">Выгрузить снимок базы</button>

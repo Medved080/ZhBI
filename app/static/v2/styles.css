@@ -1276,3 +1276,10 @@ button.ws-tile:hover { background: var(--surface); }
    пользователя и капризен в проверках), Esc или кнопка «Свернуть» закрывают. */
 .v2-gantt-fs { position: fixed; inset: 0; z-index: 60; background: var(--bg); padding: 14px 18px; display: flex; flex-direction: column; overflow: hidden; }
 .v2-gantt-fs .v2-gantt-wrap { flex: 1; max-height: none; }
+
+/* «Массовая правка через Excel»: четвёртый режим «⚠ Перенос базы» — отдельно и красным, как в V1 (2026-09-28): три первых
+   режима правят данные построчно, этот заменяет базу целиком. */
+.v2-bk-modes { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.v2-bk-transfer-mode { padding: 7px 10px; border: 1px solid var(--bad); border-radius: 6px; background: var(--bg); color: var(--bad); font-size: 12px; font-weight: 600; cursor: pointer; }
+.v2-bk-transfer-mode[aria-pressed="true"] { background: var(--bad); color: var(--accent-ink); }
+.v2-dt-embedded { margin-top: 12px; }

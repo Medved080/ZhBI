@@ -1,5 +1,6 @@
 // «Массовая правка через Excel» в V2: выгрузка → правка в Excel → сверка → применение отмеченного. Три режима V1 — «Реквизиты», «История статусов»,
-// «Контрактация» (четвёртый режим V1 «Перенос базы» — замена базы целиком — остаётся только в текущем интерфейсе).
+// «Контрактация» — и четвёртый, отдельный и красный, как в V1: «⚠ Перенос базы» — замена базы целиком снимком другого сервера (2026-09-28).
+// Он встраивает тот же модуль, что экран «Перенос базы целиком» (db-transfer.js), и виден только при праве на перенос базы.
 //
 // Семантика — как в V1 (те же эндпоинты `POST /elements/bulk-edit/{export,analyze,apply}`):
 //  * выгрузка — чтение (право «Массовая правка: чтение»), сверка и применение — изменение;
@@ -11,6 +12,7 @@
 import { showConfirmDialog } from "./dialogs.js";
 import { isRealDate } from "./card-edit.js";
 import { filterSnapshotFor, describeFilterSnapshot } from "./scheme-filter-snapshot.js";
+import { mountDbTransfer } from "./db-transfer.js";
 import {
   esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, mountTemplates, makeStatus, unknownOutcomeHtml, verifyOutcome, saveBlob,
   factsHtml, valueText, changesTableHtml, wireChangesTable, applyIndeterminate,
@@ -37,6 +39,8 @@ const MODES = {
 export function mountBulkEdit(el, ctx) {
   const { screen, groupTitle, api, objectId, objects, rights } = ctx;
   const canWrite = !!(rights?.system_admin || rights?.features?.bulk_edit === "write");
+  const canTransfer = !!(rights?.system_admin || ["read", "write"].includes(rights?.features?.db_transfer));
+  let transfer = null; // смонтированный модуль переноса базы (режим «Перенос базы»)
   let dead = false, busy = false;
   let mode = "fields";
   let analysis = null, file = null, checked = new Set(), contractingDate = "";
@@ -46,9 +50,10 @@ export function mountBulkEdit(el, ctx) {
   el.className = "v2-page";
   el.innerHTML = pageFrame({
     screen, groupTitle, summary: null,
-    body: `<div class="v2-seg" role="group" aria-label="Режим правки" id="bk-modes">${Object.entries(MODES).map(([k, m]) => `<button type="button" data-mode="${k}" aria-pressed="${k === mode}">${esc(m.label)}</button>`).join("")}</div>
+    body: `<div class="v2-bk-modes"><div class="v2-seg" role="group" aria-label="Режим правки" id="bk-modes">${Object.entries(MODES).map(([k, m]) => `<button type="button" data-mode="${k}" aria-pressed="${k === mode}">${esc(m.label)}</button>`).join("")}</div>${canTransfer ? `<button type="button" class="v2-bk-transfer-mode" id="bk-transfer-mode" aria-pressed="false" data-tooltip="Полная замена базы снимком другого сервера">⚠ Перенос базы</button>` : ""}</div>
+      <div id="bk-transfer" hidden></div>
+      <div id="bk-excel">
       <p class="v2-muted" id="bk-intro"></p>
-      <div class="v2-callout" role="note">Перенос базы целиком (замена базы снимком другого сервера) — критическая операция, в новом интерфейсе не выполняется: она остаётся в текущем интерфейсе («Массовая правка через Excel → Перенос базы»).</div>
       <h3 class="v2-report-h">1. Выгрузить снимок</h3>
       <div id="bk-scope"></div>
       <div class="v2-bar"><button type="button" class="v2-btn" id="bk-export">Выгрузить в Excel</button></div>
@@ -67,7 +72,8 @@ export function mountBulkEdit(el, ctx) {
         <button type="button" class="v2-btn v2-primary" id="bk-apply">Применить отмеченное</button>
       </div>
       <div id="bk-result"></div>
-      <div id="bk-tpl" class="v2-ex-tplbox"></div>`,
+      <div id="bk-tpl" class="v2-ex-tplbox"></div>
+      </div>`,
   });
   const $ = (s) => el.querySelector(s);
   const status = makeStatus($("#bk-status"));
@@ -97,9 +103,31 @@ export function mountBulkEdit(el, ctx) {
   }
   const dirty = () => !!analysis && analysis.changes.length > 0;
 
+  // Режим «Перенос базы»: скрывает шаги Excel и монтирует модуль переноса; уход из режима убирает принятый, но не
+  // применённый снимок из очереди (guardLeave модуля), как при уходе с отдельного экрана.
+  async function leaveTransfer() {
+    if (!transfer) return true;
+    if (!(await transfer.guardLeave())) return false;
+    transfer.destroy(); transfer = null;
+    $("#bk-transfer").innerHTML = ""; $("#bk-transfer").hidden = true; $("#bk-excel").hidden = false;
+    $("#bk-transfer-mode")?.setAttribute("aria-pressed", "false");
+    return true;
+  }
+  $("#bk-transfer-mode")?.addEventListener("click", async () => {
+    if (busy || transfer) return;
+    if (dirty() && !(await showConfirmDialog("Сверка не применена — при смене режима её результат будет потерян. Сменить режим?", { confirmLabel: "Сменить режим", cancelLabel: "Остаться" }))) return;
+    resetAnalysis(); status.set("");
+    $("#bk-excel").hidden = true; $("#bk-transfer").hidden = false;
+    el.querySelectorAll("#bk-modes [data-mode]").forEach((b) => b.setAttribute("aria-pressed", "false"));
+    $("#bk-transfer-mode").setAttribute("aria-pressed", "true");
+    transfer = mountDbTransfer($("#bk-transfer"), { ...ctx, embedded: true });
+  });
+
   el.querySelector("#bk-modes").addEventListener("click", async (e) => {
     const b = e.target.closest("[data-mode]");
-    if (!b || busy || b.dataset.mode === mode) return;
+    if (!b || busy) return;
+    if (transfer) { if (!(await leaveTransfer())) return; if (b.dataset.mode === mode) { renderMode(); return; } }
+    else if (b.dataset.mode === mode) return;
     if (dirty() && !(await showConfirmDialog("Сверка не применена — при смене режима её результат будет потерян. Сменить режим?", { confirmLabel: "Сменить режим", cancelLabel: "Остаться" }))) return;
     mode = b.dataset.mode; resetAnalysis(); status.set(""); renderMode();
   });
@@ -260,7 +288,10 @@ export function mountBulkEdit(el, ctx) {
   renderMode();
   return {
     hasUnsavedChanges: dirty,
-    async guardLeave() { return !dirty() || (await showConfirmDialog("Сверка массовой правки не применена — результат сверки будет потерян. Уйти?", { confirmLabel: "Уйти", cancelLabel: "Остаться" })); },
-    destroy() { dead = true; },
+    async guardLeave() {
+      if (transfer) return transfer.guardLeave();
+      return !dirty() || (await showConfirmDialog("Сверка массовой правки не применена — результат сверки будет потерян. Уйти?", { confirmLabel: "Уйти", cancelLabel: "Остаться" }));
+    },
+    destroy() { dead = true; transfer?.destroy(); },
   };
 }
