@@ -12,11 +12,19 @@ function inside(outline, x, y) {
   return hit;
 }
 
-function stanceLevel(zone, element, objectLevels) {
+// Правило прижатия — как в серверной привязке (scripts/zone_binding.py, bind_stance_union): изделие ниже нижней
+// отметки объекта, а ригель и плита — и на самой нижней отметке, относятся к нижнему ярусу, но только если ни у
+// одной стоянки нет явной верхней отметки (2026-09-28).
+function clampsToBottom(stances) {
+  return stances.every((stance) => stance.levels.every((level) => !Number.isFinite(level.upper_elevation_mm)));
+}
+
+function stanceLevel(zone, element, objectLevels, clamp = true) {
   const elevation = element.elevation_mm;
   if (!Number.isFinite(elevation)) return null;
   const strict = CAPPING_TYPES.has(element.element_type);
   const eligible = objectLevels.filter((v) => strict ? v < elevation : v <= elevation);
+  if (!eligible.length && !clamp) return null;
   const selected = eligible.length ? eligible[eligible.length - 1] : objectLevels[0];
   const level = zone.levels.find((item) => item.elevation_mm === selected) || null;
   if (!level) return null;
@@ -29,6 +37,7 @@ export function countElementsInZone(zone, elements, zones = [zone], overrides = 
   const stances = zones.filter((item) => item.category === "Стоянка");
   const objectLevels = [...new Set(stances.flatMap((item) => item.levels.map((level) => level.elevation_mm)))]
     .filter(Number.isFinite).sort((a, b) => a - b);
+  const clamp = clampsToBottom(stances);
   let count = 0;
   for (const element of elements) {
     if (!Number.isFinite(element.x) || !Number.isFinite(element.y)) continue;
@@ -45,7 +54,7 @@ export function countElementsInZone(zone, elements, zones = [zone], overrides = 
     }
     if (!objectLevels.length || !Number.isFinite(element.elevation_mm)) continue;
     const matched = stances.filter((stance) => {
-      const outline = stanceLevel(stance, element, objectLevels)?.outline;
+      const outline = stanceLevel(stance, element, objectLevels, clamp)?.outline;
       return outline?.length && inside(outline, element.x, element.y);
     });
     if (matched.length !== 1) continue;
@@ -78,6 +87,7 @@ export function countElementsByZones(zones, elements, overrides = {}) {
       minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
   }
   const increment = (id) => { if (counts.has(id)) counts.set(id, counts.get(id) + 1); };
+  const clamp = clampsToBottom(stances);
   for (const element of elements) {
     if (!Number.isFinite(element.x) || !Number.isFinite(element.y)) continue;
     const override = overrides[String(element.id)];
@@ -92,7 +102,7 @@ export function countElementsByZones(zones, elements, overrides = {}) {
         strict ? element.elevation_mm <= item.upper : element.elevation_mm < item.upper);
       if (candidates.length) break;
     }
-    if (!candidates.length && element.elevation_mm < objectLevels[0])
+    if (!candidates.length && clamp && (strict ? element.elevation_mm <= objectLevels[0] : element.elevation_mm < objectLevels[0]))
       candidates = byLevel.get(objectLevels[0]) || [];
     let match = null, ambiguous = false;
     for (const item of candidates) {

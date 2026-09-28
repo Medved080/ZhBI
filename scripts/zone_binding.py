@@ -338,7 +338,12 @@ def bind_stance_union(element_type, x, y, outline, elevation_mm, zones):
     if candidates_by_height:
         level = max(zone.elevation_mm for zone in candidates_by_height)
         at_level = [zone for zone in candidates_by_height if zone.elevation_mm == level]
-    elif elevation_mm < levels[0] and all(
+    # Ниже нижней отметки объекта изделие прижимается к нижнему ярусу. Ригель и
+    # плита венчают ярус снизу — их полоса (отметка, верх], и на САМОЙ нижней
+    # отметке полосы нет: они прижимаются тоже (до 2026-09-28 здесь было
+    # строгое «<», и такие изделия оставались без стоянки). С явными
+    # верхними отметками прижатия нет.
+    elif (elevation_mm <= levels[0] if strict else elevation_mm < levels[0]) and all(
             zone.upper_elevation_mm is None for zone in zones if zone.category == "Стоянка"):
         at_level = [zone for zone in zones if zone.category == "Стоянка"
                     and zone.elevation_mm == levels[0]]
