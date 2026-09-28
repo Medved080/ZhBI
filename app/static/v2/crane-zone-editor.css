@@ -117,3 +117,7 @@
 .cz-crane-color span { width: 16px; height: 16px; border: 1px solid #aab8bd; border-radius: 4px; }
 .cz-crane-stand { font-size: 12px; padding: 4px 0; border-bottom: 1px solid #edf1f3; }
 @media (max-width: 1050px) { .cz-body { grid-template-columns: 170px minmax(260px, 1fr) 240px; } .cz-toolbar { min-height: 48px; } .cz-revision { display: none; } .cz-map-hint { display: none; } .cz-map-bar { grid-template-columns: 1fr; } .cz-map-controls { justify-self: start; } }
+/* Галочка «Конфликты» — красная штриховка пересекающихся стоянок и ярусов на схеме 2D (2026-09-28). */
+.cz-conflicts-layer input { accent-color: #d62020; }
+#cz-conflict-count { min-width: 1.4em; padding: 0 5px; border-radius: 8px; background: #e8eef1; color: #425b68; font-size: 11px; text-align: center; }
+#cz-conflict-count.cz-conflict-count-bad { background: #d62020; color: #fff; }

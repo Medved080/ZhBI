@@ -190,3 +190,38 @@ export function peerOverlap(zones, zone, elevation, outline, minimumArea = 1) {
       })
     .filter(({ area }) => area > minimumArea);
 }
+
+// Все конфликты стоянок объекта (красная штриховка на схеме 2D, 2026-09-28): пары ярусов ЛЮБЫХ стоянок — разных
+// кранов, одного крана и одной стоянки, — у которых высотные полосы пересекаются, а контуры накладываются по
+// площади. Полоса яруса — от его отметки до верхней отметки, а без неё — до следующей отметки объекта (как в
+// overlappingPeerLevels выше). Касание границ конфликтом не считается. Возвращает пары с кусками наложения
+// (непересекающиеся многоугольники) и общей высотной полосой пары [lower, upper).
+export function zoneConflicts(zones, minimumArea = 1) {
+  const stances = (zones || []).filter((zone) => zone.category === "Стоянка");
+  const lowers = [...new Set(stances.flatMap((zone) => (zone.levels || []).map((level) => level.elevation_mm)))]
+    .filter(Number.isFinite).sort((a, b) => a - b);
+  const upperFor = (level) => Number.isFinite(level.upper_elevation_mm) ? level.upper_elevation_mm :
+    lowers.find((value) => value > level.elevation_mm) ?? Infinity;
+  const items = stances.flatMap((zone) => (zone.levels || []).map((level, index) => ({ zone, level, index }))
+    .filter(({ level }) => level.outline?.length >= 3 && Number.isFinite(level.elevation_mm))
+    .map((item) => ({ ...item, lower: item.level.elevation_mm, upper: upperFor(item.level), box: boundingBox(item.level.outline) })));
+  const conflicts = [];
+  for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+    const a = items[i], b = items[j];
+    if (!(a.lower < b.upper && b.lower < a.upper)) continue;
+    if (a.box.x1 <= b.box.x0 || b.box.x1 <= a.box.x0 || a.box.y1 <= b.box.y0 || b.box.y1 <= a.box.y0) continue;
+    const pieces = overlapPieces(a.level.outline, b.level.outline);
+    const area = pieces.reduce((sum, piece) => sum + Math.abs(polygonArea(piece)), 0);
+    if (area <= minimumArea) continue;
+    conflicts.push({ a: { zone_id: a.zone.id, level_index: a.index, elevation_mm: a.lower },
+      b: { zone_id: b.zone.id, level_index: b.index, elevation_mm: b.lower },
+      lower: Math.max(a.lower, b.lower), upper: Math.min(a.upper, b.upper), area, pieces });
+  }
+  return conflicts;
+}
+
+// Соседние ярусы, в которые нельзя заходить контуром стоянки на отметке elevation: те же, что проверяют
+// peerSegmentIntrusion/peerOverlap. Редактор обводит их при ручной отрисовке контура (2026-09-28).
+export function peerLevels(zones, zone, elevation) {
+  return overlappingPeerLevels(zones, zone, elevation).filter(({ level }) => level.outline?.length >= 3);
+}
