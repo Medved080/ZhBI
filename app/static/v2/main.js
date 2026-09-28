@@ -56,6 +56,14 @@ const root = document.getElementById("v2-root");
   document.head.appendChild(l);
 })();
 
+// Стиль полосы «Вышло обновление сервиса» (см. watchAppBuild ниже) — тем же приёмом.
+(() => {
+  if (document.querySelector("link[data-update-note-css]")) return;
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = "/static/v2/update-note.css"; l.setAttribute("data-update-note-css", "1");
+  document.head.appendChild(l);
+})();
+
 // Стиль полосы режима «Зайти под пользователем» — тем же приёмом (own файл, не styles.css).
 (() => {
   if (document.querySelector("link[data-impersonation-bar-css]")) return;
@@ -305,6 +313,10 @@ async function renderShell(user, permissions) {
       <a href="/?ui=v1" id="v2-banner-back">Вернуться в текущий интерфейс</a>
     </div>
     <div class="v2-gate-note" id="v2-gate-note" role="status" aria-live="polite" hidden></div>
+    <div class="v2-update-note" id="v2-update-note" role="status" aria-live="polite" hidden>
+      <span>Вышло обновление сервиса <b id="v2-update-note-version"></b> — эта вкладка работает предыдущей версией. Обновите страницу, чтобы перейти на новую.</span>
+      <button type="button" class="v2-btn v2-primary" id="v2-update-note-reload">Обновить страницу</button>
+    </div>
     <div class="v2-disk-note" id="v2-disk-note" role="status" aria-live="polite" hidden>
       <span id="v2-disk-note-text"></span>
       <button type="button" id="v2-disk-note-x" aria-label="Скрыть предупреждение">✕</button>
@@ -357,6 +369,29 @@ async function renderShell(user, permissions) {
     }).catch(() => { /* фоновое уведомление — тихий отказ, не должен мешать работе */ });
   }
   warnAboutDiskSpace();
+
+  // «Вышло обновление, обновите страницу» (2026-09-28) — то же, что V1 (app/static/app.js: checkAppBuild): сервер
+  // отдаёт отпечаток сборки (GET /app-build, считается при старте по всему коду app/), вкладка запоминает первый
+  // ответ и сверяет его раз в 15 с и при возврате на вкладку. Полоса не исчезает сама и не перезагружает страницу
+  // без спроса: человек может сначала дописать начатое; несохранённое при перезагрузке защищает beforeunload выше.
+  const updateNote = document.getElementById("v2-update-note");
+  document.getElementById("v2-update-note-reload").addEventListener("click", () => location.reload());
+  let knownAppBuild = null;
+  let appBuildTimer = null;
+  async function checkAppBuild() {
+    if (!updateNote.hidden) return;
+    let data;
+    try { data = await api.get("/app-build"); } catch (err) { return; } // сеть моргнула — попробует следующий тик
+    if (!data || !data.build) return;
+    if (knownAppBuild === null) { knownAppBuild = data.build; return; }
+    if (data.build === knownAppBuild) return;
+    document.getElementById("v2-update-note-version").textContent = data.version ? `v${data.version}` : "";
+    updateNote.hidden = false;
+    clearInterval(appBuildTimer); // полоса показана — дальше спрашивать незачем
+  }
+  checkAppBuild();
+  appBuildTimer = setInterval(() => { if (!document.hidden) checkAppBuild(); }, 15000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkAppBuild(); });
 
   // Полоса режима «Зайти под пользователем» (2026-09-22): признак приходит С СЕРВЕРА (/me), а не берётся из
   // наличия токена в sessionStorage — та же причина, что у V1 (app/static/app.js: applyImpersonationBar):

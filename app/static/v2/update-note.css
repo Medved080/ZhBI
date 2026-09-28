@@ -1,0 +1,12 @@
+/* Полоса «Вышло обновление сервиса» (главная оболочка, main.js: watchAppBuild) — своим файлом, как disk-note.css:
+   styles.css общий. Тот же смысл и текст, что у #update-banner V1 (app/static/index.html): сообщение о
+   состоянии сервиса, а не об опасности, поэтому акцентный, а не красный цвет. */
+.v2-update-note {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 6px 24px; font-size: 13px; background: var(--surface); border-bottom: 1px solid var(--line);
+  border-left: 4px solid var(--accent); color: var(--ink);
+}
+.v2-update-note[hidden] { display: none; }
+.v2-update-note span { min-width: 0; }
+.v2-update-note button { flex: none; }
+#v2-root.v2-ws-mode .v2-update-note { padding: 4px 14px; font-size: 12px; }

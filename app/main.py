@@ -888,24 +888,32 @@ def health():
 # ради чего обновление и выкатывали.
 #
 # Отпечаток сборки считается ОДИН РАЗ при импорте модуля, то есть при старте
-# процесса, — по mtime и размеру файлов фронтенда плюс номер верхней записи
-# журнала версий. Почему так, а не по номеру версии: запись в журнал версий
-# добавляется вручную и не на каждый деплой (её текст ещё и согласуется), а
-# устаревает вкладка от ЛЮБОГО изменения фронтенда. Почему не по содержимому
-# файлов: app.js — это 700+ КБ, считать хэш на каждый запрос ни к чему,
-# а на старте достаточно и метаданных: новый образ — новые файлы.
+# процесса, — по СОДЕРЖИМОМУ всех файлов кода в app/ (сервер, V1, V2) плюс
+# номер верхней записи журнала версий. Почему не по номеру версии: запись в
+# журнал версий добавляется вручную и не на каждый деплой. Почему по всему
+# app/, а не только index.html/app.js, как было до 2026-09-28: обновление V2
+# или одного сервера отпечаток не меняло, и вкладки V2 уведомления не
+# получали вовсе. Почему по содержимому, а не по mtime: перезапуск контейнера
+# без нового кода не должен звать всех обновлять страницу. ~18 МБ хэшируются
+# один раз при старте за доли секунды.
+_APP_BUILD_SUFFIXES = {".py", ".js", ".mjs", ".css", ".html", ".sql", ".json"}
+
+
 def _compute_app_build() -> str:
-    parts = [CHANGELOG[0]["version"] if CHANGELOG else "0"]
-    static_dir = Path(__file__).resolve().parent / "static"
-    for name in ("index.html", "app.js"):
+    digest = hashlib.sha256((CHANGELOG[0]["version"] if CHANGELOG else "0").encode("utf-8"))
+    app_dir = Path(__file__).resolve().parent
+    files = sorted(p for p in app_dir.rglob("*")
+                   if p.is_file() and p.suffix in _APP_BUILD_SUFFIXES
+                   and "__pycache__" not in p.parts)
+    for path in files:
+        digest.update(b"|" + path.relative_to(app_dir).as_posix().encode("utf-8") + b"|")
         try:
-            st = (static_dir / name).stat()
-            parts.append(f"{name}:{int(st.st_mtime)}:{st.st_size}")
+            digest.update(path.read_bytes())
         except OSError:
-            # Файла нет (теоретически — иная сборка образа): отпечаток всё
-            # равно должен получиться, иначе сломается сам механизм.
-            parts.append(f"{name}:?")
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+            # Файл пропал между обходом и чтением: отпечаток всё равно должен
+            # получиться, иначе сломается сам механизм.
+            digest.update(b"?")
+    return digest.hexdigest()[:16]
 
 
 APP_BUILD = _compute_app_build()
