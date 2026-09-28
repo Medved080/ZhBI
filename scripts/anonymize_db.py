@@ -314,6 +314,24 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
         user_names[uid] = f"{last} {first}"
     count("users", len(rows))
 
+    # Справочники ролей объекта (2026-09-28): подразделения («СМУ») и
+    # физлица («Директор СМУ», «Ответственный») — реальные названия и ФИО.
+    # Объекты ссылаются на них по id, поэтому имя меняется на псевдоним без
+    # последствий для связей. Проверка на утечки нашла их в копии с боевой.
+    existing = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table, group, label in (("smu_catalog", "smu_catalog.name", "Подразделение"),
+                                ("individuals", "individuals.name", "Физлицо")):
+        if table not in existing:
+            continue
+        rows = conn.execute(f"SELECT id, name FROM {table} ORDER BY id").fetchall()
+        # Два прохода из-за UNIQUE(name): сначала временные имена, затем псевдонимы.
+        for row in rows:
+            conn.execute(f"UPDATE {table} SET name=? WHERE id=?", (f"__anon_{row['id']}__", row["id"]))
+        for n, row in enumerate(rows, start=1):
+            alias = mapping.put(group, row["name"], f"{label} {n}")
+            conn.execute(f"UPDATE {table} SET name=? WHERE id=?", (alias, row["id"]))
+        count(f"{table}.name", len(rows))
+
     # Сессии — это живые токены доступа. Обезличивать нечего, копия
     # должна начинаться с пустого списка сессий.
     stats["sessions (удалено)"] = conn.execute("DELETE FROM sessions").rowcount
@@ -638,6 +656,10 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
 # ложное срабатывание на КАЖДОЙ таблице, где есть `element_type` — это
 # не общий заказчиком реквизит, а термин самой предметной области.
 _ENUM_COLUMNS = {"element_type"}
+# Служебные значения конкретных колонок: совпадение с ними — не утечка. Например,
+# schedule_versions.origin — «import»/«calc», а «import» встречается и как
+# служебный автор в status_history.changed_by. Иное значение проверяется как обычно.
+_ENUM_VALUES = {("schedule_versions", "origin"): {"import", "calc"}}
 _RELEASE_TASK_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$")
 
 
@@ -676,6 +698,8 @@ def find_leaks(conn: sqlite3.Connection, needles: list[tuple[str, str]]) -> list
                 if (table, column) == ("release_tasks", "name") and \
                         _RELEASE_TASK_NAME.fullmatch(value):
                     continue  # идентификатор из реестра кода, не клиентский текст
+                if value in _ENUM_VALUES.get((table, column), ()):
+                    continue  # служебное значение колонки, не клиентский текст
                 for group, pattern in compiled:
                     if pattern.search(value):
                         leaks.append((table, column, group))
