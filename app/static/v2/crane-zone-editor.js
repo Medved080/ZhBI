@@ -58,7 +58,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
   function staleDraft() { return !!draft && !!currentVersion() && draft.base_version_id !== currentVersion().id; }
   function draftWritable() { return standFocus && canEdit && !!draft && !staleDraft(); }
-  function canStartEditing() { return standFocus && canEdit && !selectedVersionId; }
+  function canStartEditing() { return standFocus && canEdit && !selectedVersionId && !staleDraft(); }
   function inputEditState() { return draftWritable() ? "" : canStartEditing() ? "readonly data-start-edit" : "disabled"; }
   function propertyActions(zone) {
     if (!canStartEditing()) return "";
@@ -236,6 +236,14 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (mode3d) viewer3d?.update(viewerData()); else draw();
     updateStatus();
   }
+  function updateLevelDisplay() {
+    const zone = selected(), level = zone?.levels[activeLevel];
+    if (!level) return;
+    const label = root.querySelector(`.cz-level[data-level="${activeLevel}"]`);
+    if (label) label.textContent = `${levelBandLabel(level.elevation_mm, level.upper_elevation_mm)} · ${level.outline.length} точек`;
+    const summary = $(".cz-map-summary");
+    if (summary) summary.textContent = `${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий`;
+  }
 
   function status(text, tone = "info") { message = text; messageTone = tone; updateStatus(); }
   function updateStatus() {
@@ -245,7 +253,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       !canEdit ? "Редактирование недоступно: нет права на изменение зон." :
       selectedVersionId ? "Просмотр сохранённой редакции. Для правки создайте черновик; координаты изделий показаны по текущей схеме." :
       staleDraft() ? STALE_DRAFT_MESSAGE :
-      !draft ? staleDraftCount() ? `Есть ${staleDraftCount()} черновик(ов) прежней редакции. Они доступны для просмотра. Нажмите «Редактировать стоянку» или её поле отметки — откроется новый черновик.` : "Выберите стоянку и нажмите «Редактировать» либо поле отметки — черновик создастся автоматически." :
+      !draft ? staleDraftCount() ? `Есть ${staleDraftCount()} черновик(ов) прежней редакции. Они доступны для просмотра. Выберите стоянку: редактирование откроет актуальный черновик или создаст его при отсутствии.` : "Выберите стоянку и нажмите «Редактировать» либо поле отметки — откроется актуальный черновик или создастся новый при отсутствии." :
       dirty ? "Шаг 1 из 3: есть несохранённые изменения — сохраните их в черновике." :
       draft.warnings?.length ? `Черновик сохранён, но пока не готов к публикации: ${draft.warnings[0]}` :
       !draft.note?.trim() ? "Шаг 2 из 3: укажите причину изменения и сохраните черновик." :
@@ -318,10 +326,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <label>Номер<input id="cz-number" type="number" min="1" step="1" data-tooltip="Порядковый номер зоны в пределах объекта; у стоянки — в пределах её крана. Используется в справочнике и назначениях изделий." value="${z.number}" ${inputEditState()}></label>
       <label>Название<input id="cz-name" type="text" maxlength="200" data-tooltip="Название зоны в списках и отчётах. Изменение не перемещает контур и не меняет принадлежность изделий." value="${esc(z.name)}" ${inputEditState()}></label>
       ${z.category === "Стоянка" ? `<label>Кран<select id="cz-parent" data-tooltip="Родительский кран стоянки. Смена крана изменит назначение изделий в её контурах." ${can ? "" : "disabled"}>${zones().filter((v) => v.category === "Кран").map((c) => `<option value="${c.id}" ${z.parent_zone_id === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>` : ""}
-      ${level ? `<div class="cz-elevation-pair"><label>Нижняя отметка, мм<input id="cz-elevation" type="number" step="1" list="cz-object-levels" data-tooltip="Начало яруса в миллиметрах." value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${inputEditState()}></label><label>Верхняя отметка, мм<input id="cz-upper-elevation" type="number" step="1" list="cz-object-levels" data-tooltip="Конец яруса в миллиметрах. Если оставить пустым, действует до следующей нижней отметки на объекте." value="${level.upper_elevation_mm ?? ""}" placeholder="Авто" ${inputEditState()}></label></div><datalist id="cz-object-levels">${suggestedLevels().map(([v, label]) => `<option value="${v}" label="${esc(label)}">`).join("")}</datalist>` : ""}
+      ${level ? `<div class="cz-elevation-pair"><label>Нижняя отметка, мм<input id="cz-elevation" type="number" step="1" data-tooltip="Введите любую нижнюю отметку в миллиметрах." value="${level.elevation_mm ?? ""}" placeholder="Введите отметку" ${inputEditState()}></label><label>Верхняя отметка, мм<input id="cz-upper-elevation" type="number" step="1" data-tooltip="Введите любую верхнюю отметку в миллиметрах. Пустое поле означает автоматическую границу по следующему уровню объекта." value="${level.upper_elevation_mm ?? ""}" placeholder="Авто или число" ${inputEditState()}></label></div>` : ""}
       ${z.category === "Кран" && !z.levels.length ? `<p class="cz-hint">Зона крана вычисляется как объединение его стоянок. Контуры меняются на вкладке «Стоянки кранов».</p><div class="cz-crane-color"><span style="background:${esc(zoneColor(z))}"></span>Цвет крана: ${esc(zoneColor(z))}</div><div class="cz-subtitle">Стоянки · ${zones().filter((v) => v.category === "Стоянка" && v.parent_zone_id === z.id).length}</div>${zones().filter((v) => v.category === "Стоянка" && v.parent_zone_id === z.id).map((v) => `<div class="cz-crane-stand">${esc(v.name)} · ${zoneCountLabel(v)} изделий</div>`).join("")}` : `
       <div class="cz-subtitle">Ярусы и контуры</div>
-      ${canStartEditing() ? `<div class="cz-level-actions"><button type="button" class="v2-btn" id="cz-add-level" data-tooltip="Создаёт следующий высотный ярус с копией текущего контура. Нижнюю и верхнюю отметку можно изменить до публикации.">Добавить ярус</button>${z.levels.length > 1 ? `<button type="button" class="v2-btn cz-delete-action" id="cz-delete-level">Удалить ярус</button>` : ""}</div>` : ""}
+      ${canStartEditing() ? `<div class="cz-level-actions"><button type="button" class="v2-btn" id="cz-add-level" data-tooltip="Добавить ярус в текущий черновик с копией контура. Нижнюю и верхнюю отметку можно ввести вручную.">Добавить ярус</button>${z.levels.length > 1 ? `<button type="button" class="v2-btn cz-delete-action" id="cz-delete-level">Удалить ярус</button>` : ""}</div>` : ""}
       <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}" data-tooltip="Показать контур и изделия этой полосы. Изменения границы затронут назначения изделий на соответствующей отметке.">${levelBandLabel(l.elevation_mm, l.upper_elevation_mm)} · ${l.outline.length} точек</button>`).join("")}</div>
       ${level ? `<p class="cz-hint">В 2D потяните зону внутри контура, чтобы переместить её целиком, или потяните ребро, чтобы изменить размер. Перетаскивание пустого фона сдвигает вид. В 3D поворачивайте сцену вне ручек.</p>
         <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Number(p[0].toFixed(1))}; ${Number(p[1].toFixed(1))}</span>`).join("")}</div>` : ""}`}
@@ -815,13 +823,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-number")?.addEventListener("change", (e) => { if (!draftWritable()) return; selected().number = Number(e.target.value); markDirty(false); render(); });
     $("#cz-name")?.addEventListener("change", (e) => { if (!draftWritable()) return; selected().name = e.target.value; markDirty(false); render(); });
     $("#cz-parent")?.addEventListener("change", (e) => { if (!draftWritable()) return; selected().parent_zone_id = Number(e.target.value); markDirty(); render(); });
-    $("#cz-elevation")?.addEventListener("change", (e) => { if (!draftWritable()) return; selected().levels[activeLevel].elevation_mm = e.target.value === "" ? null : Number(e.target.value); markDirty(); render(); });
+    $("#cz-elevation")?.addEventListener("change", (e) => { if (!draftWritable()) return; selected().levels[activeLevel].elevation_mm = e.target.value === "" ? null : Number(e.target.value); markDirty(); updateLevelDisplay(); });
     $("#cz-upper-elevation")?.addEventListener("change", (e) => {
       if (!draftWritable()) return;
       const level = selected().levels[activeLevel];
       if (e.target.value === "") delete level.upper_elevation_mm;
       else level.upper_elevation_mm = Number(e.target.value);
-      markDirty(); render();
+      markDirty(); updateLevelDisplay();
     });
     $("#cz-note")?.addEventListener("input", (e) => { draft.note = e.target.value; markDirty(false); });
     $("#cz-date")?.addEventListener("change", (e) => { effectiveDate = e.target.value; });
@@ -974,21 +982,39 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     busy = true; message = ""; updateStatus();
     try {
       const r = await api.post(`${prefix}/drafts`);
-      await refresh(); await loadDraft(r.draft_id);
-      if (selectedId != null && zoneById(selectedId)) {
-        selectedZone = selectedId;
-        activeLevel = Math.min(selectedLevel, Math.max(0, selected().levels.length - 1));
-        if (selected()?.parent_zone_id != null) expandedCraneIds.add(selected().parent_zone_id);
-        render();
-      }
+      const [detail, list] = await Promise.all([
+        api.get(`${prefix}/drafts/${r.draft_id}`), api.get(`${prefix}/drafts`),
+      ]);
+      drafts = list;
+      activateEditableDraft(detail, selectedId, selectedLevel);
       status("Создан черновик. Рабочие зоны не изменены.");
       return true;
     }
     catch (e) { status(errText(e), "error"); return false; } finally { busy = false; updateStatus(); }
   }
+  function activateEditableDraft(detail, selectedId = selectedZone, selectedLevel = activeLevel) {
+    draft = detail; selectedVersionId = null; scene = currentScene;
+    selectedElements.clear(); dirty = false; preview = null; liveCountsReady = false;
+    selectedZone = selectedId != null && zoneById(selectedId) ? selectedId : firstZoneId();
+    activeLevel = selectedZone === selectedId
+      ? Math.min(selectedLevel, Math.max(0, selected()?.levels.length - 1)) : 0;
+    if (selected()?.parent_zone_id != null) expandedCraneIds.add(selected().parent_zone_id);
+    render();
+  }
   async function ensureEditableDraft() {
     if (!canStartEditing() || busy) return false;
     if (draftWritable()) return true;
+    const currentDraft = drafts.find((row) => row.base_version_id === currentVersion()?.id);
+    if (currentDraft) {
+      busy = true; updateStatus();
+      try {
+        const detail = await api.get(`${prefix}/drafts/${currentDraft.id}`);
+        activateEditableDraft(detail);
+        status(`Открыт черновик №${detail.id}.`);
+        return true;
+      } catch (e) { status(errText(e), "error"); return false; }
+      finally { busy = false; updateStatus(); }
+    }
     return createDraft();
   }
   async function deleteDraft() {

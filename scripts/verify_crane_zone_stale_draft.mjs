@@ -38,12 +38,12 @@ try {
   await tap(browser, '.cz-crane-stands:not([hidden]) .cz-stand');
   assert.equal(await browser.eval("document.querySelector('#cz-save').disabled"), true);
   assert.equal(await browser.eval("document.querySelector('#cz-preview').disabled"), true);
-  assert.equal(await browser.eval("document.querySelector('#cz-name')?.readOnly"), true);
-  assert.equal(await browser.eval("!!document.querySelector('#cz-delete-zone')"), true,
-    "кнопка удаления стоянки не видна при просмотре старого черновика");
+  assert.equal(await browser.eval("document.querySelector('#cz-name')?.disabled"), true);
+  assert.equal(await browser.eval("!!document.querySelector('#cz-add-level')"), false,
+    "устаревший черновик не должен предлагать добавление яруса");
   const selectedStanceId = await browser.eval("document.querySelector('.cz-stand.active')?.dataset.zoneId");
   const oldToken = await browser.eval(`(async()=> (await (await fetch('/objects/1/crane-zone-versions/drafts/${old}')).json()).edit_token)()`);
-  await tap(browser, '#cz-upper-elevation');
+  await tap(browser, '#cz-new');
   await browser.waitFor(`!!document.querySelector('#cz-draft-select')?.value && document.querySelector('#cz-draft-select').value !== ${JSON.stringify(old)}`, 30000);
   assert.notEqual(await browser.eval("document.querySelector('#cz-draft-select').value"), old);
   assert.equal(await browser.eval("document.querySelector('#cz-upper-elevation').readOnly"), false,
@@ -66,9 +66,37 @@ try {
   await browser.waitFor("!!document.querySelector('#cz-save:not(:disabled)')", 5000);
   await tap(browser, '#cz-save');
   await browser.waitFor("document.querySelector('#cz-status')?.textContent.startsWith('Черновик сохранён')", 10000);
+  const currentDraft = await browser.eval("document.querySelector('#cz-draft-select').value");
+  const draftCount = await browser.eval("document.querySelector('#cz-draft-select').options.length");
+  await browser.eval("document.querySelector('#cz-draft-select').value='';document.querySelector('#cz-draft-select').dispatchEvent(new Event('change',{bubbles:true}))");
+  await browser.waitFor("document.querySelector('#cz-draft-select')?.value === ''", 10000);
+  if (!await browser.eval("!!document.querySelector('.cz-crane-stands:not([hidden]) .cz-stand')")) await tap(browser, '.cz-crane-toggle');
+  await tap(browser, '.cz-crane-stands:not([hidden]) .cz-stand');
   await tap(browser, '#cz-add-level');
+  await browser.waitFor(`document.querySelector('#cz-draft-select')?.value === ${JSON.stringify(currentDraft)} && document.querySelectorAll('.cz-level').length > 1`, 10000);
+  assert.equal(await browser.eval("document.querySelector('#cz-draft-select').options.length"), draftCount,
+    "добавление яруса создало ещё один черновик");
   assert.equal(await browser.eval("!!document.querySelector('#cz-upper-elevation')"), true,
     "нет поля верхней отметки яруса");
+  assert.equal(await browser.eval("document.querySelector('#cz-upper-elevation').hasAttribute('list')"), false,
+    "верхняя отметка всё ещё ограничена списком");
+  const stableFields = await browser.eval(`(() => {
+    const panel = document.querySelector('.cz-properties');
+    panel.scrollTop = 50;
+    const scrollBefore = panel.scrollTop;
+    window.__upperFieldBefore = document.querySelector('#cz-upper-elevation');
+    window.__lowerFieldBefore = document.querySelector('#cz-elevation');
+    window.__panelBefore = panel;
+    const upper = window.__upperFieldBefore;
+    upper.value = '8725'; upper.dispatchEvent(new Event('change', { bubbles: true }));
+    const lower = window.__lowerFieldBefore;
+    lower.value = '4250'; lower.dispatchEvent(new Event('change', { bubbles: true }));
+    return panel === document.querySelector('.cz-properties') &&
+      upper === document.querySelector('#cz-upper-elevation') &&
+      lower === document.querySelector('#cz-elevation') && panel.scrollTop === scrollBefore;
+  })()`);
+  assert.equal(stableFields, true, "форма пересоздалась или прокрутилась при вводе отметки");
+  assert.equal(await browser.eval("document.querySelector('.cz-level.active').textContent.includes('8725')"), true);
   await browser.eval("document.querySelector('#cz-upper-elevation').value='-1';document.querySelector('#cz-upper-elevation').dispatchEvent(new Event('change',{bubbles:true}))");
   await tap(browser, '#cz-save');
   await browser.waitFor("document.querySelector('#cz-feedback')?.textContent.includes('Перед публикацией исправьте')", 10000);
