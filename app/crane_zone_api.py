@@ -11,9 +11,10 @@ from app import activity
 from app.access import assert_object_feature
 from app.auth import format_display_name, get_current_user
 from app.crane_zone_editor import ZoneDraftError
+from app.backups import backup_before_import
 from app.crane_zone_service import (
     create_draft, delete_draft, draft_warnings, preview_draft, publish_draft,
-    update_draft,
+    update_draft, withdraw_versions,
 )
 from app.db import get_connection
 
@@ -264,6 +265,48 @@ def publish(object_id: int, draft_id: int, body: PublishIn,
         activity.log(
             "crane_zone_version_publish", user=user, entity_type="object", entity_id=object_id,
             new_value=f"Редакция {result['revision_no']} действует с {result['effective_date']}",
+            details=result,
+        )
+        return result
+    finally:
+        conn.close()
+
+
+class WithdrawIn(BaseModel):
+    latest_version_id: int
+
+
+@router.post("/{version_id:int}/restore")
+def restore_version(object_id: int, version_id: int, body: WithdrawIn,
+                    user: sqlite3.Row = Depends(get_current_user)):
+    """Вернуться к редакции version_id: все более поздние публикации снимаются
+    и становятся черновиками, изделия возвращаются к её назначениям
+    (решение пользователя 2026-09-28, app.crane_zone_service.withdraw_versions).
+    Переписывает историю, поэтому перед снятием — резервная копия базы, как
+    перед загрузкой данных: без неё операция не начинается."""
+    conn = get_connection()
+    try:
+        _check(conn, user, object_id, "write")
+        target = conn.execute(
+            "SELECT revision_no FROM crane_zone_versions WHERE id = ? AND object_id = ?",
+            (version_id, object_id),
+        ).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Редакция не найдена на этом объекте")
+        backup_before_import(
+            f"снятие публикаций зон кранов после редакции №{target['revision_no']} (объект {object_id})",
+            format_display_name(user), user["id"],
+        )
+        try:
+            result = withdraw_versions(conn, object_id, version_id, body.latest_version_id,
+                                       user["id"], format_display_name(user))
+        except ZoneDraftError as exc:
+            _public_error(exc)
+        withdrawn = ", ".join(f"№{item['revision_no']}" for item in result["withdrawn"])
+        activity.log(
+            "crane_zone_version_withdraw", user=user, entity_type="object", entity_id=object_id,
+            new_value=(f"Сняты редакции {withdrawn}; действует №{result['target_revision_no']}, "
+                       f"изменено назначений изделий: {result['changed_elements']}"),
             details=result,
         )
         return result

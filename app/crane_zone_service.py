@@ -371,8 +371,16 @@ def _reserve_new_zones(conn: sqlite3.Connection, object_id: int,
     return result, mapping
 
 
-def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
-    """Материализовать уже опубликованную версию в старых рабочих таблицах."""
+def _apply_current(conn: sqlite3.Connection, object_id: int, version,
+                   reappeared: dict[int, sqlite3.Row] | None = None) -> None:
+    """Материализовать уже опубликованную версию в старых рабочих таблицах.
+
+    reappeared — только для снятия публикации (withdraw_versions): текущие
+    изделия, которых нет в назначениях версии, но у которых есть более раннее
+    сохранённое назначение с тем же UID; они получают его, как при возвращении
+    изделия импортом.
+    """
+    reappeared = reappeared or {}
     zones = json.loads(version["zones_json"])
     previous = snapshot_zones(conn, object_id)
     _migrate_schedule_flow(conn, object_id, previous, zones)
@@ -447,7 +455,7 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             "SELECT id FROM elements WHERE object_id = ? AND is_current = 1", (object_id,),
         )
     }
-    missing = current_ids - {row["element_id"] for row in assignments}
+    missing = current_ids - {row["element_id"] for row in assignments} - set(reappeared)
     if missing:
         valid_arrivals = {
             row["element_id"] for row in conn.execute(
@@ -478,6 +486,19 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             (assignment["crane_zone_id"], assignment["crane_status"],
              assignment["stance_zone_id"], assignment["stance_status"], level_id,
              assignment["element_id"], object_id),
+        )
+    for element_id, old in reappeared.items():
+        level_id = None
+        if old["stance_zone_id"] is not None:
+            level_id = levels.get((old["stance_zone_id"], old["stance_elevation_mm"]))
+            if level_id is None:
+                raise ZoneDraftError(f"У стоянки изделия {element_id} нет нужного яруса")
+        conn.execute(
+            "UPDATE elements SET zone_crane_id = ?, zone_crane_status = ?, "
+            "zone_stance_id = ?, zone_stance_status = ?, zone_stance_level_id = ?, "
+            "updated_at = datetime('now') WHERE id = ? AND object_id = ?",
+            (old["crane_zone_id"], old["crane_status"], old["stance_zone_id"],
+             old["stance_status"], level_id, element_id, object_id),
         )
     conn.execute(
         "UPDATE crane_zone_versions SET activated_at = datetime('now') WHERE id = ?",
@@ -665,3 +686,188 @@ def activate_due(conn: sqlite3.Connection) -> list[int]:
             conn.rollback()
             raise
     return activated
+
+
+# ---------- Снятие публикации (2026-09-28) ----------
+# Решение пользователя: снятая редакция снова становится черновиком и уходит
+# на доработку, изделия пересчитываются на предыдущую редакцию; вернуться
+# можно к ЛЮБОЙ прежней — тогда снимаются все публикации после неё. Это
+# ПЕРЕПИСЫВАЕТ историю: отчёты за период снятых редакций строятся по
+# оставшейся (решение принято осознанно). Служебные редакции — исходная и
+# техническая конверсия — не снимаются: на них держится переход объекта на
+# новую модель зон.
+WITHDRAWABLE_KINDS = ("published", "rollback")
+
+
+def _as_draft_of(zones: list[dict], base_zones: list[dict],
+                 overrides: dict) -> tuple[list[dict], dict]:
+    """Снимок зон → черновик на основе base_zones.
+
+    Зоны с реальным id, которых в основе нет (их завела снимаемая редакция),
+    получают временные отрицательные id, как новые зоны редактора; ссылки
+    стоянок на кран и исключения изделий переводятся на них. Временные id,
+    уже бывшие в черновике, сохраняются.
+    """
+    base_ids = {zone["id"] for zone in base_zones}
+    next_id = min([0, *(zone["id"] for zone in zones)]) - 1
+    mapping = {}
+    for zone in zones:
+        if zone["id"] > 0 and zone["id"] not in base_ids:
+            mapping[zone["id"]] = next_id
+            next_id -= 1
+    result = []
+    for zone in zones:
+        item = {**zone, "id": mapping.get(zone["id"], zone["id"]),
+                "parent_zone_id": mapping.get(zone.get("parent_zone_id"), zone.get("parent_zone_id"))}
+        if zone["id"] in mapping:
+            # Происхождение новой зоны заводится заново при следующей публикации.
+            item.pop("source_file", None)
+            item.pop("dxf_handle", None)
+            item["levels"] = [{key: value for key, value in level.items()
+                               if key not in ("source_file", "dxf_handle")}
+                              for level in zone.get("levels", [])]
+        result.append(item)
+    remapped = {}
+    for element_id, override in overrides.items():
+        remapped[element_id] = {
+            **override,
+            "crane_zone_id": mapping.get(override.get("crane_zone_id"), override.get("crane_zone_id")),
+            "stance_zone_id": mapping.get(override.get("stance_zone_id"), override.get("stance_zone_id")),
+        }
+    return result, remapped
+
+
+def withdraw_versions(conn: sqlite3.Connection, object_id: int, target_version_id: int,
+                      latest_version_id: int, user_id: int | None,
+                      author_name: str | None) -> dict:
+    """Снять с публикации все редакции после target: каждая становится
+    черновиком на основе target, текущие зоны и изделия возвращаются к target.
+
+    latest_version_id — последняя редакция, которую видел оператор: если с
+    тех пор опубликовали новую, снимать вслепую нельзя. Одна транзакция.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _require_ready(conn, object_id)
+        latest = _latest(conn, object_id)
+        if latest is None or latest["id"] != latest_version_id:
+            raise ZoneDraftError("Список редакций изменился — обновите форму и повторите")
+        target = conn.execute(
+            "SELECT * FROM crane_zone_versions WHERE id = ? AND object_id = ?",
+            (target_version_id, object_id),
+        ).fetchone()
+        if target is None:
+            raise ZoneDraftError("Редакция не найдена на этом объекте")
+        if target["activated_at"] is None:
+            raise ZoneDraftError("Вернуться можно только к редакции, которая уже действовала")
+        later = conn.execute(
+            "SELECT * FROM crane_zone_versions WHERE object_id = ? AND revision_no > ? "
+            "ORDER BY revision_no DESC", (object_id, target["revision_no"]),
+        ).fetchall()
+        if not later:
+            raise ZoneDraftError("После этой редакции нет публикаций")
+        technical = [row for row in later if row["kind"] not in WITHDRAWABLE_KINDS]
+        if technical:
+            raise ZoneDraftError(
+                f"Редакцию №{technical[0]['revision_no']} снять нельзя: она служебная "
+                "(исходная или перенос на новую модель зон)"
+            )
+        active = next((row for row in later if row["activated_at"] is not None), None)
+        if active is not None:
+            # Текущие таблицы должны совпадать с действующей редакцией: иначе
+            # откат затрёт изменения, внесённые мимо редакций.
+            _assert_current_matches_version(conn, object_id, active)
+        target_zones = json.loads(target["zones_json"])
+        later_ids = [row["id"] for row in later]
+        created = []
+        for row in later:
+            zones, overrides = _as_draft_of(
+                json.loads(row["zones_json"]), target_zones,
+                _inherited_overrides(conn, object_id, row["id"], {}),
+            )
+            cur = conn.execute(
+                "INSERT INTO crane_zone_drafts "
+                "(object_id, base_version_id, zones_json, overrides_json, note, created_by, author_name) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (object_id, target["id"], _json(zones), _json(overrides), row["note"],
+                 user_id, author_name),
+            )
+            created.append({"draft_id": cur.lastrowid, "revision_no": row["revision_no"],
+                            "effective_date": row["effective_date"]})
+        marks = ",".join("?" * len(later_ids))
+        rebased = []
+        for draft in conn.execute(
+            f"SELECT * FROM crane_zone_drafts WHERE object_id = ? AND base_version_id IN ({marks})",
+            (object_id, *later_ids),
+        ).fetchall():
+            zones, overrides = _as_draft_of(json.loads(draft["zones_json"]), target_zones,
+                                            json.loads(draft["overrides_json"]))
+            conn.execute(
+                "UPDATE crane_zone_drafts SET base_version_id = ?, zones_json = ?, overrides_json = ?, "
+                "updated_at = datetime('now'), edit_token = edit_token + 1 WHERE id = ?",
+                (target["id"], _json(zones), _json(overrides), draft["id"]),
+            )
+            rebased.append(draft["id"])
+        # Назначение изделия сравнивается по отметке яруса, а не по его id:
+        # материализация пересоздаёт строки zone_levels.
+        def assignments_now() -> dict[int, tuple]:
+            return {row[0]: tuple(row[1:]) for row in conn.execute(
+                "SELECT e.id, e.zone_crane_id, e.zone_crane_status, e.zone_stance_id, "
+                "e.zone_stance_status, l.elevation_mm FROM elements e "
+                "LEFT JOIN zone_levels l ON l.id = e.zone_stance_level_id "
+                "WHERE e.object_id = ? AND e.is_current = 1", (object_id,),
+            )}
+        before = assignments_now()
+        conn.execute(f"DELETE FROM crane_zone_versions WHERE id IN ({marks})", later_ids)
+        changed = 0
+        if active is not None:
+            kept = {row["element_id"] for row in conn.execute(
+                "SELECT element_id FROM crane_zone_version_assignments WHERE version_id = ?",
+                (target["id"],),
+            )}
+            reappeared = {}
+            for row in conn.execute(
+                "SELECT id, element_uid FROM elements WHERE object_id = ? AND is_current = 1",
+                (object_id,),
+            ).fetchall():
+                if row["id"] in kept:
+                    continue
+                old = conn.execute(
+                    "SELECT a.* FROM crane_zone_version_assignments a "
+                    "JOIN crane_zone_versions v ON v.id = a.version_id "
+                    "WHERE v.object_id = ? AND a.element_id = ? AND a.element_uid IS ? "
+                    "ORDER BY v.revision_no DESC LIMIT 1",
+                    (object_id, row["id"], row["element_uid"]),
+                ).fetchone()
+                if old is not None:
+                    reappeared[row["id"]] = old
+                    continue
+                # Изделие появилось после target: как после импорта — без зоны
+                # до следующей публикации.
+                conn.execute(
+                    "UPDATE elements SET zone_crane_id = NULL, zone_crane_status = NULL, "
+                    "zone_stance_id = NULL, zone_stance_status = NULL, zone_stance_level_id = NULL, "
+                    "updated_at = datetime('now') WHERE id = ?", (row["id"],),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO crane_zone_import_arrivals (object_id, element_id, first_seen_date) "
+                    "VALUES (?, ?, ?)", (object_id, row["id"], business_date()),
+                )
+            activated_at = target["activated_at"]
+            _apply_current(conn, object_id, target, reappeared)
+            # Дата действия target не меняется: он уже действовал раньше.
+            conn.execute("UPDATE crane_zone_versions SET activated_at = ? WHERE id = ?",
+                         (activated_at, target["id"]))
+            after = assignments_now()
+            changed = sum(1 for element_id, value in after.items() if before.get(element_id) != value)
+            _assert_current_matches_version(conn, object_id, target)
+        conn.commit()
+        return {"target_version_id": target["id"], "target_revision_no": target["revision_no"],
+                "withdrawn": [{"revision_no": row["revision_no"], "effective_date": row["effective_date"],
+                               "was_active": row["activated_at"] is not None} for row in later],
+                "drafts": created, "rebased_drafts": rebased, "changed_elements": changed,
+                # Как у публикации: действующие зоны изменились — V1 перечитывает схему.
+                "activated": active is not None}
+    except Exception:
+        conn.rollback()
+        raise

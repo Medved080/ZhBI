@@ -174,6 +174,7 @@ ACTIONS = {
     "zone_edit_undo": ("Откат правки зоны", _D),
     "crane_zone_version_publish": ("Публикация редакции кранов и стоянок", _D),
     "crane_zone_version_activate": ("Вступление в силу редакции кранов и стоянок", _D),
+    "crane_zone_version_withdraw": ("Снятие публикации редакций кранов и стоянок", _D),
     "fill_empty_scope": ("Заполнение пустых «Объект» и «Проект»", _D),
     "attachment_add": ("Вложение добавлено", _D),
     "attachment_delete": ("Вложение удалено", _D),
