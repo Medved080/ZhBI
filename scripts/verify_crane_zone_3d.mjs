@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, stopServer, session, openScreen, tap } from "./audit_work/lib.mjs";
+import { startServer, stopServer, session, openScreen, tap, exec } from "./audit_work/lib.mjs";
+// Сценарий рассчитан на объект без открытых черновиков: чужой черновик
+// удаляется только во временной копии, исходная база не меняется.
+const withoutDrafts = { setup: (db) => exec(db, "PRAGMA foreign_keys = ON; DELETE FROM crane_zone_drafts;") };
 import { elementsOnStanceLevel } from "../app/static/v2/crane-zone-editor.js";
 
 const elements = [
@@ -21,13 +24,16 @@ console.log("PASS отбор изделий по ярусу: граничные 
 const work = mkdtempSync(join(tmpdir(), "crane-3d-"));
 let browser;
 try {
-  const { base } = await startServer(8378, work);
+  const { base } = await startServer(8378, work, withoutDrafts);
   browser = await session(base, "admin", { objectId: 1,
     width: Number(process.env.ZONE_TEST_WIDTH) || 1366, height: Number(process.env.ZONE_TEST_HEIGHT) || 768,
     args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
   await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Кран]')");
   await tap(browser, '[data-cat="Кран"]');
-  await browser.waitFor("!!document.querySelector('#cz-add-crane')");
+  // «Зоны кранов» — только просмотр: краны и стоянки создаются во вкладке стоянок.
+  await browser.waitFor("document.querySelector('.cz-toolbar strong')?.textContent === 'Зоны кранов' && !!document.querySelector('.cz-tree-item')");
+  assert.equal(await browser.eval("!!document.querySelector('#cz-add-crane') || !!document.querySelector('#cz-add-stand')"), false,
+    "в «Зонах кранов» не должно быть команд добавления");
   await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.renderedOutlines) > 9000", 30000);
   assert.equal(await browser.eval("document.querySelector('#cz-canvas').dataset.renderKind"), "outlines");
   const switch2d = await browser.rect("#cz-view-2d");

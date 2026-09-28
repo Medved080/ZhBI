@@ -2,12 +2,15 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, stopServer, session, openScreen, tap, check, summary } from "./audit_work/lib.mjs";
+import { startServer, stopServer, session, openScreen, tap, check, summary, exec } from "./audit_work/lib.mjs";
+// Сценарий рассчитан на объект без открытых черновиков: чужой черновик
+// удаляется только во временной копии, исходная база не меняется.
+const withoutDrafts = { setup: (db) => exec(db, "PRAGMA foreign_keys = ON; DELETE FROM crane_zone_drafts;") };
 
 const work = mkdtempSync(join(tmpdir(), "crane-zone-editor-ux-"));
 let browser;
 try {
-  const { base } = await startServer(8378, work);
+  const { base } = await startServer(8378, work, withoutDrafts);
   browser = await session(base, "admin", { objectId: 1, width: 1366, height: 768,
     args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
   await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Стоянка]')");
@@ -20,7 +23,7 @@ try {
   check("Рабочая область занимает большую часть высоты", await browser.eval("document.querySelector('.cz-body').getBoundingClientRect().height > innerHeight * .56"));
   check("Верхние информационные строки скрыты", await browser.eval("getComputedStyle(document.querySelector('.v2-screen-head')).display === 'none' && getComputedStyle(document.querySelector('.ze-context')).display === 'none'"));
   check("Все краны сначала свернуты", await browser.eval("[...document.querySelectorAll('.cz-crane-toggle')].every(b => b.getAttribute('aria-expanded') === 'false') && ![...document.querySelectorAll('.cz-crane-stands')].some(e => e.getClientRects().length)"));
-  check("Добавление находится над списком, инструкция в подсказке", await browser.eval("document.querySelector('#cz-add-stand').getBoundingClientRect().bottom <= document.querySelector('.cz-crane-toggle').getBoundingClientRect().top && document.querySelector('#cz-add-stand').dataset.tooltip.includes('Выберите кран') && !document.querySelector('.cz-tree-intro')"));
+  check("Добавление находится над списком, инструкция в подсказке", await browser.eval("document.querySelector('#cz-add-stand').getBoundingClientRect().bottom <= document.querySelector('.cz-crane-toggle').getBoundingClientRect().top && document.querySelector('#cz-add-stand').dataset.tooltip.includes('выбранному крану') && !document.querySelector('.cz-tree-intro')"));
   await tap(browser, '.cz-crane-toggle');
   check("Кран раскрывает стоянки", await browser.eval("document.querySelector('.cz-crane-toggle').getAttribute('aria-expanded') === 'true' && !!document.querySelector('.cz-crane-stands .cz-stand')?.getClientRects().length"));
   await tap(browser, '.cz-crane-toggle');

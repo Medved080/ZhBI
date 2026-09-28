@@ -3,12 +3,15 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, stopServer, session, openScreen, tap, check, summary, noPageScroll } from "./audit_work/lib.mjs";
+import { startServer, stopServer, session, openScreen, tap, check, summary, noPageScroll, exec } from "./audit_work/lib.mjs";
+// Сценарий рассчитан на объект без открытых черновиков: чужой черновик
+// удаляется только во временной копии, исходная база не меняется.
+const withoutDrafts = { setup: (db) => exec(db, "PRAGMA foreign_keys = ON; DELETE FROM crane_zone_drafts;") };
 
 const work = mkdtempSync(join(tmpdir(), "crane-zone-tabs-"));
 let browser;
 try {
-  const { base } = await startServer(8378, work);
+  const { base } = await startServer(8378, work, withoutDrafts);
   for (const [width, height] of [[1366, 768], [1920, 1080]]) {
     browser = await session(base, "admin", { objectId: 1, width, height });
     await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Захватка]')");
@@ -22,7 +25,7 @@ try {
       crane.y < before.y && Math.abs(pageBefore.x - pageCrane.x) <= 1 && Math.abs(pageBefore.w - pageCrane.w) <= 1,
       `${JSON.stringify({ before, crane, pageBefore, pageCrane })}`);
     check(`${width}: зона крана названа отдельно`, await browser.eval("document.querySelector('.cz-toolbar strong')?.textContent === 'Зоны кранов'"));
-    check(`${width}: в зонах кранов нет стоянок и команды их добавления`, await browser.eval("!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-stand') && document.querySelector('.cz-prop-head span')?.textContent === 'Кран'"));
+    check(`${width}: в зонах кранов нет стоянок и команды их добавления`, await browser.eval("!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-stand') && !document.querySelector('#cz-add-crane') && /^Кран №\\d+$/.test(document.querySelector('.cz-prop-head span')?.textContent || '')"));
     if (process.env.ZONES_SHOTS) await browser.shot(join(process.env.ZONES_SHOTS, `cranes-${width}.png`));
     await tap(browser, '[data-cat="Стоянка"]');
     await browser.waitFor("document.querySelector('.cz-toolbar strong')?.textContent === 'Стоянки кранов'");
@@ -30,8 +33,8 @@ try {
     const pageStand = await browser.rect(".v2-screen");
     check(`${width}: вкладки и ширина компактной формы стабильны`,
       Math.abs(crane.y - stand.y) <= 1 && Math.abs(pageBefore.x - pageStand.x) <= 1 && Math.abs(pageBefore.w - pageStand.w) <= 1);
-    check(`${width}: объяснение добавления перенесено в подсказку`, await browser.eval("!document.querySelector('.cz-tree-intro') && !document.querySelector('#ze-context')?.textContent && document.querySelector('#cz-add-stand')?.dataset.tooltip.includes('Выберите кран')"));
-    check(`${width}: стоянки сгруппированы по свёрнутым кранам`, await browser.eval("!!document.querySelector('.cz-tree-item.cz-stand') && !document.querySelector('#cz-add-crane') && [...document.querySelectorAll('.cz-crane-toggle')].every(b => b.getAttribute('aria-expanded') === 'false') && document.querySelector('.cz-prop-head span')?.textContent === 'Кран-владелец'"));
+    check(`${width}: объяснение добавления перенесено в подсказку`, await browser.eval("!document.querySelector('.cz-tree-intro') && !document.querySelector('#ze-context')?.textContent && document.querySelector('#cz-add-stand')?.dataset.tooltip.includes('выбранному крану')"));
+    check(`${width}: стоянки сгруппированы по свёрнутым кранам, кран добавляется здесь же`, await browser.eval("!!document.querySelector('.cz-tree-item.cz-stand') && !!document.querySelector('#cz-add-crane') && [...document.querySelectorAll('.cz-crane-toggle')].every(b => b.getAttribute('aria-expanded') === 'false') && document.querySelector('.cz-prop-head span')?.textContent === 'Кран-владелец'"));
     const add = await browser.rect("#cz-add-stand");
     check(`${width}: добавление стоянки видно без прокрутки`, !!add && add.y >= 0 && add.y + add.h <= height && await browser.eval("!document.querySelector('#cz-add-stand').disabled"));
     check(`${width}: нет прокрутки страницы`, await noPageScroll(browser));

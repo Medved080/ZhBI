@@ -2,14 +2,17 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ROOT, startServer, stopServer, session, openScreen, tap, check, summary, sql1 } from "./audit_work/lib.mjs";
+import { ROOT, startServer, stopServer, session, openScreen, tap, check, summary, sql1, exec } from "./audit_work/lib.mjs";
+// Сценарий рассчитан на объект без открытых черновиков: чужой черновик
+// удаляется только во временной копии, исходная база не меняется.
+const withoutDrafts = { setup: (db) => exec(db, "PRAGMA foreign_keys = ON; DELETE FROM crane_zone_drafts;") };
 
 const work = mkdtempSync(join(tmpdir(), "crane-stance-browser-"));
 const shots = join(ROOT, "output", "crane-stance-union");
 mkdirSync(shots, { recursive: true });
 let browser;
 try {
-  const { base, db } = await startServer(8378, work);
+  const { base, db } = await startServer(8378, work, withoutDrafts);
   check("Временная БД стартует без чужих черновиков", sql1(db, "SELECT count(*) FROM crane_zone_drafts") === 0);
   browser = await session(base, "admin", { objectId: 1, width: 1366, height: 768,
     args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
@@ -17,7 +20,7 @@ try {
   await tap(browser, '[data-cat="Кран"]');
   await browser.waitFor("!!document.querySelector('#cz-canvas')");
   check("Кран показан как справочник без редактируемых ярусов", await browser.eval(
-    "document.querySelector('.cz-prop-head span')?.textContent === 'Кран' && !document.querySelector('#cz-elevation')"));
+    "/^Кран №\\d+$/.test(document.querySelector('.cz-prop-head span')?.textContent || '') && !document.querySelector('#cz-elevation') && !document.querySelector('#cz-add-crane')"));
   check("Вкладка крана предлагает уровни объекта", await browser.eval("document.querySelector('#cz-crane-level')?.options.length > 1"));
   await tap(browser, "#cz-view-3d");
   await browser.waitFor("!!document.querySelector('#cz-3d[data-zone-bands]')", 30000);
