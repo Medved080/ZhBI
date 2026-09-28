@@ -196,7 +196,11 @@ export function peerOverlap(zones, zone, elevation, outline, minimumArea = 1) {
 // площади. Полоса яруса — от его отметки до верхней отметки, а без неё — до следующей отметки объекта (как в
 // overlappingPeerLevels выше). Касание границ конфликтом не считается. Возвращает пары с кусками наложения
 // (непересекающиеся многоугольники) и общей высотной полосой пары [lower, upper).
-export function zoneConflicts(zones, minimumArea = 1) {
+// Порог площади конфликта для схемы (решение пользователя 2026-09-28): наложения меньше 0,01 м² — полоски от
+// неточности чертежа на границе соседних стоянок — конфликтом не считаются. Площадь в мм².
+export const CONFLICT_MIN_AREA_MM2 = 10000;
+
+export function zoneConflicts(zones, minimumArea = CONFLICT_MIN_AREA_MM2) {
   const stances = (zones || []).filter((zone) => zone.category === "Стоянка");
   const lowers = [...new Set(stances.flatMap((zone) => (zone.levels || []).map((level) => level.elevation_mm)))]
     .filter(Number.isFinite).sort((a, b) => a - b);
