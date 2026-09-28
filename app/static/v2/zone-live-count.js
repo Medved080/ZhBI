@@ -19,18 +19,23 @@ function clampsToBottom(stances) {
   return stances.every((stance) => stance.levels.every((level) => !Number.isFinite(level.upper_elevation_mm)));
 }
 
+// Ярус стоянки, в полосу которого попадает отметка изделия (полоса — от отметки яруса до явной верхней, а без неё —
+// до следующей отметки объекта; у ригеля и плиты нижняя граница не входит). Полосы ярусов одной стоянки не
+// перекрываются, поэтому такой ярус у стоянки один. Полосы РАЗНЫХ стоянок с явными верхними отметками могут
+// перекрываться — стоянку выбирает контур, как на сервере (исправление 2026-09-28).
 function stanceLevel(zone, element, objectLevels, clamp = true) {
   const elevation = element.elevation_mm;
   if (!Number.isFinite(elevation)) return null;
   const strict = CAPPING_TYPES.has(element.element_type);
-  const eligible = objectLevels.filter((v) => strict ? v < elevation : v <= elevation);
-  if (!eligible.length && !clamp) return null;
-  const selected = eligible.length ? eligible[eligible.length - 1] : objectLevels[0];
-  const level = zone.levels.find((item) => item.elevation_mm === selected) || null;
-  if (!level) return null;
-  const next = objectLevels.find((value) => value > selected) ?? Infinity;
-  const upper = Number.isFinite(level.upper_elevation_mm) ? level.upper_elevation_mm : next;
-  return (strict ? elevation <= upper : elevation < upper) ? level : null;
+  const inBand = zone.levels.find((level) => {
+    if (!Number.isFinite(level.elevation_mm)) return false;
+    const next = objectLevels.find((value) => value > level.elevation_mm) ?? Infinity;
+    const upper = Number.isFinite(level.upper_elevation_mm) ? level.upper_elevation_mm : next;
+    return strict ? level.elevation_mm < elevation && elevation <= upper : level.elevation_mm <= elevation && elevation < upper;
+  });
+  if (inBand) return inBand;
+  const below = strict ? elevation <= objectLevels[0] : elevation < objectLevels[0];
+  return clamp && below ? zone.levels.find((level) => level.elevation_mm === objectLevels[0]) || null : null;
 }
 
 export function countElementsInZone(zone, elements, zones = [zone], overrides = {}) {
@@ -94,16 +99,15 @@ export function countElementsByZones(zones, elements, overrides = {}) {
     if (override) { increment(override.crane_zone_id); increment(override.stance_zone_id); continue; }
     if (!objectLevels.length || !Number.isFinite(element.elevation_mm)) continue;
     const strict = CAPPING_TYPES.has(element.element_type);
-    let candidates = [];
-    for (let i = objectLevels.length - 1; i >= 0; i--) {
-      const value = objectLevels[i];
-      if (strict ? value >= element.elevation_mm : value > element.elevation_mm) continue;
-      candidates = (byLevel.get(value) || []).filter((item) =>
-        strict ? element.elevation_mm <= item.upper : element.elevation_mm < item.upper);
-      if (candidates.length) break;
+    // Все ярусы, в полосу которых попадает отметка, — кандидаты; выбирает контур (как bind_stance_union).
+    const candidates = [];
+    for (const value of objectLevels) {
+      if (strict ? value >= element.elevation_mm : value > element.elevation_mm) break;
+      for (const item of byLevel.get(value) || [])
+        if (strict ? element.elevation_mm <= item.upper : element.elevation_mm < item.upper) candidates.push(item);
     }
     if (!candidates.length && clamp && (strict ? element.elevation_mm <= objectLevels[0] : element.elevation_mm < objectLevels[0]))
-      candidates = byLevel.get(objectLevels[0]) || [];
+      candidates.push(...(byLevel.get(objectLevels[0]) || []));
     let match = null, ambiguous = false;
     for (const item of candidates) {
       if (element.x < item.minX || element.x > item.maxX ||

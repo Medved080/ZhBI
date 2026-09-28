@@ -13,9 +13,22 @@ const assignments = (db) => JSON.stringify(sql(db, "SELECT e.id, e.zone_crane_id
 let browser;
 try {
   const { base, db } = await startServer(8378, work, { setup: (path) => exec(path, "PRAGMA foreign_keys = ON; DELETE FROM crane_zone_drafts;") });
+  browser = await session(base, "admin", { objectId: 1, width: 1366, height: 768 });
+  // Сценарий начинается с объекта, где последняя редакция — служебная: если в копии уже есть опубликованные
+  // (копия с рабочей базы), объект сначала откатывается к переносу на новую модель, черновики отката убираются.
+  const conversion = sql(db, "SELECT id FROM crane_zone_versions WHERE object_id = 1 AND kind = 'conversion'")[0];
+  const top = sql(db, "SELECT id, kind FROM crane_zone_versions WHERE object_id = 1 ORDER BY revision_no DESC LIMIT 1")[0];
+  if (conversion && top.kind !== "conversion") {
+    await browser.eval(`window.__prep = null; fetch("/objects/1/crane-zone-versions/${conversion.id}/restore", { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ latest_version_id: ${top.id} }) })
+      .then(async (r) => { window.__prep = r.ok ? "ok" : "ERR " + await r.text(); }); true`);
+    const prep = await browser.waitFor("window.__prep", 180000);
+    if (prep !== "ok") throw new Error(prep);
+    exec(db, "DELETE FROM crane_zone_drafts");
+  }
+  const withdrawsBefore = sql1(db, "SELECT COUNT(*) FROM activity_log WHERE action = 'crane_zone_version_withdraw'");
   const before = assignments(db);
   const previous = sql(db, "SELECT id, revision_no FROM crane_zone_versions WHERE object_id = 1 ORDER BY revision_no DESC LIMIT 1")[0];
-  browser = await session(base, "admin", { objectId: 1, width: 1366, height: 768 });
   // Публикация пересчитывает ~10 тыс. изделий дольше таймаута одного вызова DevTools — результат ждём опросом.
   await browser.eval(`window.__pub = null; (async () => {
     const prefix = "/objects/1/crane-zone-versions";
@@ -72,7 +85,7 @@ try {
     draft.note === "Стоянка уменьшена для проверки снятия");
   check("Черновик открыт в редакторе для доработки", await browser.eval(`document.querySelector('#cz-draft-select')?.value === '${draft?.id}'`)
     && await browser.eval("!document.querySelector('#cz-draft-select option:checked')?.textContent.includes('устарел')"));
-  check("Действие записано в журнал", sql1(db, "SELECT COUNT(*) FROM activity_log WHERE action = 'crane_zone_version_withdraw'") === 1);
+  check("Действие записано в журнал", sql1(db, "SELECT COUNT(*) FROM activity_log WHERE action = 'crane_zone_version_withdraw'") === withdrawsBefore + 1);
   check("Перед откатом сделана резервная копия", existsSync(join(work, "backups")) &&
     readdirSync(join(work, "backups")).some((name) => name.endsWith(".db")));
   check("Списки редакций подписаны", await browser.eval("[...document.querySelectorAll('.cz-select-label > span')].map((e) => e.textContent).join('|') === 'Просмотр редакции|Черновик'")
