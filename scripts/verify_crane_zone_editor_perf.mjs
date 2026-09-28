@@ -17,6 +17,9 @@ try {
   await tap(browser, '[data-cat="Стоянка"]');
   await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.renderedOutlines) > 9000", 30000);
   console.log(`Страница с черновиком и контурами: ${Date.now() - t} мс`);
+  // Черновик прежней основы только для просмотра — ручки есть лишь в явно открытом новом.
+  await tap(browser, "#cz-new");
+  await browser.waitFor("!!document.querySelector('#cz-draft-select')?.value", 15000);
   await tap(browser, '.cz-crane-toggle');
   const stands = await browser.eval("[...document.querySelectorAll('.cz-crane-stands:not([hidden]) .cz-stand')].slice(0,2).map(e=>({id:e.dataset.zoneId,name:e.textContent.trim()}))");
   t = Date.now();
