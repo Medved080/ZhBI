@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, stopServer, session, openScreen, tap } from "./audit_work/lib.mjs";
-import { peerOverlap } from "../app/static/v2/zone-overlap.js";
+import { overlapArea, peerOverlap } from "../app/static/v2/zone-overlap.js";
 
 const rect = (x) => [[x, 0], [x + 100, 0], [x + 100, 100], [x, 100]];
 const own = { id: 1, category: "Стоянка" };
@@ -21,7 +21,11 @@ try {
     args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
   await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Стоянка]')");
   await tap(browser, '[data-cat="Стоянка"]');
-  await browser.waitFor("!!document.querySelector('.cz-crane-toggle') && !!document.querySelector('#cz-draft-select')?.value", 30000);
+  await browser.waitFor("!!document.querySelector('.cz-crane-toggle')", 30000);
+  if (!await browser.eval("!!document.querySelector('#cz-draft-select')?.value && !document.querySelector('#cz-draft-select option:checked')?.textContent.includes('устарел')")) {
+    await tap(browser, '#cz-new');
+    await browser.waitFor("!!document.querySelector('#cz-draft-select')?.value", 30000);
+  }
   await tap(browser, '.cz-crane-toggle');
   const standId = await browser.eval("document.querySelectorAll('.cz-crane-stands:not([hidden]) .cz-stand')[1].dataset.zoneId");
   await tap(browser, `.cz-stand[data-zone-id="${standId}"]`);
@@ -50,6 +54,11 @@ try {
   await browser.drag(canvas.x + target.edge.x, canvas.y + target.edge.y,
     canvas.x + target.edge.x + target.dx / length * 110,
     canvas.y + target.edge.y + target.dy / length * 110, { steps: 24 });
+  const draggedOutline = await browser.eval(`[...document.querySelectorAll('.cz-point-list span')]
+    .map(e => e.textContent.match(/^\\d+\\.\\s+(-?[\\d.]+);\\s+(-?[\\d.]+)$/))
+    .map(m => [Number(m[1]), Number(m[2])])`);
+  assert.ok(target.neighborOutlines.every((outline) => overlapArea(draggedOutline, outline) <= 1),
+    "перетаскивание ребра допустило пересечение ещё до сохранения черновика");
   assert.equal(await browser.eval("document.querySelector('#cz-collision').classList.contains('is-visible')"), true);
   assert.equal(await browser.eval("document.querySelector('#cz-feedback').textContent.includes('Грань достигла')"), false);
   await browser.waitFor("Number(getComputedStyle(document.querySelector('#cz-collision')).opacity) > .8", 1200, 50);

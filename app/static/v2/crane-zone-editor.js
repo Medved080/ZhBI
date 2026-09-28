@@ -2,7 +2,7 @@
 // Все изменения до публикации живут только в локальном/серверном черновике.
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
-import { displacedZoneEdge, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { axisSnapPoint, completeOrthogonalOutline, displacedZoneEdge, nearestEdgeIndex, orthogonalOutlineValid } from "./zone-edge-geometry.js";
 import { edgeResizeAngle, edgeResizeCursor, edgeResizeHandles } from "./zone-resize-direction.js";
 import { peerOverlap } from "./zone-overlap.js";
 import { countElementsByZones } from "./zone-live-count.js";
@@ -47,6 +47,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let effectiveDate = today();
   let view = null, fitScale = null, viewWidth = 0, viewHeight = 0;
   let drag = null, hoverEdge = null, activeLevel = 0, craneLevel = null;
+  let polygonDraft = null, polygonFrame = null;
   let viewStanceIds = null, cameraCraneId = null;
   let canvasResizeObserver = null;
   let viewer3d = null, renderGeneration = 0;
@@ -175,7 +176,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function blockingOverlap(zone, elevation, outline, previous = null) {
     if (zone.category !== "Стоянка") return { contact: null };
     const key = (other, level) => `${other.id}:${level}`;
-    const oldAreas = new Map(previous ? peerOverlap(zones(), zone, elevation, previous).map(({ other, elevation_mm, area }) => [key(other, elevation_mm), area]) : []);
+    const oldAreas = new Map(previous ? peerOverlap(zones(), zone, elevation, previous)
+      .filter(({ elevation_mm }) => elevation_mm === elevation)
+      .map(({ other, elevation_mm, area }) => [key(other, elevation_mm), area]) : []);
     return peerOverlap(zones(), zone, elevation, outline).find(({ other, elevation_mm, area }) =>
       area > (oldAreas.get(key(other, elevation_mm)) || 0) + 1) || null;
   }
@@ -282,14 +285,14 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (next) { next.disabled = busy; next.dataset.tooltip = busy ? "Дождитесь завершения операции." : "Создать отдельный черновик для изменений зон."; }
     const save = $("#cz-save");
     if (save) {
-      save.disabled = !draftWritable() || !dirty || busy;
+      save.disabled = !draftWritable() || !dirty || busy || !!polygonDraft;
       save.dataset.tooltip = busy ? "Дождитесь завершения операции." : staleDraft() ? STALE_DRAFT_MESSAGE : !draft ? "Сначала создайте черновик." :
         !dirty ? "Изменений для сохранения нет. Черновик уже сохранён." :
         "Сохранить изменения в черновике. Действующие зоны пока не изменятся.";
     }
     const previewButton = $("#cz-preview");
     if (previewButton) {
-      previewButton.disabled = busy || !draftWritable();
+      previewButton.disabled = busy || !draftWritable() || !!polygonDraft;
       previewButton.dataset.tooltip = busy ? "Дождитесь завершения операции." :
         staleDraft() ? STALE_DRAFT_MESSAGE :
         dirty ? "Сначала сохраните черновик. Затем можно рассчитать новые назначения без публикации." :
@@ -298,7 +301,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     }
     const publish = $("#cz-publish");
     if (publish) {
-      publish.disabled = !draftWritable() || dirty || !!draft.warnings?.length || !draft.note?.trim() || !preview || busy;
+      publish.disabled = !draftWritable() || dirty || !!draft.warnings?.length || !draft.note?.trim() || !preview || busy || !!polygonDraft;
       publish.dataset.tooltip = busy ? "Дождитесь завершения операции." : staleDraft() ? STALE_DRAFT_MESSAGE : !draft ? "Сначала создайте черновик." :
         dirty ? "Сначала сохраните изменения в черновике." : draft.warnings?.length ? draft.warnings[0] : !draft.note?.trim() ?
           "Укажите причину изменения, сохраните черновик и выполните предпросмотр." : !preview ?
@@ -371,6 +374,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function render() {
     if (dead) return;
+    if (polygonDraft && (mode3d || !draftWritable() || selectedZone !== polygonDraft.zoneId || activeLevel !== polygonDraft.levelIndex)) polygonDraft = null;
     const previous3dHost = $("#cz-3d");
     previous3dHost?.remove();
     const treeScroll = $(".cz-tree")?.scrollTop ?? 0;
@@ -390,7 +394,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
       <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit && standFocus ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${(!standFocus || selected()?.category === "Кран") && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
-      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${mapSummary()}</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
+      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${mapSummary()}</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div>${!mode3d && canStartEditing() && selected()?.category === "Стоянка" ? `<button type="button" id="cz-redraw-polygon" class="v2-btn ${polygonDraft ? "cz-mode-active" : ""}" aria-pressed="${!!polygonDraft}" data-tooltip="Нарисовать новый контур стоянки на схеме 2D: точки соединяются строго по горизонтали и вертикали.">${polygonDraft ? "Отменить рисование" : "Нарисовать контур"}</button>` : ""}<label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}" ${polygonDraft ? "disabled" : ""}>Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas>${polygonDraft ? `<div class="cz-draw-guide" role="status"><span class="cz-draw-guide-text">${esc(polygonDraft.hint)}</span><button type="button" class="v2-btn" id="cz-draw-undo" ${polygonDraft.points.length ? "" : "disabled"}>Убрать точку</button><button type="button" class="v2-btn" id="cz-draw-cancel">Отмена</button></div>` : ""}<div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft && standFocus ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${draftWritable() ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${draftWritable() ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><button type="button" class="v2-btn" id="cz-exceptions-toggle" aria-expanded="${exceptionsOpen}" aria-controls="cz-exceptions">Исключения · ${Object.keys(draft.overrides || {}).length}</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}, статус: ${preview.counts.status || 0}, ярус: ${preview.counts.tier || 0}; ручных: ${preview.counts.manual || 0}, исключений переноса: ${preview.counts.conversion_exceptions || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>${exceptionsHtml()}` : ""}`;
     if (previous3dHost) {
@@ -607,7 +611,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     canvas.dataset.renderedOutlines = String(drawn);
     canvas.dataset.highlightedOutlines = String(accented);
     // Ручки только на рёбрах: вершины не редактируются.
-    const resizable = draftWritable() && standFocus && selected()?.category === "Стоянка" && activeOutline?.length >= 3;
+    const resizable = !polygonDraft && draftWritable() && standFocus && selected()?.category === "Стоянка" && activeOutline?.length >= 3;
     const handles = resizable ? edgeResizeHandles(activeOutline,
       (point) => toScreen(...point, canvas), w, h) : [];
     canvas.dataset.edgeMidpoints = JSON.stringify(handles);
@@ -634,6 +638,27 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       }
     }
     if (drag?.kind === "box") { ctx.strokeStyle = "#ef6b33"; ctx.setLineDash([5, 4]); ctx.strokeRect(drag.x, drag.y, drag.lastX - drag.x, drag.lastY - drag.y); ctx.setLineDash([]); }
+    if (polygonDraft) {
+      const points = polygonDraft.points;
+      const hover = polygonDraft.hover && points.length ? axisSnapPoint(points.at(-1), polygonDraft.hover) : null;
+      const closing = points.length >= 3 && polygonDraft.hover &&
+        Math.hypot(...toScreen(...points[0], canvas).map((value, i) => value - toScreen(...polygonDraft.hover, canvas)[i])) <= 14
+        ? completeOrthogonalOutline(points) : null;
+      ctx.save(); ctx.lineJoin = "round";
+      if (points.length) {
+        ctx.beginPath(); points.forEach((point, i) => { const screen = toScreen(...point, canvas); if (i) ctx.lineTo(...screen); else ctx.moveTo(...screen); });
+        ctx.strokeStyle = "#fff"; ctx.lineWidth = 6; ctx.stroke();
+        ctx.strokeStyle = "#087e9a"; ctx.lineWidth = 3; ctx.stroke();
+        if (hover) {
+          ctx.beginPath(); ctx.moveTo(...toScreen(...points.at(-1), canvas));
+          if (closing) { for (const corner of closing.slice(points.length)) ctx.lineTo(...toScreen(...corner, canvas)); ctx.lineTo(...toScreen(...points[0], canvas)); }
+          else ctx.lineTo(...toScreen(...hover, canvas));
+          ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]);
+        }
+      }
+      points.forEach((point, i) => { const [px, py] = toScreen(...point, canvas); ctx.beginPath(); ctx.arc(px, py, i ? 5 : 8, 0, Math.PI * 2); ctx.fillStyle = i ? "#fff" : "#2c8953"; ctx.fill(); ctx.strokeStyle = i ? "#087e9a" : "#fff"; ctx.lineWidth = 2; ctx.stroke(); });
+      ctx.restore();
+    }
     drawing = false;
   }
 
@@ -692,6 +717,68 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         outlines: item.levels.map((level) => clone(level.outline)) })),
       wasDirty: dirty, wasPreview: preview };
   }
+  function polygonHint(text) {
+    if (!polygonDraft) return;
+    polygonDraft.hint = text;
+    const label = $(".cz-draw-guide-text");
+    if (label) label.textContent = text;
+    const undo = $("#cz-draw-undo");
+    if (undo) undo.disabled = !polygonDraft.points.length;
+  }
+  async function togglePolygonRedraw() {
+    if (polygonDraft) { polygonDraft = null; render(); return; }
+    if (!canStartEditing() || selected()?.category !== "Стоянка" || !await ensureEditableDraft()) return;
+    if (selected()?.category !== "Стоянка") return;
+    selectMode = false;
+    polygonDraft = { zoneId: selectedZone, levelIndex: activeLevel, points: [], hover: null,
+      hint: "Поставьте первую точку на схеме. Следующие отрезки будут строго горизонтальными или вертикальными." };
+    render();
+  }
+  function addPolygonPoint(x, y, canvas) {
+    if (!polygonDraft || !draftWritable()) return;
+    const points = polygonDraft.points;
+    if (points.length >= 3 && Math.hypot(...toScreen(...points[0], canvas).map((value, i) => value - [x, y][i])) <= 14) {
+      const outline = completeOrthogonalOutline(points);
+      if (!outline) { polygonHint("Контур пока нельзя замкнуть: добавьте точки без пересечений и снова нажмите на начальную точку."); return; }
+      const zone = selected(), level = zone.levels[activeLevel];
+      const blocked = blockingOverlap(zone, level.elevation_mm, outline, level.outline);
+      if (blocked) {
+        showCollision(blocked.contact, canvas, toScreen(...blocked.contact, canvas));
+        polygonHint("Новый контур пересекает соседнюю стоянку. Уберите точку и измените линию.");
+        return;
+      }
+      level.outline = outline;
+      polygonDraft = null;
+      view = null;
+      markDirty();
+      render();
+      status("Новый контур стоянки добавлен в черновик. Сохраните черновик и проверьте назначения.", "success");
+      return;
+    }
+    const point = axisSnapPoint(points.at(-1), toWorld(x, y, canvas));
+    if (points.length && Math.hypot(point[0] - points.at(-1)[0], point[1] - points.at(-1)[1]) < 1) {
+      polygonHint("Поставьте следующую точку дальше от предыдущей."); return;
+    }
+    const next = [...points, point];
+    if (!orthogonalOutlineValid(next)) { polygonHint("Отрезок пересекает нарисованную линию. Выберите другую точку."); return; }
+    points.push(point);
+    polygonHint(points.length < 3 ? `Поставьте точку ${points.length + 1}. Отрезок привяжется к горизонтали или вертикали.` :
+      "Продолжайте ставить точки или нажмите на зелёную начальную точку. Недостающий прямой угол добавится сам.");
+    draw();
+  }
+  function undoPolygonPoint() {
+    if (!polygonDraft) return;
+    polygonDraft.points.pop();
+    polygonHint(polygonDraft.points.length ? "Последняя точка убрана. Продолжайте рисование." : "Поставьте первую точку на схеме.");
+    draw();
+  }
+  function onEditorKeyDown(event) {
+    if (!polygonDraft) return;
+    if (event.key === "Escape") { event.preventDefault(); polygonDraft = null; render(); }
+    else if (event.key === "Backspace" && !event.target.closest?.("input, textarea, select")) {
+      event.preventDefault(); undoPolygonPoint();
+    }
+  }
   function moveZone(move, x, y, canvas) {
     if (Math.hypot(x - move.x, y - move.y) <= 3 && !move.attempted) return;
     move.attempted = true;
@@ -722,6 +809,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function onDown(e) {
     hideCollision();
     const canvas = e.currentTarget, [x, y] = pointer(e);
+    if (polygonDraft) { if (e.button === 0) { e.preventDefault(); addPolygonPoint(x, y, canvas); } return; }
     if (e.shiftKey || selectMode) drag = { kind: "box", x, y, lastX: x, lastY: y };
     else {
       const edge = nearestEdge(x, y, canvas);
@@ -739,6 +827,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
   function onMove(e) {
     const canvas = e.currentTarget, [x, y] = pointer(e);
+    if (polygonDraft) {
+      polygonDraft.hover = toWorld(x, y, canvas); canvas.style.cursor = "crosshair";
+      if (polygonFrame == null) polygonFrame = requestAnimationFrame(() => { polygonFrame = null; draw(); });
+      return;
+    }
     if (!drag) {
       const edge = !selectMode ? nearestEdge(x, y, canvas) : null;
       const hit = !selectMode && edge == null ? hitZone(x, y, canvas) : null;
@@ -799,6 +892,9 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     drag = null; hoverEdge = null; message = ""; render();
   }
   function bind() {
+    $("#cz-redraw-polygon")?.addEventListener("click", togglePolygonRedraw);
+    $("#cz-draw-undo")?.addEventListener("click", undoPolygonPoint);
+    $("#cz-draw-cancel")?.addEventListener("click", () => { polygonDraft = null; render(); });
     $("#cz-crane-level")?.addEventListener("change", (e) => { craneLevel = e.target.value === "" ? null : Number(e.target.value); view = null; render(); });
     $("#cz-exception-filter")?.addEventListener("change", (e) => { exceptionFilter = e.target.value; render(); });
     $("#cz-exceptions-toggle")?.addEventListener("click", () => { exceptionsOpen = !exceptionsOpen; render(); });
@@ -1157,6 +1253,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return save();
   }
   root.innerHTML = `<p class="v2-muted">Загрузка редакций и схемы…</p>`;
+  window.addEventListener("keydown", onEditorKeyDown);
   refresh(true).then(() => {
     // 2D готов сразу после данных зон; тяжёлые объёмы изделий и модули Three.js
     // подготавливаются после первого кадра, не блокируя форму и переход между вкладками.
@@ -1166,5 +1263,5 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ensureModelData().catch(() => {});
     }, 0));
   }).catch((e) => { if (!dead) root.innerHTML = `<div class="v2-callout v2-callout-bad">${esc(errText(e))}</div>`; });
-  return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; hideCollision(); canvasResizeObserver?.disconnect(); viewer3d?.dispose(); } };
+  return { hasUnsavedChanges: () => dirty, guardLeave, destroy() { dead = true; hideCollision(); if (polygonFrame != null) cancelAnimationFrame(polygonFrame); window.removeEventListener("keydown", onEditorKeyDown); canvasResizeObserver?.disconnect(); viewer3d?.dispose(); } };
 }

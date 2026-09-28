@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { displacedEdgeEndpoints, displacedZoneEdge, nearestEdgeIndex } from "../app/static/v2/zone-edge-geometry.js";
+import { axisSnapPoint, completeOrthogonalOutline, displacedEdgeEndpoints, displacedZoneEdge, nearestEdgeIndex, orthogonalOutlineValid } from "../app/static/v2/zone-edge-geometry.js";
 
 const square = [[0, 0], [100, 0], [100, 100], [0, 100]];
 const project = (point) => point;
@@ -28,5 +28,20 @@ const limited = displacedZoneEdge(stepped, 0, 0, 1000);
 assert.ok(limited[0][1] < 60 && limited[0][1] >= 20,
   "ребро не остановилось перед самопересечением");
 assert.deepEqual(displacedZoneEdge(square, 0, 0, 20), [[0, 20], [100, 20], [100, 100], [0, 100]]);
+
+const sloped = [[0, 0], [100, 0], [120, 70], [50, 100], [-20, 70]];
+const resized = displacedZoneEdge(sloped, 0, 0, 15);
+for (let i = 0; i < sloped.length; i++) {
+  const before = [sloped[(i + 1) % sloped.length][0] - sloped[i][0], sloped[(i + 1) % sloped.length][1] - sloped[i][1]];
+  const after = [resized[(i + 1) % resized.length][0] - resized[i][0], resized[(i + 1) % resized.length][1] - resized[i][1]];
+  assert.ok(Math.abs(before[0] * after[1] - before[1] * after[0]) < 1e-7,
+    `ребро ${i} изменило направление`);
+}
+assert.deepEqual(axisSnapPoint([0, 0], [98.5, 31]), [99, 0]);
+assert.deepEqual(axisSnapPoint([100, 0], [109, 83]), [100, 83]);
+assert.deepEqual(completeOrthogonalOutline([[0, 0], [100, 0], [100, 80]]), square.map((p) => [p[0], p[1] === 100 ? 80 : p[1]]));
+assert.equal(orthogonalOutlineValid([[0, 0], [100, 0], [100, 80], [0, 80]], true), true);
+assert.equal(orthogonalOutlineValid([[0, 0], [100, 0], [100, 80], [0, 40]], true), false);
+assert.equal(orthogonalOutlineValid([[0, 0], [100, 0], [100, 80], [40, 80], [40, -20]], false), false);
 
 console.log("zone edge geometry: polygon and rectangle checks passed");

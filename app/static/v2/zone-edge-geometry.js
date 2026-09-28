@@ -70,11 +70,11 @@ export function displacedRectFace(outline, index, dx, dy) {
 }
 
 // У многоугольной стоянки сдвигается выбранное ребро параллельно себе.
-// Остальные вершины остаются на месте; при достижении самопересечения
+// Остальные вершины остаются на месте; соседние рёбра удлиняются или
+// укорачиваются без поворота. При достижении самопересечения
 // перемещение останавливается на последнем допустимом положении.
 export function displacedZoneEdge(outline, index, dx, dy) {
   if (!Array.isArray(outline) || outline.length < 3 || index < 0 || index >= outline.length) return null;
-  if (outline.length === 4) return displacedRectFace(outline, index, dx, dy);
   const n = outline.length, next = (index + 1) % n;
   const a = outline[index], b = outline[next];
   const ex = b[0] - a[0], ey = b[1] - a[1], length = Math.hypot(ex, ey);
@@ -83,13 +83,27 @@ export function displacedZoneEdge(outline, index, dx, dy) {
   const desired = Math.round(dx * nx + dy * ny);
   const sourceArea = signedArea2(outline);
   if (Math.abs(sourceArea) < 1) return null;
+  // Концы сдвинутого ребра скользят по прямым соседних рёбер. Поэтому
+  // направление всех трёх сторон сохраняется даже у непрямоугольной стоянки.
+  const intersection = (p, direction, q, otherDirection) => {
+    const cross = direction[0] * otherDirection[1] - direction[1] * otherDirection[0];
+    if (Math.abs(cross) < 1e-9 * Math.hypot(...direction) * Math.hypot(...otherDirection)) return null;
+    const t = ((q[0] - p[0]) * otherDirection[1] - (q[1] - p[1]) * otherDirection[0]) / cross;
+    return [p[0] + t * direction[0], p[1] + t * direction[1]];
+  };
+  const before = outline[(index + n - 1) % n], after = outline[(index + 2) % n];
+  const previousDirection = [a[0] - before[0], a[1] - before[1]];
+  const nextDirection = [after[0] - b[0], after[1] - b[1]];
   const candidate = (offset) => {
     const result = outline.map((point) => [...point]);
-    result[index] = [a[0] + offset * nx, a[1] + offset * ny];
-    result[next] = [b[0] + offset * nx, b[1] + offset * ny];
+    const shifted = [a[0] + offset * nx, a[1] + offset * ny];
+    result[index] = intersection(before, previousDirection, shifted, [ex, ey]);
+    result[next] = intersection(b, nextDirection, shifted, [ex, ey]);
+    if (!result[index] || !result[next]) return null;
     return result;
   };
   const valid = (result) => {
+    if (!result) return false;
     const area = signedArea2(result);
     if (Math.abs(area) < 1 || Math.sign(area) !== Math.sign(sourceArea)) return false;
     for (const edge of [(index + n - 1) % n, index, next]) {
@@ -112,6 +126,39 @@ export function displacedZoneEdge(outline, index, dx, dy) {
     else high = middle;
   }
   return best;
+}
+
+export function axisSnapPoint(from, point) {
+  const x = Math.round(point[0]), y = Math.round(point[1]);
+  if (!from) return [x, y];
+  return Math.abs(x - from[0]) >= Math.abs(y - from[1]) ? [x, from[1]] : [from[0], y];
+}
+
+export function orthogonalOutlineValid(points, closed = false) {
+  if (!Array.isArray(points) || points.length < (closed ? 4 : 1)) return false;
+  if (closed && Math.abs(signedArea2(points)) < 1) return false;
+  const edges = closed ? points.length : points.length - 1;
+  for (let i = 0; i < edges; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    if (!(a[0] === b[0] && a[1] !== b[1] || a[1] === b[1] && a[0] !== b[0])) return false;
+    for (let j = i + 1; j < edges; j++) {
+      if (j === i + 1 || closed && i === 0 && j === edges - 1) continue;
+      if (segmentsIntersect(a, b, points[j], points[(j + 1) % points.length])) return false;
+    }
+  }
+  return true;
+}
+
+export function completeOrthogonalOutline(points) {
+  if (orthogonalOutlineValid(points, true)) return points.map((point) => [...point]);
+  if (!Array.isArray(points) || points.length < 3) return null;
+  const first = points[0], last = points.at(-1);
+  const corners = [[first[0], last[1]], [last[0], first[1]]];
+  for (const corner of corners) {
+    const outline = [...points, corner];
+    if (orthogonalOutlineValid(outline, true)) return outline;
+  }
+  return null;
 }
 
 function signedArea2(points) {
