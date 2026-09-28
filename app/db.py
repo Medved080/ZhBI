@@ -245,6 +245,7 @@ _COLUMN_MIGRATIONS = [
     # Служебная ссылка на прежнюю отчётную отметку без рабочего контура.
     # Binder и рабочие уровни используют только is_reference = 0.
     ("zone_levels", "is_reference", "INTEGER NOT NULL DEFAULT 0"),
+    ("zone_levels", "upper_elevation_mm", "INTEGER"),
     # "Контрактация 2.0" (см. Docs/backlog.md) — четыре независимые шкалы
     # дат поставки элемента. planned/actual пишутся индивидуально на каждый
     # физический элемент (не на партию, партии убраны); project_* —

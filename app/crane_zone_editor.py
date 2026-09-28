@@ -31,7 +31,8 @@ def _zone_id(value):
 
 
 def validate_zones(zones: list[dict], base_zones: list[dict], *,
-                   allow_geometry_errors: bool = False) -> dict[int, dict]:
+                   allow_geometry_errors: bool = False,
+                   allow_deletions: bool = False) -> dict[int, dict]:
     """Сверяет весь снимок; старые зоны нельзя молча потерять из черновика."""
     if not isinstance(zones, list):
         raise ZoneDraftError("Список зон должен быть массивом")
@@ -86,6 +87,10 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
             if elevation in elevations:
                 raise ZoneDraftError(f"У зоны {zone_id} повторяется отметка {elevation}")
             elevations.add(elevation)
+            upper = level.get("upper_elevation_mm")
+            if upper is not None and (isinstance(upper, bool) or not isinstance(upper, int)
+                                      or upper <= elevation):
+                raise ZoneDraftError(f"Верхняя отметка яруса зоны {zone_id} должна быть выше нижней")
             outline = level.get("outline")
             if not isinstance(outline, list) or not 3 <= len(outline) <= 10000:
                 raise ZoneDraftError(f"У яруса зоны {zone_id} неверное количество точек")
@@ -99,7 +104,7 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
                 raise ZoneDraftError(f"Контур яруса зоны {zone_id} самопересекается или пуст")
         by_id[zone_id] = zone
     missing = set(original) - set(by_id)
-    if missing:
+    if missing and not allow_deletions:
         raise ZoneDraftError(
             "Удаление зон пока не поддерживается: " + ", ".join(map(str, sorted(missing)[:8]))
         )
@@ -117,27 +122,31 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
         names.add(key)
     if allow_geometry_errors:
         return by_id
-    # Каждый ярус действует только до следующего уровня ВСЕГО объекта.
-    # Сравнение включает стоянки разных кранов; касание не даёт площадь.
+    # Без заданного верха ярус действует до следующего уровня всего объекта.
+    # Проверяем пересечение объёмов, включая разные нижние отметки.
     peers = [z for z in by_id.values() if z["category"] == "Стоянка"]
     levels = sorted({l["elevation_mm"] for z in peers for l in z["levels"]})
-    for level in levels:
-        present = [(z, Polygon(l["outline"])) for z in peers
-                   for l in z["levels"] if l["elevation_mm"] == level]
-        for index, (zone, poly) in enumerate(present):
-            for other, peer_poly in present[index + 1:]:
-                area = poly.intersection(peer_poly).area
-                old_a = next((l for l in original.get(zone["id"], {}).get("levels", [])
-                              if l["elevation_mm"] == level), None)
-                old_b = next((l for l in original.get(other["id"], {}).get("levels", [])
-                              if l["elevation_mm"] == level), None)
-                baseline = (Polygon(old_a["outline"]).intersection(Polygon(old_b["outline"])).area
-                            if old_a and old_b else 0)
-                if area > max(1, baseline + 1):
-                    raise ZoneDraftError(
-                        f"Стоянки «{zone['name']}» и «{other['name']}» пересекаются "
-                        f"на рабочем уровне {level} мм. Уменьшите контуры до касания."
-                    )
+    bands = [(z, l, Polygon(l["outline"]), l["elevation_mm"],
+              l["upper_elevation_mm"] if l.get("upper_elevation_mm") is not None else
+              next((v for v in levels if v > l["elevation_mm"]), math.inf))
+             for z in peers for l in z["levels"]]
+    for index, (zone, _, poly, lower, upper) in enumerate(bands):
+        for other, peer, peer_poly, peer_lower, peer_upper in bands[index + 1:]:
+            if zone["id"] == other["id"] or lower >= peer_upper or peer_lower >= upper:
+                continue
+            area = poly.intersection(peer_poly).area
+            old_a = next((l for l in original.get(zone["id"], {}).get("levels", [])
+                          if l["elevation_mm"] == lower), None)
+            old_b = next((l for l in original.get(other["id"], {}).get("levels", [])
+                          if l["elevation_mm"] == peer_lower), None)
+            baseline = (Polygon(old_a["outline"]).intersection(Polygon(old_b["outline"])).area
+                        if old_a and old_b and lower == peer_lower else 0)
+            if area > max(1, baseline + 1):
+                raise ZoneDraftError(
+                    f"Стоянки «{zone['name']}» и «{other['name']}» пересекаются "
+                    f"между отметками {max(lower, peer_lower)} и {min(upper, peer_upper)} мм. "
+                    "Уменьшите контуры до касания."
+                )
     return by_id
 
 
@@ -204,6 +213,7 @@ def _records(zones: list[dict]) -> list[ZoneRecord]:
         ZoneRecord(
             handle=f"{z['id']}:{index}", category=z["category"],
             elevation_mm=level["elevation_mm"],
+            upper_elevation_mm=level.get("upper_elevation_mm"),
             outline=[tuple(p) for p in level["outline"]],
             name=z["name"], match_status=z.get("match_status") or "matched",
             parent_zone_handle=first_crane_level.get(z.get("parent_zone_id")),
@@ -226,7 +236,7 @@ def _resolved(result, by_id):
 def preview_assignments(conn: sqlite3.Connection, object_id: int,
                         zones: list[dict], base_zones: list[dict], overrides: dict) -> dict:
     """Все привязки новой редакции; без INSERT/UPDATE/COMMIT."""
-    by_id = validate_zones(zones, base_zones)
+    by_id = validate_zones(zones, base_zones, allow_deletions=True)
     elements = conn.execute(
         "SELECT e.id, e.element_uid, e.element_type, e.x, e.y, e.outline_json, e.elevation_mm, "
         "e.zone_crane_id AS crane_zone_id, e.zone_crane_status AS crane_status, "

@@ -16,13 +16,15 @@ const WHEEL_SENSITIVITY = 0.0012;
 const BUTTON_ZOOM_STEP = 1.15;
 const MIN_ZOOM_RATIO = 0.5;
 const TIER_CAPPING_TYPES = new Set(["Плита перекрытия", "Ригель"]);
+const STALE_DRAFT_MESSAGE = "Этот черновик создан до перехода к новой схеме зон. Он сохранён для просмотра, но редактировать и публиковать его нельзя. Нажмите «Новый черновик» и измените стоянку в нём.";
 
 export function elementsOnStanceLevel(elements, levels, activeIndex, objectLevels = null) {
   const base = levels?.[activeIndex]?.elevation_mm;
   if (!Number.isFinite(base)) return elements;
   const above = (objectLevels || levels.map((level) => level.elevation_mm))
     .filter((value) => Number.isFinite(value) && value > base);
-  const next = above.length ? Math.min(...above) : Infinity;
+  const next = Number.isFinite(levels[activeIndex]?.upper_elevation_mm)
+    ? levels[activeIndex].upper_elevation_mm : above.length ? Math.min(...above) : Infinity;
   return elements.filter((element) => {
     const elevation = element.elevation_mm;
     if (!Number.isFinite(elevation)) return false;
@@ -54,12 +56,16 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   const $ = (s) => root.querySelector(s);
 
   function currentVersion() { return versions.find((v) => v.activated_at) || versions[0]; }
+  function staleDraft() { return !!draft && !!currentVersion() && draft.base_version_id !== currentVersion().id; }
+  function draftWritable() { return standFocus && canEdit && !!draft && !staleDraft(); }
+  function staleDraftCount() { return drafts.filter((row) => row.base_version_id !== currentVersion()?.id).length; }
   function displayVersion() { return versions.find((v) => v.id === selectedVersionId) || currentVersion(); }
   function zones() { return draft?.zones || displayVersion()?.zones || []; }
   function objectWorkingLevels() { return [...new Set(zones().filter((z) => z.category === "Стоянка")
     .flatMap((z) => z.levels.map((l) => l.elevation_mm)).filter(Number.isFinite))].sort((a, b) => a - b); }
-  function levelBandLabel(base) {
+  function levelBandLabel(base, upper = null) {
     if (!Number.isFinite(base)) return "Исторический контур без отметки";
+    if (Number.isFinite(upper)) return `от +${base} до +${upper} мм`;
     const next = objectWorkingLevels().find((value) => value > base);
     return next == null ? `от +${base} мм до верха здания` :
       `от +${base} до +${next} мм (следующий уровень объекта)`;
@@ -226,11 +232,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function status(text, tone = "info") { message = text; messageTone = tone; updateStatus(); }
   function updateStatus() {
-    const guide = busy ? "Выполняется операция…" : transition?.state !== "ready" ?
+    const guide = busy ? "Выполняется операция…" : !standFocus ?
+      "Зоны кранов показаны для просмотра. Изменения выполняются в разделе «Стоянки кранов»." : transition?.state !== "ready" ?
       `Новый редактор ожидает перехода: ${transition?.last_error || "объект ещё в старом формате"}. Историю можно просматривать.` :
       !canEdit ? "Редактирование недоступно: нет права на изменение зон." :
       selectedVersionId ? "Просмотр сохранённой редакции. Для правки создайте черновик; координаты изделий показаны по текущей схеме." :
-      !draft ? "Шаг 1 из 3: создайте черновик, затем измените зоны." :
+      staleDraft() ? STALE_DRAFT_MESSAGE :
+      !draft ? staleDraftCount() ? `Есть ${staleDraftCount()} черновик(ов) прежней редакции. Они доступны для просмотра. Для изменения стоянки нажмите «Новый черновик».` : "Шаг 1 из 3: создайте черновик, затем измените зоны." :
       dirty ? "Шаг 1 из 3: есть несохранённые изменения — сохраните их в черновике." :
       draft.warnings?.length ? `Черновик сохранён, но пока не готов к публикации: ${draft.warnings[0]}` :
       !draft.note?.trim() ? "Шаг 2 из 3: укажите причину изменения и сохраните черновик." :
@@ -245,28 +253,31 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (next) { next.disabled = busy; next.dataset.tooltip = busy ? "Дождитесь завершения операции." : "Создать отдельный черновик для изменений зон."; }
     const save = $("#cz-save");
     if (save) {
-      save.disabled = !canEdit || !draft || !dirty || busy;
-      save.dataset.tooltip = busy ? "Дождитесь завершения операции." : !draft ? "Сначала создайте черновик." :
+      save.disabled = !draftWritable() || !dirty || busy;
+      save.dataset.tooltip = busy ? "Дождитесь завершения операции." : staleDraft() ? STALE_DRAFT_MESSAGE : !draft ? "Сначала создайте черновик." :
         !dirty ? "Изменений для сохранения нет. Черновик уже сохранён." :
         "Сохранить изменения в черновике. Действующие зоны пока не изменятся.";
     }
     const previewButton = $("#cz-preview");
     if (previewButton) {
-      previewButton.disabled = busy;
+      previewButton.disabled = busy || !draftWritable();
       previewButton.dataset.tooltip = busy ? "Дождитесь завершения операции." :
+        staleDraft() ? STALE_DRAFT_MESSAGE :
         dirty ? "Сначала сохраните черновик. Затем можно рассчитать новые назначения без публикации." :
         draft?.warnings?.length ? draft.warnings[0] :
         "Рассчитать назначения изделий по черновику без изменения действующей схемы.";
     }
     const publish = $("#cz-publish");
     if (publish) {
-      publish.disabled = !canEdit || !draft || dirty || !!draft.warnings?.length || !draft.note?.trim() || !preview || busy;
-      publish.dataset.tooltip = busy ? "Дождитесь завершения операции." : !draft ? "Сначала создайте черновик." :
+      publish.disabled = !draftWritable() || dirty || !!draft.warnings?.length || !draft.note?.trim() || !preview || busy;
+      publish.dataset.tooltip = busy ? "Дождитесь завершения операции." : staleDraft() ? STALE_DRAFT_MESSAGE : !draft ? "Сначала создайте черновик." :
         dirty ? "Сначала сохраните изменения в черновике." : draft.warnings?.length ? draft.warnings[0] : !draft.note?.trim() ?
           "Укажите причину изменения, сохраните черновик и выполните предпросмотр." : !preview ?
           "Сначала выполните предпросмотр назначений изделий." :
           "Опубликовать редакцию после подтверждения. Назначения изделий будут пересчитаны.";
     }
+    const removeDraft = $("#cz-delete-draft");
+    if (removeDraft) removeDraft.disabled = busy || !draft;
   }
 
   function treeHtml() {
@@ -283,23 +294,33 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function propertyHtml() {
     const z = selected();
     if (!z) return `<div class="cz-empty">Выберите ${standFocus ? "кран или стоянку" : "кран"} в списке либо на схеме.</div>`;
-    if (standFocus && z.category === "Кран") return `<div class="cz-prop-head"><span>Кран-владелец</span><strong>${esc(z.name)}</strong><small id="cz-live-count">${zoneCountDescription(z)}</small></div>`;
+    if (!standFocus && z.category === "Кран") return `<div class="cz-prop-head"><span>Кран №${z.number}</span><strong>${esc(z.name)}</strong><small id="cz-live-count">${zoneCountDescription(z)}</small></div>
+      <p class="cz-hint">Зона крана показана как объединение его стоянок. Состав, границы и реквизиты меняются в разделе «Стоянки кранов».</p>
+      <div class="cz-crane-color"><span style="background:${esc(zoneColor(z))}"></span>Цвет крана: ${esc(zoneColor(z))}</div>
+      <div class="cz-subtitle">Стоянки · ${zones().filter((item) => item.category === "Стоянка" && item.parent_zone_id === z.id).length}</div>
+      ${zones().filter((item) => item.category === "Стоянка" && item.parent_zone_id === z.id).map((item) => `<div class="cz-crane-stand">${esc(item.name)} · ${zoneCountLabel(item)} изделий</div>`).join("")}`;
+    if (standFocus && z.category === "Кран") return `<div class="cz-prop-head"><span>Кран-владелец</span><strong>${esc(z.name)}</strong><small id="cz-live-count">${zoneCountDescription(z)}</small></div>
+      <label>Номер<input id="cz-number" type="number" min="1" step="1" value="${z.number}" ${draftWritable() ? "" : "disabled"}></label>
+      <label>Название<input id="cz-name" type="text" maxlength="200" value="${esc(z.name)}" ${draftWritable() ? "" : "disabled"}></label>
+      <p class="cz-hint">Рабочая зона крана состоит из его стоянок.</p>
+      ${draftWritable() ? `<button type="button" class="v2-btn" id="cz-delete-zone">Удалить кран и его стоянки</button>` : ""}`;
     const level = z.levels[activeLevel] || z.levels[0];
-    const can = canEdit && !!draft;
+    const can = draftWritable();
     return `<div class="cz-prop-head"><span>${z.category}</span><strong>${esc(z.name)}</strong><small id="cz-live-count">${zoneCountDescription(z)}</small>${z.category === "Стоянка" ? `<small>В составе крана «${esc(zoneById(z.parent_zone_id)?.name || "не выбран")}»</small>` : standFocus ? `<small>Выбран родитель стоянки. Добавить её можно кнопкой слева.</small>` : ""}</div>
       <label>Номер<input id="cz-number" type="number" min="1" step="1" data-tooltip="Порядковый номер зоны в пределах объекта; у стоянки — в пределах её крана. Используется в справочнике и назначениях изделий." value="${z.number}" ${can ? "" : "disabled"}></label>
       <label>Название<input id="cz-name" type="text" maxlength="200" data-tooltip="Название зоны в списках и отчётах. Изменение не перемещает контур и не меняет принадлежность изделий." value="${esc(z.name)}" ${can ? "" : "disabled"}></label>
       ${z.category === "Стоянка" ? `<label>Кран<select id="cz-parent" data-tooltip="Родительский кран стоянки. Смена крана изменит назначение изделий в её контурах." ${can ? "" : "disabled"}>${zones().filter((v) => v.category === "Кран").map((c) => `<option value="${c.id}" ${z.parent_zone_id === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>` : ""}
       ${z.category === "Кран" && !z.levels.length ? `<p class="cz-hint">Зона крана вычисляется как объединение его стоянок. Контуры меняются на вкладке «Стоянки кранов».</p><div class="cz-crane-color"><span style="background:${esc(zoneColor(z))}"></span>Цвет крана: ${esc(zoneColor(z))}</div><div class="cz-subtitle">Стоянки · ${zones().filter((v) => v.category === "Стоянка" && v.parent_zone_id === z.id).length}</div>${zones().filter((v) => v.category === "Стоянка" && v.parent_zone_id === z.id).map((v) => `<div class="cz-crane-stand">${esc(v.name)} · ${zoneCountLabel(v)} изделий</div>`).join("")}` : `
       <div class="cz-subtitle">Ярусы и контуры</div>
-      <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}" data-tooltip="Показать контур и изделия этой полосы. Изменения границы затронут назначения изделий на соответствующей отметке.">${levelBandLabel(l.elevation_mm)} · ${l.outline.length} точек</button>`).join("")}</div>
-      ${can ? `<button type="button" class="v2-btn" id="cz-add-level" data-tooltip="Создаёт следующий высотный ярус с копией текущего контура. Его отметку и границы можно изменить до публикации.">Добавить ярус</button>` : ""}
-      ${level ? `<label>Отметка, мм<input id="cz-elevation" type="number" step="1" list="cz-object-levels" data-tooltip="Начало яруса в миллиметрах. Верхняя граница берётся из ближайшей отметки стоянки всего объекта." value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label><datalist id="cz-object-levels">${suggestedLevels().map(([v, label]) => `<option value="${v}" label="${esc(label)}">`).join("")}</datalist>
+      <div class="cz-levels">${z.levels.map((l, i) => `<button type="button" class="cz-level ${i === activeLevel ? "active" : ""}" data-level="${i}" data-tooltip="Показать контур и изделия этой полосы. Изменения границы затронут назначения изделий на соответствующей отметке.">${levelBandLabel(l.elevation_mm, l.upper_elevation_mm)} · ${l.outline.length} точек</button>`).join("")}</div>
+      ${can ? `<button type="button" class="v2-btn" id="cz-add-level" data-tooltip="Создаёт следующий высотный ярус с копией текущего контура. Нижнюю и верхнюю отметку можно изменить до публикации.">Добавить ярус</button>${z.levels.length > 1 ? `<button type="button" class="v2-btn" id="cz-delete-level">Удалить ярус</button>` : ""}` : ""}
+      ${level ? `<label>Нижняя отметка, мм<input id="cz-elevation" type="number" step="1" list="cz-object-levels" data-tooltip="Начало яруса в миллиметрах." value="${level.elevation_mm ?? ""}" placeholder="Без отметки" ${can ? "" : "disabled"}></label><label>Верхняя отметка, мм<input id="cz-upper-elevation" type="number" step="1" list="cz-object-levels" data-tooltip="Конец яруса в миллиметрах. Если оставить пустым, действует до следующей нижней отметки на объекте." value="${level.upper_elevation_mm ?? ""}" placeholder="Авто: следующий ярус" ${can ? "" : "disabled"}></label><datalist id="cz-object-levels">${suggestedLevels().map(([v, label]) => `<option value="${v}" label="${esc(label)}">`).join("")}</datalist>
         <p class="cz-hint">В 2D потяните зону внутри контура, чтобы переместить её целиком, или потяните ребро, чтобы изменить размер. Перетаскивание пустого фона сдвигает вид. В 3D поворачивайте сцену вне ручек.</p>
         <div class="cz-point-list">${level.outline.map((p, i) => `<span>${i + 1}. ${Number(p[0].toFixed(1))}; ${Number(p[1].toFixed(1))}</span>`).join("")}</div>` : ""}`}
       <div class="cz-subtitle">Выбрано изделий: ${selectedElements.size}</div>
       ${can ? `<div class="cz-actions"><button type="button" class="v2-btn" id="cz-assign" data-tooltip="Записывает ручное назначение выбранных изделий этой зоне в черновик. Действующие свойства изменятся только после публикации." ${selectedElements.size ? "" : "disabled"}>Назначить выбранные сюда</button><button type="button" class="v2-btn" id="cz-clear" data-tooltip="Убирает назначение крана и стоянки у выделенных изделий в черновике; опубликованные данные пока не меняются." ${selectedElements.size ? "" : "disabled"}>Без зоны</button></div>` : ""}
-      <p class="cz-hint">Shift + протяжка на схеме выделяет группу изделий. Обычный щелчок выбирает одно изделие.</p>`;
+      <p class="cz-hint">Shift + протяжка на схеме выделяет группу изделий. Обычный щелчок выбирает одно изделие.</p>
+      ${can ? `<button type="button" class="v2-btn" id="cz-delete-zone">Удалить стоянку</button>` : ""}`;
   }
 
   function exceptionsHtml() {
@@ -316,7 +337,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       <select id="cz-exception-filter" aria-label="Источник исключения"><option value="conversion" ${exceptionFilter === "conversion" ? "selected" : ""}>Перенос</option><option value="manual" ${exceptionFilter === "manual" ? "selected" : ""}>Ручные</option><option value="all" ${exceptionFilter === "all" ? "selected" : ""}>Все</option></select>
       <input id="cz-exception-query" type="search" placeholder="ID, UID или марка" value="${esc(exceptionQuery)}" aria-label="Найти изделие">
       <span>${found.length} найдено${found.length > 100 ? "; показаны первые 100" : ""}</span>
-      <div class="cz-exception-list">${found.slice(0, 100).map(([id, item]) => { const element = sceneById.get(id); return `<div class="cz-exception-item"><span>#${esc(id)} ${esc(element?.mark || element?.element_uid || "")} · ${item.source === "conversion" ? "перенос" : "вручную"} · ${esc(item.reason || "без причины")} · ${esc(zoneById(item.stance_zone_id)?.name || zoneById(item.crane_zone_id)?.name || "без зоны")}</span>${canEdit ? `<button type="button" class="v2-btn" data-remove-exception="${esc(id)}" data-tooltip="Явно снять исключение и вернуть расчёт по геометрии">Вернуть геометрию</button>` : ""}</div>`; }).join("")}</div></section>`;
+      <div class="cz-exception-list">${found.slice(0, 100).map(([id, item]) => { const element = sceneById.get(id); return `<div class="cz-exception-item"><span>#${esc(id)} ${esc(element?.mark || element?.element_uid || "")} · ${item.source === "conversion" ? "перенос" : "вручную"} · ${esc(item.reason || "без причины")} · ${esc(zoneById(item.stance_zone_id)?.name || zoneById(item.crane_zone_id)?.name || "без зоны")}</span>${draftWritable() ? `<button type="button" class="v2-btn" data-remove-exception="${esc(id)}" data-tooltip="Явно снять исключение и вернуть расчёт по геометрии">Вернуть геометрию</button>` : ""}</div>`; }).join("")}</div></section>`;
   }
 
   function render() {
@@ -332,17 +353,17 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     root.className = "cz-root";
     const version = displayVersion();
     const parent = parentCrane();
-    const primaryAdd = standFocus ? `<button type="button" class="v2-btn v2-primary" id="cz-add-stand" data-tooltip="Выберите кран — он станет владельцем новой стоянки. Выбор существующей стоянки сохранит её кран. Создаёт стоянку рядом с существующими; границы и отметки можно уточнить до сохранения черновика. Изменения вступят в силу после публикации." ${parent ? "" : "disabled"}>+ Добавить стоянку</button>` : `<button type="button" class="v2-btn v2-primary" id="cz-add-crane" data-tooltip="Создаёт кран без отдельного контура. Его зона образуется из стоянок; изменения вступят в силу после публикации.">+ Добавить кран</button>`;
+    const primaryAdd = `<button type="button" class="v2-btn v2-primary" id="cz-add-stand" data-tooltip="${staleDraft() ? STALE_DRAFT_MESSAGE : "Добавить стоянку выбранному крану. Её границы, нижнюю и верхнюю отметки можно уточнить в черновике."}" ${parent && !staleDraft() ? "" : "disabled"}>+ Добавить стоянку</button><button type="button" class="v2-btn" id="cz-add-crane" data-tooltip="Создать кран; его рабочая зона образуется из стоянок." ${staleDraft() ? "disabled" : ""}>+ Добавить кран</button>`;
     root.innerHTML = `<div class="cz-toolbar"><strong>${standFocus ? "Стоянки кранов" : "Зоны кранов"}</strong><span class="cz-revision">${version ? `Редакция №${version.revision_no}${version.effective_date ? ` · с ${esc(version.effective_date)}` : " · исходная"}` : "Нет редакции"}</span>
       <select id="cz-version-select" aria-label="История редакций" data-tooltip="Открывает опубликованную редакцию для просмотра. Назначения изделий показываются на дату этой редакции; изменить её нельзя."><option value="">Действующая редакция</option>${versions.map((v) => `<option value="${v.id}" ${selectedVersionId === v.id ? "selected" : ""}>№${v.revision_no} · ${v.effective_date || `исходная с ${v.known_from}`}${v.activated_at ? "" : " · ожидает"}</option>`).join("")}</select>
-      <select id="cz-draft-select" aria-label="Черновик" data-tooltip="Переключает сохранённые незавершённые редакции. Черновик не меняет действующие зоны до публикации."><option value="">Действующая редакция</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select>
-      ${canEdit ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
+      ${standFocus ? `<select id="cz-draft-select" aria-label="Черновик" data-tooltip="Переключает сохранённые незавершённые редакции. Черновик не меняет действующие зоны до публикации."><option value="">Действующая редакция</option>${drafts.map((d) => `<option value="${d.id}" ${draft?.id === d.id ? "selected" : ""}>Черновик №${d.id}${d.base_version_id !== currentVersion()?.id ? " · устарел, только просмотр" : ""} · ${esc(d.author_name || "импорт")} · ${esc(d.updated_at)}</option>`).join("")}</select>` : ""}
+      ${canEdit && standFocus ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn" id="cz-delete-draft">Удалить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
-      <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${!standFocus && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
+      <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit && standFocus ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${!standFocus && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
       <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
-      ${draft ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${canEdit ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${canEdit ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><button type="button" class="v2-btn" id="cz-exceptions-toggle" aria-expanded="${exceptionsOpen}" aria-controls="cz-exceptions">Исключения · ${Object.keys(draft.overrides || {}).length}</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}, статус: ${preview.counts.status || 0}, ярус: ${preview.counts.tier || 0}; ручных: ${preview.counts.manual || 0}, исключений переноса: ${preview.counts.conversion_exceptions || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>${exceptionsHtml()}` : ""}`;
+      ${draft && standFocus ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${draftWritable() ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${draftWritable() ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><button type="button" class="v2-btn" id="cz-exceptions-toggle" aria-expanded="${exceptionsOpen}" aria-controls="cz-exceptions">Исключения · ${Object.keys(draft.overrides || {}).length}</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}, статус: ${preview.counts.status || 0}, ярус: ${preview.counts.tier || 0}; ручных: ${preview.counts.manual || 0}, исключений переноса: ${preview.counts.conversion_exceptions || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>${exceptionsHtml()}` : ""}`;
     if (previous3dHost) {
       previous3dHost.hidden = !mode3d;
       $("#cz-3d")?.replaceWith(previous3dHost);
@@ -384,7 +405,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       modelTop, craneColors,
       modelElements: showElements && model3d ? model3d.elements.filter((element) => ids.has(element.id)) : [],
       highlightIds: highlightedElementIds(visible), highlightColor: elementHighlightColor,
-      selectedElements, editable: !!draft && canEdit && standFocus && selected()?.category === "Стоянка" };
+      selectedElements, editable: draftWritable() && standFocus && selected()?.category === "Стоянка" };
   }
   async function ensureModelData() {
     if (model3d) return model3d;
@@ -407,7 +428,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (!viewer3d) viewer3d = createCraneZone3d({
       onOutline(outline) {
         const zone = selected(), level = zone?.levels[activeLevel];
-        if (!level || !draft || !canEdit) return;
+        if (!level || !draftWritable()) return;
         const blocked = blockingOverlap(zone, level.elevation_mm, outline, level.outline);
         if (blocked) {
           showCollision(blocked.contact, $("#cz-3d"), viewer3d?.screenPoint(blocked.contact));
@@ -518,7 +539,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ctx.globalAlpha = 1;
       ctx.strokeStyle = color;
       ctx.lineWidth = active ? 2.7 : z.category === "Кран" ? 1.5 : 1; ctx.stroke();
-      if (active && draft && canEdit && z.category === "Стоянка") activeOutline = level.outline;
+      if (active && draftWritable() && z.category === "Стоянка") activeOutline = level.outline;
     }
     const visible = visibleElements(), highlighted = highlightedElementIds(visible);
     let drawn = 0, accented = 0;
@@ -580,7 +601,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function pointer(event) { const rect = event.currentTarget.getBoundingClientRect(); return [event.clientX - rect.left, event.clientY - rect.top]; }
   function nearestEdge(x, y, canvas) {
-    const z = selected(); if (!draft || !canEdit || !z || (standFocus && z.category !== "Стоянка")) return null;
+    const z = selected(); if (!draftWritable() || !z || (standFocus && z.category !== "Стоянка")) return null;
     const level = z.levels[activeLevel]; if (level?.outline?.length !== 4) return null;
     const grip = JSON.parse(canvas.dataset.edgeMidpoints || "[]")
       .find((point) => Math.hypot(point.x - x, point.y - y) <= 14);
@@ -670,7 +691,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         members: memberOutlines(selected()), wasDirty: dirty, wasPreview: preview, moved: false };
       else {
         const hit = hitZone(x, y, canvas);
-        drag = hit && draft && canEdit && hit.zone.category === "Стоянка"
+        drag = hit && draftWritable() && hit.zone.category === "Стоянка"
           ? beginZoneDrag(hit, x, y, canvas)
           : { kind: "pan", x, y, lastX: x, lastY: y, moved: false };
       }
@@ -685,7 +706,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const hit = !selectMode && edge == null ? hitZone(x, y, canvas) : null;
       canvas.style.cursor = selectMode ? "crosshair" : edge != null ?
         edgeResizeCursor(edgeResizeAngle(selected().levels[activeLevel].outline, edge, (p) => toScreen(...p, canvas))) :
-        hit && draft && canEdit && hit.zone.category === "Стоянка" ? "move" : "crosshair";
+        hit && draftWritable() && hit.zone.category === "Стоянка" ? "move" : "crosshair";
       if (hoverEdge !== edge) { hoverEdge = edge; draw(); }
       return;
     }
@@ -751,6 +772,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-draft-select")?.addEventListener("change", async (e) => { if (dirty && !(await guardLeave())) { e.target.value = draft?.id || ""; return; } await loadDraft(e.target.value ? Number(e.target.value) : null); });
     $("#cz-new")?.addEventListener("click", createDraft);
     $("#cz-save")?.addEventListener("click", save);
+    $("#cz-delete-draft")?.addEventListener("click", deleteDraft);
     $("#cz-publish")?.addEventListener("click", publish);
     $("#cz-preview")?.addEventListener("click", loadPreview);
     $("#cz-fit")?.addEventListener("click", fit);
@@ -777,11 +799,19 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     $("#cz-name")?.addEventListener("change", (e) => { selected().name = e.target.value; markDirty(false); render(); });
     $("#cz-parent")?.addEventListener("change", (e) => { selected().parent_zone_id = Number(e.target.value); markDirty(); render(); });
     $("#cz-elevation")?.addEventListener("change", (e) => { selected().levels[activeLevel].elevation_mm = e.target.value === "" ? null : Number(e.target.value); markDirty(); render(); });
+    $("#cz-upper-elevation")?.addEventListener("change", (e) => {
+      const level = selected().levels[activeLevel];
+      if (e.target.value === "") delete level.upper_elevation_mm;
+      else level.upper_elevation_mm = Number(e.target.value);
+      markDirty(); render();
+    });
     $("#cz-note")?.addEventListener("input", (e) => { draft.note = e.target.value; markDirty(false); });
     $("#cz-date")?.addEventListener("change", (e) => { effectiveDate = e.target.value; });
     $("#cz-add-crane")?.addEventListener("click", () => startAddingZone("Кран"));
     $("#cz-add-stand")?.addEventListener("click", () => startAddingZone("Стоянка"));
     $("#cz-add-level")?.addEventListener("click", addLevel);
+    $("#cz-delete-level")?.addEventListener("click", deleteLevel);
+    $("#cz-delete-zone")?.addEventListener("click", deleteZone);
     $("#cz-assign")?.addEventListener("click", () => assign(false));
     $("#cz-clear")?.addEventListener("click", () => assign(true));
     const canvas = $("#cz-canvas");
@@ -800,7 +830,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     }, { passive: false });
   }
   async function startAddingZone(category) {
-    if (!canEdit || busy) return;
+    if (!standFocus || !canEdit || busy) return;
+    if (staleDraft()) return status(STALE_DRAFT_MESSAGE, "warning");
     const parentId = category === "Стоянка" ? parentCrane()?.id : null;
     if (category === "Стоянка" && parentId == null) return status("Сначала выберите кран для новой стоянки.");
     if (!draft) {
@@ -860,9 +891,45 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     selectedZone = id; activeLevel = 0; markDirty(); render();
     return true;
   }
-  function addLevel() { const z = selected(); if (z?.category !== "Стоянка" || !z.levels.length) return; const last = z.levels[z.levels.length - 1]; const used = new Set(z.levels.map((level) => level.elevation_mm)); const elevation_mm = suggestedLevels().map(([value]) => value).find((level) => level > last.elevation_mm && !used.has(level)) ?? last.elevation_mm + 3000; z.levels.push({ elevation_mm, outline: clone(last.outline) }); activeLevel = z.levels.length - 1; markDirty(); render(); }
+  function addLevel() {
+    const z = selected();
+    if (!draftWritable() || z?.category !== "Стоянка" || !z.levels.length) return;
+    const last = z.levels[z.levels.length - 1];
+    const used = new Set(z.levels.map((level) => level.elevation_mm));
+    const elevation_mm = suggestedLevels().map(([value]) => value)
+      .find((value) => value > last.elevation_mm && !used.has(value)) ?? last.elevation_mm + 3000;
+    const upper_elevation_mm = suggestedLevels().map(([value]) => value)
+      .find((value) => value > elevation_mm) ?? Math.max(elevation_mm + 3000,
+        Math.ceil((model3d?.elements.reduce((top, element) => Math.max(top,
+          (Number(element.elevation_mm) || 0) + element.renderHeight), -Infinity) || 0) / 1000) * 1000);
+    z.levels.push({ elevation_mm, upper_elevation_mm, outline: clone(last.outline) });
+    activeLevel = z.levels.length - 1; markDirty(); render();
+  }
+  async function deleteLevel() {
+    const z = selected();
+    if (!draftWritable() || z?.category !== "Стоянка" || z.levels.length <= 1) return;
+    const level = z.levels[activeLevel];
+    if (!(await showConfirmDialog(`Удалить ярус стоянки «${z.name}» от ${level.elevation_mm} мм из черновика?`,
+      { confirmLabel: "Удалить ярус" }))) return;
+    z.levels.splice(activeLevel, 1); activeLevel = Math.min(activeLevel, z.levels.length - 1);
+    markDirty(); render();
+  }
+  async function deleteZone() {
+    const z = selected();
+    if (!draftWritable() || !z) return;
+    const affected = z.category === "Кран" ? zones().filter((item) => item.id === z.id || item.parent_zone_id === z.id) : [z];
+    const text = z.category === "Кран" ? `Удалить кран «${z.name}» и ${affected.length - 1} его стоянок из черновика?` :
+      `Удалить стоянку «${z.name}» из черновика?`;
+    if (!(await showConfirmDialog(text, { confirmLabel: "Удалить из черновика" }))) return;
+    const ids = new Set(affected.map((item) => item.id));
+    draft.zones = draft.zones.filter((item) => !ids.has(item.id));
+    for (const [elementId, item] of Object.entries(draft.overrides || {}))
+      if (ids.has(item.crane_zone_id) || ids.has(item.stance_zone_id)) delete draft.overrides[elementId];
+    selectedZone = firstZoneId(); activeLevel = 0;
+    markDirty(); render();
+  }
   function assign(clear) {
-    if (!draft || !selectedElements.size) return;
+    if (!draftWritable() || !selectedElements.size) return;
     const z = selected(), crane = clear ? null : z?.category === "Кран" ? z.id : z?.parent_zone_id;
     const stance = clear ? null : z?.category === "Стоянка" ? z.id : null;
     if (!clear && !z) return;
@@ -873,10 +940,23 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     markDirty(); status(`${ids.length} изделий подготовлено к ${clear ? "снятию назначения" : "назначению"}. Сохраните черновик и проверьте предпросмотр.`);
   }
   async function createDraft() {
-    if (busy || !canEdit || (dirty && !(await guardLeave()))) return false;
+    if (busy || !standFocus || !canEdit || (dirty && !(await guardLeave()))) return false;
     busy = true; message = ""; updateStatus();
     try { const r = await api.post(`${prefix}/drafts`); await refresh(); await loadDraft(r.draft_id); status("Создан черновик. Рабочие зоны не изменены."); return true; }
     catch (e) { status(errText(e), "error"); return false; } finally { busy = false; updateStatus(); }
+  }
+  async function deleteDraft() {
+    if (!draft || busy || !standFocus || !canEdit) return;
+    const id = draft.id;
+    if (!(await showConfirmDialog(`Удалить черновик №${id}? Все несохранённые и сохранённые изменения этого черновика будут потеряны. Опубликованные редакции останутся.`,
+      { confirmLabel: "Удалить черновик" }))) return;
+    busy = true; updateStatus();
+    try {
+      await api.delete(`${prefix}/drafts/${id}?edit_token=${draft.edit_token}`);
+      draft = null; dirty = false; preview = null; selectedZone = null;
+      await refresh(); status(`Черновик №${id} удалён.`, "success");
+    } catch (e) { status(errText(e), "error"); }
+    finally { busy = false; updateStatus(); }
   }
   async function loadDraft(id) {
     try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; liveCountsReady = false; selectedVersionId = null; scene = currentScene; selectedElements.clear(); dirty = false; preview = null; selectedZone = firstZoneId(); activeLevel = 0; view = null; message = ""; render(); }
@@ -899,12 +979,14 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
   async function save() {
     if (!draft || !dirty || busy) return false;
+    if (staleDraft()) { status(STALE_DRAFT_MESSAGE, "warning"); return false; }
     busy = true; message = ""; updateStatus();
     try { const r = await api.patch(`${prefix}/drafts/${draft.id}`, { edit_token: draft.edit_token, zones: draft.zones, overrides: draft.overrides, note: draft.note || "" }); draft.edit_token = r.edit_token; draft.warnings = r.warnings || []; dirty = false; status(draft.warnings.length ? `Черновик сохранён, действующая схема не изменена. Перед публикацией исправьте: ${draft.warnings[0]}` : `Черновик сохранён; действующая редакция не изменилась. ${draft.note?.trim() ? "Теперь выполните предпросмотр." : "Укажите причину изменения, затем выполните предпросмотр."}`, draft.warnings.length ? "warning" : "success"); return true; }
     catch (e) { status(errText(e), "error"); return false; } finally { busy = false; updateStatus(); }
   }
   async function loadPreview() {
     if (!draft || busy) return;
+    if (staleDraft()) return status(STALE_DRAFT_MESSAGE, "warning");
     if (dirty && !(await save())) return;
     if (draft.warnings?.length) return status(`Предпросмотр пока недоступен: ${draft.warnings[0]} Черновик сохранён, рабочая схема не изменена.`, "warning");
     busy = true; message = ""; updateStatus();
@@ -912,7 +994,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     catch (e) { status(errText(e), "error"); } finally { busy = false; updateStatus(); }
   }
   async function publish() {
-    if (!draft || dirty || busy || !canEdit) return;
+    if (!draftWritable() || dirty || busy) return;
     if (!draft.note?.trim()) return status("Укажите причину изменения и сохраните черновик.");
     if (!preview) return status("Сначала выполните предпросмотр.");
     const date = effectiveDate;
@@ -930,7 +1012,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     craneColors = s.crane_colors || {};
     versions = v; drafts = d; currentScene = s.elements || []; scene = currentScene;
     const current = currentVersion();
-    const firstDraftId = openFirstDraft ? drafts[0]?.id : null;
+    const firstDraftId = standFocus && openFirstDraft ? drafts.find((row) => row.base_version_id === current?.id)?.id : null;
     const [currentDetail, firstDraft] = await Promise.all([
       current ? api.get(`${prefix}/${current.id}`) : null,
       firstDraftId ? api.get(`${prefix}/drafts/${firstDraftId}`) : null,

@@ -18,7 +18,11 @@ function stanceLevel(zone, element, objectLevels) {
   const strict = CAPPING_TYPES.has(element.element_type);
   const eligible = objectLevels.filter((v) => strict ? v < elevation : v <= elevation);
   const selected = eligible.length ? eligible[eligible.length - 1] : objectLevels[0];
-  return zone.levels.find((level) => level.elevation_mm === selected) || null;
+  const level = zone.levels.find((item) => item.elevation_mm === selected) || null;
+  if (!level) return null;
+  const next = objectLevels.find((value) => value > selected) ?? Infinity;
+  const upper = Number.isFinite(level.upper_elevation_mm) ? level.upper_elevation_mm : next;
+  return (strict ? elevation <= upper : elevation < upper) ? level : null;
 }
 
 export function countElementsInZone(zone, elements, zones = [zone], overrides = {}) {
@@ -32,6 +36,11 @@ export function countElementsInZone(zone, elements, zones = [zone], overrides = 
     if (override) {
       if (zone.category === "Кран" && override.crane_zone_id === zone.id) count++;
       if (zone.category === "Стоянка" && override.stance_zone_id === zone.id) count++;
+      continue;
+    }
+    if (zone.category === "Кран" && zone.levels?.length && !stances.length) {
+      if (zone.levels.some((level) => level.outline?.length &&
+          inside(level.outline, element.x, element.y))) count++;
       continue;
     }
     if (!objectLevels.length || !Number.isFinite(element.elevation_mm)) continue;
@@ -64,6 +73,8 @@ export function countElementsByZones(zones, elements, overrides = {}) {
     const xs = level.outline.map((point) => point[0]);
     const ys = level.outline.map((point) => point[1]);
     byLevel.get(level.elevation_mm).push({ stance, outline: level.outline,
+      upper: Number.isFinite(level.upper_elevation_mm) ? level.upper_elevation_mm :
+        (objectLevels.find((value) => value > level.elevation_mm) ?? Infinity),
       minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) });
   }
   const increment = (id) => { if (counts.has(id)) counts.set(id, counts.get(id) + 1); };
@@ -73,13 +84,18 @@ export function countElementsByZones(zones, elements, overrides = {}) {
     if (override) { increment(override.crane_zone_id); increment(override.stance_zone_id); continue; }
     if (!objectLevels.length || !Number.isFinite(element.elevation_mm)) continue;
     const strict = CAPPING_TYPES.has(element.element_type);
-    let elevation = objectLevels[0];
-    for (const value of objectLevels) {
-      if (strict ? value < element.elevation_mm : value <= element.elevation_mm) elevation = value;
-      else break;
+    let candidates = [];
+    for (let i = objectLevels.length - 1; i >= 0; i--) {
+      const value = objectLevels[i];
+      if (strict ? value >= element.elevation_mm : value > element.elevation_mm) continue;
+      candidates = (byLevel.get(value) || []).filter((item) =>
+        strict ? element.elevation_mm <= item.upper : element.elevation_mm < item.upper);
+      if (candidates.length) break;
     }
+    if (!candidates.length && element.elevation_mm < objectLevels[0])
+      candidates = byLevel.get(objectLevels[0]) || [];
     let match = null, ambiguous = false;
-    for (const item of byLevel.get(elevation) || []) {
+    for (const item of candidates) {
       if (element.x < item.minX || element.x > item.maxX ||
           element.y < item.minY || element.y > item.maxY ||
           !inside(item.outline, element.x, element.y)) continue;

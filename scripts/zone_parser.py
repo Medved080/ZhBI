@@ -38,6 +38,7 @@ class ZoneRecord:
     # "ambiguous" — 0 либо больше 1 кандидата-крана).
     parent_zone_handle: Optional[str] = None
     parent_match_status: str = "not_applicable"  # "matched"|"unmatched"|"ambiguous"|"not_applicable" (не Стоянка)
+    upper_elevation_mm: Optional[int] = None
 
 
 @dataclass

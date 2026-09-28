@@ -44,9 +44,12 @@ def snapshot_zones(conn: sqlite3.Connection, object_id: int) -> list[dict]:
     references = {}
     has_reference = any(r["name"] == "is_reference" for r in conn.execute(
         "PRAGMA table_info(zone_levels)"))
+    has_upper = any(r["name"] == "upper_elevation_mm" for r in conn.execute(
+        "PRAGMA table_info(zone_levels)"))
     for row in conn.execute(
         "SELECT l.zone_id, l.elevation_mm, l.outline_json, l.source_file, l.dxf_handle, "
-        + ("l.is_reference" if has_reference else "0 AS is_reference") + " "
+        + ("l.is_reference" if has_reference else "0 AS is_reference") + ", "
+        + ("l.upper_elevation_mm" if has_upper else "NULL AS upper_elevation_mm") + " "
         "FROM zone_levels l JOIN zones z ON z.id = l.zone_id "
         "WHERE z.object_id = ? AND z.is_current = 1 AND z.category IN ('Кран', 'Стоянка') "
         "ORDER BY l.zone_id, l.elevation_mm, l.id",
@@ -60,6 +63,8 @@ def snapshot_zones(conn: sqlite3.Connection, object_id: int) -> list[dict]:
             "outline": json.loads(row["outline_json"]),
             "source_file": row["source_file"],
             "dxf_handle": row["dxf_handle"],
+            **({"upper_elevation_mm": row["upper_elevation_mm"]}
+               if row["upper_elevation_mm"] is not None else {}),
         })
     return [{**dict(row), "levels": levels.get(row["id"], []),
              **({"report_levels": references[row["id"]]} if row["id"] in references else {})}

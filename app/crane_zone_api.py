@@ -12,7 +12,8 @@ from app.access import assert_object_feature
 from app.auth import format_display_name, get_current_user
 from app.crane_zone_editor import ZoneDraftError
 from app.crane_zone_service import (
-    create_draft, preview_draft, publish_draft, update_draft,
+    create_draft, delete_draft, draft_warnings, preview_draft, publish_draft,
+    update_draft,
 )
 from app.db import get_connection
 
@@ -183,7 +184,10 @@ def get_draft(object_id: int, draft_id: int,
         result = dict(row)
         result["zones"] = json.loads(result.pop("zones_json"))
         result["overrides"] = json.loads(result.pop("overrides_json"))
-        result["warnings"] = []
+        base = conn.execute("SELECT zones_json FROM crane_zone_versions WHERE id = ?",
+                            (row["base_version_id"],)).fetchone()
+        result["warnings"] = (draft_warnings(result["zones"], json.loads(base[0]))
+                              if base else ["Исходная редакция черновика не найдена"])
         return result
     finally:
         conn.close()
@@ -200,8 +204,28 @@ def patch_draft(object_id: int, draft_id: int, body: DraftPatch,
                                  body.zones, body.overrides, body.note)
         except ZoneDraftError as exc:
             _public_error(exc)
+        base = conn.execute(
+            "SELECT v.zones_json FROM crane_zone_drafts d "
+            "JOIN crane_zone_versions v ON v.id = d.base_version_id "
+            "WHERE d.id = ? AND d.object_id = ?", (draft_id, object_id),
+        ).fetchone()
         return {"draft_id": draft_id, "edit_token": token,
-                "warnings": []}
+                "warnings": draft_warnings(body.zones, json.loads(base[0]))}
+    finally:
+        conn.close()
+
+
+@router.delete("/drafts/{draft_id}")
+def remove_draft(object_id: int, draft_id: int, edit_token: int,
+                 user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        _check(conn, user, object_id, "write")
+        try:
+            delete_draft(conn, object_id, draft_id, edit_token)
+        except ZoneDraftError as exc:
+            _public_error(exc)
+        return {"deleted": True}
     finally:
         conn.close()
 

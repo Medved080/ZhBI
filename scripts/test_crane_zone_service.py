@@ -14,7 +14,8 @@ from app import db
 from app import main as app_main
 from app import zone_sync
 from app.crane_zone_service import (
-    ZoneDraftError, activate_due, create_draft, preview_draft, publish_draft,
+    ZoneDraftError, activate_due, create_draft, delete_draft, draft_warnings,
+    preview_draft, publish_draft,
     register_import_membership, update_draft,
 )
 from app.crane_zone_editor import preview_assignments
@@ -111,6 +112,27 @@ class CraneZoneServiceTest(unittest.TestCase):
         )
         return draft_id, token
 
+    def test_old_format_draft_reports_stale_base_before_crane_geometry(self):
+        baseline = self.conn.execute(
+            "SELECT id, zones_json FROM crane_zone_versions WHERE object_id = ? AND kind = 'baseline'",
+            (self.object_id,),
+        ).fetchone()
+        old_id = self.conn.execute(
+            "INSERT INTO crane_zone_drafts (object_id, base_version_id, zones_json, overrides_json, author_name) "
+            "VALUES (?, ?, ?, '{}', 'Тест')",
+            (self.object_id, baseline["id"], baseline["zones_json"]),
+        ).lastrowid
+        self.conn.commit()
+        with self.assertRaisesRegex(ZoneDraftError, "прежней редакции зон"):
+            update_draft(self.conn, self.object_id, old_id, 1,
+                         json.loads(baseline["zones_json"]), {}, "Изменена стоянка")
+        saved = self.conn.execute(
+            "SELECT zones_json, edit_token FROM crane_zone_drafts WHERE id = ?", (old_id,),
+        ).fetchone()
+        self.assertEqual(saved["zones_json"], baseline["zones_json"])
+        self.assertEqual(saved["edit_token"], 1)
+        self.assertNotEqual(create_draft(self.conn, self.object_id, None, "Тест"), old_id)
+
     def test_preview_has_no_writes_and_publish_is_consistent(self):
         draft_id, token = self._draft_with_new_crane()
         before = self.conn.total_changes
@@ -159,6 +181,88 @@ class CraneZoneServiceTest(unittest.TestCase):
             "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
             (self.object_id,),
         ).fetchone()[0], 0)
+
+    def test_invalid_structure_is_saved_but_publication_is_blocked(self):
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        base = snapshot_zones(self.conn, self.object_id)
+        zones = json.loads(json.dumps(base))
+        stance = next(zone for zone in zones if zone["id"] == self.stance_id)
+        stance["levels"][0]["upper_elevation_mm"] = -1
+        token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {}, "Проверка")
+        self.assertEqual(token, 2)
+        self.assertRegex(draft_warnings(zones, base)[0], "Верхняя отметка")
+        with self.assertRaisesRegex(ZoneDraftError, "Верхняя отметка"):
+            publish_draft(self.conn, self.object_id, draft_id, token,
+                          business_date(), None, "Тест")
+
+    def test_delete_stance_retires_current_zone_but_keeps_history(self):
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        zones = [zone for zone in snapshot_zones(self.conn, self.object_id)
+                 if zone["id"] != self.stance_id]
+        token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {}, "Убрали стоянку")
+        result = publish_draft(self.conn, self.object_id, draft_id, token,
+                               business_date(), None, "Тест")
+        self.assertTrue(result["activated"])
+        self.assertEqual(self.conn.execute(
+            "SELECT is_current FROM zones WHERE id = ?", (self.stance_id,),
+        ).fetchone()[0], 0)
+        self.assertTrue(self.conn.execute(
+            "SELECT 1 FROM zone_levels WHERE zone_id = ?", (self.stance_id,),
+        ).fetchone())
+        old = self.conn.execute(
+            "SELECT zones_json FROM crane_zone_versions WHERE object_id = ? AND revision_no = 0",
+            (self.object_id,),
+        ).fetchone()[0]
+        self.assertIn(self.stance_id, [zone["id"] for zone in json.loads(old)])
+        self.assertIsNone(self.conn.execute(
+            "SELECT zone_stance_id FROM elements WHERE id = ?", (self.element_id,),
+        ).fetchone()[0])
+
+    def test_delete_crane_and_stance_keeps_schedule_flow_row(self):
+        self.conn.execute(
+            "INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) "
+            "VALUES (?, 'Кран 1', 'Стоянка 1', 1, 7)", (self.object_id,),
+        )
+        self.conn.commit()
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        token = update_draft(self.conn, self.object_id, draft_id, 1, [], {}, "Убрали кран")
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM zones WHERE object_id = ? AND category IN ('Кран', 'Стоянка') "
+            "AND is_current = 1", (self.object_id,),
+        ).fetchone()[0], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT order_no FROM schedule_flow WHERE object_id = ?", (self.object_id,),
+        ).fetchone()[0], 7)
+
+    def test_delete_draft_uses_token_and_does_not_change_versions(self):
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        with self.assertRaisesRegex(ZoneDraftError, "изменён"):
+            delete_draft(self.conn, self.object_id, draft_id, 2)
+        delete_draft(self.conn, self.object_id, draft_id, 1)
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM crane_zone_drafts WHERE id = ?", (draft_id,),
+        ).fetchone())
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM crane_zone_versions WHERE object_id = ?",
+            (self.object_id,),
+        ).fetchone()[0], 2)
+
+    def test_upper_elevation_is_published_and_affects_binding(self):
+        draft_id = create_draft(self.conn, self.object_id, None, "Тест")
+        zones = snapshot_zones(self.conn, self.object_id)
+        stance = next(zone for zone in zones if zone["id"] == self.stance_id)
+        stance["levels"][0]["upper_elevation_mm"] = 2000
+        token = update_draft(self.conn, self.object_id, draft_id, 1, zones, {}, "Уточнили верх")
+        publish_draft(self.conn, self.object_id, draft_id, token,
+                      business_date(), None, "Тест")
+        self.assertEqual(self.conn.execute(
+            "SELECT upper_elevation_mm FROM zone_levels WHERE zone_id = ? AND elevation_mm = 0",
+            (self.stance_id,),
+        ).fetchone()[0], 2000)
+        self.assertEqual(next(zone for zone in snapshot_zones(self.conn, self.object_id)
+                              if zone["id"] == self.stance_id)["levels"][0]["upper_elevation_mm"], 2000)
 
     def test_future_version_does_not_change_current_until_activation(self):
         draft_id, token = self._draft_with_new_crane()

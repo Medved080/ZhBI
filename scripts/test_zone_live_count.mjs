@@ -18,4 +18,7 @@ const stance = { category: "Стоянка", levels: [
 ] };
 assert.equal(countElementsInZone(stance, elements), 2,
   "ригель на границе относится к нижнему ярусу, колонна — к верхнему");
-console.log("zone live count: 3 checks passed");
+stance.levels[0].upper_elevation_mm = 2000;
+assert.equal(countElementsInZone(stance, elements), 1,
+  "явная верхняя отметка исключает ригель на +3000 из нижнего яруса");
+console.log("zone live count: 4 checks passed");

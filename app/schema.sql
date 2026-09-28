@@ -586,6 +586,7 @@ CREATE TABLE IF NOT EXISTS zone_levels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     zone_id INTEGER NOT NULL REFERENCES zones (id) ON DELETE CASCADE,
     elevation_mm INTEGER,
+    upper_elevation_mm INTEGER,
     outline_json TEXT NOT NULL,
     source_file TEXT,
     dxf_handle TEXT,

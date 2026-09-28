@@ -101,7 +101,8 @@ def _zone_records(conn: sqlite3.Connection, object_id: int) -> list:
     records = []
     for row in conn.execute(
         "SELECT z.id AS zone_id, z.category, z.name, z.match_status, z.parent_zone_id, "
-        "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
+        "z.parent_match_status, l.id AS level_id, l.elevation_mm, "
+        "l.upper_elevation_mm, l.outline_json "
         "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
         "WHERE z.object_id = ? AND z.is_current = 1 AND l.is_reference = 0",
         (object_id,),
@@ -110,6 +111,7 @@ def _zone_records(conn: sqlite3.Connection, object_id: int) -> list:
             handle=_handle(row["zone_id"], row["level_id"]),
             category=row["category"],
             elevation_mm=row["elevation_mm"],
+            upper_elevation_mm=row["upper_elevation_mm"],
             outline=[tuple(p) for p in json.loads(row["outline_json"])],
             name=row["name"],
             match_status=row["match_status"] or "matched",

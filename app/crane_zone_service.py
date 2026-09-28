@@ -20,6 +20,15 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def draft_warnings(zones: list[dict], base_zones: list[dict]) -> list[str]:
+    """Быстрая проверка схемы для черновика, без пересчёта изделий."""
+    try:
+        validate_zones(zones, base_zones, allow_deletions=True)
+    except (ZoneDraftError, KeyError, TypeError, ValueError) as exc:
+        return [str(exc) or "Проверьте состав зон и ярусов"]
+    return []
+
+
 def _latest(conn: sqlite3.Connection, object_id: int):
     return conn.execute(
         "SELECT * FROM crane_zone_versions WHERE object_id = ? "
@@ -240,16 +249,22 @@ def update_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         draft = _draft(conn, object_id, draft_id)
         if draft["edit_token"] != edit_token:
             raise ZoneDraftError("Черновик изменён в другой вкладке; обновите его")
+        latest = _latest(conn, object_id)
+        if latest is None or draft["base_version_id"] != latest["id"]:
+            raise ZoneDraftError(
+                "Черновик создан для прежней редакции зон и не может быть сохранён "
+                "после перехода на новую схему. Откройте новый черновик; старый сохранён для просмотра."
+            )
         base = conn.execute(
             "SELECT zones_json FROM crane_zone_versions WHERE id = ? AND object_id = ?",
             (draft["base_version_id"], object_id),
         ).fetchone()
         if base is None:
             raise ZoneDraftError("Исходная редакция черновика не найдена")
-        # Промежуточный черновик может временно оставить стоянку вне крана:
-        # оператору нужно сохранить сдвиг крана до перемещения стоянки.
-        # Предпросмотр и публикация по-прежнему требуют корректной геометрии.
-        validate_zones(zones, json.loads(base["zones_json"]), allow_geometry_errors=True)
+        # Промежуточный черновик можно сохранить с ошибками. Строгая проверка
+        # обязательна при предпросмотре и публикации.
+        if not isinstance(zones, list) or len(zones) > 2000 or len(_json(zones)) > 8_000_000:
+            raise ZoneDraftError("Список зон черновика слишком велик или повреждён")
         if not isinstance(overrides, dict) or len(overrides) > 100000:
             raise ZoneDraftError("Слишком много ручных назначений")
         if not isinstance(note, str) or len(note) > 2000:
@@ -263,6 +278,21 @@ def update_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
         )
         conn.commit()
         return edit_token + 1
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def delete_draft(conn: sqlite3.Connection, object_id: int, draft_id: int,
+                 edit_token: int) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        draft = _draft(conn, object_id, draft_id)
+        if draft["edit_token"] != edit_token:
+            raise ZoneDraftError("Черновик изменён в другой вкладке; обновите его")
+        conn.execute("DELETE FROM crane_zone_drafts WHERE id = ? AND object_id = ?",
+                     (draft_id, object_id))
+        conn.commit()
     except Exception:
         conn.rollback()
         raise
@@ -324,6 +354,8 @@ def _reserve_new_zones(conn: sqlite3.Connection, object_id: int,
         resolved["levels"] = sorted([
             {
                 "elevation_mm": level["elevation_mm"], "outline": level["outline"],
+                **({"upper_elevation_mm": level["upper_elevation_mm"]}
+                   if level.get("upper_elevation_mm") is not None else {}),
                 "source_file": level.get("source_file") or resolved["source_file"],
                 "dxf_handle": level.get("dxf_handle") or resolved["dxf_handle"],
             }
@@ -352,9 +384,11 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
             "AND category IN ('Кран', 'Стоянка')", (object_id,),
         )
     }
-    if not alive.issubset(expected):
-        raise ZoneDraftError("Текущие зоны изменены вне редакции; активация остановлена")
+    removed = alive - expected
     retired_assignments = _retired_saved_assignments(conn, object_id)
+    for zone_id in removed:
+        conn.execute("UPDATE zones SET is_current = 0 WHERE id = ? AND object_id = ?",
+                     (zone_id, object_id))
     for zone in zones:
         first = zone["levels"][0] if zone["levels"] else None
         conn.execute(
@@ -370,9 +404,10 @@ def _apply_current(conn: sqlite3.Connection, object_id: int, version) -> None:
         conn.execute("DELETE FROM zone_levels WHERE zone_id = ?", (zone["id"],))
         for level in zone["levels"]:
             conn.execute(
-                "INSERT INTO zone_levels (zone_id, elevation_mm, outline_json, source_file, dxf_handle, is_reference) "
-                "VALUES (?, ?, ?, ?, ?, 0)",
-                (zone["id"], level["elevation_mm"], _json(level["outline"]),
+                "INSERT INTO zone_levels (zone_id, elevation_mm, upper_elevation_mm, outline_json, source_file, dxf_handle, is_reference) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0)",
+                (zone["id"], level["elevation_mm"], level.get("upper_elevation_mm"),
+                 _json(level["outline"]),
                  level.get("source_file") or zone.get("source_file"),
                  level.get("dxf_handle") or zone.get("dxf_handle")),
             )
@@ -486,7 +521,9 @@ def _migrate_schedule_flow(conn: sqlite3.Connection, object_id: int,
             new_stance = new_by_id.get(matches[0])
             new_crane = new_by_id.get(new_stance["parent_zone_id"]) if new_stance else None
             if new_stance is None or new_crane is None:
-                raise ZoneDraftError("Стоянка из потока графика отсутствует в новой редакции")
+                # Сохранить исходную строку потока для дальнейшего разбора.
+                # В расчёте она не найдёт действующую стоянку.
+                continue
             new_pair = (new_crane["name"], new_stance["name"])
         key = (new_pair[0], new_pair[1], row["floor"])
         if key in final_keys:

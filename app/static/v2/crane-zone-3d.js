@@ -75,6 +75,8 @@ export function createCraneZone3d(callbacks) {
   }
   function zoneTop(zone, levelIndex, bounds) {
     const base = levelY(zone.levels[levelIndex]);
+    const explicit = zone.levels[levelIndex]?.upper_elevation_mm;
+    if (Number.isFinite(explicit) && explicit > base) return explicit;
     const higher = (data?.zones || []).filter((item) => item.category === "Стоянка" || item.virtual_stance_box)
       .flatMap((item) => item.levels.map(levelY)).filter((value) => value > base).sort((a, b) => a - b);
     if (higher.length) return higher[0];

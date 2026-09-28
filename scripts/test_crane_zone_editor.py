@@ -4,6 +4,8 @@ import copy
 import unittest
 
 from app.crane_zone_editor import ZoneDraftError, validate_overrides, validate_zones
+from zone_binding import bind_stance_union
+from zone_parser import ZoneRecord
 
 
 def square(x, y, size):
@@ -99,6 +101,20 @@ class CraneZoneDraftTest(unittest.TestCase):
         draft[-1]["levels"][0]["elevation_mm"] = 3000
         with self.assertRaisesRegex(ZoneDraftError, "пересекаются"):
             validate_zones(draft, baseline)
+
+    def test_explicit_upper_elevation_limits_binding(self):
+        records = [ZoneRecord(handle="C", category="Кран", elevation_mm=None,
+                              outline=[], name="Кран 1", match_status="matched"),
+                   ZoneRecord(handle="S", category="Стоянка", elevation_mm=0,
+                              outline=square(0, 0, 5), name="Стоянка 1",
+                              match_status="matched", parent_zone_handle="C",
+                              upper_elevation_mm=2000)]
+        _, matched = bind_stance_union("Колонна", 2, 2, None, 1999, records)
+        _, above = bind_stance_union("Колонна", 2, 2, None, 2000, records)
+        _, cap = bind_stance_union("Ригель", 2, 2, None, 2000, records)
+        self.assertEqual(matched.zone_handle, "S")
+        self.assertEqual(above.status, "unmatched")
+        self.assertEqual(cap.zone_handle, "S")
 
 
 if __name__ == "__main__":

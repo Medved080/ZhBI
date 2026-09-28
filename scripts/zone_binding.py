@@ -324,9 +324,27 @@ def bind_stance_union(element_type, x, y, outline, elevation_mm, zones):
     if not levels:
         empty = ZoneBindingResult(None, "unmatched")
         return empty, empty
-    index = _tier_index(elevation_mm, levels, element_type in TIER_CAPPING_TYPES)
-    level = levels[index]
-    at_level = [z for z in zones if z.category == "Стоянка" and z.elevation_mm == level]
+    strict = element_type in TIER_CAPPING_TYPES
+    candidates_by_height = []
+    for zone in zones:
+        if zone.category != "Стоянка" or zone.elevation_mm is None or not zone.outline:
+            continue
+        lower = zone.elevation_mm
+        higher = next((value for value in levels if value > lower), float("inf"))
+        upper = zone.upper_elevation_mm if zone.upper_elevation_mm is not None else higher
+        in_band = (lower < elevation_mm <= upper) if strict else (lower <= elevation_mm < upper)
+        if in_band:
+            candidates_by_height.append(zone)
+    if candidates_by_height:
+        level = max(zone.elevation_mm for zone in candidates_by_height)
+        at_level = [zone for zone in candidates_by_height if zone.elevation_mm == level]
+    elif elevation_mm < levels[0] and all(
+            zone.upper_elevation_mm is None for zone in zones if zone.category == "Стоянка"):
+        at_level = [zone for zone in zones if zone.category == "Стоянка"
+                    and zone.elevation_mm == levels[0]]
+    else:
+        empty = ZoneBindingResult(None, "unmatched")
+        return empty, empty
     polygons = [(z.handle, _to_valid_polygon(z.outline)) for z in at_level]
     candidates = [(h, p) for h, p in polygons if p is not None and not p.is_empty]
     use_point = element_type in POINT_BASED_TYPES or not outline
