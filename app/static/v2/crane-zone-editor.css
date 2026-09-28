@@ -41,7 +41,9 @@
 .cz-tree-icon { color: #4b9870; }
 .cz-tree-chevron { color: #607782; width: 10px; flex: none; }
 .cz-crane-stands[hidden] { display: none; }
-.cz-stand { padding-left: 23px; }
+.cz-stand-row { display: flex; align-items: center; gap: 3px; }
+.cz-stand-row .cz-stand { flex: 1; min-width: 0; padding-left: 3px; }
+.cz-stand-visible { flex: none; width: 16px; height: 16px; margin: 0 0 0 9px; accent-color: #2c8953; cursor: pointer; }
 .cz-stand .cz-tree-icon { color: #6185a5; }
 .cz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .cz-map { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }

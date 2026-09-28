@@ -2,7 +2,7 @@
 // Все изменения до публикации живут только в локальном/серверном черновике.
 import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
-import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { displacedZoneEdge, nearestEdgeIndex } from "./zone-edge-geometry.js";
 import { edgeResizeAngle, edgeResizeCursor } from "./zone-resize-direction.js";
 import { peerOverlap } from "./zone-overlap.js";
 import { countElementsByZones } from "./zone-live-count.js";
@@ -47,6 +47,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   let effectiveDate = today();
   let view = null, fitScale = null, viewWidth = 0, viewHeight = 0;
   let drag = null, hoverEdge = null, activeLevel = 0, craneLevel = null;
+  let viewStanceIds = null, cameraCraneId = null;
   let canvasResizeObserver = null;
   let viewer3d = null, renderGeneration = 0;
   let model3d = null, modelById = new Map(), modelPromise = null;
@@ -85,7 +86,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     return [...levels].sort((a, b) => a[0] - b[0]);
   }
   function visibleZones() {
-    if (standFocus) return zones().filter((z) => z.category === "Стоянка");
+    if (standFocus) {
+      const craneId = viewedCraneId();
+      return zones().filter((z) => z.category === "Стоянка" && z.parent_zone_id === craneId &&
+        (viewStanceIds == null || viewStanceIds.has(z.id)));
+    }
     const cranes = zones().filter((z) => z.category === "Кран");
     if (cranes.some((z) => z.levels.length)) return cranes; // исторический legacy-снимок
     return zones().filter((z) => z.category === "Стоянка").flatMap((stance) =>
@@ -97,10 +102,19 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function firstZoneId() { return zones().find((z) => z.category === "Кран")?.id ?? zones()[0]?.id ?? null; }
   function zoneById(id) { return zones().find((z) => z.id === id); }
   function selected() { return zoneById(selectedZone); }
+  function viewedCraneId() {
+    const zone = selected();
+    return zone?.category === "Кран" ? zone.id : zone?.parent_zone_id ?? null;
+  }
   function visibleElements() {
     const zone = selected();
     return standFocus && zone?.category === "Стоянка" ?
       elementsOnStanceLevel(scene, zone.levels, activeLevel, objectWorkingLevels()) : scene;
+  }
+  function mapSummary() {
+    if (!standFocus) return `Зоны кранов · ${visibleElements().length} изделий`;
+    const total = zones().filter((z) => z.category === "Стоянка" && z.parent_zone_id === viewedCraneId()).length;
+    return `Стоянки · ${visibleZones().length} из ${total} · ${visibleElements().length} изделий`;
   }
   function countForZone(zone) {
     if (draft) return preview?.zone_counts?.[zone.id] ?? liveCounts.get(zone.id) ?? 0;
@@ -242,7 +256,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const label = root.querySelector(`.cz-level[data-level="${activeLevel}"]`);
     if (label) label.textContent = `${levelBandLabel(level.elevation_mm, level.upper_elevation_mm)} · ${level.outline.length} точек`;
     const summary = $(".cz-map-summary");
-    if (summary) summary.textContent = `${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий`;
+    if (summary) summary.textContent = mapSummary();
   }
 
   function status(text, tone = "info") { message = text; messageTone = tone; updateStatus(); }
@@ -301,8 +315,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       const stands = standFocus ? all.filter((z) => z.category === "Стоянка" && z.parent_zone_id === crane.id) : [];
       const count = zoneCountLabel(crane);
       const expanded = expandedCraneIds.has(crane.id);
-      return `<div class="cz-crane"><button type="button" class="cz-tree-item ${standFocus ? "cz-crane-toggle" : ""} ${selectedZone === crane.id ? "active" : ""}" data-zone-id="${crane.id}" ${standFocus ? `data-crane-toggle="${crane.id}" aria-expanded="${expanded}"` : ""} aria-label="${standFocus ? `${expanded ? "Свернуть" : "Развернуть"} кран` : "Кран"} ${esc(crane.name)}, ${standFocus ? `${stands.length} стоянок, ` : ""}${count} изделий" data-tooltip="${standFocus ? `Выбрать кран и ${expanded ? "свернуть" : "развернуть"} его стоянки` : "Выбрать кран на схеме"}">${standFocus ? `<span class="cz-tree-chevron" aria-hidden="true">${expanded ? "▾" : "▸"}</span>` : ""}<span class="cz-tree-icon">▣</span><span>${esc(crane.name)}</span><b>${standFocus ? `${stands.length} ст. · ${count}` : count}</b></button>
-        ${standFocus ? `<div class="cz-crane-stands" ${expanded ? "" : "hidden"}>${stands.map((stand) => `<button type="button" class="cz-tree-item cz-stand ${selectedZone === stand.id ? "active" : ""}" data-zone-id="${stand.id}" data-tooltip="Выбрать стоянку и её контур. ${draft ? "Знак ≈ означает предварительный подсчёт по текущей геометрии; точные назначения — в предпросмотре." : "Число справа — уже назначенные изделия."}"><span class="cz-tree-icon">⌞</span><span>${esc(stand.name)}</span><b>${zoneCountLabel(stand)}</b></button>`).join("")}${!stands.length ? `<p class="cz-parent-hint">Стоянок пока нет</p>` : ""}</div>` : ""}</div>`;
+      return `<div class="cz-crane"><button type="button" class="cz-tree-item ${standFocus ? "cz-crane-toggle" : ""} ${selectedZone === crane.id ? "active" : ""}" data-zone-id="${crane.id}" ${standFocus ? `data-crane-toggle="${crane.id}" aria-expanded="${expanded}"` : ""} aria-label="${standFocus ? `${expanded ? "Свернуть" : "Развернуть"} кран` : "Кран"} ${esc(crane.name)}, ${standFocus ? `${stands.length} стоянок, ` : ""}${count} изделий" data-tooltip="${standFocus ? `Показать на схеме только стоянки этого крана и ${expanded ? "свернуть" : "развернуть"} список` : "Выбрать кран на схеме"}">${standFocus ? `<span class="cz-tree-chevron" aria-hidden="true">${expanded ? "▾" : "▸"}</span>` : ""}<span class="cz-tree-icon">▣</span><span>${esc(crane.name)}</span><b>${standFocus ? `${stands.length} ст. · ${count}` : count}</b></button>
+        ${standFocus ? `<div class="cz-crane-stands" ${expanded ? "" : "hidden"}>${stands.map((stand) => `<div class="cz-stand-row"><input type="checkbox" class="cz-stand-visible" data-view-stance="${stand.id}" aria-label="Показывать ${esc(stand.name)} на схеме" data-tooltip="Добавить или убрать стоянку на схеме, не меняя черновик" ${viewedCraneId() === crane.id && (viewStanceIds == null || viewStanceIds.has(stand.id)) ? "checked" : ""}><button type="button" class="cz-tree-item cz-stand ${selectedZone === stand.id ? "active" : ""}" data-zone-id="${stand.id}" data-tooltip="Выбрать стоянку для просмотра и редактирования. Галочками можно показать несколько стоянок одного крана."><span class="cz-tree-icon">⌞</span><span>${esc(stand.name)}</span><b>${zoneCountLabel(stand)}</b></button></div>`).join("")}${!stands.length ? `<p class="cz-parent-hint">Стоянок пока нет</p>` : ""}</div>` : ""}</div>`;
     }).join("") || `<p class="v2-muted">Кранов пока нет.</p>`;
   }
 
@@ -375,8 +389,8 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       ${canEdit && standFocus ? `<button type="button" class="v2-btn" id="cz-new">Новый черновик</button><button type="button" class="v2-btn" id="cz-save">Сохранить черновик</button><button type="button" class="v2-btn" id="cz-delete-draft">Удалить черновик</button><button type="button" class="v2-btn v2-primary" id="cz-publish">Опубликовать</button>` : ""}</div>
       <div class="cz-feedback" id="cz-feedback" role="status" aria-live="polite"></div>
       ${selectedVersionId ? `<div class="cz-history-note">Редакция №${version.revision_no} · ${esc(version.author_name || "система")} · ${esc(version.note || "Причина не указана")} · ${version.activated_at ? "действовала с указанной даты" : "ожидает вступления в силу"}. Координаты изделий показаны по текущей схеме.</div>` : ""}
-      <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit && standFocus ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${!standFocus && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
-      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${standFocus ? "Стоянки" : "Зоны кранов"} · ${visibleElements().length} изделий</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
+      <div class="cz-body"><aside class="cz-tree"><div class="cz-tree-head"><div class="cz-title">${standFocus ? "Стоянки по кранам" : "Краны"}</div>${canEdit && standFocus ? `<div class="cz-tree-add">${primaryAdd}</div>` : ""}${(!standFocus || selected()?.category === "Кран") && objectWorkingLevels().length ? `<label>Ярус объекта<select id="cz-crane-level" aria-label="Ярус объекта"><option value="">Все</option>${objectWorkingLevels().map((v) => `<option value="${v}" ${craneLevel === v ? "selected" : ""}>+${v} мм</option>`).join("")}</select></label>` : ""}</div>${treeHtml()}</aside>
+      <div class="cz-map"><div class="cz-map-bar"><span class="cz-map-summary">${mapSummary()}</span><div class="cz-map-controls"><div class="cz-view-switch" role="group" aria-label="Вид схемы"><button type="button" id="cz-view-2d" class="v2-btn ${mode3d ? "" : "cz-mode-active"}" aria-pressed="${!mode3d}">2D</button><button type="button" id="cz-view-3d" class="v2-btn ${mode3d ? "cz-mode-active" : ""}" aria-pressed="${mode3d}">3D</button></div><label class="cz-elements-layer"><input type="checkbox" id="cz-show-elements" ${showElements ? "checked" : ""}> Изделия</label><button type="button" id="cz-select-mode" class="v2-btn ${selectMode ? "cz-mode-active" : ""}" aria-pressed="${selectMode}">Выделить рамкой</button></div><span class="cz-map-hint">${selectedVersionId ? "Назначения выбранной редакции; координаты изделий текущие" : selectedElements.size ? `Выделено ${selectedElements.size}` : selected() ? `${standFocus && selected().category === "Стоянка" ? `Ярус ${selected().levels[activeLevel]?.elevation_mm ?? "без отметки"} мм · ` : ""}В контуре ${highlightedElementIds().size} изделий` : mode3d ? "Перетаскивание — поворот" : "Щелчок — выбор; внутри зоны — перемещение; Shift + протяжка — группа"}</span></div><canvas id="cz-canvas" ${mode3d ? "hidden" : ""} aria-label="${standFocus ? "Схема стоянок" : "Схема зон кранов"} и изделий"></canvas><div id="cz-3d" ${mode3d ? "" : "hidden"} role="group" aria-label="3D-схема зон и изделий"></div><svg id="cz-collision-tail" class="cz-collision-tail" aria-hidden="true"><polygon></polygon></svg><div id="cz-collision" class="cz-collision" role="alert" aria-hidden="true">${collisionText}</div><div class="cz-zoom-controls" role="group" aria-label="Масштаб схемы"><button type="button" id="cz-zoom-out" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" disabled>−</button><output id="cz-zoom-value" aria-label="Текущий масштаб">100%</output><button type="button" id="cz-zoom-in" title="Увеличить масштаб" aria-label="Увеличить масштаб">+</button><button type="button" id="cz-fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему">⟲</button></div><div class="cz-map-foot" id="cz-status" aria-hidden="true"></div></div>
       <aside class="cz-properties"><div class="cz-title">Свойства</div>${propertyHtml()}</aside></div>
       ${draft && standFocus ? `<div class="cz-bottom"><label>Причина изменения<input id="cz-note" type="text" maxlength="2000" data-tooltip="Попадёт в историю редакций и объяснит, почему изменена схема. Без причины публикация недоступна." value="${esc(draft.note || "")}" placeholder="Обязательно перед публикацией" ${draftWritable() ? "" : "disabled"}></label><label>Действует с<input id="cz-date" type="date" data-tooltip="Дата вступления редакции в силу. От неё зависит, какую схему применять при отчётах за период." value="${effectiveDate}" min="${today()}" ${draftWritable() ? "" : "disabled"}></label><button type="button" class="v2-btn" id="cz-preview">Предпросмотр</button><button type="button" class="v2-btn" id="cz-exceptions-toggle" aria-expanded="${exceptionsOpen}" aria-controls="cz-exceptions">Исключения · ${Object.keys(draft.overrides || {}).length}</button><span id="cz-preview-result">${preview ? `Изделий: ${preview.total}; смена крана: ${preview.counts.crane || 0}, стоянки: ${preview.counts.stance || 0}, статус: ${preview.counts.status || 0}, ярус: ${preview.counts.tier || 0}; ручных: ${preview.counts.manual || 0}, исключений переноса: ${preview.counts.conversion_exceptions || 0}; требуют проверки: ${preview.counts.needs_review || 0}` : ""}</span></div>${exceptionsHtml()}` : ""}`;
     if (previous3dHost) {
@@ -384,7 +398,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       $("#cz-3d")?.replaceWith(previous3dHost);
     }
     const ready3d = mode3d && viewer3d?.isReady($("#cz-3d"));
-    if (ready3d) viewer3d.update(viewerData());
+    if (ready3d) {
+      viewer3d.update(viewerData());
+      if (standFocus && cameraCraneId !== viewedCraneId()) viewer3d.fit();
+      cameraCraneId = viewedCraneId();
+    }
     if (collisionNotice?.expires > Date.now()) placeCollision(collisionNotice.x, collisionNotice.y);
     else collisionNotice = null;
     const controlHelp = {
@@ -412,11 +430,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function viewerData() {
     const visible = visibleElements();
+    const focusZones = standFocus ? zones().filter((zone) =>
+      zone.category === "Стоянка" && zone.parent_zone_id === viewedCraneId()) : [];
     const ids = showElements && model3d ? new Set(visible.map((element) => element.id)) : null;
     const levelBase = standFocus && selected()?.category === "Стоянка" ? selected().levels[activeLevel]?.elevation_mm : null;
     const modelKey = Number.isFinite(levelBase) ? `tier:${levelBase}:${selectedVersionId || "current"}` : `all:${selectedVersionId || "current"}`;
     const modelTop = model3d?.elements.reduce((top, element) => Math.max(top, (Number(element.elevation_mm) || 0) + element.renderHeight), -Infinity);
-    return { zones: visibleZones(), elements: visible, selectedZone, selectedCategory: selected()?.category, activeLevel, selectMode, showElements, modelKey,
+    return { zones: visibleZones(), focusZones, elements: visible, selectedZone, selectedCategory: selected()?.category, activeLevel, selectMode, showElements, modelKey,
       modelTop, craneColors,
       modelElements: showElements && model3d ? model3d.elements.filter((element) => ids.has(element.id)) : [],
       highlightIds: highlightedElementIds(visible), highlightColor: elementHighlightColor,
@@ -458,13 +478,15 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       },
       onCommit() { finishCollisionDrag(); refreshLiveCounts(); render(); },
       onSelectElements(ids) { hideCollision(); selectedElements = new Set(ids); render(); },
-      onSelectZone(id, levelIndex) { hideCollision(); selectedZone = id; activeLevel = levelIndex; selectedElements.clear(); render(); },
+      onSelectZone(id, levelIndex) { hideCollision(); selectedZone = id; viewStanceIds = new Set([id]); activeLevel = levelIndex; selectedElements.clear(); render(); },
       onViewChange() { if (mode3d) { updateZoomControls(); repositionCollision3d(); } },
     });
     try {
       await ensureModelData().catch(() => null);
       if (dead || !mode3d || generation !== renderGeneration) return;
       await viewer3d.show($("#cz-3d"), viewerData());
+      if (standFocus && cameraCraneId != null && cameraCraneId !== viewedCraneId()) viewer3d.fit();
+      cameraCraneId = viewedCraneId();
       if (!dead && mode3d && generation === renderGeneration) updateZoomControls();
     } catch (e) {
       if (dead || generation !== renderGeneration) return;
@@ -474,8 +496,11 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
 
   function bounds() {
     const pts = [];
-    for (const z of visibleZones()) for (const l of z.levels) pts.push(...l.outline);
-    for (const e of visibleElements()) if (Number.isFinite(e.x) && Number.isFinite(e.y)) pts.push([e.x, e.y]);
+    const focusZones = standFocus ? zones().filter((zone) =>
+      zone.category === "Стоянка" && zone.parent_zone_id === viewedCraneId()) : visibleZones();
+    for (const z of focusZones) for (const l of z.levels) pts.push(...l.outline);
+    if (!standFocus || !pts.length) for (const e of visibleElements())
+      if (Number.isFinite(e.x) && Number.isFinite(e.y)) pts.push([e.x, e.y]);
     if (!pts.length) return { x: 0, y: 0, w: 100, h: 100 };
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
@@ -543,17 +568,17 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     let activeOutline = null;
     for (const z of visibleZones()) for (const [li, level] of z.levels.entries()) {
       if (!level.outline?.length) continue;
-      if (!standFocus && craneLevel != null && level.elevation_mm !== craneLevel) continue;
+      if ((!standFocus || selected()?.category === "Кран") && craneLevel != null && level.elevation_mm !== craneLevel) continue;
       if (standFocus && selected()?.category === "Стоянка" && z.category === "Стоянка" && level.elevation_mm !== selected().levels[activeLevel]?.elevation_mm) continue;
       ctx.beginPath(); level.outline.forEach((p, i) => { const [sx, sy] = toScreen(p[0], p[1], canvas); if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy); }); ctx.closePath();
       const active = z.id === selectedZone && (!standFocus || z.category === "Стоянка") && (z.virtual_stance_box || li === activeLevel);
       const color = zoneColor(z);
       ctx.fillStyle = color;
-      ctx.globalAlpha = active ? 0.23 : 0.05;
+      ctx.globalAlpha = active ? 0.23 : standFocus ? 0.09 : 0.05;
       ctx.fill();
       ctx.globalAlpha = 1;
       ctx.strokeStyle = color;
-      ctx.lineWidth = active ? 2.7 : z.category === "Кран" ? 1.5 : 1; ctx.stroke();
+      ctx.lineWidth = active ? 2.7 : standFocus || z.category === "Кран" ? 1.5 : 1; ctx.stroke();
       if (active && draftWritable() && z.category === "Стоянка") activeOutline = level.outline;
     }
     const visible = visibleElements(), highlighted = highlightedElementIds(visible);
@@ -581,12 +606,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     canvas.dataset.renderedOutlines = String(drawn);
     canvas.dataset.highlightedOutlines = String(accented);
     // Ручки только на рёбрах: вершины не редактируются.
-    canvas.dataset.edgeMidpoints = JSON.stringify(activeOutline?.length === 4 ? activeOutline.map((point, index) => {
-      const a = toScreen(...point, canvas), b = toScreen(...activeOutline[(index + 1) % 4], canvas);
+    const resizable = draftWritable() && standFocus && selected()?.category === "Стоянка" && activeOutline?.length >= 3;
+    canvas.dataset.edgeMidpoints = JSON.stringify(resizable ? activeOutline.map((point, index) => {
+      const a = toScreen(...point, canvas), b = toScreen(...activeOutline[(index + 1) % activeOutline.length], canvas);
       return { index, x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, length: Math.hypot(b[0] - a[0], b[1] - a[1]),
         angle: edgeResizeAngle(activeOutline, index, (p) => toScreen(...p, canvas)) };
     }) : []);
-    if (activeOutline?.length === 4) {
+    if (resizable) {
       const highlighted = drag?.kind === "edge" ? drag.index : hoverEdge;
       if (highlighted != null) {
         const a = toScreen(...activeOutline[highlighted], canvas);
@@ -617,7 +643,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function pointer(event) { const rect = event.currentTarget.getBoundingClientRect(); return [event.clientX - rect.left, event.clientY - rect.top]; }
   function nearestEdge(x, y, canvas) {
     const z = selected(); if (!draftWritable() || !z || (standFocus && z.category !== "Стоянка")) return null;
-    const level = z.levels[activeLevel]; if (level?.outline?.length !== 4) return null;
+    const level = z.levels[activeLevel]; if ((level?.outline?.length || 0) < 3) return null;
     const grip = JSON.parse(canvas.dataset.edgeMidpoints || "[]")
       .find((point) => Math.hypot(point.x - x, point.y - y) <= 14);
     if (grip) return grip.index;
@@ -648,7 +674,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const activeStanceElevation = standFocus && selected()?.category === "Стоянка"
       ? selected().levels[activeLevel]?.elevation_mm : undefined;
     const hits = visibleZones().flatMap((zone) => zone.levels.flatMap((level, index) => {
-      if (!standFocus && craneLevel != null && level.elevation_mm !== craneLevel) return [];
+      if ((!standFocus || selected()?.category === "Кран") && craneLevel != null && level.elevation_mm !== craneLevel) return [];
       if (standFocus && selected()?.category === "Стоянка" && zone.category === "Стоянка" &&
           level.elevation_mm !== activeStanceElevation) return [];
       return inside(level.outline, wx, wy) ? [{ zone, index }] : [];
@@ -728,7 +754,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (drag.kind === "edge") {
       const level = selected()?.levels[activeLevel]; if (!level) return;
       const world = toWorld(x, y, canvas);
-      const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
+      const outline = displacedZoneEdge(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
       if (!outline) return;
       const blocked = blockingOverlap(selected(), level.elevation_mm, outline, drag.outline);
       if (blocked) {
@@ -755,7 +781,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     } else if ((move.kind === "pan" && !move.moved) || (move.kind === "zone" && !move.attempted)) {
       const element = nearestElement(x, y, canvas), hit = element ? null : hitZone(x, y, canvas);
       if (element) selectedElements = new Set([element.id]);
-      else if (hit) { selectedZone = hit.zone.id; activeLevel = hit.index; }
+      else if (hit) { selectedZone = hit.zone.id; if (standFocus) viewStanceIds = new Set([hit.zone.id]); activeLevel = hit.index; }
       render();
     } else if (move.kind === "edge" || move.kind === "zone") render();
     drag = null;
@@ -805,10 +831,30 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       hideCollision();
       selectedZone = Number(b.dataset.zoneId);
       if (b.dataset.craneToggle) {
+        viewStanceIds = null;
         if (expandedCraneIds.has(selectedZone)) expandedCraneIds.delete(selectedZone);
         else expandedCraneIds.add(selectedZone);
-      } else if (zoneById(selectedZone)?.parent_zone_id != null) expandedCraneIds.add(zoneById(selectedZone).parent_zone_id);
+      } else if (zoneById(selectedZone)?.parent_zone_id != null) {
+        viewStanceIds = new Set([selectedZone]);
+        expandedCraneIds.add(zoneById(selectedZone).parent_zone_id);
+      }
       activeLevel = 0; selectedElements.clear(); view = null; render();
+    }));
+    root.querySelectorAll("[data-view-stance]").forEach((checkbox) => checkbox.addEventListener("change", () => {
+      const id = Number(checkbox.dataset.viewStance), stance = zoneById(id);
+      if (!stance || stance.category !== "Стоянка") return;
+      const craneId = stance.parent_zone_id;
+      if (viewedCraneId() !== craneId) {
+        selectedZone = craneId; activeLevel = 0; viewStanceIds = new Set();
+      } else if (viewStanceIds == null) {
+        viewStanceIds = new Set(zones().filter((zone) => zone.category === "Стоянка" && zone.parent_zone_id === craneId).map((zone) => zone.id));
+      }
+      if (checkbox.checked) viewStanceIds.add(id); else viewStanceIds.delete(id);
+      if (selected()?.category === "Стоянка" && !viewStanceIds.has(selectedZone)) {
+        selectedZone = craneId; activeLevel = 0;
+      }
+      expandedCraneIds.add(craneId);
+      selectedElements.clear(); view = null; render();
     }));
     root.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => { hideCollision(); activeLevel = Number(b.dataset.level); selectedElements.clear(); view = null; render(); }));
     $("#cz-edit-zone")?.addEventListener("click", ensureEditableDraft);
@@ -875,7 +921,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const number = Math.max(0, ...all.filter((z) => z.category === category && z.parent_zone_id === parent).map((z) => z.number)) + 1;
     if (category === "Кран") {
       all.push({ id, category, number, name: `Кран ${number}`, parent_zone_id: null, levels: [] });
-      selectedZone = id; activeLevel = 0; markDirty(); render();
+      selectedZone = id; viewStanceIds = null; activeLevel = 0; markDirty(); render();
       return true;
     }
     const parentPoints = all.filter((z) => z.category === "Стоянка" && z.parent_zone_id === parent)
@@ -914,7 +960,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (levels.some((level) => !level.outline)) { status("Нет свободного места рядом с существующими зонами на одном из ярусов. Сначала освободите участок или выберите другой кран.", "error"); return false; }
     all.push({ id, category, number, name: `${category} ${number}`, parent_zone_id: parent,
       levels });
-    selectedZone = id; activeLevel = 0; markDirty(); render();
+    selectedZone = id; viewStanceIds = new Set([id]); activeLevel = 0; markDirty(); render();
     return true;
   }
   async function addLevel() {
@@ -962,7 +1008,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     draft.zones = draft.zones.filter((item) => !ids.has(item.id));
     for (const [elementId, item] of Object.entries(draft.overrides || {}))
       if (ids.has(item.crane_zone_id) || ids.has(item.stance_zone_id)) delete draft.overrides[elementId];
-    selectedZone = firstZoneId(); activeLevel = 0;
+    selectedZone = firstZoneId(); viewStanceIds = null; activeLevel = 0;
     markDirty(); render();
   }
   function assign(clear) {
@@ -1025,13 +1071,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     busy = true; updateStatus();
     try {
       await api.delete(`${prefix}/drafts/${id}?edit_token=${draft.edit_token}`);
-      draft = null; dirty = false; preview = null; selectedZone = null;
+      draft = null; dirty = false; preview = null; selectedZone = null; viewStanceIds = null;
       await refresh(); status(`Черновик №${id} удалён.`, "success");
     } catch (e) { status(errText(e), "error"); }
     finally { busy = false; updateStatus(); }
   }
   async function loadDraft(id) {
-    try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; liveCountsReady = false; selectedVersionId = null; scene = currentScene; selectedElements.clear(); dirty = false; preview = null; selectedZone = firstZoneId(); activeLevel = 0; view = null; message = ""; render(); }
+    try { draft = id ? await api.get(`${prefix}/drafts/${id}`) : null; liveCountsReady = false; selectedVersionId = null; scene = currentScene; selectedElements.clear(); dirty = false; preview = null; selectedZone = firstZoneId(); viewStanceIds = null; activeLevel = 0; view = null; message = ""; render(); }
     catch (e) { status(errText(e)); }
   }
   async function loadVersion(id) {
@@ -1045,7 +1091,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
         scene = image.elements || [];
       } else scene = currentScene;
       selectedVersionId = id; draft = null; liveCountsReady = false; dirty = false; preview = null;
-      selectedElements.clear(); selectedZone = firstZoneId();
+      selectedElements.clear(); selectedZone = firstZoneId(); viewStanceIds = null;
       activeLevel = 0; view = null; message = ""; render();
     } catch (e) { status(errText(e)); }
   }
@@ -1100,7 +1146,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     }
     if (draft && !drafts.some((item) => item.id === draft.id)) draft = null;
     liveCountsReady = false;
+    if (selectedZone && !zoneById(selectedZone)) viewStanceIds = null;
     selectedZone = selectedZone && zoneById(selectedZone) ? selectedZone : firstZoneId();
+    if (viewStanceIds) viewStanceIds = new Set([...viewStanceIds].filter((id) =>
+      zoneById(id)?.category === "Стоянка" && zoneById(id)?.parent_zone_id === viewedCraneId()));
     view = null; render();
   }
   async function guardLeave() {

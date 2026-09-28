@@ -1,7 +1,7 @@
 // Интерактивная 3D-схема черновика кранов и стоянок. Зоны показаны объёмными
 // призмами; сдвиг боковой грани идёт за ребро в плоскости верхней грани. Высоту меняет
 // отдельное поле «Отметка». Сохранение и публикация остаются в редакторе.
-import { displacedRectFace, nearestEdgeIndex } from "./zone-edge-geometry.js";
+import { displacedZoneEdge, nearestEdgeIndex } from "./zone-edge-geometry.js";
 import { edgeResizeAngle, edgeResizeCursor } from "./zone-resize-direction.js";
 
 let libraries;
@@ -126,8 +126,9 @@ export function createCraneZone3d(callbacks) {
     host.dataset.edgeMidpoints = JSON.stringify(midpoints);
     if (!gripLayer) return;
     gripLayer.replaceChildren();
-    if (!data?.editable || outline.length !== 4) return;
+    if (!data?.editable || outline.length < 3) return;
     for (const midpoint of midpoints) {
+      if (outline.length > 4 && midpoint.length < 18) continue;
       const grip = document.createElement("span");
       grip.className = "cz-3d-grip";
       grip.style.left = `${midpoint.x}px`;
@@ -150,9 +151,9 @@ export function createCraneZone3d(callbacks) {
   }
   function nearestHandle(x, y) {
     const level = activeLevel();
-    if (!data?.editable || level?.outline?.length !== 4) return null;
+    if (!data?.editable || (level?.outline?.length || 0) < 3) return null;
     const midpoints = JSON.parse(host?.dataset.edgeMidpoints || "[]");
-    const grip = midpoints.find((point) => Math.hypot(point.x - x, point.y - y) <= 17);
+    const grip = midpoints.find((point) => (level.outline.length === 4 || point.length >= 18) && Math.hypot(point.x - x, point.y - y) <= 17);
     if (grip) return { kind: "edge", index: grip.index };
     // У соседней новой зоны на обзорном масштабе ребро может быть ~18 px:
     // прежние 12 px отступа от каждой вершины перекрывали его целиком.
@@ -212,7 +213,7 @@ export function createCraneZone3d(callbacks) {
     }
     if (drag.kind === "orbit") { if (Math.hypot(x - drag.x, y - drag.y) > 4) drag.moved = true; return; }
     const world = worldOnLevel(x, y); if (!world) return;
-    const outline = displacedRectFace(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
+    const outline = displacedZoneEdge(drag.outline, drag.index, world[0] - drag.start[0], world[1] - drag.start[1]);
     if (!outline) return;
     if (Math.hypot(x - drag.x, y - drag.y) > 2) drag.moved = true;
     if (drag.moved) {
@@ -390,18 +391,17 @@ export function createCraneZone3d(callbacks) {
       const colorName = zone.category === "Стоянка" ? data.zones.find((item) => item.id === zone.parent_zone_id)?.name : zone.name;
       const colorCode = data.craneColors?.[colorName];
       const color = colorCode ? Number(`0x${colorCode.replace("#", "")}`) : zone.category === "Кран" ? 0x2c8953 : 0x4682b4;
-      const quietStand = data.selectedCategory === "Стоянка" && zone.category === "Стоянка" && !active;
       const shape = new THREE.Shape(outline.map((point) => new THREE.Vector2(point[0], point[1])));
       const geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(100, top - y), bevelEnabled: false, steps: 1 });
       const volume = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true,
-        opacity: active ? 0.38 : quietStand ? 0 : data.showElements ? 0.015 : 0.05,
+        opacity: active ? 0.38 : data.showElements ? 0.07 : 0.12,
         side: THREE.DoubleSide, depthWrite: false, depthTest: !active }));
       volume.rotation.x = -Math.PI / 2; volume.position.y = y;
       volume.renderOrder = active ? 4 : 1;
       volume.userData = { zoneId: zone.id, levelIndex };
       meshes.push(volume); group.add(volume);
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color,
-        transparent: true, opacity: active ? 0.95 : quietStand ? 0 : 0.13, depthTest: false }));
+        transparent: true, opacity: active ? 0.95 : 0.45, depthTest: false }));
       edges.rotation.x = -Math.PI / 2; edges.position.y = y; edges.renderOrder = active ? 5 : 2;
       group.add(edges);
       if (active) { r.activeVolume = volume; r.activeEdges = edges; }
@@ -409,7 +409,7 @@ export function createCraneZone3d(callbacks) {
     r.group = group; r.scene.add(group); requestFrame();
   }
   function updateOutline(outline) {
-    if (!r?.activeVolume || !r.activeEdges || outline?.length !== 4) return;
+    if (!r?.activeVolume || !r.activeEdges || (outline?.length || 0) < 3) return;
     const zone = data.zones.find((item) => item.id === data.selectedZone);
     if (!zone) return;
     const y = levelY(zone.levels[data.activeLevel]);
@@ -425,7 +425,7 @@ export function createCraneZone3d(callbacks) {
   }
   function fit() {
     if (!r || !data) return;
-    const bounds = sceneBounds || extent();
+    const bounds = focusExtent() || sceneBounds || extent();
     const { minX, maxX, minY, maxY, minZ } = bounds;
     const maxZ = Math.max(bounds.maxZ, ...data.zones.flatMap((zone) => zone.levels.map((_, index) => zoneTop(zone, index, bounds))));
     const span = Math.max(maxX - minX, maxY - minY, (maxZ - minZ) * 1.5, 1000);
@@ -437,6 +437,21 @@ export function createCraneZone3d(callbacks) {
     r.controls.maxDistance = homeDistance * 2;
     r.controls.minDistance = homeDistance / 100;
     r.controls.update(); framed = true; requestFrame();
+  }
+  function focusExtent() {
+    if (!data.focusZones?.length) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const zone of data.focusZones) for (const level of zone.levels) {
+      const base = levelY(level);
+      minZ = Math.min(minZ, base);
+      maxZ = Math.max(maxZ, Number.isFinite(level.upper_elevation_mm) ? level.upper_elevation_mm : base + 3000);
+      for (const point of level.outline || []) {
+        minX = Math.min(minX, point[0]); maxX = Math.max(maxX, point[0]);
+        minY = Math.min(minY, point[1]); maxY = Math.max(maxY, point[1]);
+      }
+    }
+    return Number.isFinite(minX) ? { minX, maxX, minY, maxY, minZ, maxZ } : null;
   }
   function zoom(factor) {
     if (!r || !homeDistance) return;

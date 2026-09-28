@@ -68,3 +68,70 @@ export function displacedRectFace(outline, index, dx, dy) {
   result[(index + 3) % 4] = point(left, opposite);
   return result;
 }
+
+// У многоугольной стоянки сдвигается выбранное ребро параллельно себе.
+// Остальные вершины остаются на месте; при достижении самопересечения
+// перемещение останавливается на последнем допустимом положении.
+export function displacedZoneEdge(outline, index, dx, dy) {
+  if (!Array.isArray(outline) || outline.length < 3 || index < 0 || index >= outline.length) return null;
+  if (outline.length === 4) return displacedRectFace(outline, index, dx, dy);
+  const n = outline.length, next = (index + 1) % n;
+  const a = outline[index], b = outline[next];
+  const ex = b[0] - a[0], ey = b[1] - a[1], length = Math.hypot(ex, ey);
+  if (length < 1) return null;
+  const nx = -ey / length, ny = ex / length;
+  const desired = Math.round(dx * nx + dy * ny);
+  const sourceArea = signedArea2(outline);
+  if (Math.abs(sourceArea) < 1) return null;
+  const candidate = (offset) => {
+    const result = outline.map((point) => [...point]);
+    result[index] = [a[0] + offset * nx, a[1] + offset * ny];
+    result[next] = [b[0] + offset * nx, b[1] + offset * ny];
+    return result;
+  };
+  const valid = (result) => {
+    const area = signedArea2(result);
+    if (Math.abs(area) < 1 || Math.sign(area) !== Math.sign(sourceArea)) return false;
+    for (const edge of [(index + n - 1) % n, index, next]) {
+      const p = result[edge], q = result[(edge + 1) % n];
+      if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 0.001) return false;
+      for (let other = 0; other < n; other++) {
+        if (other === edge || (edge + 1) % n === other || (other + 1) % n === edge) continue;
+        if (segmentsIntersect(p, q, result[other], result[(other + 1) % n])) return false;
+      }
+    }
+    return true;
+  };
+  const result = candidate(desired);
+  if (valid(result)) return result;
+  let low = 0, high = Math.abs(desired), best = candidate(0);
+  for (let step = 0; step < 15 && high - low > 1; step++) {
+    const middle = Math.floor((low + high) / 2);
+    const attempt = candidate(Math.sign(desired) * middle);
+    if (valid(attempt)) { low = middle; best = attempt; }
+    else high = middle;
+  }
+  return best;
+}
+
+function signedArea2(points) {
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    sum += a[0] * b[1] - b[0] * a[1];
+  }
+  return sum;
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const cross = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const abC = cross(a, b, c), abD = cross(a, b, d);
+  const cdA = cross(c, d, a), cdB = cross(c, d, b);
+  if ((abC > 0 && abD < 0 || abC < 0 && abD > 0) &&
+      (cdA > 0 && cdB < 0 || cdA < 0 && cdB > 0)) return true;
+  const on = (p, q, r) => r[0] >= Math.min(p[0], q[0]) - 1e-7 &&
+    r[0] <= Math.max(p[0], q[0]) + 1e-7 && r[1] >= Math.min(p[1], q[1]) - 1e-7 &&
+    r[1] <= Math.max(p[1], q[1]) + 1e-7;
+  return Math.abs(abC) < 1e-7 && on(a, b, c) || Math.abs(abD) < 1e-7 && on(a, b, d) ||
+    Math.abs(cdA) < 1e-7 && on(c, d, a) || Math.abs(cdB) < 1e-7 && on(c, d, b);
+}

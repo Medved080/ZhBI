@@ -14,7 +14,11 @@ try {
     args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-webgl", "--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
   await openScreen(browser, "zones", "!!document.querySelector('[data-cat=Стоянка]')");
   await tap(browser, '[data-cat="Стоянка"]');
-  await browser.waitFor("!!document.querySelector('.cz-crane-toggle') && !!document.querySelector('#cz-draft-select')?.value", 30000);
+  await browser.waitFor("!!document.querySelector('.cz-crane-toggle')", 30000);
+  if (!await browser.eval("!!document.querySelector('#cz-draft-select')?.value && !document.querySelector('#cz-draft-select option:checked')?.textContent.includes('устарел')")) {
+    await tap(browser, '#cz-new');
+    await browser.waitFor("!!document.querySelector('#cz-draft-select')?.value", 30000);
+  }
   await tap(browser, '.cz-crane-toggle');
   const ids = await browser.eval("[...document.querySelectorAll('.cz-crane-stands:not([hidden]) .cz-stand')].slice(0,2).map(e=>e.dataset.zoneId)");
   await tap(browser, `.cz-stand[data-zone-id="${ids[0]}"]`);

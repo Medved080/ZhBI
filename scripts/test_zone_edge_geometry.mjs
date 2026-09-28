@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { displacedEdgeEndpoints, nearestEdgeIndex } from "../app/static/v2/zone-edge-geometry.js";
+import { displacedEdgeEndpoints, displacedZoneEdge, nearestEdgeIndex } from "../app/static/v2/zone-edge-geometry.js";
 
 const square = [[0, 0], [100, 0], [100, 100], [0, 100]];
 const project = (point) => point;
@@ -20,4 +20,13 @@ assert.ok(Math.abs((a[0] - old[0]) * (oldEnd[0] - old[0]) + (a[1] - old[1]) * (o
 assert.deepEqual(displacedEdgeEndpoints(diagonal, 0, 0, 0), [old, oldEnd]);
 assert.equal(displacedEdgeEndpoints([[0, 0], [0, 0], [10, 10]], 0, 1, 1), null);
 
-console.log("zone edge geometry: 11 checks passed");
+const stepped = [[0, 0], [100, 0], [100, 60], [70, 60], [70, 100], [0, 100]];
+const moved = displacedZoneEdge(stepped, 0, 0, 20);
+assert.deepEqual(moved.slice(0, 2), [[0, 20], [100, 20]]);
+assert.deepEqual(moved.slice(2), stepped.slice(2), "остальные вершины сложной стоянки сдвинулись");
+const limited = displacedZoneEdge(stepped, 0, 0, 1000);
+assert.ok(limited[0][1] < 60 && limited[0][1] >= 20,
+  "ребро не остановилось перед самопересечением");
+assert.deepEqual(displacedZoneEdge(square, 0, 0, 20), [[0, 20], [100, 20], [100, 100], [0, 100]]);
+
+console.log("zone edge geometry: polygon and rectangle checks passed");
