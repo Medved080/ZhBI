@@ -132,8 +132,10 @@ def validate_zones(zones: list[dict], base_zones: list[dict], *,
              for z in peers for l in z["levels"]]
     for index, (zone, _, poly, lower, upper) in enumerate(bands):
         for other, peer, peer_poly, peer_lower, peer_upper in bands[index + 1:]:
-            if zone["id"] == other["id"] or lower >= peer_upper or peer_lower >= upper:
+            if lower >= peer_upper or peer_lower >= upper:
                 continue
+            if zone["id"] == other["id"]:
+                raise ZoneDraftError(f"Ярусы стоянки «{zone['name']}» перекрываются по высоте")
             area = poly.intersection(peer_poly).area
             old_a = next((l for l in original.get(zone["id"], {}).get("levels", [])
                           if l["elevation_mm"] == lower), None)

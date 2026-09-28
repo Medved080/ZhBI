@@ -116,6 +116,14 @@ class CraneZoneDraftTest(unittest.TestCase):
         self.assertEqual(above.status, "unmatched")
         self.assertEqual(cap.zone_handle, "S")
 
+    def test_upper_elevation_cannot_overlap_next_level_of_same_stance(self):
+        draft = copy.deepcopy(self.baseline)
+        draft[1]["levels"][0]["upper_elevation_mm"] = 4000
+        draft[1]["levels"].append({"elevation_mm": 3000,
+                                    "outline": square(0, 0, 5)})
+        with self.assertRaisesRegex(ZoneDraftError, "перекрываются по высоте"):
+            validate_zones(draft, self.baseline)
+
 
 if __name__ == "__main__":
     unittest.main()
