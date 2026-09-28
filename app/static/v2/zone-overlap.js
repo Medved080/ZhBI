@@ -107,7 +107,7 @@ function closestPointOnBoundary(outline, point) {
   return closest;
 }
 
-export function peerOverlap(zones, zone, elevation, outline) {
+function overlappingPeerLevels(zones, zone, elevation) {
   if (zone.category !== "Стоянка") return [];
   const lowerLevels = [...new Set(zones.filter((item) => item.category === "Стоянка")
     .flatMap((item) => (item.levels || []).map((level) => level.elevation_mm)).concat(elevation))]
@@ -118,7 +118,65 @@ export function peerOverlap(zones, zone, elevation, outline) {
   const upper = source ? upperFor(source) : lowerLevels.find((value) => value > elevation) ?? Infinity;
   return zones.filter((other) => other.id !== zone.id && other.category === "Стоянка")
     .flatMap((other) => other.levels.filter((level) => elevation < upperFor(level) && level.elevation_mm < upper)
-      .map((level) => {
+      .map((level) => ({ other, level })));
+}
+
+function pointOnSegment(point, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const cross = (point[0] - a[0]) * dy - (point[1] - a[1]) * dx;
+  return Math.abs(cross) <= 1e-7 * Math.max(1, Math.hypot(dx, dy)) &&
+    point[0] >= Math.min(a[0], b[0]) - 1e-7 && point[0] <= Math.max(a[0], b[0]) + 1e-7 &&
+    point[1] >= Math.min(a[1], b[1]) - 1e-7 && point[1] <= Math.max(a[1], b[1]) + 1e-7;
+}
+
+function strictlyInside(outline, point) {
+  let inside = false;
+  for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+    const a = outline[j], b = outline[i];
+    if (pointOnSegment(point, a, b)) return false;
+    if ((a[1] > point[1]) !== (b[1] > point[1]) &&
+      point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+function segmentIntrusion(outline, from, to) {
+  if (strictlyInside(outline, from)) return closestPointOnBoundary(outline, from);
+  const dx = to[0] - from[0], dy = to[1] - from[1];
+  if (!dx && !dy) return null;
+  const crossing = [0, 1];
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i], b = outline[(i + 1) % outline.length];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    const denominator = dx * ey - dy * ex;
+    if (Math.abs(denominator) < 1e-9) continue;
+    const ax = a[0] - from[0], ay = a[1] - from[1];
+    const t = (ax * ey - ay * ex) / denominator;
+    const u = (ax * dy - ay * dx) / denominator;
+    if (t >= -1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9)
+      crossing.push(Math.max(0, Math.min(1, t)));
+  }
+  crossing.sort((a, b) => a - b);
+  for (let i = 0; i < crossing.length - 1; i++) {
+    if (crossing[i + 1] - crossing[i] < 1e-9) continue;
+    const middle = (crossing[i] + crossing[i + 1]) / 2;
+    if (strictlyInside(outline, [from[0] + dx * middle, from[1] + dy * middle]))
+      return [from[0] + dx * crossing[i], from[1] + dy * crossing[i]];
+  }
+  return strictlyInside(outline, to) ? closestPointOnBoundary(outline, to) : null;
+}
+
+export function peerSegmentIntrusion(zones, zone, elevation, from, to = from) {
+  for (const { other, level } of overlappingPeerLevels(zones, zone, elevation)) {
+    const contact = segmentIntrusion(level.outline, from, to);
+    if (contact) return { other, elevation_mm: level.elevation_mm, contact };
+  }
+  return null;
+}
+
+export function peerOverlap(zones, zone, elevation, outline, minimumArea = 1) {
+  return overlappingPeerLevels(zones, zone, elevation)
+    .map(({ other, level }) => {
         const pieces = overlapPieces(level.outline, outline);
         const area = pieces.reduce((sum, piece) => sum + Math.abs(polygonArea(piece)), 0);
         const center = area > 0 ? [0, 0] : null;
@@ -129,6 +187,6 @@ export function peerOverlap(zones, zone, elevation, outline) {
         }
         return { other, elevation_mm: level.elevation_mm, area,
           contact: center ? closestPointOnBoundary(level.outline, center) : null };
-      }))
-    .filter(({ area }) => area > 1);
+      })
+    .filter(({ area }) => area > minimumArea);
 }

@@ -4,7 +4,7 @@ import { esc } from "./screen-view.js";
 import { showConfirmDialog, showUnsavedDialog } from "./dialogs.js";
 import { axisSnapPoint, completeOrthogonalOutline, displacedZoneEdge, nearestEdgeIndex, orthogonalOutlineValid } from "./zone-edge-geometry.js";
 import { edgeResizeAngle, edgeResizeCursor, edgeResizeHandles } from "./zone-resize-direction.js";
-import { peerOverlap } from "./zone-overlap.js";
+import { peerOverlap, peerSegmentIntrusion } from "./zone-overlap.js";
 import { countElementsByZones } from "./zone-live-count.js";
 import { createCraneZone3d, preloadCraneZone3d } from "./crane-zone-3d.js";
 import { computeElementRenderHeights } from "./element-render-heights.js";
@@ -162,6 +162,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   const elementHighlightColor = "#ff6a00";
   const elementHighlightFill = "#ffb347";
   function highlightedElementIds(elements = visibleElements()) {
+    if (polygonDraft) return new Set();
     const outline = selected()?.levels?.[activeLevel]?.outline;
     if (!outline?.length && selected()?.category === "Кран")
       return new Set(elements.filter((element) => element.zone_crane_id === selectedZone).map((element) => element.id));
@@ -187,6 +188,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   }
   let collisionNotice = null, collisionTimer = null;
   const collisionText = "Грань достигла соседней стоянки: пересечение не допускается.";
+  const polygonCollisionText = "Точка или отрезок заходит в соседнюю стоянку: пересечение не допускается.";
   function placeCollision(x, y, animate = false) {
     const map = $(".cz-map"), bubble = $("#cz-collision"), tail = $("#cz-collision-tail");
     if (!map || !bubble || !tail) return;
@@ -212,14 +214,16 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     });
     else { bubble.classList.add("is-visible"); tail.classList.add("is-visible"); }
   }
-  function showCollision(contact, surface, screenPoint) {
+  function showCollision(contact, surface, screenPoint, noticeText = collisionText) {
     const map = $(".cz-map");
     if (!map || !surface || !screenPoint) return;
+    const bubble = $("#cz-collision");
+    if (bubble) bubble.textContent = noticeText;
     const mapRect = map.getBoundingClientRect(), surfaceRect = surface.getBoundingClientRect();
     const x = surfaceRect.left - mapRect.left + screenPoint[0];
     const y = surfaceRect.top - mapRect.top + screenPoint[1];
     placeCollision(x, y, true);
-    collisionNotice = { contact, mode3d, x, y, expires: Date.now() + 60000 };
+    collisionNotice = { contact, mode3d, x, y, text: noticeText, expires: Date.now() + 60000 };
     clearTimeout(collisionTimer);
     collisionTimer = setTimeout(hideCollision, 60000);
   }
@@ -407,7 +411,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       if (standFocus && cameraCraneId !== viewedCraneId()) viewer3d.fit();
       cameraCraneId = viewedCraneId();
     }
-    if (collisionNotice?.expires > Date.now()) placeCollision(collisionNotice.x, collisionNotice.y);
+    if (collisionNotice?.expires > Date.now()) { $("#cz-collision").textContent = collisionNotice.text; placeCollision(collisionNotice.x, collisionNotice.y); }
     else collisionNotice = null;
     const controlHelp = {
       "cz-view-2d": "Показать вид сверху: внутри зоны можно переместить её целиком, за ребро — изменить размер. Данные черновика при переключении сохраняются.",
@@ -653,6 +657,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
           ctx.beginPath(); ctx.moveTo(...toScreen(...points.at(-1), canvas));
           if (closing) { for (const corner of closing.slice(points.length)) ctx.lineTo(...toScreen(...corner, canvas)); ctx.lineTo(...toScreen(...points[0], canvas)); }
           else ctx.lineTo(...toScreen(...hover, canvas));
+          ctx.strokeStyle = polygonDraft.hoverBlocked ? "#c53f32" : "#087e9a";
           ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]);
         }
       }
@@ -725,12 +730,39 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     const undo = $("#cz-draw-undo");
     if (undo) undo.disabled = !polygonDraft.points.length;
   }
+  function drawingStepIntrusion(raw, point) {
+    const zone = selected(), level = zone?.levels[activeLevel];
+    if (!level) return null;
+    const first = peerSegmentIntrusion(zones(), zone, level.elevation_mm, raw);
+    if (first) return first;
+    const snapped = peerSegmentIntrusion(zones(), zone, level.elevation_mm, point);
+    if (snapped) return snapped;
+    const previous = polygonDraft.points.at(-1);
+    return previous ? peerSegmentIntrusion(zones(), zone, level.elevation_mm, previous, point) : null;
+  }
+  function closingIntrusion(outline) {
+    const zone = selected(), level = zone?.levels[activeLevel];
+    if (!level) return null;
+    const points = polygonDraft.points;
+    let previous = points.at(-1);
+    for (const point of [...outline.slice(points.length), outline[0]]) {
+      const blocked = peerSegmentIntrusion(zones(), zone, level.elevation_mm, previous, point);
+      if (blocked) return blocked;
+      previous = point;
+    }
+    return peerOverlap(zones(), zone, level.elevation_mm, outline, 1e-6)[0] || null;
+  }
+  function rejectPolygonIntrusion(blocked, canvas, hint) {
+    showCollision(blocked.contact, canvas, toScreen(...blocked.contact, canvas), polygonCollisionText);
+    polygonHint(hint);
+  }
   async function togglePolygonRedraw() {
     if (polygonDraft) { polygonDraft = null; render(); return; }
     if (!canStartEditing() || selected()?.category !== "Стоянка" || !await ensureEditableDraft()) return;
     if (selected()?.category !== "Стоянка") return;
     selectMode = false;
-    polygonDraft = { zoneId: selectedZone, levelIndex: activeLevel, points: [], hover: null,
+    selectedElements.clear();
+    polygonDraft = { zoneId: selectedZone, levelIndex: activeLevel, points: [], hover: null, hoverBlocked: null,
       hint: "Поставьте первую точку на схеме. Следующие отрезки будут строго горизонтальными или вертикальными." };
     render();
   }
@@ -740,13 +772,12 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
     if (points.length >= 3 && Math.hypot(...toScreen(...points[0], canvas).map((value, i) => value - [x, y][i])) <= 14) {
       const outline = completeOrthogonalOutline(points);
       if (!outline) { polygonHint("Контур пока нельзя замкнуть: добавьте точки без пересечений и снова нажмите на начальную точку."); return; }
-      const zone = selected(), level = zone.levels[activeLevel];
-      const blocked = blockingOverlap(zone, level.elevation_mm, outline, level.outline);
+      const blocked = closingIntrusion(outline);
       if (blocked) {
-        showCollision(blocked.contact, canvas, toScreen(...blocked.contact, canvas));
-        polygonHint("Новый контур пересекает соседнюю стоянку. Уберите точку и измените линию.");
+        rejectPolygonIntrusion(blocked, canvas, "Замыкающий отрезок или новый контур пересекает чужую стоянку. Уберите точку и измените линию.");
         return;
       }
+      const level = selected().levels[activeLevel];
       level.outline = outline;
       polygonDraft = null;
       view = null;
@@ -755,13 +786,20 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       status("Новый контур стоянки добавлен в черновик. Сохраните черновик и проверьте назначения.", "success");
       return;
     }
-    const point = axisSnapPoint(points.at(-1), toWorld(x, y, canvas));
+    const raw = toWorld(x, y, canvas);
+    const point = axisSnapPoint(points.at(-1), raw);
     if (points.length && Math.hypot(point[0] - points.at(-1)[0], point[1] - points.at(-1)[1]) < 1) {
       polygonHint("Поставьте следующую точку дальше от предыдущей."); return;
     }
     const next = [...points, point];
     if (!orthogonalOutlineValid(next)) { polygonHint("Отрезок пересекает нарисованную линию. Выберите другую точку."); return; }
+    const blocked = drawingStepIntrusion(raw, point);
+    if (blocked) {
+      rejectPolygonIntrusion(blocked, canvas, "Точка или отрезок попадает в чужую стоянку. Выберите другое место.");
+      return;
+    }
     points.push(point);
+    polygonDraft.hover = null; polygonDraft.hoverBlocked = null;
     polygonHint(points.length < 3 ? `Поставьте точку ${points.length + 1}. Отрезок привяжется к горизонтали или вертикали.` :
       "Продолжайте ставить точки или нажмите на зелёную начальную точку. Недостающий прямой угол добавится сам.");
     draw();
@@ -769,6 +807,7 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function undoPolygonPoint() {
     if (!polygonDraft) return;
     polygonDraft.points.pop();
+    polygonDraft.hover = null; polygonDraft.hoverBlocked = null;
     polygonHint(polygonDraft.points.length ? "Последняя точка убрана. Продолжайте рисование." : "Поставьте первую точку на схеме.");
     draw();
   }
@@ -828,7 +867,13 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
   function onMove(e) {
     const canvas = e.currentTarget, [x, y] = pointer(e);
     if (polygonDraft) {
-      polygonDraft.hover = toWorld(x, y, canvas); canvas.style.cursor = "crosshair";
+      const raw = toWorld(x, y, canvas), points = polygonDraft.points;
+      const nearStart = points.length >= 3 && Math.hypot(...toScreen(...points[0], canvas).map((value, i) => value - [x, y][i])) <= 14;
+      const closing = nearStart ? completeOrthogonalOutline(points) : null;
+      polygonDraft.hover = raw;
+      polygonDraft.hoverBlocked = nearStart ? (closing && closingIntrusion(closing)) :
+        drawingStepIntrusion(raw, axisSnapPoint(points.at(-1), raw));
+      canvas.style.cursor = polygonDraft.hoverBlocked ? "not-allowed" : "crosshair";
       if (polygonFrame == null) polygonFrame = requestAnimationFrame(() => { polygonFrame = null; draw(); });
       return;
     }
@@ -986,7 +1031,10 @@ export function mountCraneZoneEditor(root, { objectId, api, canEdit, onPublished
       canvasResizeObserver.observe(canvas);
     }
     canvas?.addEventListener("pointerdown", onDown); canvas?.addEventListener("pointermove", onMove); canvas?.addEventListener("pointerup", onUp); canvas?.addEventListener("pointercancel", onCancel);
-    canvas?.addEventListener("pointerleave", () => { if (!drag && hoverEdge != null) { hoverEdge = null; draw(); } });
+    canvas?.addEventListener("pointerleave", () => {
+      if (polygonDraft) { polygonDraft.hover = null; polygonDraft.hoverBlocked = null; draw(); }
+      else if (!drag && hoverEdge != null) { hoverEdge = null; draw(); }
+    });
     canvas?.addEventListener("wheel", (e) => {
       e.preventDefault();
       const [x, y] = pointer(e);

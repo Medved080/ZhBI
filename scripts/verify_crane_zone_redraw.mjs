@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, stopServer, session, openScreen, tap } from "./audit_work/lib.mjs";
+import { overlapArea } from "../app/static/v2/zone-overlap.js";
 
 const work = mkdtempSync(join(tmpdir(), "crane-redraw-"));
 let browser;
@@ -24,9 +25,11 @@ try {
   assert.ok(stance);
   await tap(browser, `.cz-stand[data-zone-id="${stance}"]`);
   await browser.waitFor("!!document.querySelector('#cz-redraw-polygon')", 10000);
+  await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.highlightedOutlines) > 0", 10000);
   const initial = await browser.eval("[...document.querySelectorAll('.cz-point-list span')].map(e => e.textContent)");
   await tap(browser, "#cz-redraw-polygon");
   assert.equal(await browser.eval("!!document.querySelector('.cz-draw-guide')"), true);
+  await browser.waitFor("Number(document.querySelector('#cz-canvas')?.dataset.highlightedOutlines) === 0", 10000);
 
   const shape = await browser.eval(`(() => {
     const vertices = [...document.querySelectorAll('.cz-point-list span')].map(e => {
@@ -35,9 +38,6 @@ try {
     });
     if (vertices.some(p => !p)) return null;
     const handles = JSON.parse(document.querySelector('#cz-canvas').dataset.edgeMidpoints || '[]');
-    // В режиме рисования ручки скрыты, поэтому масштаб берём из вписанного вида:
-    // сначала найдем вершины по цвету нельзя; до включения режима масштаб
-    // можно восстановить из прежних ручек, сохранённых ниже.
     return { vertices, handles };
   })()`);
   assert.equal(shape.handles.length, 0, "ручки должны скрываться во время рисования");
@@ -57,17 +57,24 @@ try {
     }
     return yes;
   };
-  let square = null;
+  const baseElevation = Number(await browser.eval("document.querySelector('#cz-elevation').value"));
+  const elements = await browser.eval(`(async()=> (await (await fetch('/objects/1/crane-zone-versions/scene')).json()).elements
+    .filter(e => e.elevation_mm === ${baseElevation} && e.element_type !== 'Плита перекрытия' && e.element_type !== 'Ригель'
+      && Number.isFinite(e.x) && Number.isFinite(e.y)).map(e => [e.x, e.y]))()`);
+  let square = null, bestCount = -1;
   const stepX = (x1 - x0) / 35, stepY = (y1 - y0) / 35;
   const halfX = Math.max(2, Math.min((x1 - x0) / 12, 20 / scale));
   const halfY = Math.max(2, Math.min((y1 - y0) / 12, 20 / scale));
-  for (let x = x0 + 3 * stepX; x < x1 - 3 * stepX && !square; x += stepX) {
+  for (let x = x0 + 3 * stepX; x < x1 - 3 * stepX; x += stepX) {
     for (let y = y0 + 3 * stepY; y < y1 - 3 * stepY; y += stepY) {
       const corners = [[x - halfX, y - halfY], [x + halfX, y - halfY], [x + halfX, y + halfY], [x - halfX, y + halfY]];
-      if (corners.every(inside)) { square = corners; break; }
+      if (!corners.every(inside) || overlapArea(shape.vertices, corners) < 4 * halfX * halfY - 1) continue;
+      const count = elements.filter(([ex, ey]) => ex > x - halfX && ex < x + halfX && ey > y - halfY && ey < y + halfY).length;
+      if (count > bestCount) { square = corners; bestCount = count; }
     }
   }
   assert.ok(square, "не нашлось места для тестового прямоугольника внутри стоянки");
+  assert.ok(bestCount > 0, "не нашлось тестового контура с изделиями для проверки подсветки");
   for (const point of square.slice(0, 3)) await browser.click(...project(point));
   assert.deepEqual(await browser.eval("[...document.querySelectorAll('.cz-point-list span')].map(e => e.textContent)"), initial,
     "до замыкания исходный контур должен оставаться неизменным");
@@ -76,6 +83,8 @@ try {
   const next = await browser.eval("[...document.querySelectorAll('.cz-point-list span')].map(e => e.textContent)");
   assert.equal(next.length, 4, "замкнутый прямоугольник должен содержать четыре точки");
   assert.notDeepEqual(next, initial);
+  assert.ok(Number(await browser.eval("document.querySelector('#cz-canvas').dataset.highlightedOutlines")) > 0,
+    "после замыкания подсветка изделий внутри нового контура не вернулась");
   assert.equal(await browser.eval("!!document.querySelector('#cz-save:not(:disabled)')"), true);
   await tap(browser, '#cz-save');
   await browser.waitFor("document.querySelector('#cz-feedback')?.textContent.includes('Черновик сохранён')", 30000);
