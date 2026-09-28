@@ -5441,6 +5441,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         elements = []
         axis_rows_all = []
         zones = []
+        seen_level_ids = set()  # ярусы зон объекта — по одному разу на всю выборку файлов
         # Объект показа (этап D): по нему читаются подписи, цвета зон и
         # контракты по умолчанию. Схема показывает ОДИН объект (этап B),
         # поэтому берётся объект ПЕРВОГО элемента выборки — второго быть не
@@ -5556,15 +5557,31 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             # зонами — их удалила чистка дообъектного наследия
             # (app/db._purge_legacy_elements), и появиться заново они не
             # могут: импорт всегда заводит зону записью справочника.
+            #
+            # Стоянки объекта на новой модели зон (transition = ready) —
+            # геометрия ОБЪЕКТА из редакций, а не чертежа: стоянка и кран,
+            # созданные в редакторе, живут под source_file
+            # «manual-zone:<объект>», и отбор по файлу чертежа их терял —
+            # фильтр V1 показывал кран как «зона #<id>» (2026-09-28). Поэтому
+            # для такого объекта стоянки берутся по объекту, каждая ярус-строка
+            # один раз на всю выборку (seen_level_ids), даже если выбрано
+            # несколько файлов. Захватки остаются привязаны к файлу.
+            ready = conn.execute(
+                "SELECT 1 FROM crane_zone_transition WHERE object_id = ? AND state = 'ready'",
+                (item_object_id,),
+            ).fetchone() is not None
             file_zones = []
             for r in conn.execute(
                 "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, "
                 "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
                 "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
-                "WHERE l.source_file = ? AND z.object_id IS ? AND z.is_current = 1 "
-                "AND l.is_reference = 0",
-                (item.source_file, item_object_id),
+                "WHERE z.object_id IS ? AND z.is_current = 1 AND l.is_reference = 0 "
+                "AND (l.source_file = ? OR (? AND z.category IN ('Кран', 'Стоянка')))",
+                (item_object_id, item.source_file, 1 if ready else 0),
             ).fetchall():
+                if r["level_id"] in seen_level_ids:
+                    continue
+                seen_level_ids.add(r["level_id"])
                 z = dict(r)
                 z["outline"] = json.loads(z.pop("outline_json"))
                 file_zones.append(z)
@@ -5574,10 +5591,6 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 "WHERE object_id = ? AND is_current = 1 AND category = 'Кран'",
                 (item_object_id,),
             )}
-            ready = conn.execute(
-                "SELECT 1 FROM crane_zone_transition WHERE object_id = ? AND state = 'ready'",
-                (item_object_id,),
-            ).fetchone() is not None
             if ready:
                 # Display-only crane boxes are the union of stance boxes.
                 # There is no crane polygon or crane zone_level in storage.
