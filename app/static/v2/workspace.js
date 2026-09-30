@@ -408,11 +408,37 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const dis = it.enabled ? "" : " ws-dim";
     return `<label class="ws-check${dis}"><input type="checkbox" data-g="${esc(g.id)}" data-key="${esc(key)}" data-v="${esc(JSON.stringify(it.v))}" ${it.on ? "checked" : ""}> <span>${esc(it.label)}</span><em>${it.count}</em></label>`;
   }
+  // Диапазоны дат («СМР», «Поставка», в том числе прогнозные) и «Изменения» — группы особого вида: не список значений, а поля (2026-09-30)
+  const EMPTY_MODES = [["show", "с датой и без даты"], ["hide", "только с датой"], ["only", "только без даты"]];
+  function datesGroupHtml(g) {
+    const open = openGroups.has(g.id);
+    const body = !open ? "" : `<div class="ws-fbody">${g.fields.map((f) => `<div class="ws-dfield" data-dfield="${esc(f.key)}"><div class="ws-btitle">${esc(f.title)}</div>
+      ${[["from", "с"], ["to", "по"]].map(([b, cap]) => `<label class="ws-drow"><span>${cap}</span><input type="date" data-bound="${b}" value="${esc(f[b])}" ${f.empty === "only" ? "disabled" : ""} aria-label="${esc(f.title)}: ${cap}"></label>`).join("")}
+      ${EMPTY_MODES.map(([m, t]) => `<label class="ws-check"><input type="radio" name="wsd-${esc(f.key)}" data-empty="${m}" ${f.empty === m ? "checked" : ""}> <span>${t}</span></label>`).join("")}</div>`).join("")}
+      <div class="ws-factions"><button type="button" data-dreset="${esc(g.key)}" ${g.active ? "" : "disabled"}>Сбросить</button></div></div>`;
+    return `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${esc(g.id)}" aria-expanded="${open}"><span>${open ? "▾" : "▸"} ${esc(g.title)}</span>${g.active ? `<b class="ws-badge">задан</b>` : ""}</button>${body}</section>`;
+  }
+  function changesGroupHtml(g) {
+    const open = openGroups.has(g.id);
+    const scopes = [["mine", "только мои"]].concat(g.canChoose ? [["all", "все пользователи"], ["some", "выбранные пользователи"]] : []);
+    const status = g.error ? `<p class="ws-err">Не удалось получить изменения: ${esc(g.error)}</p>`
+      : !g.on ? "" : g.loading ? `<p class="v2-muted">Запрашиваю изменения…</p>` : g.loaded ? `<p class="v2-muted">Изменённых изделий: ${g.count}</p>` : "";
+    const body = !open ? "" : `<div class="ws-fbody" data-chgbox>
+      <label class="ws-check"><input type="checkbox" data-chg="on" ${g.on ? "checked" : ""}> <span>отбирать изменённые за период</span></label>
+      ${[["from", "с"], ["to", "по"]].map(([b, cap]) => `<label class="ws-drow"><span>${cap}</span><input type="date" data-chg="${b}" value="${esc(g[b])}" ${g.on ? "" : "disabled"} aria-label="Изменения: ${cap}"></label>`).join("")}
+      ${scopes.map(([m, t]) => `<label class="ws-check"><input type="radio" name="wsd-chg-scope" data-chg="scope" value="${m}" ${g.scope === m ? "checked" : ""} ${g.on ? "" : "disabled"}> <span>${t}</span></label>`).join("")}
+      ${g.on && g.scope === "some" && g.canChoose ? `<div class="ws-branch">${g.users.length ? g.users.map((u) => `<label class="ws-check"><input type="checkbox" data-chg-user="${u.id}" ${u.on ? "checked" : ""}> <span>${esc(u.name)}</span></label>`).join("") : `<p class="v2-muted">Список пользователей объекта пуст</p>`}</div>` : ""}
+      ${status}
+      <div class="ws-factions"><button type="button" data-chg-reset ${g.on ? "" : "disabled"}>Сбросить</button></div></div>`;
+    return `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${esc(g.id)}" aria-expanded="${open}"><span>${open ? "▾" : "▸"} ${esc(g.title)}</span>${g.on ? `<b class="ws-badge">включён</b>` : ""}</button>${body}</section>`;
+  }
   function filtersHtml() {
     if (!filters) return `<p class="v2-muted ws-pad">${sc?.loaded === false ? "Схема загружается…" : "Загрузка фильтров…"}</p>`;
     if (!filters.groups.length) return `<p class="v2-muted ws-pad">Нет данных для фильтрации.</p>`;
     const head = `<div class="ws-fhead"><span>${sc ? `Показано ${sc.shown} из ${sc.total}` : ""}</span><button type="button" class="v2-btn" data-act="reset-filters" ${sc?.excluded ? "" : "disabled"}>Сбросить все</button></div>`;
     return head + filters.groups.map((g) => {
+      if (g.kind === "dates") return datesGroupHtml(g);
+      if (g.kind === "changes") return changesGroupHtml(g);
       const excluded = g.items.reduce((n, it) => n + (it.on ? 0 : 1) + (it.branches ? Object.values(it.branches).reduce((m, arr) => m + arr.filter((x) => !x.on).length, 0) : 0), 0);
       const open = openGroups.has(g.id);
       const q = (groupSearch.get(g.id) || "").toLowerCase();
@@ -752,6 +778,23 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     }));
     body.querySelectorAll("[data-all]").forEach((b) => b.addEventListener("click", () => bulkGroup(b.dataset.all, b.dataset.on === "1")));
     body.querySelectorAll("input[data-key]").forEach((c) => c.addEventListener("change", () => toggleItem(c)));
+    // диапазоны дат: любая правка подгруппы отправляет её состояние целиком
+    body.querySelectorAll("[data-dfield]").forEach((box) => box.querySelectorAll("input").forEach((i) => i.addEventListener("change", () => {
+      const val = (b) => box.querySelector(`[data-bound="${b}"]`).value || "";
+      const empty = box.querySelector("input[data-empty]:checked")?.dataset.empty || "show";
+      send("setDateFilter", { key: box.dataset.dfield, from: val("from"), to: val("to"), empty });
+    })));
+    body.querySelectorAll("[data-dreset]").forEach((b) => b.addEventListener("click", () => send("resetDateFilters", { group: b.dataset.dreset })));
+    // «Изменения»
+    body.querySelectorAll("[data-chgbox]").forEach((box) => box.querySelectorAll("input[data-chg], input[data-chg-user]").forEach((i) => i.addEventListener("change", () => {
+      const val = (k) => box.querySelector(`[data-chg="${k}"]`)?.value || "";
+      send("setChangeFilter", {
+        on: !!box.querySelector('[data-chg="on"]')?.checked, from: val("from"), to: val("to"),
+        scope: box.querySelector('input[data-chg="scope"]:checked')?.value || "mine",
+        userIds: Array.from(box.querySelectorAll("input[data-chg-user]:checked")).map((c) => Number(c.dataset.chgUser)),
+      });
+    })));
+    body.querySelectorAll("[data-chg-reset]").forEach((b) => b.addEventListener("click", () => send("resetChanges")));
   }
 
   // Переключение значения фильтра. У родителя дерева (тип, кран, контрагент) переключаются и его дочерние значения — как в V1.

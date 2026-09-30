@@ -34,7 +34,8 @@ if (EMBED_SCENE) {
     const method = String((init && init.method) || (isReq ? input.method : "GET")).toUpperCase();
     let path = "";
     try { path = new URL(isReq ? input.url : String(input), document.baseURI).pathname; } catch (e) { path = ""; }
-    if (method === "GET" || method === "HEAD" || (method === "POST" && path === "/plan-data")) return realFetch(input, init);
+    // POST /plan-data и POST /elements/changed — ЧТЕНИЕ (тело запроса нужно только для параметров; ничего не пишут)
+    if (method === "GET" || method === "HEAD" || (method === "POST" && (path === "/plan-data" || path === "/elements/changed"))) return realFetch(input, init);
     // журнал действий V1 (POST /activity) в кадре не ведётся — тихий отказ без шума в интерфейсе
     if (path === "/activity") return Promise.resolve(new Response(null, { status: 204 }));
     return Promise.resolve(new Response(JSON.stringify({ detail: "В окне схемы запись отключена — операции выполняются в панели рабочего места" }),

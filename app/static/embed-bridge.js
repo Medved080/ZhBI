@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -43,6 +43,9 @@
   function excludedCount() {
     let n = 0;
     for (const k of filterKeys()) n += state.placementFilters[k].size;
+    // Диапазоны дат и «Изменения» — тоже заданный отбор (иначе «Сбросить все» в панели V2 оставался бы серым при одних только датах)
+    if (typeof DATE_FILTER_DEFS !== "undefined") for (const d of DATE_FILTER_DEFS) if (dateFilterIsActive(d.key)) n++;
+    if (state.changeFilter && state.changeFilter.on) n++;
     return n;
   }
 
@@ -488,6 +491,27 @@
     return groups;
   }
 
+  // Диапазоны дат (группы «СМР» и «Поставка», в том числе прогнозные) и «Изменения» — те же состояния движка, что рисует форма фильтров V1
+  function dateGroups() {
+    return DATE_FILTER_GROUPS.map((gd) => {
+      const fields = DATE_FILTER_DEFS.filter((d) => d.group === gd.key).map((d) => {
+        const f = state.dateFilters[d.key];
+        return { key: d.key, title: d.title, from: f.from, to: f.to, empty: f.empty, active: dateFilterIsActive(d.key) };
+      });
+      return { id: "dates:" + gd.key, title: gd.title, kind: "dates", key: gd.key, items: [], fields, active: fields.some((x) => x.active) };
+    });
+  }
+  function changesGroup() {
+    const f = state.changeFilter;
+    return {
+      id: "changes", title: "Изменения", kind: "changes", key: "changes", items: [],
+      on: f.on, from: f.from, to: f.to, scope: f.scope, summary: changeFilterSummary(),
+      canChoose: !!myWorkUsers.canChoose,
+      users: (myWorkUsers.list || []).map((u) => ({ id: u.id, name: u.display_name, on: f.userIds.has(u.id) })),
+      count: f.count, loading: !!f.loading, error: f.error || "", loaded: !!f.ids,
+    };
+  }
+
   function filterModel() {
     if (!state.elements.length) return { groups: [] };
     return {
@@ -499,6 +523,8 @@
         typeGroup(),
         flatGroup("status", "Статус", statusLabelFor),
         ...supplierGroup(),
+        ...dateGroups(),
+        changesGroup(),
       ],
       statusColors: state.statusColors,
     };
@@ -583,6 +609,44 @@
         const set = state.placementFilters[ch.key];
         for (const v of ch.values) { if (ch.on) set.delete(v); else set.add(v); }
       }
+      onPlacementFilterChange();
+      scheduleState(); sendFilters();
+    },
+    // Диапазон дат одной подгруппы («Дата начала СМР», «Прогноз поставки», …): from/to — "" или ГГГГ-ММ-ДД, empty — как обращаться с пустой датой
+    setDateFilter(a) {
+      const def = DATE_FILTER_DEFS.find((d) => d.key === a.key);
+      const okDate = (x) => x === "" || (typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x));
+      if (!def || !okDate(a.from) || !okDate(a.to) || !["show", "hide", "only"].includes(a.empty)) throw new Error("параметры даты");
+      const f = state.dateFilters[def.key];
+      f.from = a.from; f.to = a.to; f.empty = a.empty;
+      onPlacementFilterChange();
+      scheduleState(); sendFilters();
+    },
+    resetDateFilters(a) {
+      const g = DATE_FILTER_GROUPS.find((x) => x.key === a.group);
+      if (!g) throw new Error("группа дат");
+      for (const d of DATE_FILTER_DEFS) if (d.group === g.key) resetDateFilter(d.key);
+      onPlacementFilterChange();
+      scheduleState(); sendFilters();
+    },
+    // «Изменения»: набор изменённых изделий спрашивается у сервера (POST /elements/changed — чтение), право выбирать чужие изменения решает сервер
+    async setChangeFilter(a) {
+      const okDate = (x) => x === "" || (typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x));
+      if (typeof a.on !== "boolean" || !okDate(a.from) || !okDate(a.to) || !["mine", "all", "some"].includes(a.scope)
+          || !Array.isArray(a.userIds) || a.userIds.length > 500 || !a.userIds.every(isInt)) throw new Error("параметры отбора изменений");
+      const f = state.changeFilter;
+      f.on = a.on; f.from = a.from; f.to = a.to; f.scope = a.scope; f.userIds = new Set(a.userIds);
+      // как в V1: период по умолчанию — текущий день, заполняется при ВКЛЮЧЕНИИ
+      if (f.on && !f.from && !f.to) { f.from = todayIsoLocal(); f.to = todayIsoLocal(); }
+      if (f.on) await ensureMyWorkUsers();
+      if (f.scope !== "mine" && !myWorkUsers.canChoose) f.scope = "mine";   // «все»/«выбранные» — только администратору объекта
+      onPlacementFilterChange();
+      scheduleState(); sendFilters();
+      await refreshChangedElementIds();
+      scheduleState(); sendFilters();
+    },
+    resetChanges() {
+      resetChangeFilter();
       onPlacementFilterChange();
       scheduleState(); sendFilters();
     },
