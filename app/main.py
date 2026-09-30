@@ -217,7 +217,7 @@ from app.pdf_export import build_schema_pdf
 from app.schedule_import import ScheduleImportError, import_schedule, parse_schedule_xlsx
 from app.report_help import help_for as report_help_for
 from app.schedule_calc import router as schedule_calc_router
-from app.schedule_versions import element_deviation
+from app.schedule_versions import element_deviation, latest_current_id as latest_schedule_version_id
 from app.schedule_versions import router as schedule_versions_router
 from app.admin_guide import router as admin_guide_router
 from app.training import router as training_router
@@ -5644,6 +5644,28 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 else:
                     z["color"] = None
             zones.extend(file_zones)
+
+        # Прогнозные даты СМР последней актуализации графика (2026-09-30) — для
+        # фильтров «Прогноз начала/окончания СМР» и «Прогноз поставки» в панели
+        # «Фильтры». Одной выборкой на весь список, а не запросом на изделие
+        # (тот же довод, что у кода контрагента ниже). Нет актуализации или
+        # изделия нет в версии — None: фильтр трактует это как «без даты».
+        _forecast_by_element = {}
+        if plan_object_id is not None and elements:
+            _forecast_version_id = latest_schedule_version_id(conn, plan_object_id)
+            if _forecast_version_id is not None:
+                _forecast_by_element = {
+                    r["element_id"]: (r["smr_start_date"], r["smr_end_date"])
+                    for r in conn.execute(
+                        "SELECT element_id, smr_start_date, smr_end_date "
+                        "FROM schedule_version_dates WHERE version_id = ?",
+                        (_forecast_version_id,),
+                    )
+                }
+        for el in elements:
+            _f = _forecast_by_element.get(el["id"])
+            el["forecast_smr_start_date"] = _f[0] if _f else None
+            el["forecast_smr_end_date"] = _f[1] if _f else None
 
         # Допстрока подписи марки на схеме (2D/3D, см. Docs/backlog.md,
         # "Контрактация 2.0") показывается для КАЖДОГО видимого элемента с

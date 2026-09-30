@@ -227,6 +227,11 @@ let state = {
     smrStart: { from: "", to: "", empty: "show" },
     smrEnd: { from: "", to: "", empty: "show" },
     deliveryPlanned: { from: "", to: "", empty: "show" },
+    // Прогноз последней актуализации графика (2026-09-30) — те же диапазоны,
+    // но по прогнозным датам (поля приходят в /plan-data, см. DATE_FILTER_DEFS).
+    smrStartForecast: { from: "", to: "", empty: "show" },
+    smrEndForecast: { from: "", to: "", empty: "show" },
+    deliveryForecast: { from: "", to: "", empty: "show" },
   },
   // Отбор по ИЗМЕНЕНИЯМ (сайдбар → Фильтры → «Изменения», живой запрос
   // 2026-08-03): какие изделия рабочей области кто-то правил за период —
@@ -2437,6 +2442,15 @@ const DATE_FILTER_DEFS = [
   { key: "smrStart", title: "Дата начала СМР", shortTitle: "начало", field: "project_smr_start_date", group: "smr" },
   { key: "smrEnd", title: "Дата окончания СМР", shortTitle: "окончание", field: "project_delivery_date", group: "smr" },
   { key: "deliveryPlanned", title: "Плановая дата поставки", shortTitle: "поставка", field: "planned_delivery_date", group: "delivery" },
+  // Прогноз — последняя актуализация графика (2026-09-30, живой запрос: «фильтровать
+  // и по прогнозным датам»). Поля приходят в /plan-data (forecast_smr_*_date; нет
+  // актуализации или изделия в ней — null, то есть «без даты»). Поставка по
+  // прогнозу — прогнозное НАЧАЛО СМР: так же её считают отчёты и «Динамика»
+  // (app/schedule_versions.FORECAST_START), в версиях графика поля «плановая
+  // поставка» нет. Поэтому два определения смотрят в одно поле.
+  { key: "smrStartForecast", title: "Прогноз начала СМР", shortTitle: "начало (прогноз)", field: "forecast_smr_start_date", group: "smr" },
+  { key: "smrEndForecast", title: "Прогноз окончания СМР", shortTitle: "окончание (прогноз)", field: "forecast_smr_end_date", group: "smr" },
+  { key: "deliveryForecast", title: "Прогноз поставки (по прогнозному началу СМР)", shortTitle: "поставка (прогноз)", field: "forecast_smr_start_date", group: "delivery" },
 ];
 
 // Верхнеуровневые группы дат — заголовок свёрнутой группы и ключ для
