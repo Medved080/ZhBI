@@ -120,10 +120,7 @@ const inV1Only = (s) => s.impl === "v1" || (s.status || 0) <= 2;
 // давно работающих в V2 (рабочие места, карта, контракты, документы контрактации, график СМР, служебные экраны).
 function homeChip(s) {
   if (inV1Only(s)) return `<span class="v2-chip" title="Функции раздела пока работают в текущем интерфейсе">в V1</span>`;
-  if (s.status >= 6) return `<span class="v2-chip v2-chip-warn" title="${esc(STATUS_LABEL[s.status] || "")}">заблокирован</span>`;
-  if (s.status >= 5) return `<span class="v2-chip v2-chip-ok" title="${esc(STATUS_LABEL[5])}">в V2</span>`;
-  const gap = s.limits ? ` Чего пока нет: ${s.limits}` : "";
-  return `<span class="v2-chip v2-chip-warn" title="${esc(`${STATUS_LABEL[s.status] || ""}.${gap}`)}">в V2 · не всё</span>`;
+  return "";   // статусные плашки «в V2 / не всё / заблокирован» убраны (2026-09-30)
 }
 
 export function mountHome(el, { registry, allowed, hiddenCount, go }) {
@@ -142,10 +139,9 @@ export function mountHome(el, { registry, allowed, hiddenCount, go }) {
   const inV2 = mine.filter((s) => !inV1Only(s)).length;
   const full = mine.filter((s) => !inV1Only(s) && s.status === 5).length;
   el.innerHTML = `<div class="v2-container">
-    <h2 class="v2-home-title">Новый интерфейс — экспериментальный</h2>
-    <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. «в V2» — раздел работает в новом интерфейсе и проверен;
-      «в V2 · не всё» — работает, но часть возможностей V1 пока не перенесена (наведите на пометку — что именно); «в V1» — раздел пока открывается в текущем интерфейсе.
-      Доступно вам: ${mine.length} разделов, в новом интерфейсе работают ${inV2}, из них полностью — ${full}.${hiddenCount ? ` Скрыто по правам: ${hiddenCount}.` : ""}</p>
+    <h2 class="v2-home-title">Новый интерфейс</h2>
+    <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. «в V1» — раздел пока открывается в текущем интерфейсе.
+      Доступно вам: ${mine.length} разделов.${hiddenCount ? ` Скрыто по правам: ${hiddenCount}.` : ""}</p>
     <div class="v2-cards">${cards}</div>
   </div>`;
   el.querySelectorAll("[data-screen-link]").forEach((a) => a.addEventListener("click", (e) => {

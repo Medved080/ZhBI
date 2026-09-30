@@ -471,7 +471,7 @@ export function checkWrite(method, pathWithQuery, body) {
     problem,
     message: problem
       ? `Запрос не отправлен: ${problem}.`
-      : `Операция отключена в экспериментальном интерфейсе${known ? ` («${known.action}»)` : ""}. Выполните её в текущем интерфейсе.`,
+      : `Операция отключена в новом интерфейсе${known ? ` («${known.action}»)` : ""}. Выполните её в текущем интерфейсе.`,
   };
 }
 

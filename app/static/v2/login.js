@@ -3,7 +3,6 @@
 // здесь только форма поверх тех же эндпоинтов, что уже использует V1
 // (POST /login, POST /me/change-password) — без своей копии правил.
 import { ApiError } from "./api.js";
-import { EXPERIMENTAL_NOTICE } from "./write-gate.js";
 import { mountPasswordForm } from "./password-form.js";
 
 export async function renderLogin(root, { api, onSuccess }) {
@@ -11,7 +10,7 @@ export async function renderLogin(root, { api, onSuccess }) {
     <div class="v2-auth-screen">
       <div class="v2-auth-card">
         <h2>ЖБИ — новый интерфейс</h2>
-        <small>${EXPERIMENTAL_NOTICE}. Вход тем же паролем, что и в текущем интерфейсе.</small>
+        <small>Вход тем же паролем, что и в текущем интерфейсе.</small>
         <form id="v2-login-form">
           <label class="v2-field">Логин
             <input id="v2-login-user" name="domain_login" autocomplete="username" list="v2-login-users" required>

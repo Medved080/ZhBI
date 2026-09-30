@@ -40,7 +40,7 @@ import { hasAdminScreen, mountAdminScreen } from "./admin-screens.js";
 import { startStatusLog } from "./statuslog.js";
 import { mountShapeEdit } from "./shape-edit.js";
 import { mountMapScreen } from "./map-screen.js";
-import { EXPERIMENTAL_NOTICE, BLOCKED_EVENT, disabledForScreen } from "./write-gate.js";
+import { BLOCKED_EVENT, disabledForScreen } from "./write-gate.js";
 import { createShellPrefsStore } from "./shell-prefs.js";
 import { mountShellNav } from "./shell-nav.js";
 import { openObjectPicker } from "./shell-object-picker.js";
@@ -286,7 +286,6 @@ async function renderShell(user, permissions) {
       <div class="v2-head-title">
         <strong>ЖБИ</strong>
         <span class="v2-head-section" id="v2-head-section"></span>
-        <span class="v2-badge">Новый интерфейс — экспериментальный</span>
         <span class="v2-build" id="v2-build" hidden></span>
       </div>
       <div class="v2-head-right">
@@ -308,10 +307,6 @@ async function renderShell(user, permissions) {
         <button type="button" class="v2-back" id="v2-back-btn" title="">← Текущий интерфейс</button>
       </div>
     </header>
-    <div class="v2-exp-banner" id="v2-exp-banner" role="note">
-      <span id="v2-exp-text">${escapeHtml(EXPERIMENTAL_NOTICE)}.</span>
-      <a href="/?ui=v1" id="v2-banner-back">Вернуться в текущий интерфейс</a>
-    </div>
     <div class="v2-gate-note" id="v2-gate-note" role="status" aria-live="polite" hidden></div>
     <div class="v2-update-note" id="v2-update-note" role="status" aria-live="polite" hidden>
       <span>Вышло обновление сервиса <b id="v2-update-note-version"></b> — эта вкладка работает предыдущей версией. Обновите страницу, чтобы перейти на новую.</span>
@@ -350,7 +345,6 @@ async function renderShell(user, permissions) {
       location.reload();
     } finally { navBusy = false; }
   });
-  document.getElementById("v2-banner-back").addEventListener("click", (e) => { e.preventDefault(); onBackClick(); });
   const gateNote = document.getElementById("v2-gate-note");
   // Предупреждение о нехватке места (перенос п.6 задания, V1: warnAboutDiskSpace) — фоновый запрос ОДИН раз за
   // загрузку оболочки (renderShell вызывается ровно один раз на вход/восстановление сеанса — см. afterLogin),
@@ -788,7 +782,7 @@ async function renderShell(user, permissions) {
     if (!off.length && !hit) { gateNote.hidden = true; gateNote.innerHTML = ""; return; }
     const link = target ? linkList(target, registry.structure[target.id], objectId) : "";
     gateNote.innerHTML = (hit ? `<strong>Не выполнено:</strong> ${escapeHtml(hit)} ` : "")
-      + (off.length ? `<strong>В этом разделе отключено в экспериментальном интерфейсе:</strong> ${off.map((r) => escapeHtml(r.action)).join("; ")}. Просмотр доступен. ` : "")
+      + (off.length ? `<strong>В этом разделе отключено в новом интерфейсе:</strong> ${off.map((r) => escapeHtml(r.action)).join("; ")}. Просмотр доступен. ` : "")
       + link;
     gateNote.hidden = false;
   }

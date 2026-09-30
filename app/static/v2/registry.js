@@ -14,10 +14,7 @@ export async function loadRegistry() {
     fetchJson("/static/v2/screens.json"),
     fetchJson("/static/v2/screen-structure.json"),
   ]);
-  // Новая цельная редакция кранов заменила прежнюю проверенную форму зон.
-  // Пока не завершена регрессия всего сценария, общий экран не должен
-  // показывать старую зелёную отметку «рабочий и проверенный».
-  const screens = reg.screens.map((s) => s.id === "zones" ? { ...s, status: 4 } : s);
+  const screens = reg.screens;
   const byId = new Map(screens.map((s) => [s.id, s]));
   return { groups: reg.groups, screens, structure, byId };
 }
@@ -65,9 +62,7 @@ export const STATUS_LABEL = {
   6: "заблокирован",
 };
 
-// Плашка статуса экрана у заголовка: «рабочий и проверенный» — зелёная, остальные — предупреждение (раньше оранжевой была любая,
-// включая проверенные). Подписи — константы STATUS_LABEL, экранирования не требуют.
-export function statusChip(screen) {
-  const s = screen?.status;
-  return `<span class="v2-chip v2-chip-${s === 5 ? "ok" : "warn"}" title="Статус реализации в реестре охвата">${STATUS_LABEL[s] || ""}</span>`;
-}
+// Плашка статуса экрана у заголовка больше не показывается (2026-09-30, решение пользователя: пометки «в V2 / не всё /
+// рабочий и проверенный» убраны). Функция оставлена, чтобы не править десятки вызывающих экранов; статусы реестра
+// (screens.json) по-прежнему ведутся и используются проверками.
+export function statusChip() { return ""; }

@@ -20,16 +20,14 @@ export const tests = [
     async run(t) {
       await guard(t, async () => {
         const a = await openApp({ home: true });
-        await waitFor(() => a.$("#v2-exp-banner"), { what: "пометка" });
-        t.has(a.$("#v2-exp-banner").textContent, NOTICE, "текст предупреждения — слово в слово");
-        t.has(a.$(".v2-badge").textContent, "экспериментальный", "бейдж в шапке");
-        t.ok(a.$("#v2-back-btn") && a.$("#v2-banner-back"), "есть кнопка возврата в шапке и ссылка в пометке");
-        t.eq(a.$("#v2-banner-back").getAttribute("href"), "/?ui=v1", "возврат ведёт в V1 (и сбрасывает выбор)");
-        t.ok(a.$("#v2-exp-banner").getClientRects().length > 0, "пометка видна");
+        await waitFor(() => a.$("#v2-back-btn"), { what: "шапка" });
+        // 2026-09-30: пометка «экспериментальный интерфейс» снята по решению пользователя
+        t.ok(!a.$("#v2-exp-banner") && !a.$(".v2-badge"), "пометок «экспериментальный» в оболочке нет");
+        t.ok(a.$("#v2-back-btn"), "кнопка возврата в текущий интерфейс в шапке на месте");
         for (const key of ["dict-smu", "zones", "users-access"]) {
           a.click(a.$(`${NAV}[data-section="${key}"]`));
           await waitFor(() => a.$(`${NAV}[data-section="${key}"][aria-pressed="true"]`), { what: key });
-          t.ok(a.$("#v2-exp-banner").getClientRects().length > 0, `пометка на экране ${key} на месте`);
+          t.ok(!a.$("#v2-exp-banner"), `на экране ${key} пометки нет`);
         }
       });
     },
@@ -244,7 +242,7 @@ export const tests = [
         t.eq(writes(a).length, 0, "запросов записи до отправки формы нет");
         const b = await openApp({ session: false });
         await waitFor(() => b.$("#v2-login-form"), { what: "вход" });
-        t.has(b.doc.body.innerText, NOTICE, "на экране входа — предупреждение");
+        t.ok(!b.doc.body.innerText.includes("Экспериментальный"), "на экране входа пометки «экспериментальный» нет (снята 2026-09-30)");
       });
     },
   },
