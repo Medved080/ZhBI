@@ -419,25 +419,36 @@ export function mountUsersAccess(container, ctx) {
       !q || `${u.display_name} ${u.domain_login} ${u.department || ""}`.toLowerCase().includes(q));
     if (!rows.length) return `<tr><td colspan="5">Пользователи не найдены</td></tr>`;
     const catalog = state.catalog, matrix = state.accessMatrix;
-    return rows.map((u) => {
+    // Учётная запись без пароля сервиса: вход закрыт. Такие — в свёрнутой по умолчанию группе в конце (2026-09-30).
+    const closed = (u) => u.auth_method !== "domain" && !u.has_password;
+    const open = rows.filter((u) => !closed(u)), shut = rows.filter(closed);
+    const shutOpen = !!state.closedOpen || (q !== "" && shut.length > 0);
+    const head = shut.length
+      ? `<tr class="v2-closed-head"><td colspan="5"><button type="button" class="v2-link" id="ua-closed-toggle" aria-expanded="${shutOpen}">${shutOpen ? "▾" : "▸"} Вход закрыт — пароль снят (${shut.length})</button></td></tr>`
+      : "";
+    return open.map(userRow).join("") + head + (shutOpen ? shut.map(userRow).join("") : "");
+    function userRow(u) {
       let accessCell = "—";
       if (catalog && matrix) {
         const summary = buildAccessSummary(accessMapFromGrants(matrix.grants[String(u.id)]), catalog);
         accessCell = `<button type="button" class="v2-link" data-open-access="${u.id}">${escapeHtml(accessSummaryLabel(u, summary))}</button>`;
       }
+      const isClosed = closed(u);
       return `
-      <tr>
+      <tr${isClosed ? ' class="v2-closed-row"' : ""}>
         <td><div class="v2-person">
           <span class="v2-avatar">${escapeHtml(initials(u))}</span>
           <div><button class="v2-link" data-user="${u.id}">${escapeHtml(u.display_name)}</button>
           <small>${escapeHtml([u.position, u.department].filter(Boolean).join(" · ") || "—")}</small></div>
         </div></td>
-        <td>${escapeHtml(u.domain_login)}<small>${u.auth_method === "domain" ? "Домен" : (u.has_password ? "Пароль сервиса" : "Пароль не задан")}</small></td>
+        <td>${escapeHtml(u.domain_login)}${isClosed
+          ? ' <span class="v2-closed-tag" title="Пароль снят: войти нельзя, пока администратор не задаст новый">🔒 Вход закрыт</span>'
+          : `<small>${u.auth_method === "domain" ? "Домен" : "Пароль сервиса"}</small>`}</td>
         <td><span class="v2-tag">${escapeHtml(ROLE_LABELS[u.role] || u.role)}</span></td>
         <td>${accessCell}</td>
         <td class="v2-row-action"><button class="v2-link" data-user="${u.id}">Открыть</button></td>
       </tr>`;
-    }).join("");
+    }
   }
 
   function initials(u) {
@@ -465,6 +476,11 @@ export function mountUsersAccess(container, ctx) {
     // innerHTML #ua-rows, но обработчик выше него и переживает замену строк
     // — до правки обработчики вешались на сами <tr> и терялись при вводе.
     body.querySelector(".v2-table").addEventListener("click", (e) => {
+      if (e.target.closest("#ua-closed-toggle")) {
+        state.closedOpen = !body.querySelector("#ua-closed-toggle").matches('[aria-expanded="true"]');
+        body.querySelector("#ua-rows").innerHTML = userRows();
+        return;
+      }
       const openAccess = e.target.closest("[data-open-access]");
       if (openAccess) { openUser(Number(openAccess.dataset.openAccess), "access"); return; }
       const openUserBtn = e.target.closest("[data-user]");

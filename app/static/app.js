@@ -15360,28 +15360,56 @@ function usersMatchesSearch(u, q) {
 
 // Перерисовка СТРОК по уже загруженным данным — поиск фильтрует на клиенте,
 // без похода на сервер: список пользователей и так весь на руках.
+// Учётная запись без пароля сервиса: вход закрыт (сервер такую не пускает, см.
+// app/auth.py verify_password). Доменные сюда не относятся: их пароль в домене.
+function userLoginClosed(u) {
+  return u.auth_method !== "domain" && !u.has_password;
+}
+// Группа «Вход закрыт» в конце списка свёрнута по умолчанию (2026-09-30).
+let usersClosedOpen = false;
+
 function renderUsersRows() {
   const table = document.getElementById("users-table");
   document.getElementById("users-count").textContent =
     `${usersCache.length} ${ruPlural(usersCache.length, "учётная запись", "учётные записи", "учётных записей")}`;
   const q = usersSearch.trim().toLowerCase();
   const видимые = usersCache.filter(u => usersMatchesSearch(u, q));
-  const rowsHtml = видимые.length ? видимые.map(u => {
+  const рабочие = видимые.filter(u => !userLoginClosed(u));
+  const закрытые = видимые.filter(userLoginClosed);
+  // Поиск нашёл закрытых — раскрываем группу, иначе человек решит, что записи нет.
+  const закрытыеРаскрыты = usersClosedOpen || (q !== "" && закрытые.length > 0);
+  const строка = (u) => {
     const summary = buildAccessSummary(
       accessMapFromGrants(usersMatrixCache.grants[String(u.id)]), usersCatalogCache);
     const должность = [u.position, u.department].filter(Boolean).join(" · ");
+    const закрыт = userLoginClosed(u);
     return `
-    <tr>
+    <tr${закрыт ? ' class="user-closed-row"' : ""}>
       <td><div class="user-cell"><span class="user-avatar">${escapeHtml(userInitials(u))}</span>
         <div><button type="button" class="link-btn user-cell-name" data-edit="${u.id}">${escapeHtml(u.display_name)}</button>
         <small>${escapeHtml(должность || "—")}</small></div></div></td>
-      <td>${escapeHtml(u.domain_login)}<small>${escapeHtml(authMethodLabel(u))}</small></td>
+      <td>${escapeHtml(u.domain_login)}${закрыт
+        ? ' <span class="user-closed-tag" title="Пароль снят: войти нельзя, пока администратор не задаст новый">🔒 Вход закрыт</span>'
+        : `<small>${escapeHtml(authMethodLabel(u))}</small>`}</td>
       <td><span class="ue-tag">${escapeHtml(ROLE_LABELS[u.role] || u.role)}</span></td>
       <td><button type="button" class="link-btn" data-open-access="${u.id}">${escapeHtml(accessSummaryLabel(u, summary))}</button></td>
       <td class="user-actions"><button type="button" class="link-btn" data-edit="${u.id}">Изменить</button></td>
     </tr>`;
-  }).join("") : `<tr><td colspan="5">Пользователи не найдены</td></tr>`;
+  };
+  let rowsHtml = рабочие.map(строка).join("");
+  if (закрытые.length) {
+    rowsHtml += `<tr class="users-closed-head"><td colspan="5">
+      <button type="button" class="link-btn" id="users-closed-toggle" aria-expanded="${закрытыеРаскрыты}">
+      ${закрытыеРаскрыты ? "▾" : "▸"} Вход закрыт — пароль снят (${закрытые.length})</button></td></tr>`;
+    if (закрытыеРаскрыты) rowsHtml += закрытые.map(строка).join("");
+  }
+  if (!rowsHtml) rowsHtml = `<tr><td colspan="5">Пользователи не найдены</td></tr>`;
   table.innerHTML = USERS_TABLE_HEAD + rowsHtml;
+  const переключатель = document.getElementById("users-closed-toggle");
+  if (переключатель) переключатель.addEventListener("click", () => {
+    usersClosedOpen = !закрытыеРаскрыты;
+    renderUsersRows();
+  });
   table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () =>
     openUserEdit(usersCache.find(u => u.id === Number(btn.dataset.edit)))));
   // Значение колонки «Доступ» открывает карточку СРАЗУ на вкладке доступа

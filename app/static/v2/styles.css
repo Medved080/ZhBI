@@ -247,6 +247,11 @@ table.v2-table { width: 100%; border-collapse: separate; border-spacing: 0; text
   padding: 3px 7px;
   font-size: 12px;
 }
+.v2-closed-tag { display: inline-block; border-radius: 4px; padding: 2px 7px; font-size: 12px; font-weight: 600;
+  background: #fde8e8; color: #b42318; white-space: nowrap; }
+@media (prefers-color-scheme: dark) { .v2-closed-tag { background: #4a1d1d; color: #ffb4a8; } }
+.v2-closed-head td { background: var(--surface); padding: 8px 10px; }
+.v2-closed-row { opacity: .8; }
 .v2-ok { color: var(--good); }
 .v2-bad-text { color: var(--bad); }
 
