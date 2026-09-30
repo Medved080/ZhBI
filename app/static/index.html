@@ -2234,6 +2234,17 @@
   .filter-subgroup { margin-top: 8px; }
   .filter-subgroup:first-child { margin-top: 2px; }
   .filter-subgroup-title { font-size: 11px; font-weight: 600; margin-bottom: 2px; }
+  /* Подгруппы дат внутри «СМР»/«Поставка»/«Изменения» — каждая своя вложенная карточка
+     (2026-09-30: даты сливались, не было видно, где кончается одна и начинается другая). */
+  #placement-filters .filter-group-body > .filter-subgroup {
+    background: var(--color-surface-2); border: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-primary); border-radius: var(--radius-sm);
+    padding: 7px 9px 8px; margin-top: 10px;
+  }
+  #placement-filters .filter-group-body > .filter-subgroup:first-child { margin-top: 4px; }
+  #placement-filters .filter-group-body > .filter-subgroup > .filter-subgroup-title {
+    font-size: 12px; padding-bottom: 5px; margin-bottom: 4px; border-bottom: 1px solid var(--color-border);
+  }
   .filter-date-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--color-text-muted); }
   .filter-date-row.filter-disabled { opacity: .4; }
   .filter-date-row.filter-disabled input { cursor: not-allowed; }

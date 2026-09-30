@@ -1045,7 +1045,10 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-badge { font-weight: 400; font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 7px; }
 .ws-fbody { padding: 0 12px 10px; }
 .ws-fsearch { width: 100%; margin: 2px 0 6px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
-.ws-dfield { margin-top: 8px; }
+.ws-dfield { margin-top: 10px; padding: 7px 9px 8px; background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 6px; }
+.ws-dfield:first-of-type { margin-top: 4px; }
+.ws-dfield > .ws-btitle { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--ink); font-weight: 600; padding-bottom: 5px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
 .ws-drow { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--muted); }
 .ws-drow > span { flex: 0 0 18px; }
 .ws-drow input[type="date"] { flex: 1; min-width: 0; font-size: 12px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
