@@ -231,6 +231,23 @@ export function mountShellNav(el, {
       </div>`;
     };
 
+    // ---- «Избранное» сверху над группами (2026-09-30): ДУБЛИРУЕТ отмеченные пункты всех групп (в самих группах они остаются
+    // наверху своего списка, как и прежде). Порядок — порядок групп меню, внутри группы — личный порядок пунктов. Вне поиска.
+    const favIds = new Set(prefsStore.get().favorites);
+    const favTop = [];
+    if (!q && favIds.size) {
+      const groupOrder = [...registry.groups.filter((g) => g.id !== "home" && g.id !== "work" && !BOTTOM_GROUPS.has(g.id)),
+        ...registry.groups.filter((g) => BOTTOM_GROUPS.has(g.id)), ...registry.groups.filter((g) => g.id === "work")];
+      for (const g of groupOrder) {
+        const list = byGroup.get(g.id);
+        if (!list) continue;
+        for (const s of applyOrder(list, prefsStore.getItemOrder(g.id))) if (favIds.has(s.id)) favTop.push(s);
+      }
+    }
+    const favTopHtml = favTop.length
+      ? `<div class="v2-shellnav-static-head">Избранное</div><div class="v2-shellnav-favtop">${favTop.map((s) => `<div class="v2-shellnav-row">${itemHtml(s, currentKey)}<span class="v2-shellnav-tools">${favBtnHtml(s)}</span></div>`).join("")}</div>`
+      : "";
+
     // ---- полное меню (общее для «temp» и «pinned»)
     const panel = `
       <div class="v2-shellnav-panelhead">
@@ -243,6 +260,7 @@ export function mountShellNav(el, {
       </div>
       <div class="v2-shellnav-scroll">
         <button type="button" class="v2-shellnav-item v2-shellnav-home" data-section="home" aria-pressed="${currentKey === "home"}">${svgIcon("home", { size: 15 })}<span class="v2-shellnav-item-label">Начало</span></button>
+        ${favTopHtml}
         ${workVisible.length ? `<div class="v2-shellnav-static-head">Рабочие места</div><div class="v2-shellnav-work">${workVisible.map((s) => itemHtml(s, currentKey)).join("")}</div>` : ""}
         ${middleGroups.map(groupHtml).join("")}
         ${bottomGroups.length ? `<div class="v2-shellnav-divider" role="separator"></div>${bottomGroups.map(groupHtml).join("")}` : ""}

@@ -684,6 +684,7 @@ input:disabled, select:disabled, textarea:disabled {
   font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
   padding: 10px 10px 4px;
 }
+.v2-shellnav-favtop { display: flex; flex-direction: column; gap: 1px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
 .v2-shellnav-work { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
 .v2-shellnav-group { margin-top: 2px; }
 .v2-shellnav-group-head {
