@@ -36,6 +36,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from app import activity, contract_guard, impersonation
 from app.db import touch_elements
+from app.schedule_versions import forecast_dates
 from app.contracts import (
     apply_status_change,
     build_contract_name,
@@ -85,6 +86,10 @@ COLUMNS = [
     ("planned_delivery_date", FIELD_LABELS["planned_delivery_date"], True),
     ("project_smr_start_date", FIELD_LABELS["project_smr_start_date"], True),
     ("project_delivery_date", FIELD_LABELS["project_delivery_date"], True),
+    # Прогноз последней актуализации графика (2026-10-01, живой запрос) — только для чтения; у смонтированных — факт
+    # (см. schedule_versions.forecast_dates). Загрузкой не правится: даты версий графика меняет загрузка графика.
+    ("forecast_smr_start_date", "Начало СМР (прогноз)", False),
+    ("forecast_smr_end_date", "Завершение СМР (прогноз)", False),
     ("comment", FIELD_LABELS["comment"], True),
     ("contract_name", FIELD_LABELS["contract_id"], True),
     ("counterparty", "Контрагент (справочно)", False),
@@ -178,16 +183,26 @@ def _element_rows(conn, element_ids: Optional[set] = None) -> list:
         ORDER BY o.name, e.element_type, e.mark, e.id
         """
     ).fetchall()
-    if element_ids is None:
-        return rows
-    return [r for r in rows if r["id"] in element_ids]
+    # Прогноз — к каждой строке (словарём: sqlite3.Row не дополнить); см. schedule_versions.forecast_dates.
+    прогноз = forecast_dates(conn)
+    out = []
+    for r in rows:
+        if element_ids is not None and r["id"] not in element_ids:
+            continue
+        d = dict(r)
+        f = прогноз.get(r["id"])
+        d["forecast_smr_start_date"] = f[0] if f else None
+        d["forecast_smr_end_date"] = f[1] if f else None
+        out.append(d)
+    return out
 
 
 # Колонки, которые в Excel должны быть НАСТОЯЩИМИ датами с русским
 # форматом (живой запрос 2026-08-03): три правимые даты плюс справочная
 # фактическая. `actual_delivery_date` тоже дата, хотя и не правится.
 _DATE_COLUMNS = {"planned_delivery_date", "project_smr_start_date",
-                 "project_delivery_date", "actual_delivery_date"}
+                 "project_delivery_date", "actual_delivery_date",
+                 "forecast_smr_start_date", "forecast_smr_end_date"}
 
 
 def display_values(row, contract_by_id: dict) -> dict:

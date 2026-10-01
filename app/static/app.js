@@ -234,6 +234,9 @@ let state = {
     smrEndForecast: { from: "", to: "", empty: "show" },
     deliveryForecast: { from: "", to: "", empty: "show" },
   },
+  // «Отставание» (группа «СМР», 2026-10-01): галочки «прогноз позже плана» отдельно по началу и по окончанию СМР.
+  // Не диапазон и не перечисление — простой признак на элемент, см. LAG_FILTER_DEFS.
+  lagFilters: { lagStart: false, lagEnd: false },
   // Отбор по ИЗМЕНЕНИЯМ (сайдбар → Фильтры → «Изменения», живой запрос
   // 2026-08-03): какие изделия рабочей области кто-то правил за период —
   // реквизиты или историю статуса.
@@ -588,6 +591,7 @@ function describeActiveFilters() {
     if (!dateFilterIsActive(def.key)) continue;
     parts.push(`${def.title}: ${dateFilterSummary(state.dateFilters[def.key])}`);
   }
+  for (const def of LAG_FILTER_DEFS) if (state.lagFilters[def.key]) parts.push(`${def.title}: только отстающие`);
   if (state.changeFilter.on) parts.push(`Изменения: ${changeFilterSummary()}`);
   return parts;
 }
@@ -2454,6 +2458,26 @@ const DATE_FILTER_DEFS = [
   { key: "deliveryForecast", title: "Прогноз поставки (по прогнозному началу СМР)", shortTitle: "поставка (прогноз)", field: "forecast_smr_start_date", group: "delivery" },
 ];
 
+// «Отставание» = прогнозная дата − плановая (плюс — позже плана). Две подгруппы в «СМР»: по началу и по окончанию.
+// Отстающим считается НЕ смонтированное изделие, у которого есть и плановая, и прогнозная дата и прогноз позже плана:
+// у смонтированных вместо прогноза подставлен факт (forecast_smr_is_fact, см. app/schedule_versions.forecast_dates) —
+// они уже не «отстают», а выполнены.
+const LAG_FILTER_DEFS = [
+  { key: "lagStart", title: "Отставание по началу СМР", shortTitle: "отставание по началу", plan: "project_smr_start_date", forecast: "forecast_smr_start_date" },
+  { key: "lagEnd", title: "Отставание по окончанию СМР", shortTitle: "отставание по окончанию", plan: "project_delivery_date", forecast: "forecast_smr_end_date" },
+];
+
+function elementIsLagging(element, def) {
+  if (element.forecast_smr_is_fact) return false;
+  const plan = element[def.plan], forecast = element[def.forecast];
+  if (!plan || !forecast) return false;
+  return String(forecast).slice(0, 10) > String(plan).slice(0, 10);
+}
+
+function lagFilterIsActive() {
+  return LAG_FILTER_DEFS.some(d => state.lagFilters[d.key]);
+}
+
 // Верхнеуровневые группы дат — заголовок свёрнутой группы и ключ для
 // state.topFilterCollapsed (см. buildDateRangeFilterGroup).
 const DATE_FILTER_GROUPS = [
@@ -2483,6 +2507,9 @@ function elementPassesDateFilters(element) {
     if (f.empty === "only") return false;
     if (f.from && value < f.from) return false;
     if (f.to && value > f.to) return false;
+  }
+  for (const def of LAG_FILTER_DEFS) {
+    if (state.lagFilters[def.key] && !elementIsLagging(element, def)) return false;
   }
   return true;
 }
@@ -2966,10 +2993,13 @@ function dateFilterSummary(f) {
 
 function buildDateRangeFilterGroup(groupDef, onChange) {
   const defs = DATE_FILTER_DEFS.filter(d => d.group === groupDef.key);
-  const active = defs.some(d => dateFilterIsActive(d.key));
+  // «Отставание» — только в группе «СМР»
+  const lagDefs = groupDef.key === "smr" ? LAG_FILTER_DEFS : [];
+  const active = defs.some(d => dateFilterIsActive(d.key)) || lagDefs.some(d => state.lagFilters[d.key]);
   const summary = defs
     .filter(d => dateFilterIsActive(d.key))
     .map(d => `${d.shortTitle}: ${dateFilterSummary(state.dateFilters[d.key])}`)
+    .concat(lagDefs.filter(d => state.lagFilters[d.key]).map(d => d.shortTitle))
     .join(" · ");
   const { wrap, header, body } = filterGroupShell(
     active ? `${groupDef.title} · ${summary}` : groupDef.title, groupDef.key, { actions: false }
@@ -2982,12 +3012,38 @@ function buildDateRangeFilterGroup(groupDef, onChange) {
   resetBtn.disabled = !active;
   resetBtn.addEventListener("click", () => {
     for (const def of defs) resetDateFilter(def.key);
+    for (const def of lagDefs) state.lagFilters[def.key] = false;
     onChange();
   });
   header.appendChild(resetBtn);
 
   for (const def of defs) body.appendChild(buildDateFilterSubgroup(def, onChange));
+  for (const def of lagDefs) body.appendChild(buildLagFilterSubgroup(def, onChange));
   return wrap;
+}
+
+// Подгруппа «Отставание по …»: одна галочка. Оформлена той же карточкой, что и подгруппы дат.
+function buildLagFilterSubgroup(def, onChange) {
+  const box = document.createElement("div");
+  box.className = "filter-subgroup";
+  box.dataset.lagFilterKey = def.key;
+  const title = document.createElement("div");
+  title.className = "filter-subgroup-title";
+  title.textContent = def.title;
+  box.appendChild(title);
+  const row = document.createElement("label");
+  row.className = "toggle";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = !!state.lagFilters[def.key];
+  input.addEventListener("change", () => {
+    state.lagFilters[def.key] = input.checked;
+    onChange();
+  });
+  row.appendChild(input);
+  row.appendChild(document.createTextNode(" Отстающие (прогноз позже плана)"));
+  box.appendChild(row);
+  return box;
 }
 
 function buildDateFilterSubgroup(def, onChange) {
@@ -3311,6 +3367,7 @@ function resetDateFilter(key) {
 
 function resetAllDateFilters() {
   for (const def of DATE_FILTER_DEFS) resetDateFilter(def.key);
+  for (const def of LAG_FILTER_DEFS) state.lagFilters[def.key] = false;
 }
 
 // Иерархическая группа (Кран→Стоянка крана, Тип элемента→Подтип, Тип

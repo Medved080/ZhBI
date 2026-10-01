@@ -133,6 +133,49 @@ FORECAST_JOIN = """
 FORECAST_START = "f.smr_start_date"
 
 
+# Смонтированные изделия (2026-10-01): в актуализацию графика они НЕ входят (прогноз пересчитывается только для не смонтированных),
+# и «прогнозных» дат у них нет. Чтобы фильтры и выгрузка по прогнозным датам их не теряли, вместо прогноза подставляется ФАКТ.
+INSTALLED_STATUSES = ("installed", "accepted")
+
+
+def forecast_dates(conn: sqlite3.Connection, object_id: Optional[int] = None) -> dict:
+    """«Прогнозные» даты СМР изделий: element_id -> (начало, окончание, это_факт).
+
+    Не смонтированное изделие — даты последней актуализации графика (как есть; None, если изделия в ней нет). Смонтированное
+    (статус «Смонтирован» или «Принят») — ФАКТ: окончание СМР = дата первого перехода в «Смонтирован» (нет такой записи —
+    в «Принят»), начало = фактическая дата поставки, а если её нет — та же дата монтажа. Дата берётся из истории статусов
+    (первый переход, как в «Динамике»). `object_id` — один объект (схема); без него — все актуальные изделия (выгрузка).
+    Два запроса на весь набор, а не по запросу на изделие.
+    """
+    where, params = ("e.object_id = ?", [object_id]) if object_id is not None else ("e.is_current = 1", [])
+    rows = conn.execute(
+        f"""
+        SELECT e.id, e.current_status, e.actual_delivery_date, f.smr_start_date AS fs, f.smr_end_date AS fe
+        FROM elements e
+        {FORECAST_JOIN}
+        WHERE {where}
+        """, params).fetchall()
+    facts = {}
+    for r in conn.execute(
+        f"""
+        SELECT sh.element_id AS id, sh.status AS st, date(MIN(sh.changed_at)) AS d
+        FROM status_history sh JOIN elements e ON e.id = sh.element_id
+        WHERE sh.status IN ('installed', 'accepted') AND {where}
+        GROUP BY sh.element_id, sh.status
+        """, params):
+        facts.setdefault(r["id"], {})[r["st"]] = r["d"]
+    out = {}
+    for r in rows:
+        if r["current_status"] in INSTALLED_STATUSES:
+            ф = facts.get(r["id"], {})
+            end = ф.get("installed") or ф.get("accepted")
+            start = (str(r["actual_delivery_date"])[:10] if r["actual_delivery_date"] else None) or end
+            out[r["id"]] = (start, end, True)
+        else:
+            out[r["id"]] = (r["fs"], r["fe"], False)
+    return out
+
+
 def baseline_id(conn: sqlite3.Connection, object_id: int) -> Optional[int]:
     row = conn.execute(
         "SELECT id FROM schedule_versions WHERE object_id = ? AND kind = 'baseline'",

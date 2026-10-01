@@ -415,6 +415,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const body = !open ? "" : `<div class="ws-fbody">${g.fields.map((f) => `<div class="ws-dfield" data-dfield="${esc(f.key)}"><div class="ws-btitle">${esc(f.title)}</div>
       ${[["from", "с"], ["to", "по"]].map(([b, cap]) => `<label class="ws-drow"><span>${cap}</span><input type="date" data-bound="${b}" value="${esc(f[b])}" ${f.empty === "only" ? "disabled" : ""} aria-label="${esc(f.title)}: ${cap}"></label>`).join("")}
       ${EMPTY_MODES.map(([m, t]) => `<label class="ws-check"><input type="radio" name="wsd-${esc(f.key)}" data-empty="${m}" ${f.empty === m ? "checked" : ""}> <span>${t}</span></label>`).join("")}</div>`).join("")}
+      ${(g.lags || []).map((l) => `<div class="ws-dfield"><div class="ws-btitle">${esc(l.title)}</div>
+        <label class="ws-check"><input type="checkbox" data-lag="${esc(l.key)}" ${l.on ? "checked" : ""}> <span>Отстающие (прогноз позже плана)</span></label></div>`).join("")}
       <div class="ws-factions"><button type="button" data-dreset="${esc(g.key)}" ${g.active ? "" : "disabled"}>Сбросить</button></div></div>`;
     return `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${esc(g.id)}" aria-expanded="${open}"><span>${open ? "▾" : "▸"} ${esc(g.title)}</span>${g.active ? `<b class="ws-badge">задан</b>` : ""}</button>${body}</section>`;
   }
@@ -784,6 +786,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       const empty = box.querySelector("input[data-empty]:checked")?.dataset.empty || "show";
       send("setDateFilter", { key: box.dataset.dfield, from: val("from"), to: val("to"), empty });
     })));
+    body.querySelectorAll("input[data-lag]").forEach((c) => c.addEventListener("change", () => send("setLagFilter", { key: c.dataset.lag, on: c.checked })));
     body.querySelectorAll("[data-dreset]").forEach((b) => b.addEventListener("click", () => send("resetDateFilters", { group: b.dataset.dreset })));
     // «Изменения»
     body.querySelectorAll("[data-chgbox]").forEach((box) => box.querySelectorAll("input[data-chg], input[data-chg-user]").forEach((i) => i.addEventListener("change", () => {

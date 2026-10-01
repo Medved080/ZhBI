@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -45,6 +45,7 @@
     for (const k of filterKeys()) n += state.placementFilters[k].size;
     // Диапазоны дат и «Изменения» — тоже заданный отбор (иначе «Сбросить все» в панели V2 оставался бы серым при одних только датах)
     if (typeof DATE_FILTER_DEFS !== "undefined") for (const d of DATE_FILTER_DEFS) if (dateFilterIsActive(d.key)) n++;
+    if (typeof LAG_FILTER_DEFS !== "undefined") for (const d of LAG_FILTER_DEFS) if (state.lagFilters[d.key]) n++;
     if (state.changeFilter && state.changeFilter.on) n++;
     return n;
   }
@@ -498,7 +499,10 @@
         const f = state.dateFilters[d.key];
         return { key: d.key, title: d.title, from: f.from, to: f.to, empty: f.empty, active: dateFilterIsActive(d.key) };
       });
-      return { id: "dates:" + gd.key, title: gd.title, kind: "dates", key: gd.key, items: [], fields, active: fields.some((x) => x.active) };
+      // «Отставание» — галочки только в группе «СМР»
+      const lags = gd.key === "smr" ? LAG_FILTER_DEFS.map((d) => ({ key: d.key, title: d.title, on: !!state.lagFilters[d.key] })) : [];
+      return { id: "dates:" + gd.key, title: gd.title, kind: "dates", key: gd.key, items: [], fields, lags,
+        active: fields.some((x) => x.active) || lags.some((x) => x.on) };
     });
   }
   function changesGroup() {
@@ -622,10 +626,18 @@
       onPlacementFilterChange();
       scheduleState(); sendFilters();
     },
+    // «Отставание» (прогноз позже плана): on — включить/выключить признак по началу или окончанию СМР
+    setLagFilter(a) {
+      if (!LAG_FILTER_DEFS.some((d) => d.key === a.key) || typeof a.on !== "boolean") throw new Error("параметры отставания");
+      state.lagFilters[a.key] = a.on;
+      onPlacementFilterChange();
+      scheduleState(); sendFilters();
+    },
     resetDateFilters(a) {
       const g = DATE_FILTER_GROUPS.find((x) => x.key === a.group);
       if (!g) throw new Error("группа дат");
       for (const d of DATE_FILTER_DEFS) if (d.group === g.key) resetDateFilter(d.key);
+      if (g.key === "smr") for (const d of LAG_FILTER_DEFS) state.lagFilters[d.key] = false;
       onPlacementFilterChange();
       scheduleState(); sendFilters();
     },
