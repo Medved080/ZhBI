@@ -23191,6 +23191,8 @@ document.getElementById("report-pdf").addEventListener("click", () => downloadRe
 // 9422 на реальном файле). Без склейки это была бы очередь тяжёлых запросов.
 const SIDE_REPORTS_DEBOUNCE_MS = 250;
 let sideStatusData = null;
+// Версия отчёта «Статус монтажа» (2026-10-01): 1 — дерево статусов, 2 — сводка плана/факта и темпов (POST /reports/status-summary)
+let sideStatusVersion = (() => { try { return localStorage.getItem("zhbi_side_status_version") === "2" ? 2 : 1; } catch (e) { return 1; } })();
 let sideDynData = null;
 let sideDevData = null;   // сводка отклонения от базового графика (2026-08-14)
 let sideStatusCollapsed = new Set();
@@ -23259,7 +23261,7 @@ async function loadSidebarReports() {
       body: JSON.stringify(sideReportBody(withDate)),
     });
     const [status, dyn, dev] = await Promise.all([
-      want.status ? post("/reports/status", false) : null,
+      want.status ? post(sideStatusVersion === 2 ? "/reports/status-summary" : "/reports/status", false) : null,
       want.dynamics ? post("/reports/dynamics", true) : null,
       // Отклонение — свой эндпоинт: это не отчёт, а сравнение двух версий
       // графика, и общего с ними у него только список изделий среза.
@@ -23273,7 +23275,7 @@ async function loadSidebarReports() {
     }
     if (want.status) {
       sideStatusData = status;
-      sideStatusCollapsed = defaultCollapsedTree(status);
+      if (sideStatusVersion === 1) sideStatusCollapsed = defaultCollapsedTree(status);
       sideStale.status = false;
       renderSideStatusReport();
     }
@@ -23339,7 +23341,61 @@ function renderSideDeviation() {
     </table>` : ""}`;
 }
 
+// Сводка плана/факта и темпов — версия 2 отчёта «Статус монтажа» (app/report_status_summary.py)
+function renderSideStatusSummary(d) {
+  const body = document.getElementById("side-status-body");
+  document.getElementById("side-status-line").textContent = "";
+  if (!d) { body.innerHTML = '<div class="hint-text">нет данных</div>'; return; }
+  const num = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("ru-RU"));
+  const pct = (p) => (p === null || p === undefined ? "" : `${p}%`);
+  const date = (iso) => (iso ? formatDateRu(iso) : "—");
+  const days = (n) => (n === null || n === undefined ? "—"
+    : `<span class="${n < 0 ? "dev-late" : n > 0 ? "dev-early" : "dev-ok"}">${n}</span>`);
+  const pair = (title, block) => `<tr class="grp"><td colspan="3">${title}</td></tr>`
+    + `<tr><td>Поставка</td><td class="num">${num(block.delivery.n)}</td><td class="pct">${pct(block.delivery.pct)}</td></tr>`
+    + `<tr><td>Монтаж</td><td class="num">${num(block.montage.n)}</td><td class="pct">${pct(block.montage.pct)}</td></tr>`;
+  const kv = (label, value, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><td>${label}</td><td class="num">${value}</td></tr>`;
+  body.innerHTML = `<div class="side-sum">
+    <table>
+      <tr><td>Всего ЖБИ</td><td class="num">${num(d.total)}</td><td class="pct"></td></tr>
+      ${pair("Факт", d.fact)}${pair("План", d.plan)}${pair("Отставание от плана", d.lag)}
+    </table>
+    <table>
+      ${kv("текущая дата", date(d.on_date))}
+      ${kv("Требуемая дата завершения СМР", date(d.required_date))}
+      ${kv("Расчётная дата завершения СМР", date(d.calc_date))}
+      ${kv("Отставание, дней", days(d.lag_calc_days))}
+      ${kv("Требуемый темп монтажа, шт/сут", num(d.required_tempo), "gap")}
+      ${kv("Расчётный темп монтажа, шт/сут", num(d.calc_tempo))}
+      ${kv("Фактический темп монтажа, шт/сут", num(d.fact_tempo))}
+      ${kv("Прогнозная дата завершения СМР", date(d.forecast_date))}
+      ${kv("Отставание, дней", days(d.lag_forecast_days))}
+    </table>
+  </div>`;
+}
+
+document.getElementById("side-status-ver").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ver]");
+  if (!b) return;
+  const v = Number(b.dataset.ver);
+  if (v === sideStatusVersion) return;
+  sideStatusVersion = v;
+  try { localStorage.setItem("zhbi_side_status_version", String(v)); } catch (err) { /* не критично */ }
+  syncSideStatusVersion();
+  // данные другой версии не годятся: пересчёт заново
+  sideStatusData = null;
+  sideStale.status = true;
+  document.getElementById("side-status-body").innerHTML = '<div class="hint-text">Построение…</div>';
+  loadSidebarReports();
+});
+function syncSideStatusVersion() {
+  document.querySelectorAll("#side-status-ver [data-ver]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(Number(b.dataset.ver) === sideStatusVersion)));
+}
+syncSideStatusVersion();
+
 function renderSideStatusReport() {
+  if (sideStatusVersion === 2) { renderSideStatusSummary(sideStatusData); return; }
   const data = sideStatusData;
   const body = document.getElementById("side-status-body");
   document.getElementById("side-status-line").textContent =

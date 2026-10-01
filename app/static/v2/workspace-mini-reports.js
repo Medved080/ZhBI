@@ -29,6 +29,8 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
   let data = {}, errors = {};
   let tree = { collapsed: null };
   const expanded = new Set(["status", "deviation", "dynamics"]);
+  // Версия отчёта «Статус монтажа» (2026-10-01): 1 — дерево статусов, 2 — сводка плана/факта и темпов; выбор помнится в браузере
+  let statusVersion = (() => { try { return localStorage.getItem("v2.statusVersion") === "2" ? 2 : 1; } catch (e) { return 1; } })();
 
   function clear() {
     ++seq; ids = null; key = ""; data = {}; errors = {}; loading = false;
@@ -55,6 +57,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
     const base = { object_id: objectId, element_ids: selected };
     const jobs = [
       ["status", "/reports/status", base],
+      ["summary", "/reports/status-summary", base],
       ["deviation", "/schedule-versions/deviation", base],
       ["dynamics", "/reports/dynamics", { ...base, report_date: date }],
     ];
@@ -74,7 +77,34 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
       ${expanded.has(kind) ? `<div class="ws-mini-content">${loading ? `<p class="v2-muted">Построение…</p>` : errors[kind] ? `<p class="ws-mini-error">${esc(errors[kind])}</p>` : contents}</div>` : ""}</section>`;
   }
 
+  // Версия 2: сводка плана/факта и темпов (app/report_status_summary.py)
+  function summaryHtml() {
+    const d = data.summary;
+    if (!d) return `<p class="v2-muted">Нет данных.</p>`;
+    const pct = (p) => (p === null || p === undefined ? "" : `${p}%`);
+    const days = (n) => n === null || n === undefined ? "—" : `<span class="${n < 0 ? "dev-late" : n > 0 ? "dev-early" : "dev-ok"}">${n}</span>`;
+    const pair = (title, b) => `<tr class="grp"><td colspan="3">${title}</td></tr>
+      <tr><td>Поставка</td><td class="num">${num(b.delivery.n)}</td><td class="pct">${pct(b.delivery.pct)}</td></tr>
+      <tr><td>Монтаж</td><td class="num">${num(b.montage.n)}</td><td class="pct">${pct(b.montage.pct)}</td></tr>`;
+    const kv = (label, value, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><td>${label}</td><td class="num">${value}</td></tr>`;
+    const date = (v) => (v ? dateRu(v) : "—");
+    return `<div class="side-sum"><table>
+      <tr><td>Всего ЖБИ</td><td class="num">${num(d.total)}</td><td class="pct"></td></tr>
+      ${pair("Факт", d.fact)}${pair("План", d.plan)}${pair("Отставание от плана", d.lag)}</table>
+      <table>${kv("текущая дата", date(d.on_date))}${kv("Требуемая дата завершения СМР", date(d.required_date))}
+      ${kv("Расчётная дата завершения СМР", date(d.calc_date))}${kv("Отставание, дней", days(d.lag_calc_days))}
+      ${kv("Требуемый темп монтажа, шт/сут", num(d.required_tempo), "gap")}${kv("Расчётный темп монтажа, шт/сут", num(d.calc_tempo))}
+      ${kv("Фактический темп монтажа, шт/сут", num(d.fact_tempo))}${kv("Прогнозная дата завершения СМР", date(d.forecast_date))}
+      ${kv("Отставание, дней", days(d.lag_forecast_days))}</table></div>`;
+  }
+  const versionSwitch = () => `<div class="side-ver" role="group" aria-label="Версия отчёта «Статус монтажа»">${[1, 2].map((v) => `<button type="button" data-mini-ver="${v}" aria-pressed="${statusVersion === v}">Версия ${v}</button>`).join("")}</div>`;
+
   function statusHtml() {
+    if (statusVersion === 2) return versionSwitch() + summaryHtml();
+    return versionSwitch() + statusTreeHtml();
+  }
+
+  function statusTreeHtml() {
     const d = data.status;
     if (!d) return `<p class="v2-muted">Нет данных.</p>`;
     if (!tree.collapsed) tree.collapsed = defaultCollapsed(d);
@@ -159,6 +189,13 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
     root.querySelectorAll("[data-mini-toggle]").forEach((b) => b.addEventListener("click", () => {
       const kind = b.dataset.miniToggle;
       expanded.has(kind) ? expanded.delete(kind) : expanded.add(kind);
+      repaint();
+    }));
+    root.querySelectorAll("[data-mini-ver]").forEach((b) => b.addEventListener("click", () => {
+      const v = Number(b.dataset.miniVer);
+      if (v === statusVersion) return;
+      statusVersion = v;
+      try { localStorage.setItem("v2.statusVersion", String(v)); } catch (e) { /* не критично */ }
       repaint();
     }));
     root.querySelectorAll("[data-mini-full]").forEach((b) => b.addEventListener("click", () => openFull(b.dataset.miniFull, ids, data.dynamics?.report_date || date)));

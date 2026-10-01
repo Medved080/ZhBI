@@ -116,6 +116,7 @@ from app.element_fields import (
     contract_mismatch,
     write_fields,
 )
+from app.report_status_summary import build_status_summary
 from app.element_bulk_edit import (
     analyze as analyze_bulk_edit,
     apply_changes as apply_bulk_edit,
@@ -1778,6 +1779,17 @@ def report_status(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current
     try:
         body = _guard_report(conn, user, body, "report_status")
         return build_status_report(conn, body.source_file, body.element_ids)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/status-summary")
+def report_status_summary(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    """«Статус монтажа», версия 2 — сводка плана/факта и темпов (app/report_status_summary.py). Раздел прав — тот же, что у версии 1."""
+    conn = get_connection()
+    try:
+        body = _guard_report(conn, user, body, "report_status")
+        return build_status_summary(conn, body.source_file, body.element_ids, _report_object_id(conn, body), body.report_date)
     finally:
         conn.close()
 
