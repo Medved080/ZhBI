@@ -40,6 +40,8 @@ const fmtDateTime = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{
 const readNum = (k, d) => { try { const v = Number(sessionStorage.getItem(k)); return Number.isFinite(v) && v > 0 ? v : d; } catch (e) { return d; } };
 const writeSess = (k, v) => { try { sessionStorage.setItem(k, String(v)); } catch (e) { /* хранилище недоступно — не критично */ } };
 const readSess = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
+const readLocal = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const writeLocal = (k, v) => { try { localStorage.setItem(k, String(v)); } catch (e) { /* хранилище недоступно — не критично */ } };
 
 export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "model" }) {
   el.className = "v2-page v2-app v2-ws";
@@ -59,6 +61,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let filters = null;          // модель фильтров
   let notice = "";             // последнее сообщение движка
   let tab = ws === "picker" ? "pick" : "props";
+  // Сторона панели «Фильтры» (2026-10-02, перенос из V1 МФР «Фильтр справа / слева»): «Модель» и МФР. Личная настройка человека (localStorage),
+  // отдельно для каждого рабочего места; по умолчанию «справа» — прежняя вкладка. «Слева» — постоянная панель слева, как у АРМ прораба.
+  const sideSwitchable = ws === "model" || mfr;
+  const SIDE_KEY = `v2.wsFiltersSide.${ws}`;
+  let filtersSide = sideSwitchable && readLocal(SIDE_KEY) === "left" ? "left" : "right";
+  const filtersLeft = () => foreman || (sideSwitchable && filtersSide === "left");
   let pk = null;                // модель отбора комплектовщика (срезы, показатели, контракты)
   const al = { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" };
   let onlyRemainder = false;    // «только с остатком» — вид списка контрактов, отбор схемы не меняет
@@ -95,7 +103,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     </div>
     ${foreman ? `<div class="ws-strip" id="ws-strip" role="status" aria-label="Показатели по показанным элементам"></div>` : ""}
     <div class="ws-main">
-      ${foreman ? `<aside class="ws-left" id="ws-left" aria-label="Фильтры"><div class="ws-left-head">Отбор элементов</div><div class="ws-panel-body" id="ws-left-body"></div></aside>` : ""}
+      ${foreman || sideSwitchable ? `<aside class="ws-left" id="ws-left" aria-label="Фильтры" ${foreman || filtersSide === "left" ? "" : "hidden"}><div class="ws-left-head">${mfr ? "Фильтры" : "Отбор элементов"}</div><div class="ws-panel-body" id="ws-left-body"></div></aside>` : ""}
       <div class="ws-stage" id="ws-stage">
         <div class="ws-tools" role="toolbar" aria-label="Инструменты схемы">
           <button type="button" data-tool="fit" title="Вписать схему в экран" aria-label="Вписать схему в экран">⤢</button>
@@ -350,14 +358,31 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     const body = $("#ws-panel-body");
     const keepScroll = body.scrollTop;
     const restoreFocus = ops.captureFocus(body);     // фокус и курсор переживают перерисовку (снимки сцены приходят часто)
-    if (!tabs.some(([k]) => k === tab)) tab = "props";
-    body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? (mfr ? mfrFiltersHtml() : filtersHtml())
+    if (!tabs.some(([k]) => k === tab) || (tab === "filters" && filtersLeft())) tab = "props";
+    el.querySelector('.ws-tabs [data-tab="filters"]')?.toggleAttribute("hidden", filtersLeft());
+    body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml())
       : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
     body.scrollTop = keepScroll;
     bindPanel(body);
     restoreFocus();
     const left = $("#ws-left-body");
-    if (left) { const ks = left.scrollTop; left.innerHTML = filtersHtml(); left.scrollTop = ks; bindPanel(left); }
+    if (left && filtersLeft()) { const ks = left.scrollTop; left.innerHTML = sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml()); left.scrollTop = ks; bindPanel(left); }
+  }
+
+  // Переключатель стороны панели «Фильтры» (только «Модель» и МФР)
+  function sideSwitchHtml() {
+    if (!sideSwitchable) return "";
+    return `<div class="ws-seg ws-sidesw" role="group" aria-label="Сторона панели фильтров">${[["right", "Фильтр справа"], ["left", "Фильтр слева"]].map(([v, t]) => `<button type="button" data-fside="${v}" aria-pressed="${filtersSide === v}">${t}</button>`).join("")}</div>`;
+  }
+  function setFiltersSide(v) {
+    if (!sideSwitchable || v === filtersSide || (v !== "left" && v !== "right")) return;
+    filtersSide = v;
+    writeLocal(SIDE_KEY, v);
+    const aside = $("#ws-left");
+    if (aside) aside.hidden = v !== "left";
+    // слева фильтры видны постоянно; вернувшись направо, делаем «Фильтры» активной вкладкой (как в V1)
+    tab = v === "left" ? (tab === "filters" ? "props" : tab) : "filters";
+    paintPanel();
   }
 
   function row(k, v) { return v === null || v === undefined || v === "" ? "" : `<div class="ws-kv"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`; }
@@ -731,6 +756,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       else if (a === "locate" && sc?.selected) send("locate", { id: sc.selected.id });
       else if (a === "reset-filters") { if (mfr) mbp?.resetAll?.(); send("resetFilters"); }
     }));
+    body.querySelectorAll("[data-fside]").forEach((b) => b.addEventListener("click", () => setFiltersSide(b.dataset.fside)));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
     body.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => send("setView", { mode: b.dataset.view })));
     body.querySelectorAll("input[data-pk]").forEach((c) => c.addEventListener("change", () => { let v; try { v = JSON.parse(c.dataset.v); } catch (e) { return; } send("pickerToggle", { key: c.dataset.pk, value: v }); }));

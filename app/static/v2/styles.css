@@ -1099,6 +1099,9 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-found small { grid-column: 2 / -1; color: var(--muted); }
 .ws-found-more { padding: 8px 10px; font-size: 12px; color: var(--muted); }
 .ws-left { flex: none; width: 300px; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--bg); min-height: 0; }
+.ws-left[hidden] { display: none; }
+.ws-tabs button[hidden] { display: none; }
+.ws-sidesw { margin: 8px 12px 4px; }
 .ws-left-head { padding: 8px 12px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--line); }
 @media (max-width: 1100px) { .ws-left { width: 240px; } }
 .ws-strip { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 13px; }
