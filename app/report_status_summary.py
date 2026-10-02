@@ -6,10 +6,14 @@
 темпы монтажа. Определения согласованы с пользователем:
 
 * **Факт-Поставка** — изделия в статусе «Доставлен» и выше; **Факт-Монтаж** — «Смонтирован» и «Принят».
-* **План-Поставка** — «Плановая дата поставки» не позже отчётной даты; **План-Монтаж** — прогнозное окончание СМР
-  (`schedule_versions.forecast_dates`: у смонтированных там факт) не позже отчётной даты.
+* **План-Монтаж** — по БАЗОВОМУ графику: изделия с «Датой завершения СМР» не позже отчётной даты.
+* **План-Поставка** — по базовому графику, с двухнедельным запасом: монтаж должен быть обеспечен изделиями за 2 недели, поэтому
+  «требуемая дата поставки» = «Дата начала СМР» − 14 дней; считаются изделия, у которых она не позже отчётной даты
+  (уточнение пользователя 2026-10-02; прежде считалась «Плановая дата поставки»).
 * **Отставание от плана** = План − Факт, в % от плана; проценты Факта и Плана — от «Всего ЖБИ».
-* **Требуемая дата** — последняя «Дата завершения СМР»; **Расчётная дата** — последнее прогнозное окончание СМР.
+* **Требуемая дата** — максимальная дата базового графика (наибольшая «Дата завершения СМР»); **Расчётная дата** — максимальная
+  дата актуализированного графика (наибольшее прогнозное окончание СМР последней актуализации, факт смонтированных не учитывается).
+  Базовый график — поля изделия (источник правды директивных дат, их правят руками), как в карточке и «Отклонении от базового».
 * **Требуемый темп** = (Всего − Смонтировано) / дней до требуемой даты; **Расчётный темп** — то же до расчётной даты;
   **Фактический темп** — смонтировано за последние 7 дней / 7; **Прогнозная дата** = отчётная дата + остаток / фактический темп.
 * **Отставание, дней** = требуемая дата − расчётная (минус — отстаём); второе — требуемая − прогнозная.
@@ -25,6 +29,7 @@ from app.reports import visible_elements_clause
 from app.schedule_versions import forecast_dates
 
 DELIVERED_UP = ("delivered", "installed", "accepted")
+DELIVERY_LEAD_DAYS = 14   # запас изделий для обеспечения монтажа
 INSTALLED_UP = ("installed", "accepted")
 TEMPO_WINDOW_DAYS = 7
 
@@ -56,7 +61,7 @@ def build_status_summary(conn, source_file: Optional[str], element_ids: Optional
             clauses.append(f"e.id IN ({','.join('?' * len(element_ids))})")
             params.extend(element_ids)
     rows = conn.execute(
-        f"SELECT e.id, e.current_status AS st, e.planned_delivery_date AS pd, e.project_delivery_date AS pe "
+        f"SELECT e.id, e.current_status AS st, e.project_smr_start_date AS ps, e.project_delivery_date AS pe "
         f"FROM elements e WHERE {' AND '.join(clauses)}", params).fetchall()
     forecast = forecast_dates(conn, object_id)
 
@@ -68,22 +73,26 @@ def build_status_summary(conn, source_file: Optional[str], element_ids: Optional
     installed_recent = 0
     window_start = today - timedelta(days=TEMPO_WINDOW_DAYS - 1)
     for r in rows:
-        pd = _d(r["pd"])
-        if pd and pd <= today:
+        # План поставки — требуемая дата поставки (начало СМР по базовому графику − 2 недели) не позже отчётной даты
+        ps = _d(r["ps"])
+        if ps and ps - timedelta(days=DELIVERY_LEAD_DAYS) <= today:
             plan_delivery += 1
+        # План монтажа — «Дата завершения СМР» базового графика не позже отчётной даты; её максимум — требуемая дата
+        pe = _d(r["pe"])
+        if pe:
+            if pe <= today:
+                montage_plan += 1
+            if required is None or pe > required:
+                required = pe
         fs, fe, is_fact = forecast.get(r["id"], (None, None, False))
         fe_d = _d(fe)
         if fe_d:
-            if fe_d <= today:
-                montage_plan += 1
-            if calc is None or fe_d > calc:
+            # расчётная дата — максимум актуализированного графика (у смонтированных вместо прогноза факт — он не в счёт)
+            if not is_fact and (calc is None or fe_d > calc):
                 calc = fe_d
             # последние 7 дней — по ФАКТУ монтажа (у смонтированных forecast_dates отдаёт именно его)
             if is_fact and window_start <= fe_d <= today:
                 installed_recent += 1
-        pe = _d(r["pe"])
-        if pe and (required is None or pe > required):
-            required = pe
 
     remaining = total - fact_montage
 
