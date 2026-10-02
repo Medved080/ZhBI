@@ -2331,6 +2331,9 @@
   }
   .side-report-controls .link-btn { font-size: 11px; }
   /* Переключатель версий отчёта «Статус монтажа» и сводка версии 2 */
+  .side-plan-source { margin: 14px 0 -8px; font-size: 11px; color: var(--color-text-muted); }
+  .side-plan-source select { font-size: 11px; padding: 3px 4px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+    background: var(--color-surface); color: var(--color-text); margin-left: 4px; max-width: 100%; }
   .side-ver { display: inline-flex; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 8px; }
   .side-ver button { border: 0; background: var(--color-surface); color: var(--color-text-muted); font-size: 11px; padding: 3px 10px; cursor: pointer; }
   .side-ver button + button { border-left: 1px solid var(--color-border); }
@@ -6121,6 +6124,14 @@
       </div>
       <div id="legend"></div>
 
+      <!-- Источник ПЛАНА для «Статуса монтажа» (версия 2) и «Динамики» (2026-10-02): базовый график или последняя актуализация. Выбор общий. -->
+      <div class="side-plan-source">
+        <label>План считать от
+          <select id="side-plan-source" aria-label="Источник плана для отчётов вкладки «Статус»">
+            <option value="baseline">Базового графика</option>
+            <option value="current">Актуализированного графика</option>
+          </select></label>
+      </div>
       <div class="side-report">
         <div class="side-section-head">
           <h3>Статус монтажа</h3>

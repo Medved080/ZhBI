@@ -511,8 +511,11 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
                           object_id: Optional[int] = None,
                           week_from: Optional[str] = None,
                           week_to: Optional[str] = None,
-                          mode: Optional[str] = None) -> dict:
+                          mode: Optional[str] = None,
+                          plan_source: Optional[str] = None) -> dict:
     from datetime import date
+
+    from app.report_status_summary import normalize_plan_source, plan_day_counts
 
     from app.settings import (
         NOTE_FIELDS, PROJECT_CARD_DEFAULT, get_notes_for_date, get_project_card,
@@ -536,12 +539,10 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
 
     total = conn.execute(f"SELECT COUNT(*) AS n FROM elements e {where}", params).fetchone()["n"]
 
-    plan_smr = conn.execute(
-        f"SELECT project_smr_start_date AS d, COUNT(*) AS n FROM elements e {where} "
-        f"{'AND' if where else 'WHERE'} project_smr_start_date IS NOT NULL GROUP BY d", params).fetchall()
-    plan_delivery = conn.execute(
-        f"SELECT planned_delivery_date AS d, COUNT(*) AS n FROM elements e {where} "
-        f"{'AND' if where else 'WHERE'} planned_delivery_date IS NOT NULL GROUP BY d", params).fetchall()
+    # ПЛАН (2026-10-02): тот же источник, что у сводки «Статус монтажа» (версия 2) — app.report_status_summary.plan_dates.
+    # Монтаж — «Дата завершения СМР», поставка — «Дата начала СМР» минус 2 недели; plan_source: базовый график или актуализация.
+    plan_source = normalize_plan_source(plan_source)
+    plan_smr, plan_delivery = plan_day_counts(conn, where, params, object_id, plan_source)
 
     # Факт — по ПЕРВОМУ переходу элемента в статус: повторные записи истории
     # (откат и возврат) не должны считаться вторым смонтированным изделием.
@@ -718,6 +719,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         # не требует пересчёта, а выгрузки XLSX/PDF получают тот же список и
         # не расходятся с экраном.
         "mode": режим,
+        "plan_source": plan_source,
         "series_order": DYN_MODE_SERIES[режим],
         "montage": block("plan_smr", "fact_montage"),
         "delivery": block("plan_delivery", "fact_delivery"),

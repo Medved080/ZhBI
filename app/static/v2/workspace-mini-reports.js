@@ -30,6 +30,8 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
   let tree = { collapsed: null };
   const expanded = new Set(["status", "deviation", "dynamics"]);
   // Версия отчёта «Статус монтажа» (2026-10-01): 1 — дерево статусов, 2 — сводка плана/факта и темпов; выбор помнится в браузере
+  // Источник плана для «Статуса монтажа» (версия 2) и «Динамики» (2026-10-02): "baseline" — базовый график, "current" — актуализированный
+  let planSource = (() => { try { return localStorage.getItem("v2.planSource") === "current" ? "current" : "baseline"; } catch (e) { return "baseline"; } })();
   let statusVersion = (() => { try { return localStorage.getItem("v2.statusVersion") === "2" ? 2 : 1; } catch (e) { return 1; } })();
 
   function clear() {
@@ -54,7 +56,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
     // Пустой список нельзя отправлять как element_ids: []: для отчётов это
     // значит «без сужения», то есть они показали бы ВЕСЬ объект вместо нуля.
     if (!selected?.length) { loading = false; repaint(); return; }
-    const base = { object_id: objectId, element_ids: selected };
+    const base = { object_id: objectId, element_ids: selected, plan_source: planSource };
     const jobs = [
       ["status", "/reports/status", base],
       ["summary", "/reports/status-summary", base],
@@ -179,7 +181,8 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
     const reportTotal = data.status?.total?.values?.total;
     const scopeNote = Number.isInteger(reportTotal) && reportTotal !== ids.length
       ? `<p class="v2-muted ws-mini-scope">Отчёты учитывают ${num(reportTotal)} изделий актуального чертежа из ${num(ids.length)} показанных в срезе.</p>` : "";
-    return `<div class="ws-pad ws-mini">${scopeNote}
+    const planSwitch = `<div class="side-plan-source"><label>План считать от <select data-mini-plan aria-label="Источник плана для отчётов вкладки «Статус»"><option value="baseline" ${planSource === "baseline" ? "selected" : ""}>Базового графика</option><option value="current" ${planSource === "current" ? "selected" : ""}>Актуализированного графика</option></select></label></div>`;
+    return `<div class="ws-pad ws-mini">${scopeNote}${planSwitch}
       ${section("status", "Статус монтажа", statusHtml(), true)}
       ${section("deviation", "Отклонение от базового графика", deviationHtml())}
       ${section("dynamics", "Отчёт о динамике поставки и монтажа", dynamicsHtml(), true)}</div>`;
@@ -191,6 +194,11 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
       expanded.has(kind) ? expanded.delete(kind) : expanded.add(kind);
       repaint();
     }));
+    root.querySelector("[data-mini-plan]")?.addEventListener("change", (e) => {
+      planSource = e.target.value === "current" ? "current" : "baseline";
+      try { localStorage.setItem("v2.planSource", planSource); } catch (err) { /* не критично */ }
+      load();
+    });
     root.querySelectorAll("[data-mini-ver]").forEach((b) => b.addEventListener("click", () => {
       const v = Number(b.dataset.miniVer);
       if (v === statusVersion) return;

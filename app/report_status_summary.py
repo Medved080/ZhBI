@@ -28,6 +28,55 @@ from typing import Optional
 from app.reports import visible_elements_clause
 from app.schedule_versions import forecast_dates
 
+# Откуда брать ПЛАН (2026-10-02, живой запрос): "baseline" — базовый график (поля изделия «Дата начала/завершения СМР»), "current" —
+# последняя актуализация графика (там у смонтированных изделий вместо прогноза стоит факт, см. schedule_versions.forecast_dates).
+PLAN_SOURCES = ("baseline", "current")
+DEFAULT_PLAN_SOURCE = "baseline"
+
+
+def normalize_plan_source(value) -> str:
+    return value if value in PLAN_SOURCES else DEFAULT_PLAN_SOURCE
+
+
+def plan_dates(conn, rows, object_id: Optional[int], source: Optional[str]) -> dict:
+    """Плановые даты изделий: id -> (дата поставки, дата монтажа) как `date` (None — плана нет).
+
+    Один источник правды для сводки «Статус монтажа» (версия 2) и отчёта «Динамика поставки и монтажа», чтобы их числа сходились.
+    * Монтаж — «Дата завершения СМР»; поставка — «Дата начала СМР» минус 2 недели (монтаж должен быть обеспечен изделиями за 2 недели).
+    * baseline — даты базового графика (поля изделия); current — даты последней актуализации. Смонтированные изделия в актуализацию
+      не входят, у них там факт: дата поставки — фактическая БЕЗ сдвига на 2 недели (это уже не требование, а событие).
+    `rows` — строки с полями id, ps (начало СМР базового графика), pe (завершение СМР базового графика).
+    """
+    source = normalize_plan_source(source)
+    out = {}
+    if source == "current":
+        forecast = forecast_dates(conn, object_id)
+        for r in rows:
+            fs, fe, is_fact = forecast.get(r["id"], (None, None, False))
+            start = _d(fs)
+            delivery = start if (is_fact or start is None) else start - timedelta(days=DELIVERY_LEAD_DAYS)
+            out[r["id"]] = (delivery, _d(fe))
+    else:
+        for r in rows:
+            ps = _d(r["ps"])
+            out[r["id"]] = (ps - timedelta(days=DELIVERY_LEAD_DAYS) if ps else None, _d(r["pe"]))
+    return out
+
+
+def plan_day_counts(conn, where: str, params: list, object_id: Optional[int], source: Optional[str]):
+    """Для «Динамики»: ряды плана «по дням» — (монтаж, поставка), каждый список словарей {"d": ГГГГ-ММ-ДД, "n": число}."""
+    rows = conn.execute(
+        f"SELECT e.id, e.project_smr_start_date AS ps, e.project_delivery_date AS pe FROM elements e {where}", params).fetchall()
+    montage, delivery = {}, {}
+    for delivery_d, montage_d in plan_dates(conn, rows, object_id, source).values():
+        if montage_d:
+            montage[montage_d.isoformat()] = montage.get(montage_d.isoformat(), 0) + 1
+        if delivery_d:
+            delivery[delivery_d.isoformat()] = delivery.get(delivery_d.isoformat(), 0) + 1
+    pack = lambda m: [{"d": d, "n": n} for d, n in sorted(m.items())]
+    return pack(montage), pack(delivery)
+
+
 DELIVERED_UP = ("delivered", "installed", "accepted")
 DELIVERY_LEAD_DAYS = 14   # запас изделий для обеспечения монтажа
 INSTALLED_UP = ("installed", "accepted")
@@ -48,7 +97,8 @@ def _share(n: int, of: int) -> Optional[int]:
 
 
 def build_status_summary(conn, source_file: Optional[str], element_ids: Optional[list],
-                         object_id: Optional[int], on_date: Optional[str] = None) -> dict:
+                         object_id: Optional[int], on_date: Optional[str] = None,
+                         plan_source: Optional[str] = None) -> dict:
     today = _d(on_date) or date.today()
     clauses, params = [visible_elements_clause("e")], []
     if source_file:
@@ -72,18 +122,18 @@ def build_status_summary(conn, source_file: Optional[str], element_ids: Optional
     required = calc = None
     installed_recent = 0
     window_start = today - timedelta(days=TEMPO_WINDOW_DAYS - 1)
+    plan = plan_dates(conn, rows, object_id, plan_source)
     for r in rows:
-        # План поставки — требуемая дата поставки (начало СМР по базовому графику − 2 недели) не позже отчётной даты
-        ps = _d(r["ps"])
-        if ps and ps - timedelta(days=DELIVERY_LEAD_DAYS) <= today:
+        # План (откуда — plan_source): поставка — требуемая дата поставки, монтаж — «Дата завершения СМР»; не позже отчётной даты
+        delivery_d, montage_d = plan[r["id"]]
+        if delivery_d and delivery_d <= today:
             plan_delivery += 1
-        # План монтажа — «Дата завершения СМР» базового графика не позже отчётной даты; её максимум — требуемая дата
+        if montage_d and montage_d <= today:
+            montage_plan += 1
+        # Требуемая дата — максимум БАЗОВОГО графика (от выбора источника плана не зависит)
         pe = _d(r["pe"])
-        if pe:
-            if pe <= today:
-                montage_plan += 1
-            if required is None or pe > required:
-                required = pe
+        if pe and (required is None or pe > required):
+            required = pe
         fs, fe, is_fact = forecast.get(r["id"], (None, None, False))
         fe_d = _d(fe)
         if fe_d:
@@ -116,6 +166,7 @@ def build_status_summary(conn, source_file: Optional[str], element_ids: Optional
 
     return {
         "on_date": today.isoformat(),
+        "plan_source": normalize_plan_source(plan_source),
         "total": total,
         "remaining": remaining,
         "fact": {"delivery": {"n": fact_delivery, "pct": _share(fact_delivery, total)},

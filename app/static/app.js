@@ -21451,6 +21451,8 @@ function reportRequestBody() {
     // тот же запрос собирают выгрузки XLSX/PDF (см. downloadReport), и
     // файл обязан показывать выбранное на экране.
     body.dyn_mode = document.getElementById("dyn-mode").value;
+    // Источник плана — общий с панелью «Статус» (тот же выбор попадает и в XLSX/PDF)
+    body.plan_source = sidePlanSource;
   }
   if (REPORTS[currentReport].needsPeriod) {
     body.date_from = document.getElementById("ds-from").value || null;
@@ -23190,6 +23192,8 @@ document.getElementById("report-pdf").addEventListener("click", () => downloadRe
 // дереве фильтров меняет десятки значений, а тело запроса — список id (до
 // 9422 на реальном файле). Без склейки это была бы очередь тяжёлых запросов.
 const SIDE_REPORTS_DEBOUNCE_MS = 250;
+// Источник плана для «Статуса монтажа» (версия 2) и «Динамики» (2026-10-02): "baseline" — базовый график, "current" — актуализированный
+let sidePlanSource = (() => { try { return localStorage.getItem("zhbi_plan_source") === "current" ? "current" : "baseline"; } catch (e) { return "baseline"; } })();
 let sideStatusData = null;
 // Версия отчёта «Статус монтажа» (2026-10-01): 1 — дерево статусов, 2 — сводка плана/факта и темпов (POST /reports/status-summary)
 let sideStatusVersion = (() => { try { return localStorage.getItem("zhbi_side_status_version") === "2" ? 2 : 1; } catch (e) { return 1; } })();
@@ -23215,6 +23219,7 @@ function sideReportBody(withDate) {
     source_file: state.sourceFile || null,
     object_id: state.objectId,   // карточка объекта и блоки «на дату» — его (этап D)
     element_ids: state.elements.filter(passesPlacementFilters).map(e => e.id),
+    plan_source: sidePlanSource,
   };
   if (withDate) body.report_date = document.getElementById("side-dyn-date").value || null;
   return body;
@@ -23372,6 +23377,19 @@ function renderSideStatusSummary(d) {
       ${kv("Отставание, дней", days(d.lag_forecast_days))}
     </table>
   </div>`;
+}
+
+{
+  const planSel = document.getElementById("side-plan-source");
+  planSel.value = sidePlanSource;
+  planSel.addEventListener("change", () => {
+    sidePlanSource = planSel.value === "current" ? "current" : "baseline";
+    try { localStorage.setItem("zhbi_plan_source", sidePlanSource); } catch (err) { /* не критично */ }
+    // меняются план «Статуса монтажа» (версия 2) и «Динамики»; «Отклонение» и версия 1 от плана не зависят
+    sideStatusData = null; sideDynData = null;
+    sideStale.status = true; sideStale.dynamics = true;
+    loadSidebarReports();
+  });
 }
 
 document.getElementById("side-status-ver").addEventListener("click", (e) => {
