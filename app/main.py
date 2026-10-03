@@ -20,10 +20,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from app.calc import runtime as calc_runtime
-from app.calc.api import build_router as calc_build_router
-from app.calc.paths import WEB_DIR as CALC_WEB_DIR
-from app.calc.sync_api import build_sync_router as calc_build_sync_router
+# Подсистеме нужен Python 3.12 и pypdfium2/Pillow (requirements.txt). Окружение без них (старый .venv на 3.9) не должно
+# ронять трекер: подсистема тогда просто не подключается, а в лог идёт причина.
+try:
+    from app.calc import runtime as calc_runtime
+    from app.calc.api import build_router as calc_build_router
+    from app.calc.paths import WEB_DIR as CALC_WEB_DIR
+    from app.calc.sync_api import build_sync_router as calc_build_sync_router
+    CALC_AVAILABLE = True
+except Exception as _calc_error:  # noqa: BLE001
+    CALC_AVAILABLE = False
+    print(f"[startup] ВНИМАНИЕ: подсистема «Калькулятор» не подключена ({type(_calc_error).__name__}: {_calc_error}). "
+          f"Нужен Python 3.12 и зависимости из requirements.txt.")
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
@@ -462,9 +470,10 @@ app.include_router(shaft_panels_router)
 
 # Калькулятор: роуты /calc/*, приём и отправка пакетов, статические файлы. Права —
 # разделы calc и calc_sync (app/features.py), роль «Калькулятор».
-app.include_router(calc_build_router(calc_runtime.settings()))
-app.include_router(calc_build_sync_router(calc_runtime.settings()))
-app.mount("/calc/vendor", StaticFiles(directory=CALC_WEB_DIR / "vendor"), name="calc-vendor")
+if CALC_AVAILABLE:
+    app.include_router(calc_build_router(calc_runtime.settings()))
+    app.include_router(calc_build_sync_router(calc_runtime.settings()))
+    app.mount("/calc/vendor", StaticFiles(directory=CALC_WEB_DIR / "vendor"), name="calc-vendor")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -859,12 +868,14 @@ def stop_crane_zone_activation():
 # мигрированные таблицы проектов — и не роняет сервис при собственной ошибке.
 @app.on_event("startup")
 def start_calc_subsystem():
-    calc_runtime.startup()
+    if CALC_AVAILABLE:
+        calc_runtime.startup()
 
 
 @app.on_event("shutdown")
 def stop_calc_subsystem():
-    calc_runtime.shutdown()
+    if CALC_AVAILABLE:
+        calc_runtime.shutdown()
 
 
 # СТРАЖ РЕГИСТРАЦИИ СТАРТА (2026-08-17). Проверка стоит здесь, а не в тестах,
