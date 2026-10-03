@@ -20,16 +20,9 @@
     return cache.get(key);
   }
   // Вкладка калькулятора переиспользуется по имени окна: следующий переход меняет только #product.
-  // В новом интерфейсе (V2) калькулятор — экран оболочки #/calc (v2/calc-embed.js подхватывает изделие из sessionStorage),
-  // в прежнем (V1) — отдельная страница /calc/ в переиспользуемой вкладке.
-  function open(productId) {
-    if (document.getElementById("v2-root")) {
-      try { sessionStorage.setItem("zhbi_calc_product", productId); } catch (e) { /* ignore */ }
-      location.hash = "#/calc";
-      return;
-    }
-    window.open("/calc/?ui=v1#product=" + encodeURIComponent(productId), "zhbi-calc");
-  }
+  // Всегда полная страница калькулятора на этом изделии (в обоих интерфейсах), в переиспользуемой вкладке: следующий переход
+  // меняет только #product. Оформление и гамма в ней — ЖБИ (app/calc/web/theme.css).
+  function open(productId) { window.open("/calc/#product=" + encodeURIComponent(productId), "zhbi-calc"); }
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   // Разметка по ответу resolve; кнопки несут data-calc-open — навешивает bind().
   function html(res) {
