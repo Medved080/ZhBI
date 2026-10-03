@@ -21,8 +21,9 @@ const plural = (n, one, few, many) => { const a = Math.abs(n) % 100, b = a % 10;
 // Пары «план — факт» одного цвета, различаются штрихом (план — пунктир): на графике из четырёх кривых видно,
 // что синие — про монтаж, а оранжевые — про поставку. Те же цвета и штрихи в PDF (app/reports.py, DYN_SERIES_COLORS).
 const DYN_COLORS = { plan_smr: "#4A86C8", fact_montage: "#8C99A6", forecast_montage: "#8C99A6", plan_delivery: "#C2571A", fact_delivery: "#E8703A", forecast_delivery: "#E8703A" };
-const DYN_DASHED = new Set(["plan_smr", "plan_delivery"]);
-const DYN_DASHDOT = new Set(["forecast_montage", "forecast_delivery"]);
+// 2026-10-03: план и факт — сплошные линии, пунктиром только прогноз; линии тоньше.
+const DYN_DASHED = new Set(["forecast_montage", "forecast_delivery"]);
+const DYN_DASHDOT = new Set();
 const dynSeriesFor = (data) => data.series_order || ["plan_smr", "fact_montage", "forecast_montage", "plan_delivery", "fact_delivery", "forecast_delivery"];
 
 function niceMax(value) {
@@ -124,8 +125,8 @@ export function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {
     const points = seriesPoints(key);
     if (!points.some((p) => p.v > 0)) continue;
     const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
-    const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
-    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${dash}/>`);
+    const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="5 3"' : "";
+    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="1.5" stroke-linejoin="round"${dash}/>`);
   }
 
   if (compact) {
@@ -150,9 +151,9 @@ export function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {
 
   let lx = L;
   for (const key of compact ? [] : ряды) {
-    const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
+    const dash = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"' : DYN_DASHED.has(key) ? ' stroke-dasharray="5 3"' : "";
     const label = data.series_labels?.[key] || key;
-    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${dash}/>`);
+    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="1.8"${dash}/>`);
     parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${esc(label)}</text>`);
     lx += 34 + label.length * 6.2;
   }

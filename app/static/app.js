@@ -21520,11 +21520,12 @@ const DYN_COLORS = {
   fact_delivery: "#E8703A",
   forecast_delivery: "#E8703A",
 };
-const DYN_DASHED = new Set(["plan_smr", "plan_delivery"]);
+// 2026-10-03 (живой запрос): план и факт — СПЛОШНЫЕ линии, пунктиром только прогноз; линии тоньше.
+const DYN_DASHED = new Set(["forecast_montage", "forecast_delivery"]);
 // Прогноз — штрихпунктиром и цветом ФАКТА своей пары: он читается как
 // продолжение фактической кривой, а не как третий план (формулировка
 // заказчика: «от серой линии факта идёт штрихпунктир прогноза»).
-const DYN_DASHDOT = new Set(["forecast_montage", "forecast_delivery"]);
+const DYN_DASHDOT = new Set();   // штрихпунктира больше нет
 // Режимы графика (2026-08-14): поставка и монтаж смотрятся и порознь, и
 // вместе. Ряды сервер считает ВСЕ и всегда — режим только выбирает
 // показываемое, поэтому переключение не требует повторного запроса…
@@ -21847,8 +21848,8 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
     if (!points.some(p => p.v > 0)) continue;
     const d = points.map((p, n) => `${n ? "L" : "M"} ${x(p.i).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
     const штрих = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"'
-      : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
-    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="2.2" stroke-linejoin="round"${штрих}/>`);
+      : DYN_DASHED.has(key) ? ' stroke-dasharray="5 3"' : "";
+    parts.push(`<path d="${d}" fill="none" stroke="${DYN_COLORS[key]}" stroke-width="1.5" stroke-linejoin="round"${штрих}/>`);
   }
 
   // Вехи: красная стрелка вниз к линии плана + выноска с датой.
@@ -21886,8 +21887,8 @@ function buildDynamicsChartSvg(data, width = 1000, height = 330, opts = {}) {
   let lx = L;
   for (const key of compact ? [] : ряды) {
     const штрих = DYN_DASHDOT.has(key) ? ' stroke-dasharray="10 3 2 3"'
-      : DYN_DASHED.has(key) ? ' stroke-dasharray="7 4"' : "";
-    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="2.6"${штрих}/>`);
+      : DYN_DASHED.has(key) ? ' stroke-dasharray="5 3"' : "";
+    parts.push(`<line x1="${lx}" y1="${height - 10}" x2="${lx + 22}" y2="${height - 10}" stroke="${DYN_COLORS[key]}" stroke-width="1.8"${штрих}/>`);
     parts.push(`<text x="${lx + 28}" y="${height - 6}" font-size="11" fill="#4A5460">${escapeHtml(data.series_labels[key])}</text>`);
     lx += 34 + data.series_labels[key].length * 6.2;
   }

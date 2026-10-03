@@ -1019,7 +1019,7 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-mini .side-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; color: var(--muted); font-size: 10.5px; }
 .ws-mini .side-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
 .ws-mini .side-chart-legend i { display: inline-block; width: 12px; height: 2px; }
-.ws-mini .side-chart-legend i.dashed { height: 0; border-top: 2px dashed currentColor; background: none !important; }
+.ws-mini .side-chart-legend i.dashed { height: 0; border-top: 1.5px dashed currentColor; background: none !important; }
 .ws-mini .side-chart-legend i.dashdot { height: 0; border-top: 2px dotted currentColor; background: none !important; }
 .ws-mini .side-dyn-block { margin-top: 10px; }
 .ws-mini .side-dyn-block h4 { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin: 0 0 4px; font-size: 11px; font-weight: 600; }

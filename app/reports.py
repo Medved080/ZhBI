@@ -544,21 +544,30 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     plan_source = normalize_plan_source(plan_source)
     plan_smr, plan_delivery = plan_day_counts(conn, where, params, object_id, plan_source)
 
-    # Факт — по ПЕРВОМУ переходу элемента в статус: повторные записи истории
-    # (откат и возврат) не должны считаться вторым смонтированным изделием.
-    def fact_rows(status: str):
-        return conn.execute(
+    # ФАКТ (2026-10-03, решение пользователя: «корректное значение — как в сводке "Статус монтажа" версия 2»). В факт входят изделия,
+    # у которых СЕЙЧАС статус из набора («Доставлен» и выше для поставки, «Смонтирован»/«Принят» для монтажа) — то же определение, что
+    # у сводки. Раньше считалась любая запись истории: откатили статус назад — изделие всё равно оставалось в факте, а перескочило
+    # звено (сразу «Смонтирован») — не попадало в поставку. Дата изделия на кривой — первый переход в статус из набора (повторные
+    # записи — откат и возврат — не считаются вторым изделием); нет ни одной записи истории — изделие датируется отчётной датой.
+    def fact_rows(statuses: tuple):
+        marks = ",".join("?" * len(statuses))
+        rows = conn.execute(
             f"""
             SELECT d, COUNT(*) AS n FROM (
-                SELECT date(MIN(sh.changed_at)) AS d
-                FROM status_history sh JOIN elements e ON e.id = sh.element_id
-                {where} {'AND' if where else 'WHERE'} sh.status = ?
-                GROUP BY sh.element_id
+                SELECT (SELECT date(MIN(sh.changed_at)) FROM status_history sh
+                        WHERE sh.element_id = e.id AND sh.status IN ({marks})) AS d
+                FROM elements e
+                {where} {'AND' if where else 'WHERE'} e.current_status IN ({marks})
             ) GROUP BY d
-            """, params + [status]).fetchall()
+            """, list(statuses) + params + list(statuses)).fetchall()
+        by_day = {}
+        for r in rows:
+            day = r["d"] or today[:10]
+            by_day[day] = by_day.get(day, 0) + r["n"]
+        return [{"d": d, "n": n} for d, n in sorted(by_day.items())]
 
-    fact_montage = fact_rows("installed")
-    fact_delivery = fact_rows("delivered")
+    fact_montage = fact_rows(("installed", "accepted"))
+    fact_delivery = fact_rows(("delivered", "installed", "accepted"))
 
     # Прогноз — последняя актуализация графика объекта (2026-08-14, живой
     # запрос: «от линии факта должна идти штрихпунктирная линия прогноза»).
@@ -817,8 +826,9 @@ DYN_SERIES_COLORS = {
     "plan_smr": "#4A86C8", "fact_montage": "#8C99A6", "forecast_montage": "#8C99A6",
     "plan_delivery": "#C2571A", "fact_delivery": "#E8703A", "forecast_delivery": "#E8703A",
 }
-DYN_SERIES_DASHED = {"plan_smr", "plan_delivery"}
-DYN_SERIES_DASHDOT = {"forecast_montage", "forecast_delivery"}
+# 2026-10-03: план и факт — сплошные, пунктиром только прогноз (как на экране)
+DYN_SERIES_DASHED = {"forecast_montage", "forecast_delivery"}
+DYN_SERIES_DASHDOT = set()
 
 
 def build_dynamics_report_pdf(report: dict) -> bytes:
@@ -889,8 +899,8 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
                 if not any(v for _, v in points):
                     continue
                 c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
-                c.setLineWidth(1.2)
-                # Планы пунктиром, факты сплошной — см. DYN_SERIES_DASHED.
+                c.setLineWidth(0.9)
+                # Пунктиром только прогноз — см. DYN_SERIES_DASHED.
                 c.setDash([6, 2, 1, 2] if key in DYN_SERIES_DASHDOT
                           else [3, 2] if key in DYN_SERIES_DASHED else [])
                 path = c.beginPath()
@@ -967,7 +977,7 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
             for key in порядок:
                 label = report["series_labels"][key]
                 c.setStrokeColor(colors.HexColor(DYN_SERIES_COLORS[key]))
-                c.setLineWidth(1.4)
+                c.setLineWidth(1.1)
                 c.setDash([6, 2, 1, 2] if key in DYN_SERIES_DASHDOT
                           else [3, 2] if key in DYN_SERIES_DASHED else [])
                 c.line(lx, 6, lx + 12, 6)
