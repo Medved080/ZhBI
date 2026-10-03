@@ -21,3 +21,4 @@ CLAUDE.md
 docker-compose.yml
 .env
 .env.example
+.venv312/

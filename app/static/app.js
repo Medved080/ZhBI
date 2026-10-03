@@ -7986,6 +7986,7 @@ function cardSkeletonHtml(canEdit) {
         <div class="card-primary-type" id="card-type"></div>
         <div class="card-primary-mark" id="card-mark"></div>
       </div>
+      <div class="card-calc-link" id="card-calc-link"></div>
       <div class="card-status-row">
         <span class="swatch" id="card-status-swatch"></span>
         <span class="card-status-label" id="card-status-label"></span>
@@ -8091,6 +8092,20 @@ function holdCardBoxHeight(box) {
   return () => { box.style.minHeight = ""; };
 }
 
+// Кнопка «Открыть в калькуляторе» (2026-10-04): одна карточка обслуживает и 2D, и 3D схему.
+// Показывается только тому, у кого есть раздел `calc` (иначе сервер отвечает 403 и блок пуст).
+function renderCalcLink(element) {
+  const box = document.getElementById("card-calc-link");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!window.ZhbiCalcLink || !element.mark) return;
+  window.ZhbiCalcLink.resolve(element.mark, element.element_type).then((res) => {
+    if (cardElement !== element || !res) return;
+    box.innerHTML = window.ZhbiCalcLink.html(res);
+    window.ZhbiCalcLink.bind(box);
+  });
+}
+
 async function showCard(element) {
   const card = document.getElementById("card");
   const canEdit = can("status", "write");
@@ -8112,6 +8127,7 @@ async function showCard(element) {
     ? `${escapeHtml(element.element_type)} <span class="card-subtype">· ${escapeHtml(element.subtype)}</span>`
     : escapeHtml(element.element_type);
   document.getElementById("card-mark").textContent = element.mark || "—";
+  renderCalcLink(element);
   document.getElementById("card-status-swatch").style.background = colorFor(element.current_status);
   document.getElementById("card-status-label").textContent =
     state.statusLabels[element.current_status] || element.current_status;
@@ -17809,6 +17825,10 @@ async function renderCounterpartiesList() {
       "counterparty", String(cp.id), { onDone: renderCounterpartiesList }));
   }
 }
+
+document.getElementById("menu-calc").addEventListener("click", () => {
+  window.open("/calc/?ui=v1", "zhbi-calc");
+});
 
 document.getElementById("menu-counterparties").addEventListener("click", async () => {
   counterpartiesBackdrop.classList.add("open");

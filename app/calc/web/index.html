@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru" data-skin="gos">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Калькулятор ЖБИ — ЖБИ</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23165d98'/%3E%3Cpath d='M9 6h14v20H9zM9 12h14M9 19h14M16 6v20' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="theme.css?v=20261004-skin-1">
+  <link rel="stylesheet" href="styles.css?v=20261004-skin-1">
+  <script defer src="vendor/exceljs.min.js"></script>
+  <script defer src="money-format.js?v=20261002-money-1"></script>
+  <script defer src="export-xlsx.js?v=20261002-msu-template-2"></script>
+  <script defer src="api-client.js?v=20261004-skin-1"></script>
+  <script defer src="project-files.js"></script>
+  <script defer src="history.js?v=20261002-money-1"></script>
+  <script defer src="norms.js?v=20261003-workspace-2"></script>
+  <script defer src="source-sheets.js?v=20261002-source-links-2"></script>
+  <script defer src="commercial-reference.js?v=20261003-workspace-2"></script>
+  <script defer src="project-report.js?v=20261003-workspace-2"></script>
+  <script defer src="app.js?v=20261004-skin-2"></script>
+  <script defer src="sync-panel.js?v=20261004-sync-1"></script>
+  <script defer src="recovery.js?v=20261003-local-recovery-3"></script>
+  <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
+  <script type="module" src="viewer-3d.js?v=20261003-local-recovery-5"></script>
+</head>
+<body>
+<div id="precast-concept" aria-label="Сервис калькуляции ЖБИ">
+  <div class="pc-shell">
+    <aside class="pc-sidebar">
+      <div class="pc-brand">Калькулятор ЖБИ</div>
+      <div class="pc-context">Промышленный корпус</div>
+      <div class="pc-section-label">Изделия</div>
+      <input id="pc-product-search" class="pc-product-search" type="search" placeholder="Наименование или марка" aria-label="Поиск изделий">
+      <select id="pc-product-grouping" class="pc-product-search" aria-label="Группировка изделий"><option value="album">По альбомам</option><option value="type">По типам изделий</option><option value="none">Без группировки</option></select>
+      <select id="pc-product-filter" class="pc-product-search" aria-label="Альбом изделий"><option value="">Все альбомы</option></select>
+      <div id="pc-product-count" class="pc-context"></div>
+      <section id="pc-model-progress" class="pc-model-progress" aria-label="Обработка 3D-моделей по всей базе" aria-live="polite"></section>
+      <button id="pc-recovery-open" type="button">Обработка изделий · Qwen</button>
+      <label class="pc-select-all"><input id="pc-select-all" type="checkbox"> Выбрать найденные</label>
+      <div class="pc-model-legend"><span class="pc-model-ready" aria-hidden="true">✓</span> Полная модель</div>
+      <div id="pc-products" class="pc-product-list"></div>
+      <div class="pc-export-actions"><span id="pc-selected-count" class="pc-context">Выбрано: 1</span><button id="pc-export" class="pc-export-button cursor-interaction" type="button">Выгрузить XLSX</button><span id="pc-export-status" class="pc-context" role="status" aria-live="polite"></span></div>
+      <button id="pc-project-report" disabled class="pc-project-report-button" type="button">Отчёт по всему проекту</button>
+      <button id="pc-sync-open" class="pc-project-report-button" type="button" hidden>Передача на серверы</button>
+      <div class="pc-context pc-bottom"><span id="pc-current-user">Подключение к серверу…</span><button id="pc-logout" type="button" hidden>К трекеру ЖБИ</button><span id="pc-migration-status" role="status"></span></div>
+    </aside>
+    <main class="pc-main">
+      <header class="pc-header"><div><div class="pc-card-context"><span class="pc-context">Карточка изделия</span><span id="pc-model-readiness" class="pc-model-readiness"></span></div><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-edit-product" class="cursor-interaction" type="button">Параметры изделия</button><button id="pc-open-norms" type="button" aria-pressed="false">Производственные нормы</button></div></header>
+      <nav class="pc-tabs" aria-label="Разделы изделия"><button class="cursor-interaction" data-view="calculation" aria-pressed="true" aria-controls="pc-calculation-panel">Калькуляция</button><button class="cursor-interaction" data-view="model" aria-pressed="false" aria-controls="pc-model-panel">Модель и параметры</button><button class="cursor-interaction" data-view="tech" aria-pressed="false">Технология</button><button class="cursor-interaction" data-view="sources" aria-pressed="false">Файлы и основания</button><button class="cursor-interaction" data-view="sheets" aria-pressed="false">Исходные листы</button><button class="cursor-interaction" data-view="history" aria-pressed="false">История</button></nav>
+      <section id="pc-norms-panel" hidden aria-label="Производственные нормы"></section>
+      <section id="pc-project-report-panel" hidden aria-label="Отчёт по всему проекту"></section>
+      <div id="pc-model-panel" hidden>
+        <div class="pc-view-row">
+          <div class="pc-viewer" aria-label="Просмотр изделия">
+            <div class="pc-view-tools"><label><input id="pc-concrete" type="checkbox" checked> Бетон</label><label><input id="pc-steel" type="checkbox" checked> Арматура</label><label>Размеры <select id="pc-dimensions" aria-label="Режим размеров"><option value="none">Без размеров</option><option value="outer" selected>Только внешние</option><option value="detail">Все детально</option></select></label><label><input id="pc-rulers" type="checkbox" checked> Оси, мм</label><label>Непрозрачность <input id="pc-opacity" type="range" min="0" max="100" value="30" aria-label="Непрозрачность бетона"></label><div class="pc-camera-tools"><button id="pc-palette-open" type="button">Цвета</button><button id="pc-camera-reset" type="button" title="Вернуть исходный ракурс">Сбросить вид</button><button id="pc-camera-expand" type="button" title="Показать модель на весь экран">Развернуть</button></div></div>
+            <div id="pc-viewport" tabindex="0" role="region" aria-label="3D-модель изделия. Перетаскивание левой кнопкой вращает, колесо меняет масштаб, правая кнопка перемещает. Стрелки вращают, плюс и минус меняют масштаб."><span class="pc-view-loading">Загрузка 3D…</span></div>
+            <div class="pc-view-notes"><div class="pc-viewport-help">ЛКМ — вращать · колесо — масштаб · ПКМ — перемещать</div><div class="pc-view-caption" id="pc-model-caption">Условная геометрия и армирование · нужны проектные данные</div><button id="pc-recovery-return" type="button" hidden>Вернуться к действующей модели</button></div>
+            <div id="pc-model-layers" class="pc-model-layers" aria-label="Группы армирования"></div>
+            <div id="pc-model-pick" class="pc-context" role="status" aria-live="polite"></div>
+          </div>
+          <div class="pc-properties"><div class="pc-section-label" id="pc-property-heading">Параметры изделия</div><dl><dt>Расход бетона</dt><dd id="pc-volume"></dd><dt id="pc-weight-label">Арматура</dt><dd id="pc-weight"></dd><dt>Трудоёмкость</dt><dd id="pc-hours"></dd><dt>Основание расчёта</dt><dd id="pc-source-label"></dd></dl><dl id="pc-project-properties" hidden></dl><div class="pc-context" id="pc-geometry-note"></div><button id="pc-product-issues-link" type="button" hidden></button></div>
+        </div>
+      </div>
+      <div id="pc-calculation-panel">
+        <section id="pc-calculation" class="pc-calculation" aria-labelledby="pc-calculation-heading">
+        <div class="pc-table-head"><h3 id="pc-calculation-heading">Калькуляция на 1 изделие</h3><div class="pc-table-tools"><span id="pc-calculation-product"></span><span>Все цены без НДС</span><button id="pc-calculation-expand" type="button" aria-label="Развернуть калькуляцию" aria-expanded="false">Развернуть</button></div></div>
+        <div class="pc-table-scroll" tabindex="0" role="region" aria-label="Статьи калькуляции, прокручиваемая таблица"><table><colgroup><col class="pc-col-article"><col class="pc-col-unit"><col class="pc-col-qty"><col class="pc-col-rate"><col class="pc-col-amount"><col class="pc-col-qty"><col class="pc-col-rate"><col class="pc-col-amount"></colgroup><thead><tr><th rowspan="2" scope="col">Статья</th><th rowspan="2" scope="col">Ед.</th><th colspan="3" scope="colgroup">Расчёт сервиса</th><th colspan="3" scope="colgroup">Моя калькуляция</th></tr><tr><th scope="col">Объём</th><th scope="col">Цена</th><th scope="col">Сумма</th><th scope="col">Объём</th><th scope="col">Цена</th><th scope="col">Сумма</th></tr></thead><tbody id="pc-rows"></tbody></table></div>
+        <div class="pc-calculation-footer">
+        <div class="pc-footer-actions"><button id="pc-add" class="cursor-interaction">+ Добавить статью</button><button id="pc-clear" class="cursor-interaction">Сбросить корректировки</button><span class="pc-context">Пустое поле — использовать расчёт</span></div>
+        <div class="pc-totals" aria-live="polite"><div><span>Расчёт без НДС</span><strong id="pc-baseline"></strong></div><div><span>Моя цена без НДС</span><strong id="pc-effective"></strong></div><div><span>Отклонение</span><strong id="pc-delta"></strong></div></div>
+        <div class="pc-context" id="pc-vat"></div>
+        </div>
+        <section id="pc-commercial-reference" class="pc-commercial-reference" aria-label="Справочная цена КП" aria-live="polite"></section>
+        </section>
+      </div>
+      <div id="pc-tech-panel" hidden><h3>Предлагаемый маршрут производства</h3><ol class="pc-route"><li>Подготовить и смазать форму</li><li>Нарезать и согнуть арматуру</li><li>Собрать каркас, установить закладные</li><li>Проверить каркас и защитный слой</li><li>Уложить и уплотнить бетон</li><li>Выдержать бетон до требуемой прочности</li><li>Распалубить, проверить и маркировать</li><li>Переместить на склад, подготовить отгрузку</li></ol><div class="pc-context">Маршрут предложен по типу изделия. Режим твердения, сварку и нормы времени должен определить технолог.</div></div>
+      <div id="pc-sources-panel" hidden><section id="pc-product-discrepancies" hidden></section><div class="pc-file-heading"><h3>Проектные файлы изделия</h3><button id="pc-upload-files" type="button">+ Добавить файлы</button><input id="pc-file-input" type="file" multiple hidden></div><div id="pc-file-drop" class="pc-file-drop">Перетащите сюда чертежи, спецификации или модель изделия.<br><span class="pc-context">Файлы сохраняются на сервере. Автоматическое извлечение конструктива ещё не подключено.</span></div><div id="pc-files-status" class="pc-context" role="status" aria-live="polite"></div><div id="pc-file-list"></div><div id="pc-document-info" hidden></div><h3>Основания расчёта</h3><div class="pc-source-list"><div id="pc-source-description"></div><div id="pc-geometry-description">Геометрия и армирование показаны условно.</div><div>Рентабельность 5% в исходнике считается как маржа до отдельной доставки.</div><div>Энергия 11%, накладные 32,1% / 21,1% / 2,1%, доставка 9,5% — от стоимости материалов.</div><div>Страховые взносы 21% — допущение исходника, требует подтверждения.</div><div>Партию, оснастку, режим твердения и нормы производства определяет технолог.</div></div></div>
+      <section id="pc-sheets-panel" hidden aria-label="Исходные листы изделия"><div id="pc-sheets-content"></div></section>
+      <div id="pc-history-panel" hidden><h3>История калькуляции</h3><p class="pc-context">После сохранения на сервере создаётся версия расчёта. Предыдущие версии доступны для просмотра и выгрузки.</p><div id="pc-history-list"></div><div id="pc-history-snapshot"></div></div>
+    </main>
+  </div>
+  <dialog id="pc-model-results-dialog" aria-labelledby="pc-model-results-title"><div class="pc-results-heading"><h2 id="pc-model-results-title">Результаты исполнителей</h2><button id="pc-model-results-close" type="button" aria-label="Закрыть результаты">×</button></div><div id="pc-model-results-content"></div></dialog>
+  <dialog id="pc-commercial-dialog" aria-labelledby="pc-commercial-dialog-title"><div class="pc-commercial-dialog-heading"><div><span class="pc-context">Справочная цена · сравнение с сохранённой калькуляцией</span><h2 id="pc-commercial-dialog-title">Ориентир КП</h2></div><button id="pc-commercial-close" type="button" aria-label="Закрыть ориентир КП" autofocus>×</button></div><div id="pc-commercial-content"></div></dialog>
+</div>
+<dialog id="pc-product-dialog" aria-labelledby="pc-dialog-title">
+  <form id="pc-product-form">
+    <div class="pc-dialog-heading"><h2 id="pc-dialog-title">Новое изделие</h2><button id="pc-dialog-close" type="button" aria-label="Закрыть">×</button></div>
+    <div class="pc-form-grid">
+      <label class="pc-field-wide">Марка изделия<input name="name" required maxlength="100" autocomplete="off"></label>
+      <label>Класс бетона<input name="concreteClass" required maxlength="20" value="В50"></label>
+      <label>Объём бетона, м³<input name="volume" type="number" min="0.000001" step="any" required></label>
+      <label>Арматура, т<input name="weight" type="number" min="0" step="any" required></label>
+      <label>Трудоёмкость, чел·ч<input name="hours" type="number" min="0" step="any" required></label>
+      <label>Бетон, ₽/м³ без НДС<input name="concreteRate" type="text" inputmode="decimal" data-money min="0" required></label>
+      <label>Прочие материалы, ₽ без НДС<input name="otherMaterials" type="text" inputmode="decimal" data-money min="0" required></label>
+    </div>
+    <div class="pc-form-section"><label class="pc-check-label"><input name="hasGeometry" type="checkbox"> Задать габариты прямоугольного изделия</label><p id="pc-form-geometry-note">По габаритам строится внешний контур 3D-модели. Арматурный каркас пока показан условно.</p>
+      <fieldset id="pc-geometry-fields" disabled><legend>Габариты, м</legend><div class="pc-dimensions"><label>Длина<input name="length" type="number" min="0.01" max="100" step="any" required></label><label>Ширина<input name="width" type="number" min="0.01" max="20" step="any" required></label><label>Высота<input name="height" type="number" min="0.01" max="20" step="any" required></label></div><label class="pc-check-label"><input name="volumeFromGeometry" type="checkbox"> Считать объём бетона по габаритам</label><p>Объём = длина × ширина × высота, без вычета проёмов и арматуры.</p></fieldset>
+    </div>
+    <p class="pc-form-note">Расчёт использует коэффициенты исходной калькуляции МСУ-1. Их применимость к изделию должен подтвердить технолог.</p>
+    <div class="pc-dialog-actions"><span id="pc-form-status" role="status"></span><button id="pc-dialog-cancel" type="button">Отмена</button><button class="pc-primary" type="submit">Сохранить изделие</button></div>
+  </form>
+</dialog>
+<dialog id="pc-login-dialog" aria-labelledby="pc-login-title"><form id="pc-login-form"><h2 id="pc-login-title">Вход в калькулятор ЖБИ</h2><p>Изделия, калькуляции и файлы хранятся на сервере.</p><label>Логин<input name="login" required maxlength="100" autocomplete="username"></label><label>Пароль<input name="password" type="password" required maxlength="256" autocomplete="current-password"></label><p id="pc-login-status" role="status"></p><button type="submit">Войти</button></form></dialog>
+<dialog id="pc-conflict-dialog" aria-labelledby="pc-conflict-title"><h2 id="pc-conflict-title">Изделие изменено другим пользователем</h2><p id="pc-conflict-description"></p><p>Ваш черновик сохранён локально. Выберите, какую версию использовать.</p><div class="pc-conflict-actions"><button id="pc-conflict-server" type="button">Загрузить серверную версию</button><button id="pc-conflict-mine" type="button">Сохранить мою версию</button></div></dialog>
+</body>
+</html>

@@ -397,7 +397,23 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
         <p class="v2-muted">Нажмите на элемент схемы, чтобы увидеть его свойства. Shift + перетаскивание — выбор рамкой.</p>
         <dl class="ws-dl">${row("Показано на схеме", `${sc.shown} из ${sc.total}`)}${row("Активных фильтров", sc.excluded ? String(sc.excluded) : "нет")}</dl></div>`;
     }
-    return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "" });
+    return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "" }) + calcLinkHtml(e);
+  }
+
+  // Переход в «Калькулятор» по марке элемента (2026-10-04, одна логика с V1: static/calc-link.js). Ответ кешируется по
+  // марке и типу; пока его нет, блока нет, по приходу панель перерисовывается. Без раздела `calc` блок не появляется.
+  const calcRes = new Map();
+  function calcLinkHtml(e) {
+    const L = window.ZhbiCalcLink;
+    if (!L || mfr || !e.mark) return "";
+    const key = e.mark + "\u0001" + (e.element_type || "");
+    if (!calcRes.has(key)) {
+      calcRes.set(key, null);
+      L.resolve(e.mark, e.element_type).then((res) => { calcRes.set(key, res || false); if (!dead) paintPanel(); });
+      return "";
+    }
+    const res = calcRes.get(key);
+    return res ? `<div class="ws-pad ws-calc-link">${L.html(res)}</div>` : "";
   }
 
   // Вкладка «Статус» — как в V1: легенда «Статус по элементам» (статус × тип показанных элементов, цвет статуса, итоги),
@@ -750,6 +766,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   function bindPanel(body) {
     if (tab === "status") mini?.bind(body);
+    window.ZhbiCalcLink?.bind(body);
     body.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
       const a = b.dataset.act;
       if (a === "clear-all") send("clearSelection");

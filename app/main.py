@@ -20,6 +20,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
+from app.calc import runtime as calc_runtime
+from app.calc.api import build_router as calc_build_router
+from app.calc.paths import WEB_DIR as CALC_WEB_DIR
+from app.calc.sync_api import build_sync_router as calc_build_sync_router
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
@@ -281,7 +285,9 @@ app = FastAPI(
 # и был смысл офлайн-подложки.
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'sha256-GGgqHO/YpgtINWBQBdyPoj2n6zSoZ9PEznPWfb/aFu4='; "
+    "script-src 'self' 'sha256-GGgqHO/YpgtINWBQBdyPoj2n6zSoZ9PEznPWfb/aFu4=' "
+    # importmap подсистемы «Калькулятор» (app/calc/web/index.html); при правке его текста пересчитать
+    "'sha256-iappRSGaYmGbU+iNmsJ5teYDqM/22V2OW3B2sEfXSmU='; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob:; "
     "font-src 'self'; "
@@ -453,6 +459,12 @@ app.include_router(settings_router)
 app.include_router(attachments_router)
 app.include_router(external_models_router)
 app.include_router(shaft_panels_router)
+
+# Калькулятор: роуты /calc/*, приём и отправка пакетов, статические файлы. Права —
+# разделы calc и calc_sync (app/features.py), роль «Калькулятор».
+app.include_router(calc_build_router(calc_runtime.settings()))
+app.include_router(calc_build_sync_router(calc_runtime.settings()))
+app.mount("/calc/vendor", StaticFiles(directory=CALC_WEB_DIR / "vendor"), name="calc-vendor")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -841,6 +853,18 @@ def stop_crane_zone_activation():
     stop = getattr(app.state, "crane_zone_activation_stop", None)
     if stop is not None:
         stop.set()
+
+
+# Подсистема «Калькулятор» (2026-10-04): запускается ПОСЛЕ on_startup — ей нужны
+# мигрированные таблицы проектов — и не роняет сервис при собственной ошибке.
+@app.on_event("startup")
+def start_calc_subsystem():
+    calc_runtime.startup()
+
+
+@app.on_event("shutdown")
+def stop_calc_subsystem():
+    calc_runtime.shutdown()
 
 
 # СТРАЖ РЕГИСТРАЦИИ СТАРТА (2026-08-17). Проверка стоит здесь, а не в тестах,

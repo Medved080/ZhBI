@@ -1485,6 +1485,41 @@ def _отметить_раскладку(conn: sqlite3.Connection) -> None:
         )
 
 
+CALC_ROLE_MARKER = "calculator_role_seeded"
+CALC_ROLE_KEY = "calculator"
+
+
+def _seed_calculator_role(conn: sqlite3.Connection, changes: list) -> None:
+    """Заводит роль «Калькулятор» (2026-10-04): доступ к подсистеме калькулятора.
+
+    Один раз, за маркером — по тем же причинам, что и заводская раскладка
+    (`_seed_object_roles`): администратор вправе переименовать роль, снять с неё
+    разрешения или удалить её, и перезапуск не должен вернуть удалённое.
+    Роль независима от остальных (права складываются): она даёт ТОЛЬКО разделы
+    `calc` и `calc_sync` и ничего на схеме объекта — человеку, которому нужна
+    и схема, выдают две роли.
+    """
+    маркер = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ? AND object_id IS NULL", (CALC_ROLE_MARKER,)
+    ).fetchone()
+    if маркер and маркер["value"]:
+        return
+    if conn.execute("SELECT 1 FROM object_roles WHERE key = ?", (CALC_ROLE_KEY,)).fetchone() is None:
+        ранг = conn.execute("SELECT COALESCE(MAX(rank), 0) + 10 AS r FROM object_roles").fetchone()["r"]
+        conn.execute("INSERT INTO object_roles (key, name, rank) VALUES (?, ?, ?)",
+                     (CALC_ROLE_KEY, "Калькулятор", ранг))
+        conn.executemany(
+            "INSERT OR IGNORE INTO role_features (role_key, feature_key, level) VALUES (?, ?, 'write')",
+            [(CALC_ROLE_KEY, "calc"), (CALC_ROLE_KEY, "calc_sync")])
+        changes.append("заведена роль «Калькулятор» (разделы calc, calc_sync)")
+    обновлено = conn.execute(
+        "UPDATE app_settings SET value = '1' WHERE key = ? AND object_id IS NULL", (CALC_ROLE_MARKER,)
+    ).rowcount
+    if not обновлено:
+        conn.execute("INSERT INTO app_settings (key, object_id, value) VALUES (?, NULL, '1')",
+                     (CALC_ROLE_MARKER,))
+
+
 def _migrate_user_access_multirole(conn: sqlite3.Connection, changes: list) -> None:
     """Разрешает НЕСКОЛЬКО ролей на одном уровне гранта (2026-08-14).
 
@@ -2596,6 +2631,7 @@ def init_db() -> list:
         # внешний ключ, иначе пересобранная таблица получит битые ключи.
         _seed_object_roles(conn, changes)
         _migrate_user_access_drop_role_check(conn, changes)
+        _seed_calculator_role(conn, changes)
         # Строго ПОСЛЕ пересборки таблицы: она заново создаёт индекс в
         # прежней форме, и порядок наоборот тут же вернул бы ограничение
         # «одна роль на уровень».

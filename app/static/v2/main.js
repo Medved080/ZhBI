@@ -581,7 +581,7 @@ async function renderShell(user, permissions) {
       // Карта — тоже полноэкранная площадка со своей верхней строкой (ws-top), той же компактной шапке
       // сервиса, что и у рабочих мест: иначе на 1366×768 верхняя строка карты и шапка сервиса вместе не
       // оставляли бы карте достаточно высоты без прокрутки всей страницы.
-      root.classList.toggle("v2-ws-mode", !!target && (target.impl === "workspace" || target.impl === "map-screen"));
+      root.classList.toggle("v2-ws-mode", !!target && (target.impl === "workspace" || target.impl === "map-screen" || target.impl === "calc-embed"));
       currentKey = key;
       switchCtx.ws = target?.ws && target.impl === "workspace" ? target.ws : null;
       const wanted = key === "home" ? "#/" : `#/${key}`;
@@ -735,6 +735,11 @@ async function renderShell(user, permissions) {
         // График СМР: версии, исходные данные расчёта, расчёт с предпросмотром, диаграмма Ганта
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSchedule(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
+      } else if (target.impl === "calc-embed") {
+        // Калькулятор: страница подсистемы /calc/ кадром внутри оболочки (calc-embed.js)
+        document.title = `${target.title} — ЖБИ`;
+        const { mountCalcEmbed } = await import("./calc-embed.js");
+        activeModule = mountCalcEmbed(content, { screen: target });
       } else if (target.impl === "map-screen") {
         // Карта проектов: настоящая интерактивная карта (map-screen.js — своя раскладка вокруг общего
         // с V1 модуля app/static/map.js). Переход по клику на объект — той же функцией changeObject, что
