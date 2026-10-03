@@ -1,0 +1,6 @@
+{
+  "targets": {
+    "test": {"url": "https://ЗАМЕНИТЕ-адрес-тестового-сервера", "tokenEnv": "ZHBI_CALC_TOKEN_TEST"},
+    "prod": {"url": "https://ЗАМЕНИТЕ-адрес-боевого-сервера", "tokenFile": "~/.zhbi-calc-prod.token", "requireConfirm": true, "caFile": null}
+  }
+}

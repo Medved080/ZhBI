@@ -82,6 +82,10 @@ def build_router(settings):
             profile = conn.execute("SELECT parameters_json FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()
             installation = conn.execute("SELECT value FROM application_meta WHERE key='installation_id'").fetchone()[0]
             project = conn.execute("SELECT name,zhbi_project_id,zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()
+            if project["zhbi_project_id"] is None:  # проект «Москвич» мог появиться в ЖБИ после старта
+                from .link import link_project
+                if link_project(settings)["linked"]:
+                    project = conn.execute("SELECT name,zhbi_project_id,zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()
             return {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": [get_product(conn, r[0]) for r in rows], "profile": json.loads(profile[0]), "installationId": installation}
         finally:
             conn.close()
