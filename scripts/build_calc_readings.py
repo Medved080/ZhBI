@@ -2,7 +2,7 @@
 изделий (data/calc/assets/sources/docNN.pdf, только чтение). Результат — JSON, который кладут рядом с каталогом (assets/promka-readings.json);
 сервис накладывает его на каталог только там, где у изделия пробел (app/calc/readings.py). Метод — scripts/prototypes/vector_ocr/.
 
-Запуск (нужны pypdfium2, Pillow, numpy; ~20 минут на все колонны, подъёмники и шахты; кэш разобранных листов ускоряет повторы):
+Запуск (VOCR_REPARSE=1 перечитывает только листы без сошедшейся ведомости; процессов 8, меняется переменной VOCR_PROCS; нужны pypdfium2, Pillow, numpy; ~20 минут на все колонны, подъёмники и шахты; кэш разобранных листов ускоряет повторы):
     ZHBI_CALC_ASSETS_DIR=…/data/calc/assets .venv312/bin/python scripts/build_calc_readings.py out.json [--families Колонны,Подъёмники,Шахты лифтов]
 """
 import collections
@@ -37,7 +37,7 @@ def read_rows(args):
 
 
 def _plain(sheet):
-    return {"rods": [[c, d, kg] for (c, d), kg in sheet["rods"].items()], "rebar_total": sheet["rebar_total"], "checks": sheet["checks"]}
+    return {"rods": [[c, d, kg] for (c, d), kg in sheet["rods"].items()], "rebar_total": sheet["rebar_total"], "checks": sheet["checks"], "embedded_total": sheet.get("embedded_total")}
 
 
 def load_cache():
@@ -55,8 +55,13 @@ def main(out, families):
     offset = steel.sheet_offsets(catalog.values())
     print("моделей:", len(models), "смещения листов:", offset)
     cache = load_cache()
+    if os.environ.get("VOCR_REPARSE"):
+        # после правок разбора ведомости: перечитать только листы, где она не разобралась или не сошлись проверки (остальные остаются из кэша)
+        stale = [k for k, v in cache.items() if v.get("steel") is None or not all(v["steel"]["checks"].values())]
+        for k in stale: del cache[k]
+        print("перечитываем листы без сошедшейся ведомости:", len(stale), flush=True)
     frontier = {(int(v["source"]["id"][3:]), int(v["source"]["productPage"])) for v in models.values()}
-    with Pool(4) as pool:
+    with Pool(int(os.environ.get("VOCR_PROCS", "8"))) as pool:
         while frontier:
             todo = sorted(k for k in frontier if k not in cache)
             if todo:
@@ -83,7 +88,7 @@ def main(out, families):
     extra = {(d, q) for d, c in assembler.problems for q in range(max(1, c - assembler.window), c + assembler.window + 1) if (d, q) not in cache}
     if extra:
         print("дочитываем окна вокруг неразрешённых ссылок:", len(extra), "листов", flush=True)
-        with Pool(4) as pool:
+        with Pool(int(os.environ.get("VOCR_PROCS", "8"))) as pool:
             for n, p, rows, sheet in pool.map(read_rows, sorted(extra), chunksize=2): cache[(n, p)] = {"rows": rows, "steel": sheet}
         save_cache(cache)
         assembler = assemble_all()
@@ -98,9 +103,11 @@ def main(out, families):
                 cls = re.search(r"[ВB]\s?(\d+)", r["name"]); volume = steel.num(r.get("qty"))
                 if cls: item["concreteClass"] = "В" + cls.group(1)
                 if volume: item["volume"] = volume
-        tree = assembler.assemble(doc, page, None, None)
+        tree = assembler.assemble(doc, page, steel.mark_key(v.get("alias")) or None, None)
         rods = {k: v2 for k, v2 in tree["rods"].items()}
         item["rebar"] = {"fromAssembly": [[c, d, round(kg, 3)] for (c, d), kg in sorted(rods.items())], "unresolvedKg": round(tree["unresolved"], 3), "issues": tree["issues"][:6]}
+        item["embedded"] = {"items": [[kind, name, mass, qty, steel.pipe_size(name) if kind == "pipe" else None, steel.pipe_length_m(name, qty) if kind == "pipe" else None] for (kind, name, mass), qty in sorted(tree["emb"].items())], "issues": [i for i in tree["issues"] if "нет количества" in i][:6]}
+        if (entry.get("steel") or {}).get("embedded_total") is not None: item["embedded"]["sheetTotalKg"] = entry["steel"]["embedded_total"]
         if entry.get("steel"): item["rebar"]["fromSteelSheet"] = entry["steel"]["rods"]; item["rebar"]["steelSheetChecks"] = entry["steel"]["checks"]
         result[key] = item
     Path(out).write_text(json.dumps(result, ensure_ascii=False, indent=1))
@@ -108,6 +115,6 @@ def main(out, families):
 
 
 if __name__ == "__main__":
-    fam = ["Колонны", "Подъёмники", "Шахты лифтов", "Лестничные балки"]
+    fam = ["Колонны", "Подъёмники", "Шахты лифтов", "Лестничные балки", "Ригели", "Плиты", "Цокольные панели"]
     if "--families" in sys.argv: fam = sys.argv[sys.argv.index("--families") + 1].split(",")
     main(sys.argv[1], fam)

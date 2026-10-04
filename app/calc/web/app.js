@@ -247,6 +247,13 @@ function matchesProductName(product, query){
   if(doc){
    const checkedSteel=doc.preview3d?.verifiedSourceSpec?.steelTotalKg,steelDiffers=checkedSteel!=null&&checkedSteel!==doc.projectSteel;
    q('#pc-project-properties').innerHTML=`<dt>Бетон по проекту</dt><dd>${number(doc.projectVolume)} м³</dd><dt>${steelDiffers?'Сталь в каталоге':'Сталь по проекту'}</dt><dd>${number(doc.projectSteel)} кг</dd>${steelDiffers?`<dt>Сталь · сверка листа</dt><dd>${number(checkedSteel)} кг</dd>`:''}`;
+   const reading=doc.readings;
+   if(reading){
+    // автоматически прочитано с листа PDF: что именно взято, откуда, и перечень закладных, труб и петель (для проверки человеком)
+    const sheet=reading.sheet||{},names={embedded:'закладные',loop:'петли',pipe:'трубы'};
+    const items=(reading.embedded||[]).map(([kind,name,mass,qty])=>`${escapeHTML(name.replace(/^Закладная деталь |^Петлевой выпуск |^Петля /,''))} × ${qty}`);
+    q('#pc-project-properties').innerHTML+=`<dt>Прочитано с листа</dt><dd>${escapeHTML(reading.applied.length?reading.applied.join(', '):'пробелов не было')} · альбом doc${String(sheet.doc||0).padStart(2,'0')}, стр. ${sheet.page||'?'} · не подтверждено</dd>${items.length?`<dt>Закладные, трубы, петли по листу</dt><dd>${items.slice(0,14).join(', ')}${items.length>14?' и ещё '+(items.length-14):''}</dd>`:''}`;
+   }
    if(doc.kind!=='registry')q('#pc-geometry-note').textContent='Сечение 900 × '+doc.section[1]+' мм · консоль '+(doc.bounds[1][1]-doc.bounds[0][1])+' мм. По бетону 8 940 мм, с выпусками 11 280 мм.';
    q('#pc-source-description').textContent='Конструктив: '+doc.source.title+' · '+doc.source.revision+(doc.kind==='registry'?'. Расход по распознанной спецификации; цены и нормы требуют проверки.':'. Расходы и цены: Excel МСУ-1.');
    q('#pc-geometry-description').textContent=doc.notes.join(' ');

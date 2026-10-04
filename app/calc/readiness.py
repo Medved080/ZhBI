@@ -59,7 +59,7 @@ def readiness(conn):
             "volume": volume > 0,
             "concreteClass": not _unset(concrete_class),
             "rebar": any(i.startswith(STEEL) for i in ids),
-            "embedded": any(i.startswith(EMBEDDED) for i in ids),
+            "embedded": any(i.startswith(EMBEDDED) for i in ids) or bool(((doc or {}).get("readings") or {}).get("embeddedChecked")),   # лист прочитан, закладных на нём нет — тоже результат
             "prices": bool(resources) and rate > 0 and labour_ok and all(float(r["rate"]) > 0 for r in resources),
             "norms": family in NORMS_CONFIRMED,
             "verified": False,

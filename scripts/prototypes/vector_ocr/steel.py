@@ -6,7 +6,7 @@ import re, os, sys, collections
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 
 _LAT = str.maketrans('ABCEHKMOPTXYabcehkmoptxy', 'АВСЕНКМОРТХУАВСЕНКМОРТХУ')
-DIAM_RE = re.compile(r'^[ØøОо]\s*(\d+)$')
+DIAM_RE = re.compile(r'^[ØøОо]\s*(\d[\dОо]*)$')           # в цифрах диаметра буква «О» — неразличимый с нулём знак шрифта («Ø2О» = Ø20)
 
 
 def num(s):
@@ -18,6 +18,7 @@ def num(s):
 def class_of(text):
     """Класс стали из заголовка столбца: «А500с», «A500C» → «А500С»; «А-I (А240)» → «А240»; «Вр-I», «Вр-|» → «ВрI». Не класс — None."""
     t = text.translate(_LAT).upper().replace(' ', '').replace('|', 'I')
+    t = re.sub(r'(?<=А)([\dО]{3})', lambda x: x.group(1).replace('О', '0'), t)       # «А30О» = А300: буква «О» вместо нуля
     m = re.search(r'А(\d{3})([А-ЯA-Z]?)', t)
     if m and len(t) <= 14: return 'А' + m.group(1) + m.group(2)
     if re.match(r'^ВР-?[I1]?$', t): return 'ВрI'
@@ -58,7 +59,7 @@ def parse_steel(boxes):
         elif head.startswith('Общий'): grand = value
         elif section == 'rebar' and cls:
             m = DIAM_RE.match(head.strip())
-            if m: rods[(cls, int(m.group(1)))] += value; ok = True
+            if m: rods[(cls, int(m.group(1).replace('О', '0').replace('о', '0')))] += value; ok = True
             elif head.startswith('Итого'): class_totals[cls] = value
     if not ok: return None
     checks = {}
@@ -71,8 +72,36 @@ def parse_steel(boxes):
 
 # ------------------------------------------------------------------ сборка по спецификациям (рекурсивно по листам-составляющим)
 ROD_RE = re.compile(r'(?:^|[ØøОо\s])(\d(?:\s?\d)?)\s*([АA]\s?\d{3}\s?[СC]?|Вр\S*)', re.I)   # «Ø» из ячейки может не прочитаться — берём «диаметр класс»
-SKIP_RE = re.compile(r'^(Закладн|Труба|Бетон|Масса|Документация|Сборочные|Материалы|Технические)', re.I)
+SKIP_RE = re.compile(r'^(Закладн|Труба|Петл|Бетон|Масса|Документация|Сборочные|Материалы|Технические)', re.I)
 REF_RE = re.compile(r'л\.\s*(\d+)')
+EMB_RE = re.compile(r'^(Закладн|Труба|Петл)', re.I)   # закладные детали, трубы, петли и петлевые выпуски: считаются отдельно от арматуры
+PIPE_RE = re.compile(r'Труба\s*(\d+)\s*[хx×]\s*(\d+(?:[.,]\d+)?)', re.I)
+LEN_RE = re.compile(r'L\s*=\s*(\d+)')
+
+
+def emb_kind(name):
+    """Вид позиции: 'embedded' (закладная деталь), 'pipe' (труба), 'loop' (петля, петлевой выпуск) или None."""
+    m = EMB_RE.match(name or '')
+    if not m: return None
+    return {'закладн': 'embedded', 'труба': 'pipe', 'петл': 'loop'}[m.group(1).lower()]
+
+
+def emb_name(name):
+    """Название позиции без лишних пробелов и хвостовой пунктуации («Труба 50х5 ГОСТ 32678-2014, п.м.,» → «Труба 50х5 ГОСТ 32678-2014, п.м.»)."""
+    return re.sub(r'\s+', ' ', (name or '').strip()).rstrip(' ,;')
+
+
+def pipe_size(name):
+    """Типоразмер трубы из названия: «Труба 68х1 …» → '68x1' (латинская x, точка в толщине); не труба — None."""
+    m = PIPE_RE.search(name or '')
+    return '%sx%s' % (m.group(1), m.group(2).replace(',', '.')) if m else None
+
+
+def pipe_length_m(name, qty):
+    """Длина трубы позиции в метрах: штучная («L=700», qty шт) → qty × L / 1000; «п.м.» → qty; иначе None."""
+    m = LEN_RE.search(name or '')
+    if m: return qty * int(m.group(1)) / 1000
+    return qty if re.search(r'п\.\s?м', name or '') else None
 
 
 def parse_rod(name):
@@ -113,6 +142,17 @@ class RebarAssembler:
         self.rows, self.offset, self.cache, self.window = rows, offset, {}, window
         self.problems = set()      # (альбом, страница) вокруг которых не удалось найти лист узла: сборщик слоя дочитывает окно и повторяет
 
+    @staticmethod
+    def node_mass(sub):
+        """Масса узла по его листу. Лист узла может включать петли и закладные в итог «Масса», а может не включать — подходит любая из двух сумм
+        (арматура; арматура + позиции закладных/петель), берётся ближе к итогу листа."""
+        if not sub: return 0
+        rods = sum(sub['rods'].values()) + sub['unresolved']
+        withemb = rods + sum(k[2] * v for k, v in sub['emb'].items())
+        total = sub.get('sheet_total')
+        if total and withemb and abs(withemb / total - 1) < abs(rods / total - 1 if rods else 9): return withemb
+        return rods
+
     def sheet_masses(self, doc, page):
         """Массы, которыми лист может быть узлом: итог «Масса, кг» листа или массы изделий серии (колонка «Примечание» строк с маркой)."""
         rows = self.rows(doc, page) or []
@@ -141,7 +181,7 @@ class RebarAssembler:
     def assemble(self, doc, page, mark=None, mass=None, depth=0, stack=()):
         key = (doc, page, mark if mass is None else (mark, round(mass, 2)))
         if key in self.cache: return self.cache[key]
-        out = {'rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'issues': [], 'sum': 0.0}
+        out = {'rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'issues': [], 'sum': 0.0, 'emb': collections.Counter()}
         rows = self.rows(doc, page)
         if not rows or depth > 5 or key in stack:
             if rows is None: out['issues'].append('лист %d не разобран' % page)
@@ -150,6 +190,11 @@ class RebarAssembler:
         for r in rows:
             name = r.get('name', '') or ''; qty = num(r.get('qty')); mass_e = num(r.get('mass'))
             if re.match(r'^Масса', name) and mass_e: out['sheet_total'] = mass_e; continue
+            kind = emb_kind(name)
+            if kind:                                                  # закладная, труба, петля: количество и масса единицы с листа, без рекурсии
+                if qty and mass_e: out['emb'][(kind, emb_name(name), mass_e)] += qty
+                else: out['issues'].append('«%s»: нет количества или массы' % emb_name(name)[:40])
+                continue
             if not name or SKIP_RE.match(name) or not qty or not mass_e: continue
             kg = qty * mass_e; out['sum'] += kg
             rod = parse_rod(name)
@@ -157,12 +202,12 @@ class RebarAssembler:
             refs = REF_RE.findall(r.get('oboz', '') or '')
             center = (int(refs[-1]) + self.offset.get(doc, 0)) if refs else page          # ожидаемая страница узла; без ссылки — окрестность листа-родителя
             sub = self.assemble(doc, center, node_mark(name), mass_e, depth + 1, stack + (key,)) if refs else None
-            got = (sum(sub['rods'].values()) + sub['unresolved']) if sub else 0
+            got = self.node_mass(sub)
             if not got or abs(got / mass_e - 1) > 0.03:                  # ссылки нет или масса узла по его листу не сходится — ищем лист по массе
                 found = self.find_by_mass(doc, center, mass_e)
                 if found and found != page:
                     sub = self.assemble(doc, found, node_mark(name), mass_e, depth + 1, stack + (key,))
-                    got = sum(sub['rods'].values()) + sub['unresolved']
+                    got = self.node_mass(sub)
                 else:
                     self.problems.add((doc, center))
             if not got or abs(got / mass_e - 1) > 0.03:
@@ -170,6 +215,7 @@ class RebarAssembler:
                 out['unresolved'] += kg; continue
             out['issues'] += sub['issues']
             for k, v in sub['rods'].items(): out['rods'][k] += v * qty
+            for k, v in sub['emb'].items(): out['emb'][k] += v * qty
             out['unresolved'] += sub['unresolved'] * qty
         self.cache[key] = out
         return out

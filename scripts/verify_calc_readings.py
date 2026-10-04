@@ -145,5 +145,44 @@ check(result["ready"] == steps[-1] and 0 <= result["percent"] <= 100, "итог 
 check(sum(f["total"] for f in result["families"]) == result["total"], "группы в сумме дают все изделия")
 check(result["funnel"][0]["alone"] > 0 and result["prices"]["materials"] > 0, "объём и перечень материалов есть")
 
+# 8. закладные, трубы, петли: наложение по видам, коды ресурсов, без дублей, лист без закладных тоже «прочитан»
+from app.calc.readings import without_readings
+
+plain = next(k for k, v in base.items() if v.get("family") == "Колонны" and not v.get("resources") and not v.get("projectVolume"))
+legacy = next((k for k, v in base.items() if any(r["id"] == "pipe50" for r in v.get("resources") or [])), None)
+synthetic = {
+    "sheet": {"doc": 1, "page": 1}, "method": "vector_ocr", "confirmed": False, "volume": 2.0, "concreteClass": "В40",
+    "rebar": {"fromSteelSheet": [], "steelSheetChecks": {}, "fromAssembly": [], "unresolvedKg": 0},
+    "embedded": {"items": [["embedded", "Закладная деталь ЗД1", 9.4, 10, None, None], ["embedded", "Закладная деталь ЗД2", 5.0, 2, None, None],
+                           ["loop", "Петля П1", 2.3, 4, None, None],
+                           ["pipe", "Труба 68х1 ГОСТ 32678-2014 L=700", 1.1, 2, "68x1", 1.4], ["pipe", "Труба 50х5 ГОСТ 32678-2014 L=400", 4.0, 3, "50x5", 1.2],
+                           ["pipe", "Труба 68х5 ГОСТ 32678-2014 L=300", 3.0, 1, "68x5", 0.3]]},
+}
+empty = {"sheet": {"doc": 1, "page": 2}, "method": "vector_ocr", "confirmed": False, "volume": 1.0, "rebar": {}, "embedded": {"items": []}}
+payload = {plain: synthetic}
+if legacy: payload[legacy] = synthetic
+tmp3 = Path(tempfile.mkdtemp(prefix="calc-embedded-")); (tmp3 / SOURCE_FILE).write_text(json.dumps(payload, ensure_ascii=False))
+models3 = copy.deepcopy(base); apply_readings(models3, tmp3)
+res = {r["id"]: r for r in models3[plain]["resources"]}
+check(abs(float(res["embeddedParts"]["projectQty"]) - (9.4 * 10 + 5.0 * 2) / 1000) < 1e-6 and res["embeddedParts"]["unit"] == "т", "закладные: масса в тоннах (%s)" % res["embeddedParts"]["projectQty"])
+check(abs(float(res["loopParts"]["projectQty"]) - 2.3 * 4 / 1000) < 1e-6, "петли: масса в тоннах")
+check(res["pipe68"]["unit"] == "м" and abs(float(res["pipe68"]["projectQty"]) - 1.4) < 1e-9 and abs(float(res["pipe50"]["projectQty"]) - 1.2) < 1e-9, "трубы 68×1 и 50×5 — коды каталога, метры")
+check("pipe68x5" in res and abs(float(res["pipe68x5"]["projectQty"]) - 0.3) < 1e-9, "труба нового типоразмера получила код pipe68x5")
+check(models3[plain]["readings"]["embeddedChecked"] and "embeddedParts" in models3[plain]["readings"]["addedResources"], "в пометке записаны добавленные ресурсы")
+if legacy:
+    old = {r["id"]: r for r in base[legacy]["resources"]}
+    new = {r["id"]: r for r in models3[legacy]["resources"]}
+    check(new["pipe50"] == old["pipe50"] and sum(1 for r in models3[legacy]["resources"] if r["id"] == "pipe50") == 1, "трубы поставщика не дублируются и не меняются")
+    check("embeddedParts" in new, "закладные у модели с готовыми трубами добавлены")
+restored = without_readings(models3[plain])
+check(restored["resources"] == [] and not restored["projectVolume"], "без_чтений возвращает состояние до наложения")
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: empty}, ensure_ascii=False))
+models4 = copy.deepcopy(base); apply_readings(models4, tmp3)
+check(models4[plain]["readings"]["embeddedChecked"] and not models4[plain].get("resources"), "лист без закладных помечен прочитанным и ресурсов не добавляет")
+old_format = {"sheet": {"doc": 1, "page": 3}, "method": "vector_ocr", "confirmed": False, "volume": 1.0, "rebar": {}}      # чтение прежнего формата: раздела embedded нет
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: old_format}, ensure_ascii=False))
+models5 = copy.deepcopy(base); apply_readings(models5, tmp3)
+check(not models5[plain].get("readings", {}).get("embeddedChecked"), "чтение прежнего формата не засчитывает закладные прочитанными")
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)
