@@ -143,14 +143,14 @@ class RebarAssembler:
         self.problems = set()      # (альбом, страница) вокруг которых не удалось найти лист узла: сборщик слоя дочитывает окно и повторяет
 
     @staticmethod
-    def node_mass(sub):
-        """Масса узла по его листу. Лист узла может включать петли и закладные в итог «Масса», а может не включать — подходит любая из двух сумм
-        (арматура; арматура + позиции закладных/петель), берётся ближе к итогу листа."""
+    def node_mass(sub, expected=None):
+        """Масса узла по его листу. В итог узла могут входить петли, закладные и трубы, а могут не входить: из двух сумм (арматура; арматура + позиции закладных,
+        петель, труб) берётся ближайшая к массе, которую заявляет спецификация родителя (expected), а без неё — к итогу «Масса» листа узла."""
         if not sub: return 0
         rods = sum(sub['rods'].values()) + sub['unresolved']
         withemb = rods + sum(k[2] * v for k, v in sub['emb'].items())
-        total = sub.get('sheet_total')
-        if total and withemb and abs(withemb / total - 1) < abs(rods / total - 1 if rods else 9): return withemb
+        target = expected or sub.get('sheet_total')
+        if target and withemb and abs(withemb / target - 1) < abs(rods / target - 1 if rods else 9): return withemb
         return rods
 
     def sheet_masses(self, doc, page):
@@ -202,12 +202,12 @@ class RebarAssembler:
             refs = REF_RE.findall(r.get('oboz', '') or '')
             center = (int(refs[-1]) + self.offset.get(doc, 0)) if refs else page          # ожидаемая страница узла; без ссылки — окрестность листа-родителя
             sub = self.assemble(doc, center, node_mark(name), mass_e, depth + 1, stack + (key,)) if refs else None
-            got = self.node_mass(sub)
+            got = self.node_mass(sub, mass_e)
             if not got or abs(got / mass_e - 1) > 0.03:                  # ссылки нет или масса узла по его листу не сходится — ищем лист по массе
                 found = self.find_by_mass(doc, center, mass_e)
                 if found and found != page:
                     sub = self.assemble(doc, found, node_mark(name), mass_e, depth + 1, stack + (key,))
-                    got = self.node_mass(sub)
+                    got = self.node_mass(sub, mass_e)
                 else:
                     self.problems.add((doc, center))
             if not got or abs(got / mass_e - 1) > 0.03:

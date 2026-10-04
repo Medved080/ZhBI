@@ -38,10 +38,20 @@ def rebar_of(reading):
 EMBEDDED_RESOURCES = {"embedded": ("embeddedParts", "Закладные детали"), "loop": ("loopParts", "Петли и петлевые выпуски")}
 
 
-def embedded_resources(reading):
+def embedded_verified(reading):
+    """Сверка закладных и труб с итогом «закладные изделия» ведомости расхода стали листа (у ведомости он равен закладным деталям плюс трубам, петли в нём
+    не считаются): True — сошлось в пределах 2%, False — нет, None — итога на листе нет (проверить нечем)."""
+    embedded = reading.get("embedded") or {}
+    total = embedded.get("sheetTotalKg")
+    if not total: return None
+    mass = sum(item[2] * item[3] for item in embedded.get("items") or [] if item[0] in ("embedded", "pipe"))
+    return abs(mass / total - 1) <= 0.02
+
+
+def embedded_resources(reading, loops=True):
     """Закладные, трубы и петли из чтения: [ресурс]. Закладные и петли — по массе, т (цена за тонну); трубы — по типоразмеру, м (цена за метр, код каталога:
     pipe50 = 50×5, pipe68 = 68×1, остальные — pipeДДxТ). Позиция: [вид, название, масса единицы кг, количество шт., типоразмер трубы, длина трубы в позиции, м]:
-    типоразмер и метры сборка (build_calc_readings.py) выставляет сама, у закладных и петель они пустые."""
+    типоразмер и метры сборка (build_calc_readings.py) выставляет сама, у закладных и петель они пустые. loops=False — петли не добавляются (их масса уже в арматуре)."""
     mass = {"embedded": 0.0, "loop": 0.0}; pipes = {}
     for kind, name, unit_mass, qty, size, meters in ((list(i) + [None, None])[:6] for i in (reading.get("embedded") or {}).get("items") or []):
         if kind in mass:
@@ -50,7 +60,7 @@ def embedded_resources(reading):
             pipes[size] = pipes.get(size, 0.0) + meters
     out = []
     for kind, (identifier, title) in EMBEDDED_RESOURCES.items():
-        if mass[kind] > 0:
+        if mass[kind] > 0 and (loops or kind != "loop"):
             out.append({"id": identifier, "name": title, "unit": "т", "projectQty": round(mass[kind] / 1000, 5), "qty": round(mass[kind] / 1000, 5), "rate": "0"})
     for size, meters in sorted(pipes.items()):
         legacy = {"50x5": "pipe50", "68x1": "pipe68"}.get(size)
@@ -92,24 +102,33 @@ def apply_readings(models, directory):
             model["concreteClass"] = reading["concreteClass"]; applied.append("класс бетона")
         rods, source = rebar_of(reading)
         added = []
+        steel_counts_loops = bool(model.get("resources"))      # арматура поставщика (ведомость) уже включает петли
         if not model.get("resources") and rods:
             model["resources"] = [{"id": resource_id(c, d), "name": resource_name(c, d), "unit": "т", "projectQty": round(kg / 1000, 5), "qty": round(kg / 1000, 5), "rate": "0"}
                                   for c, d, kg in sorted(rods)]
             added += [r["id"] for r in model["resources"]]
             applied.append("арматура (" + source + ")")
+            steel_counts_loops = source == "ведомость расхода стали"      # ведомость считает петли в арматурных изделиях, сборка по узлам — нет
         # закладные, трубы, петли: каждый вид добавляется, только если у модели нет ресурсов этого вида (у двух исходных колонн Excel трубы уже есть)
         present = {r["id"] for r in model.get("resources") or []}
-        extra = [r for r in embedded_resources(reading) if not any(i.startswith("pipe" if r["id"].startswith("pipe") else r["id"]) for i in present)]
+        # закладные накладываются, только если не нарушена сверка с итогом ведомости листа (нет итога — принимаются как не подтверждённые)
+        verified = embedded_verified(reading)
+        extra = [] if verified is False else [r for r in embedded_resources(reading, loops=not steel_counts_loops)
+                                              if not any(i.startswith("pipe" if r["id"].startswith("pipe") else r["id"]) for i in present)]
         if extra:
             model.setdefault("resources", []).extend(extra)
             added += [r["id"] for r in extra]
             applied.append("закладные, трубы, петли")
         # лист прочитан, а закладных, труб и петель на нём нет: «ничего не требуется» — это тоже результат, а не пробел
-        checked = "embedded" in reading and (bool(extra) or bool(reading["embedded"].get("items")) or bool(reading.get("volume")))     # чтение старого формата (без раздела embedded) ничего не утверждает
+        checked = "embedded" in reading and verified is not False and (bool(extra) or bool(reading["embedded"].get("items")) or bool(reading.get("volume")))     # чтение старого формата (без раздела embedded) ничего не утверждает
         if applied or checked:
             sheet = reading.get("sheet") or {}
-            model["readings"] = {"applied": applied, "sheet": sheet, "confirmed": False, "method": reading.get("method"), "addedResources": added, "embeddedChecked": checked,
+            model["readings"] = {"applied": applied, "sheet": sheet, "confirmed": False, "method": reading.get("method"), "addedResources": added, "embeddedChecked": checked, "embeddedVerified": verified,
                                  "embedded": (reading.get("embedded") or {}).get("items") or []}
+        issues = model.get("issues") or []
+        if checked: issues = [i for i in issues if i != "Не заданы закладные, трубы и прочие материалы"]      # состав прочитан с листа
+        if any(x.startswith("арматура") for x in applied): issues = [i for i in issues if i != "Не разобраны ресурсные позиции стали"]
+        model["issues"] = issues
         if applied:
             model.setdefault("notes", []).append("Прочитано с листа PDF автоматически и не подтверждено человеком (%s; альбом doc%02d, стр. %s). Сверить с чертежом." % (
                 ", ".join(applied), sheet.get("doc", 0), sheet.get("page", "?")))

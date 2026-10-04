@@ -61,7 +61,7 @@ check(changed > 0, "наложено на моделей: %d" % changed)
 overwritten = [k for k in data if k in base and (
     (base[k].get("projectVolume") and models[k].get("projectVolume") != base[k]["projectVolume"])
     or (base[k].get("concreteClass") not in (None, "", "Не указан") and models[k].get("concreteClass") != base[k]["concreteClass"])
-    or (base[k].get("resources") and models[k].get("resources") != base[k]["resources"]))]
+    or (base[k].get("resources") and models[k].get("resources")[:len(base[k]["resources"])] != base[k]["resources"]))]      # ресурсы поставщика остаются как были, чтение может только добавить виды в конец
 check(not overwritten, "значения каталога поставщика не перезаписаны (затронуто %d)" % len(overwritten))
 
 # 2. пробелы закрыты, остальное не тронуто
@@ -188,6 +188,26 @@ by_mass = {**old_format, "volumeSource": "масса ÷ 2500", "volume": 0.78}
 models6 = copy.deepcopy(base); apply_readings(models6, tmp3)
 check(models6[plain]["projectVolume"] == 0.78 and any("масса ÷ 2500" in a for a in models6[plain]["readings"]["applied"]), "объём по массе ÷ 2500 помечен источником")
 check(without_readings(models6[plain])["projectVolume"] is None, "без_чтений убирает объём, вычисленный по массе")
+
+# 9. петли и сверка закладных с итогом ведомости
+with_sheet = {**synthetic, "rebar": {"fromSteelSheet": [["А500С", 12, 100.0]], "steelSheetChecks": {"total": True}, "fromAssembly": [], "unresolvedKg": 0}}
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: with_sheet}, ensure_ascii=False))
+models7 = copy.deepcopy(base); apply_readings(models7, tmp3)
+ids7 = {r["id"] for r in models7[plain]["resources"]}
+check("steel12A500C" in ids7 and "embeddedParts" in ids7 and "loopParts" not in ids7, "арматура из ведомости уже включает петли: отдельных петель нет")
+by_assembly = {**synthetic, "rebar": {"fromSteelSheet": [], "steelSheetChecks": {}, "fromAssembly": [["А500С", 12, 100.0]], "unresolvedKg": 0}}
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: by_assembly}, ensure_ascii=False))
+models8 = copy.deepcopy(base); apply_readings(models8, tmp3)
+check("loopParts" in {r["id"] for r in models8[plain]["resources"]}, "арматура из сборки петель не включает: петли добавлены")
+matching = {**synthetic, "embedded": {**synthetic["embedded"], "sheetTotalKg": 9.4 * 10 + 5.0 * 2 + 1.1 * 2 + 4.0 * 3 + 3.0 * 1}}
+wrong = {**synthetic, "embedded": {**synthetic["embedded"], "sheetTotalKg": 500.0}}
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: matching}, ensure_ascii=False))
+models9 = copy.deepcopy(base); apply_readings(models9, tmp3)
+check(models9[plain]["readings"]["embeddedVerified"] is True and "embeddedParts" in {r["id"] for r in models9[plain]["resources"]}, "закладные сошлись с итогом ведомости: наложены, проверено")
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: wrong}, ensure_ascii=False))
+models10 = copy.deepcopy(base); apply_readings(models10, tmp3)
+check(not any(r["id"] in ("embeddedParts", "loopParts") or r["id"].startswith("pipe") for r in models10[plain].get("resources") or []) and not models10[plain]["readings"]["embeddedChecked"],
+      "закладные не сошлись с итогом ведомости: не накладываются и не засчитаны прочитанными")
 
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)
