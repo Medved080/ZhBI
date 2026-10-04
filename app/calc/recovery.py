@@ -294,6 +294,45 @@ def page_images(settings,sheet,config):
     return result
 
 
+TILE_REGIONS=[(0,0,.55,.55),(.45,0,1,.55),(0,.45,.55,1),(.45,.45,1,1)]
+MAX_TOKENS=32768
+
+
+def read_with_fallback(config,settings,transport,system,prompt,images):
+    """Чтение листа с отступлением при обрезанном ответе. Плотный чертёж даёт сотни фактов (каждый с цитатой и координатами) — это
+    десятки тысяч токенов, а у «думающих» моделей рассуждение тоже считается в лимит. Порядок: тот же запрос с лимитом ×2, ×4 (до 32768),
+    затем чтение по фрагментам (полный вид и четыре перекрывающиеся плитки по отдельности) с объединением фактов."""
+    def ask(imgs,extra,tokens):
+        cfg=config.model_copy(update={'maxTokens':tokens})
+        value=qwen_client.chat(cfg,settings,[{'role':'system','content':system},{'role':'user','content':prompt+extra,'images':imgs}],PageReading.model_json_schema(),'page_reading',transport)
+        return PageReading.model_validate(value).model_dump(mode='json')
+    def truncated(error): return 'обрезан' in str(error)
+    last=None
+    for tokens in dict.fromkeys([config.maxTokens,min(MAX_TOKENS,config.maxTokens*2),min(MAX_TOKENS,config.maxTokens*4)]):
+        try: return ask(images,'',tokens)
+        except qwen_client.InferenceError as error:
+            if not truncated(error): raise
+            last=error
+    if len(images)<2: raise last
+    facts,unreadable,references=[],[],[]
+    seen=set()
+    for index,image in enumerate(images):
+        region='весь лист' if index==0 else 'фрагмент листа: x от %.2f до %.2f, y от %.2f до %.2f (доли ширины и высоты полного листа)'%(TILE_REGIONS[index-1][0],TILE_REGIONS[index-1][2],TILE_REGIONS[index-1][1],TILE_REGIONS[index-1][3])
+        extra=f'\nЭто отдельный запрос по части листа ({region}). Ответ должен быть кратким: не более 120 фактов, сначала размеры, марки, позиции и спецификация. bbox верни в координатах ПОЛНОГО листа, а не фрагмента.'
+        try: part=ask([image],extra,min(MAX_TOKENS,config.maxTokens*4))
+        except qwen_client.InferenceError as error:
+            if not truncated(error): raise
+            unreadable.append(f'Часть листа ({region}) не прочитана: ответ Qwen обрезан лимитом токенов')
+            continue
+        for fact in part['facts']:
+            key=(fact['subject'],fact['property'],fact['value'],fact['quote'])
+            if key in seen: continue
+            seen.add(key);facts.append({**fact,'id':f't{index}-'+fact['id']})
+        unreadable+=part['unreadable'];references+=part['references']
+    if not facts: raise last
+    return {'facts':facts[:300],'unreadable':list(dict.fromkeys(unreadable))[:100],'references':list(dict.fromkeys(references))[:100]}
+
+
 class LeaseLost(Exception): pass
 
 
@@ -385,8 +424,7 @@ class RecoveryWorker:
             digest=sha({'page':{k:page[k] for k in ['sourceId','pdfPage','sha256']},'config':config.model_dump(),'pipeline':PIPELINE_VERSION,'readingRevision':bundle.get('readingRevision')})
             def read_page():
                 prompt=f"Физическая PDF-страница {page['pdfPage']}, источник {page['sourceId']}. Читай все видимые марки деталей, штамп, редакцию, размеры, виды/сечения, позиции, формы, количество, диаметры, шаг, длины, ссылки. Каждый факт: точная видимая цитата и bbox x,y,w,h в координатах ПОЛНОГО листа 0..1. Первая картинка — полный лист; следующие — верхний левый, верхний правый, нижний левый, нижний правый фрагменты с перекрытием, диапазоны 0..0.55 и 0.45..1. Уникальные id фактов внутри страницы. Нечитаемое перечисли отдельно. Верни JSON по схеме."
-                value=qwen_client.chat(config,self.settings,[{'role':'system','content':system},{'role':'user','content':prompt,'images':page_images(self.settings,page,config)}],PageReading.model_json_schema(),'page_reading',self.transport)
-                return PageReading.model_validate(value).model_dump(mode='json')
+                return read_with_fallback(config,self.settings,self.transport,system,prompt,page_images(self.settings,page,config))
             reading=self.step(job,token,key,digest,read_page)
             ids=[f['id'] for f in reading['facts']]
             if len(set(ids))!=len(ids): raise ValueError('Qwen повторил идентификаторы фактов на странице')
