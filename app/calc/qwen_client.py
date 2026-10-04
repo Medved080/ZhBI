@@ -18,6 +18,12 @@ class InferenceError(Exception):
     pass
 
 
+class InferenceTruncated(InferenceError):
+    """Ответ оборван лимитом токенов или признан зациклившимся. partial — всё, что модель успела выдать (для спасения готовых фактов и диагностики)."""
+    def __init__(self,message,partial='',deltas=0,reasoning=0,loop=False):
+        super().__init__(message);self.partial=partial;self.deltas=deltas;self.reasoning=reasoning;self.loop=loop
+
+
 class InferenceTimeout(InferenceError):
     """Сервер нейросети не прислал ни байта за тайм-аут (часто — модель ещё загружается в память)."""
     first_token=False
@@ -77,6 +83,13 @@ def api_base(config):
     return origin+path
 
 
+def looping(text):
+    """Признак зацикливания: хвост (300 знаков) повторяется в последних 4000 знаках не меньше четырёх раз."""
+    if len(text)<1500: return False
+    tail=text[-300:]
+    return text[-4000:].count(tail)>=4
+
+
 def _read_stream(request,config,progress):
     """Чтение ответа по мере поступления (SSE у OpenAI-совместимых API, NDJSON у Ollama). Тайм-аут сокета действует на КАЖДОЕ ожидание данных:
     это тайм-аут простоя (в том числе до первого токена), а не предел общей длительности ответа. Общий предел — 30 минут."""
@@ -87,7 +100,7 @@ def _read_stream(request,config,progress):
         now_=time.time();info.update(fields);info['elapsed']=now_-started
         if progress and (force or now_-last_emit[0]>=0.5): last_emit[0]=now_;progress(dict(info))
     emit(True)
-    content=[];usage=None;finish=None;last_data=started;openai=config.provider=='openai'
+    content=[];usage=None;finish=None;last_data=started;openai=config.provider=='openai';tail=''
     with opener.open(request,timeout=config.timeoutSeconds) as result:
         emit(True,state='waiting_first_token')
         ctype=result.headers.get('Content-Type','').lower()
@@ -119,7 +132,9 @@ def _read_stream(request,config,progress):
                 if obj.get('done'):
                     finish=obj.get('done_reason') or 'stop'
                     usage={'completion_tokens':obj.get('eval_count'),'prompt_tokens':obj.get('prompt_eval_count')}
-            if text: content.append(text)
+            if text:
+                content.append(text);tail=(tail+text)[-4200:]
+                if info['deltas']%40==39 and looping(tail): raise InferenceTruncated('Модель зациклилась: выдаёт одно и то же. Ответ прерван',''.join(content),info['deltas'],info['reasoningDeltas'],True)
             fields={'state':'generating','chars':info['chars']+len(text)}
             if text: fields['deltas']=info['deltas']+1
             if thought: fields['reasoningDeltas']=info['reasoningDeltas']+1
@@ -127,8 +142,9 @@ def _read_stream(request,config,progress):
             emit(info['state']!='generating',**fields)
             if info['chars']>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
     emit(True)
-    if openai: return {'choices':[{'finish_reason':finish,'message':{'content':''.join(content)}}],'usage':usage}
-    return {'done_reason':finish,'message':{'content':''.join(content)},'usage':usage}
+    stats={'deltas':info['deltas'],'reasoningDeltas':info['reasoningDeltas'],'chars':info['chars']}
+    if openai: return {'choices':[{'finish_reason':finish,'message':{'content':''.join(content)}}],'usage':usage,'stats':stats}
+    return {'done_reason':finish,'message':{'content':''.join(content)},'usage':usage,'stats':stats}
 
 
 def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None):
@@ -172,10 +188,14 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
     try:
         if config.provider=='openai':
             choice=response['choices'][0]
-            if choice.get('finish_reason')=='length': raise InferenceError('Ответ Qwen обрезан лимитом токенов. Увеличьте лимит или сократите число листов')
+            if choice.get('finish_reason')=='length':
+                st=response.get('stats') or {}
+                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов (получено ~{st.get("deltas","?")} токенов ответа'+(f', рассуждение {st["reasoningDeltas"]}' if st.get('reasoningDeltas') else '')+')',choice.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0))
             content=choice['message']['content']
         else:
-            if response.get('done_reason')=='length': raise InferenceError('Ответ Qwen обрезан лимитом токенов')
+            if response.get('done_reason')=='length':
+                st=response.get('stats') or {}
+                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов',response.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0))
             content=response['message']['content']
         content=re.sub(r'^```(?:json)?\s*|\s*```$','',content.strip())
         value=json.loads(content,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('Non-finite number')))

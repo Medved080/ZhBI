@@ -19,7 +19,7 @@ from . import qwen_client
 from .recovery_live import Trace, snapshot as live_snapshot, events as live_events
 from .database import audit,connect,dumps,now,transaction
 from .document_models import model
-from .recovery_schema import ConnectionConfig,PageReading,GeometryDraft
+from .recovery_schema import ConnectionConfig,PageReading,GeometryDraft,Fact
 from .recovery_geometry import compile_draft
 from .source_sheets import sheets_for,source_info,preview_path
 
@@ -315,6 +315,9 @@ def traced_chat(config,settings,transport,trace,label,messages,schema,name,token
     """Запрос к модели с подробным ходом: журнал, «живой» снимок (ожидание первого токена, число токенов, скорость) и повтор при тайм-ауте
     до первого токена (модель могла просто загружаться в память: второй запрос пойдёт быстро)."""
     cfg=config.model_copy(update={'maxTokens':tokens}) if tokens else config
+    if 'qwen' in cfg.model.lower() and 'no_think' not in messages[-1]['content'][:12]:
+        # «Думающие» модели Qwen3 тратят лимит на рассуждение до ответа; мягкий переключатель /no_think отключает его (другие модели его не знают, но и не страдают)
+        messages=[*messages[:-1],{**messages[-1],'content':'/no_think\n'+messages[-1]['content']}]
     images=sum(len(m.get('images',[])) for m in messages);chars=sum(len(m['content']) for m in messages)
     for attempt in range(1,FIRST_TOKEN_RETRIES+1):
         if trace:
@@ -336,50 +339,70 @@ def traced_chat(config,settings,transport,trace,label,messages,schema,name,token
             if attempt==FIRST_TOKEN_RETRIES: raise
         except qwen_client.InferenceError as error:
             if trace:
-                trace.request_end(False,str(error)[:200]);trace.note(str(error)[:400],'warn' if 'обрезан' in str(error) else 'error')
+                trace.request_end(False,str(error)[:200])
+                if isinstance(error,qwen_client.InferenceTruncated): trace.note(str(error)[:300]+(f'; конец ответа: «…{error.partial[-160:]}»' if error.partial else '; содержательного текста нет — модель, вероятно, «рассуждала»: отключите режим рассуждений у модели'),'warn')
+                else: trace.note(str(error)[:400],'error')
             raise
+
+
+def reading_schema(max_facts):
+    """Схема чтения листа с ограничением числа фактов. Ограничение действует на сам вывод модели (структурированная генерация): массив обязан
+    закрыться, и ответ гарантированно завершается — без него модель перечисляет сотни размеров с цитатами и упирается в лимит токенов."""
+    import copy
+    schema=copy.deepcopy(PageReading.model_json_schema());props=schema['properties']
+    props['facts']['maxItems']=max_facts;props['unreadable']['maxItems']=15;props['references']['maxItems']=15
+    return schema
+
+
+def salvage_facts(text):
+    """Полностью завершённые факты из оборванного JSON-ответа (лучше иметь часть фактов, чем ничего)."""
+    start=text.find('[',text.find('"facts"')) if '"facts"' in text else -1
+    if start<0: return []
+    decoder=json.JSONDecoder();position=start+1;found=[]
+    while position<len(text):
+        while position<len(text) and text[position] in ' \n\r\t,': position+=1
+        if position>=len(text) or text[position]!='{': break
+        try: item,position=decoder.raw_decode(text,position)
+        except ValueError: break
+        try: found.append(Fact.model_validate(item).model_dump(mode='json'))
+        except ValidationError: continue
+    return found
 
 
 def read_with_fallback(config,settings,transport,system,prompt,images,trace=None):
-    """Чтение листа с отступлением при обрезанном ответе. Плотный чертёж даёт сотни фактов (каждый с цитатой и координатами) — это
-    десятки тысяч токенов, а у «думающих» моделей рассуждение тоже считается в лимит. Порядок: тот же запрос с лимитом ×2, ×4 (до 32768),
-    затем чтение по фрагментам (полный вид и четыре перекрывающиеся плитки по отдельности) с объединением фактов."""
-    def ask(imgs,extra,tokens,label):
-        value=traced_chat(config,settings,transport,trace,label,[{'role':'system','content':system},{'role':'user','content':prompt+extra,'images':imgs}],PageReading.model_json_schema(),'page_reading',tokens)
-        try: result=PageReading.model_validate(value).model_dump(mode='json')
-        except ValidationError:
-            if trace: trace.note('Ответ Qwen не соответствует схеме чтения листа','error')
-            raise
-        if trace: trace.note(f'Разобрано фактов: {len(result["facts"])}, не прочитано: {len(result["unreadable"])}, ссылок на другие листы: {len(result["references"])}','ok')
-        return result
-    def truncated(error): return 'обрезан' in str(error)
-    last=None
-    plan=list(dict.fromkeys([config.maxTokens,min(MAX_TOKENS,config.maxTokens*2),min(MAX_TOKENS,config.maxTokens*4)]))
-    for number,tokens in enumerate(plan,1):
-        try: return ask(images,'',tokens,'лист целиком' if number==1 else f'лист целиком, повтор с лимитом {tokens}')
-        except qwen_client.InferenceError as error:
-            if not truncated(error): raise
-            last=error
-            if trace and number<len(plan): trace.note(f'Ответ обрезан лимитом токенов — повторяю с лимитом {plan[number]}','warn')
-    if len(images)<2: raise last
-    if trace: trace.note('Лимит исчерпан — читаю лист по частям: весь лист и четыре фрагмента отдельными запросами','warn')
+    """Чтение листа отдельными запросами: общий вид (штамп, спецификация, габариты, марки) и, если включены фрагменты, четыре перекрывающиеся
+    плитки с размерами и позициями. В каждом запросе число фактов ограничено схемой, поэтому ответ завершается; оборванный ответ не
+    повторяется с большим лимитом (так модель лишь дольше крутила то же самое), а разбирается: готовые факты сохраняются, остальное
+    помечается непрочитанным. Факты объединяются без дублей."""
+    tokens=min(MAX_TOKENS,max(config.maxTokens,12000))
+    if len(images)<2: parts=[('весь лист',images,100,'Прочитай марки, штамп, размеры и позиции листа.')]
+    else:
+        parts=[('общий вид листа',[images[0]],60,'Это общий вид листа. Прочитай ТОЛЬКО: штамп (марка, лист, редакция), спецификацию и ведомости, габариты и общие размеры, марки деталей и позиции.')]
+        for index,image in enumerate(images[1:]):
+            x0,y0,x1,y1=TILE_REGIONS[index]
+            parts.append((f'фрагмент {index+1} из {len(images)-1}: x {x0:.2f}–{x1:.2f}, y {y0:.2f}–{y1:.2f} листа',[image],80,f'Это фрагмент листа (x от {x0:.2f} до {x1:.2f}, y от {y0:.2f} до {y1:.2f} долей полного листа). Прочитай размеры (числа на размерных линиях), позиции и марки, которые видны в этом фрагменте.'))
     facts,unreadable,references=[],[],[]
     seen=set()
-    for index,image in enumerate(images):
-        region='весь лист' if index==0 else 'фрагмент листа: x от %.2f до %.2f, y от %.2f до %.2f (доли ширины и высоты полного листа)'%(TILE_REGIONS[index-1][0],TILE_REGIONS[index-1][2],TILE_REGIONS[index-1][1],TILE_REGIONS[index-1][3])
-        extra=f'\nЭто отдельный запрос по части листа ({region}). Ответ должен быть кратким: не более 120 фактов, сначала размеры, марки, позиции и спецификация. bbox верни в координатах ПОЛНОГО листа, а не фрагмента.'
-        try: part=ask([image],extra,min(MAX_TOKENS,config.maxTokens*4),f'часть {index+1} из {len(images)}: {region}')
-        except qwen_client.InferenceError as error:
-            if not truncated(error): raise
-            unreadable.append(f'Часть листа ({region}) не прочитана: ответ Qwen обрезан лимитом токенов')
-            continue
+    for index,(region,imgs,limit,hint) in enumerate(parts):
+        extra=f'\nЭТО ОТДЕЛЬНЫЙ ЗАПРОС: {hint} Не более {limit} фактов, самые важные — первыми. Цитата — только сам текст (до 40 знаков), bbox верни в координатах ПОЛНОГО листа (доли от 0 до 1, два знака после запятой). Верни только JSON.'
+        try:
+            value=traced_chat(config,settings,transport,trace,f'{region} (до {limit} фактов)',[{'role':'system','content':system},{'role':'user','content':prompt+extra,'images':imgs}],reading_schema(limit),'page_reading',tokens)
+            try: part=PageReading.model_validate(value).model_dump(mode='json')
+            except ValidationError:
+                if trace: trace.note(f'{region}: ответ Qwen не соответствует схеме чтения листа','error')
+                raise
+        except qwen_client.InferenceTruncated as error:
+            salvaged=salvage_facts(error.partial)
+            if trace: trace.note(f'{region}: ответ оборван ({"зацикливание" if error.loop else "лимит токенов"}); из частичного ответа спасено фактов: {len(salvaged)}','warn' if salvaged else 'error',tail=error.partial[-300:])
+            part={'facts':salvaged,'unreadable':[f'Часть листа ({region}): ответ Qwen оборван ({"зацикливание" if error.loop else "лимит токенов"}), прочитано фактов {len(salvaged)}'],'references':[]}
+        added=0
         for fact in part['facts']:
             key=(fact['subject'],fact['property'],fact['value'],fact['quote'])
             if key in seen: continue
-            seen.add(key);facts.append({**fact,'id':f't{index}-'+fact['id']})
+            seen.add(key);facts.append({**fact,'id':f't{index}-'+fact['id']});added+=1
         unreadable+=part['unreadable'];references+=part['references']
-        if trace: trace.note(f'Часть {index+1} из {len(images)} прочитана; фактов по листу всего: {len(facts)}','info')
-    if not facts: raise last
+        if trace: trace.note(f'{region}: фактов {len(part["facts"])} (новых {added}), всего по листу {len(facts)}','ok' if part['facts'] else 'warn')
+    if not facts: raise qwen_client.InferenceError('Ни одна часть листа не прочитана: модель не вернула ни одного факта (см. журнал выполнения)')
     return {'facts':facts[:300],'unreadable':list(dict.fromkeys(unreadable))[:100],'references':list(dict.fromkeys(references))[:100]}
 
 
@@ -519,7 +542,7 @@ class RecoveryWorker:
                     'Не устраняй пересечения неподтверждённым сдвигом. Верни полный JSON по схеме.\nДАННЫЕ:\n'+dumps(assembly))
             if prior: prompt+='\nЧисленные ошибки предыдущего кандидата; исправь только по основаниям:\n'+dumps(prior)
             def assemble():
-                value=traced_chat(config,self.settings,self.transport,trace,'сборка геометрии',[{'role':'system','content':system},{'role':'user','content':prompt}],GeometryDraft.model_json_schema(),'geometry_draft')
+                value=traced_chat(config,self.settings,self.transport,trace,'сборка геометрии',[{'role':'system','content':system},{'role':'user','content':prompt}],GeometryDraft.model_json_schema(),'geometry_draft',min(MAX_TOKENS,max(config.maxTokens*2,24000)))
                 try: return GeometryDraft.model_validate(value).model_dump(mode='json')
                 except ValidationError:
                     trace.note('Ответ Qwen не соответствует схеме сборки','error');raise
