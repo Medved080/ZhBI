@@ -18,7 +18,7 @@ class ConnectionConfig(StrictModel):
     provider: Literal['openai', 'ollama'] = 'ollama'
     baseUrl: str = Field(default='http://127.0.0.1:11434', max_length=500)
     model: str = Field(default='', max_length=200)
-    timeoutSeconds: int = Field(default=180, ge=10, le=600)
+    timeoutSeconds: int = Field(default=600, ge=10, le=600)
     maxTokens: int = Field(default=16384, ge=512, le=32768)
     imageSide: int = Field(default=1400, ge=768, le=2000)
     useTiles: bool = True

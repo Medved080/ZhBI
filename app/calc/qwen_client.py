@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 import socket
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, ProxyHandler, HTTPRedirectHandler, build_opener
@@ -15,6 +16,11 @@ from .database import dumps
 
 class InferenceError(Exception):
     pass
+
+
+class InferenceTimeout(InferenceError):
+    """Сервер нейросети не прислал ни байта за тайм-аут (часто — модель ещё загружается в память)."""
+    first_token=False
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -71,7 +77,61 @@ def api_base(config):
     return origin+path
 
 
-def chat(config, settings, messages, schema, name='recovery', transport=None):
+def _read_stream(request,config,progress):
+    """Чтение ответа по мере поступления (SSE у OpenAI-совместимых API, NDJSON у Ollama). Тайм-аут сокета действует на КАЖДОЕ ожидание данных:
+    это тайм-аут простоя (в том числе до первого токена), а не предел общей длительности ответа. Общий предел — 30 минут."""
+    opener=build_opener(ProxyHandler({}),NoRedirect())
+    started=time.time();info={'state':'connecting','elapsed':0.0,'sinceLast':0.0,'deltas':0,'reasoningDeltas':0,'chars':0}
+    last_emit=[0.0]
+    def emit(force=False,**fields):
+        now_=time.time();info.update(fields);info['elapsed']=now_-started
+        if progress and (force or now_-last_emit[0]>=0.5): last_emit[0]=now_;progress(dict(info))
+    emit(True)
+    content=[];usage=None;finish=None;last_data=started;openai=config.provider=='openai'
+    with opener.open(request,timeout=config.timeoutSeconds) as result:
+        emit(True,state='waiting_first_token')
+        ctype=result.headers.get('Content-Type','').lower()
+        if openai and 'event-stream' not in ctype:
+            raw=result.read(8*1048576+1)   # сервер проигнорировал stream и ответил целиком
+            if len(raw)>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
+            emit(True,state='generating');return json.loads(raw)
+        for line in result:
+            now_=time.time()
+            if now_-started>1800: raise InferenceError('Ответ Qwen идёт дольше 30 минут: прерываю')
+            info['sinceLast']=now_-last_data
+            line=line.strip()
+            if not line or line.startswith(b':'): emit();continue
+            last_data=now_
+            if openai:
+                if not line.startswith(b'data:'): continue
+                payload=line[5:].strip()
+                if payload==b'[DONE]': break
+                obj=json.loads(payload)
+                if obj.get('error'): raise InferenceError('Qwen сообщил об ошибке: '+str(obj['error'])[:300])
+                if obj.get('usage'): usage=obj['usage']
+                choice=(obj.get('choices') or [{}])[0];delta=choice.get('delta') or {}
+                text=delta.get('content') or '';thought=delta.get('reasoning_content') or delta.get('reasoning') or ''
+                if choice.get('finish_reason'): finish=choice['finish_reason']
+            else:
+                obj=json.loads(line)
+                if obj.get('error'): raise InferenceError('Ollama сообщил об ошибке: '+str(obj['error'])[:300])
+                text=(obj.get('message') or {}).get('content') or '';thought=(obj.get('message') or {}).get('thinking') or ''
+                if obj.get('done'):
+                    finish=obj.get('done_reason') or 'stop'
+                    usage={'completion_tokens':obj.get('eval_count'),'prompt_tokens':obj.get('prompt_eval_count')}
+            if text: content.append(text)
+            fields={'state':'generating','chars':info['chars']+len(text)}
+            if text: fields['deltas']=info['deltas']+1
+            if thought: fields['reasoningDeltas']=info['reasoningDeltas']+1
+            if usage and usage.get('completion_tokens'): fields['tokens']=usage['completion_tokens']
+            emit(info['state']!='generating',**fields)
+            if info['chars']>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
+    emit(True)
+    if openai: return {'choices':[{'finish_reason':finish,'message':{'content':''.join(content)}}],'usage':usage}
+    return {'done_reason':finish,'message':{'content':''.join(content)},'usage':usage}
+
+
+def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None):
     validate_endpoint(config,settings,resolve=transport is None)
     if config.provider=='openai':
         url=api_base(config)+'/chat/completions'
@@ -82,9 +142,10 @@ def chat(config, settings, messages, schema, name='recovery', transport=None):
             converted.append({'role':message['role'],'content':content if message.get('images') else message['content']})
         body={'model':config.model,'messages':converted,'temperature':0,'max_tokens':config.maxTokens,
               'response_format':{'type':'json_schema','json_schema':{'name':name,'schema':schema}}}
+        if transport is None: body.update(stream=True,stream_options={'include_usage':True})
     else:
         url=api_base(config)+'/api/chat'
-        body={'model':config.model,'messages':messages,'stream':False,'format':schema,
+        body={'model':config.model,'messages':messages,'stream':transport is None,'format':schema,
               'options':{'temperature':0,'num_predict':config.maxTokens}}
     headers={'Content-Type':'application/json'}
     if settings.qwen_api_key: headers['Authorization']='Bearer '+settings.qwen_api_key
@@ -93,18 +154,18 @@ def chat(config, settings, messages, schema, name='recovery', transport=None):
     else:
         try:
             request=Request(url,data=dumps(body).encode(),headers=headers,method='POST')
-            with build_opener(ProxyHandler({}),NoRedirect()).open(request,timeout=config.timeoutSeconds) as result:
-                raw=result.read(8*1048576+1)
-                if len(raw)>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
-            response=json.loads(raw)
+            response=_read_stream(request,config,progress)
         except HTTPError as error:
             try: snippet=error.read(600).decode('utf-8','replace').strip()
             except OSError: snippet=''
             raise InferenceError(diagnose(config,settings,url,error.code,snippet)) from None
+        except InferenceError: raise
         except (URLError,TimeoutError,OSError) as error:
             reason=str(getattr(error,'reason',error))[:160]
             if isinstance(error,TimeoutError) or 'timed out' in reason.lower():
-                raise InferenceError(f'Qwen не ответил за {config.timeoutSeconds} с ({url}). Крупная модель может загружаться в память сервера нейросети — увеличьте «Тайм-аут» (300–600 с) и повторите, лучше сначала загрузив модель в LM Studio/Ollama') from None
+                timeout=InferenceTimeout(f'Qwen не прислал данных {config.timeoutSeconds} с ({url}). Крупная модель может загружаться в память сервера нейросети — увеличьте «Тайм-аут» (300–600 с) и повторите, лучше сначала загрузив модель в LM Studio/Ollama')
+                timeout.first_token=True
+                raise timeout from None
             raise InferenceError(f'Qwen недоступен по адресу {url}: {reason}. Проверьте адрес, порт и что сервер нейросети запущен') from None
         except (json.JSONDecodeError,UnicodeError):
             raise InferenceError('API Qwen вернул некорректный JSON') from None

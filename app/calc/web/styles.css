@@ -485,3 +485,25 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #pc-sync-dialog h2{font-size:21px;font-weight:600;margin:0}
 #pc-sync-dialog .pc-results-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
 #pc-sync-dialog .pc-context{color:var(--muted);font-size:12px}
+
+/* Подробный ход обработки чертежей (recovery.js) */
+#precast-concept .pc-recovery-running{padding:10px 14px;margin:8px 0;border:1px solid var(--pc-line);border-left:5px solid var(--pc-accent);border-radius:8px;background:var(--sel);font-size:13px}
+#precast-concept .pc-live-card{border:1px solid var(--pc-line);border-radius:10px;padding:12px 14px;margin:10px 0;background:var(--pc-sidebar)}
+#precast-concept .pc-live-title{font-size:16px;font-weight:600;margin-bottom:8px}
+#precast-concept .pc-live-bar{height:8px;border-radius:5px;background:var(--pc-line);overflow:hidden;margin:6px 0}
+#precast-concept .pc-live-bar>i{display:block;height:100%;background:var(--pc-accent);transition:width .6s}
+#precast-concept .pc-live-line{font-size:12px;color:var(--pc-ink)}
+#precast-concept .pc-live-compact{margin-top:6px;min-width:260px}
+#precast-concept .pc-live-facts,#precast-concept .pc-live-request dl{display:grid;grid-template-columns:max-content 1fr;gap:3px 14px;margin:8px 0;font-size:13px}
+#precast-concept .pc-live-facts dd,#precast-concept .pc-live-request dd{text-align:left;white-space:normal;margin:0;font-weight:500}
+#precast-concept .pc-live-request{border-top:1px dashed var(--pc-line);padding-top:8px;margin-top:8px}
+#precast-concept .pc-live-request[data-state="waiting_first_token"]{border-top-color:var(--pc-accent)}
+#precast-concept .pc-live-warn{color:var(--bad);font-weight:700}
+#precast-concept .pc-recovery-logbox{margin:12px 0}
+#precast-concept .pc-recovery-logscroll{max-height:340px;overflow:auto;border:1px solid var(--pc-line);border-radius:8px;background:var(--pc-bg);padding:6px 10px}
+#precast-concept .pc-recovery-log{list-style:none;margin:0;padding:0;font-size:12px;display:grid;gap:3px}
+#precast-concept .pc-recovery-log li{display:grid;grid-template-columns:64px 18px 1fr;gap:6px;align-items:start;overflow-wrap:anywhere}
+#precast-concept .pc-recovery-log time{color:var(--pc-muted);font-variant-numeric:tabular-nums}
+#precast-concept .pc-recovery-log li[data-level="ok"] .pc-log-mark{color:var(--good)}
+#precast-concept .pc-recovery-log li[data-level="warn"]{color:#90601d}
+#precast-concept .pc-recovery-log li[data-level="error"]{color:var(--bad);font-weight:600}
