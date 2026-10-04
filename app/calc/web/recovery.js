@@ -4,9 +4,10 @@
  dialog.innerHTML=`<div class="pc-recovery-heading"><div><h2 id="pc-recovery-title">Обработка изделий · локальный Qwen</h2><p>Результаты сохраняются отдельно до подключения частичной модели.</p></div><button type="button" data-recovery-close aria-label="Закрыть обработку">×</button></div>
  <div id="pc-recovery-status" role="status" aria-live="polite"></div><div class="pc-recovery-layout">
  <aside><details id="pc-recovery-connection" open><summary>Подключение к серверу</summary><form id="pc-recovery-config">
- <label>API<select name="provider"><option value="openai">vLLM / совместимый API</option><option value="ollama">Ollama</option></select></label>
- <label>Адрес API<input name="baseUrl" type="url" required maxlength="500" placeholder="http://192.168.1.10:8000/v1"></label>
- <label>Название модели<input name="model" required maxlength="200" placeholder="Название установленного Qwen"></label>
+ <label>API<select name="provider"><option value="openai">OpenAI-совместимый (vLLM, LM Studio)</option><option value="ollama">Ollama</option></select></label>
+ <label>Адрес API<input name="baseUrl" type="url" required maxlength="500" placeholder="LM Studio: http://192.168.87.220:1234/v1 · Ollama: http://192.168.1.10:11434"></label>
+ <label>Название модели<input name="model" list="pc-recovery-models" required maxlength="200" placeholder="Название установленного Qwen"><datalist id="pc-recovery-models"></datalist></label>
+ <div class="pc-recovery-actions"><button type="button" id="pc-recovery-list-models">Показать модели сервера</button></div>
  <details><summary>Параметры обработки</summary>
  <label>Ожидание ответа, секунд<input name="timeoutSeconds" type="number" min="10" max="600" required></label>
  <label>Лимит ответа, токенов<input name="maxTokens" type="number" min="512" max="16384" required></label>
@@ -67,6 +68,13 @@
  document.getElementById('pc-recovery-open').addEventListener('click',async()=>{if(!window.CalcZhBIRecoveryUI)return;dialog.showModal();status('');updateSelection();try{await loadConfig();await refresh();}catch(error){status(error.message,true);}clearInterval(timer);timer=setInterval(()=>{if(dialog.open&&!document.hidden)void refresh().catch(error=>status(error.message,true));},4000);});
  dialog.addEventListener('close',()=>{clearInterval(timer);timer=null;});
  form.addEventListener('submit',event=>{event.preventDefault();void act(form.querySelector('[type=submit]'),async()=>{await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});await loadConfig();status('Подключение сохранено. Проверьте чтение изображения.');});});
+ q('#pc-recovery-list-models').addEventListener('click',event=>void act(event.currentTarget,async()=>{
+  const payload=configPayload();status('Запрашиваю список моделей с сервера нейросети…');
+  const result=await api.request('/calc/api/recovery/models',{method:'POST',body:JSON.stringify(payload)});
+  q('#pc-recovery-models').replaceChildren(...result.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.label=m.id+(m.vision?' · с изображениями':'');return o;}));
+  const vision=result.models.filter(m=>m.vision);if(!form.elements.model.value&&(vision[0]||result.models[0]))form.elements.model.value=(vision[0]||result.models[0]).id;
+  status('Моделей на сервере: '+result.models.length+(vision.length?' (с поддержкой изображений: '+vision.length+')':'')+'. Выберите в поле «Название модели»: '+result.models.slice(0,6).map(m=>m.id).join(', ')+(result.models.length>6?'…':''));
+ }));
  q('#pc-recovery-test').addEventListener('click',event=>void act(event.currentTarget,async()=>{if(!form.reportValidity())return;await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});status('Проверяю чтение тестового изображения на вашем сервере…');const result=await api.request('/calc/api/recovery/connection-test',{method:'POST'});await loadConfig();status(result.note);}));
  q('#pc-recovery-scope').addEventListener('change',updateSelection);
  q('#pc-recovery-start').addEventListener('click',event=>void act(event.currentTarget,async()=>{

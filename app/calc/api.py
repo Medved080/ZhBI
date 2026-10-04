@@ -127,6 +127,12 @@ def build_router(settings):
     def recovery_save_configuration(body: ConnectionConfig,user=Depends(recovery_admin)):
         return recovery.save_configuration(settings,body,user['id'])
 
+    @router.post('/api/recovery/models')
+    def recovery_models(body: ConnectionConfig,user=Depends(recovery_admin)):
+        from . import qwen_client
+        try: return qwen_client.list_models(body,settings)
+        except (ValueError,qwen_client.InferenceError) as error: raise HTTPException(422,str(error))
+
     @router.post('/api/recovery/connection-test')
     def recovery_probe(user=Depends(recovery_admin)):
         return recovery.test_connection(settings)

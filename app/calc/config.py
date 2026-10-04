@@ -24,10 +24,10 @@ class Settings:
     def embedded(cls):
         """Настройки подсистемы внутри ЖБИ: вход, хосты и лимиты тела запроса
         обслуживает сам сервис ЖБИ, поэтому здесь важны только каталоги, лимит
-        файла вложения и фоновый разбор чертежей (на серверах он выключен:
-        нужен локальный GPU, включается ZHBI_CALC_RECOVERY_WORKER=1)."""
+        файла вложения и фоновый разбор чертежей (включён: в простое он ничего не
+        делает; сервер нейросети настраивается в интерфейсе; выключается ZHBI_CALC_RECOVERY_WORKER=0)."""
         from .paths import CALC_DIR
-        on = os.getenv("ZHBI_CALC_RECOVERY_WORKER", "0").lower() in {"1", "true", "yes"}
+        on = os.getenv("ZHBI_CALC_RECOVERY_WORKER", "1").lower() in {"1", "true", "yes"}
         return cls(
             data_dir=CALC_DIR,
             environment="development",

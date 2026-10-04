@@ -146,6 +146,31 @@ def diagnose(config,settings,url,code,snippet):
     return text
 
 
+def list_models(config,settings,getter=None):
+    """Модели, установленные на сервере нейросети (для выбора в форме): Ollama /api/tags, OpenAI-совместимые /v1/models,
+    LM Studio /api/v1/models. Запрос идёт с backend: адрес может быть доступен только серверу, а не браузеру."""
+    validate_endpoint(config,settings,resolve=getter is None)
+    getter=getter or _get_json
+    parsed=urlsplit(config.baseUrl);origin=f'{parsed.scheme}://{parsed.netloc}';base=config.baseUrl.rstrip('/')
+    if not parsed.path.rstrip('/'): base+='/v1'
+    urls=[origin+'/api/tags'] if config.provider=='ollama' else [base+'/models',origin+'/api/v1/models',origin+'/v1/models']
+    for url in dict.fromkeys(urls):
+        payload=getter(url)
+        rows=payload.get('data') or payload.get('models') if isinstance(payload,dict) else payload
+        if not isinstance(rows,list): continue
+        found=[]
+        for row in rows:
+            if isinstance(row,str): found.append({'id':row,'vision':None});continue
+            if not isinstance(row,dict): continue
+            name=row.get('id') or row.get('key') or row.get('name') or row.get('model')
+            if not name: continue
+            caps=row.get('capabilities')
+            vision=(row.get('type')=='vlm' or bool(row.get('vision')) or (isinstance(caps,dict) and bool(caps.get('vision'))) or (isinstance(caps,list) and 'vision' in caps)) or None
+            found.append({'id':str(name),'vision':vision})
+        if found: return {'url':url,'models':found}
+    raise InferenceError('Список моделей не получен: сервер нейросети не ответил по адресам '+', '.join(urls))
+
+
 def probe(config,settings,transport=None):
     if not config.model.strip(): raise ValueError('Укажите название установленной модели')
     code=str(secrets.randbelow(900)+100)
