@@ -18,6 +18,10 @@ class InferenceError(Exception):
     pass
 
 
+class InferenceCancelled(InferenceError):
+    """Запрос прерван по команде (пауза/отмена партии): соединение закрыто, сервер нейросети перестаёт генерировать."""
+
+
 class InferenceTruncated(InferenceError):
     """Ответ оборван лимитом токенов или признан зациклившимся. partial — всё, что модель успела выдать (для спасения готовых фактов и диагностики)."""
     def __init__(self,message,partial='',deltas=0,reasoning=0,loop=False):
@@ -90,10 +94,29 @@ def looping(text):
     return text[-4000:].count(tail)>=4
 
 
-def _read_stream(request,config,progress):
+def _read_stream(request,config,progress,cancel=None):
     """Чтение ответа по мере поступления (SSE у OpenAI-совместимых API, NDJSON у Ollama). Тайм-аут сокета действует на КАЖДОЕ ожидание данных:
     это тайм-аут простоя (в том числе до первого токена), а не предел общей длительности ответа. Общий предел — 30 минут."""
-    opener=build_opener(ProxyHandler({}),NoRedirect())
+    import http.client,threading
+    parsed=urlsplit(request.full_url);connection_class=http.client.HTTPSConnection if parsed.scheme=='https' else http.client.HTTPConnection
+    connection=connection_class(parsed.hostname,parsed.port,timeout=config.timeoutSeconds)
+    state={'done':False,'cancelled':False}
+    def watcher():
+        # Пауза/отмена должны останавливать модель СРАЗУ: закрытие соединения прерывает чтение (в том числе ожидание первого токена)
+        # и заставляет сервер нейросети прекратить генерацию.
+        while not state['done']:
+            try: stop=cancel and cancel()
+            except Exception: stop=False  # noqa: BLE001
+            if stop:
+                state['cancelled']=True
+                try:
+                    if connection.sock is not None: connection.sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+                try: connection.close()
+                except OSError: pass
+                return
+            time.sleep(0.4)
+    if cancel: threading.Thread(target=watcher,name='qwen-cancel-watch',daemon=True).start()
     started=time.time();info={'state':'connecting','elapsed':0.0,'sinceLast':0.0,'deltas':0,'reasoningDeltas':0,'chars':0}
     last_emit=[0.0]
     def emit(force=False,**fields):
@@ -101,7 +124,11 @@ def _read_stream(request,config,progress):
         if progress and (force or now_-last_emit[0]>=0.5): last_emit[0]=now_;progress(dict(info))
     emit(True)
     content=[];usage=None;finish=None;last_data=started;openai=config.provider=='openai';tail=''
-    with opener.open(request,timeout=config.timeoutSeconds) as result:
+    try:
+        headers=dict(request.header_items())
+        connection.request('POST',(parsed.path or '/')+('?'+parsed.query if parsed.query else ''),body=request.data,headers=headers)
+        result=connection.getresponse()
+        if result.status>=300: raise HTTPError(request.full_url,result.status,result.reason,result.headers,result)
         emit(True,state='waiting_first_token')
         ctype=result.headers.get('Content-Type','').lower()
         if openai and 'event-stream' not in ctype:
@@ -141,13 +168,21 @@ def _read_stream(request,config,progress):
             if usage and usage.get('completion_tokens'): fields['tokens']=usage['completion_tokens']
             emit(info['state']!='generating',**fields)
             if info['chars']>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
+    except (OSError,ValueError,AttributeError,http.client.HTTPException) as error:
+        if state['cancelled']: raise InferenceCancelled('Запрос прерван: задание остановлено (пауза или отмена)') from None
+        raise
+    finally:
+        state['done']=True
+        try: connection.close()
+        except OSError: pass
+    if state['cancelled']: raise InferenceCancelled('Запрос прерван: задание остановлено (пауза или отмена)')
     emit(True)
     stats={'deltas':info['deltas'],'reasoningDeltas':info['reasoningDeltas'],'chars':info['chars']}
     if openai: return {'choices':[{'finish_reason':finish,'message':{'content':''.join(content)}}],'usage':usage,'stats':stats}
     return {'done_reason':finish,'message':{'content':''.join(content)},'usage':usage,'stats':stats}
 
 
-def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None):
+def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None, cancel=None):
     validate_endpoint(config,settings,resolve=transport is None)
     if config.provider=='openai':
         url=api_base(config)+'/chat/completions'
@@ -170,7 +205,7 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
     else:
         try:
             request=Request(url,data=dumps(body).encode(),headers=headers,method='POST')
-            response=_read_stream(request,config,progress)
+            response=_read_stream(request,config,progress,cancel)
         except HTTPError as error:
             try: snippet=error.read(600).decode('utf-8','replace').strip()
             except OSError: snippet=''

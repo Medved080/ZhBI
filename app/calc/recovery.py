@@ -325,7 +325,7 @@ def traced_chat(config,settings,transport,trace,label,messages,schema,name,token
             trace.note(f'Запрос к «{cfg.model}» · {label}: изображений {images}, текст {chars} знаков, лимит ответа {cfg.maxTokens} токенов, тайм-аут простоя {cfg.timeoutSeconds} с'+(f' · попытка {attempt} из {FIRST_TOKEN_RETRIES}' if attempt>1 else ''),'info')
         started=time.time()
         try:
-            value=qwen_client.chat(cfg,settings,messages,schema,name,transport,progress=trace.progress if trace else None)
+            value=qwen_client.chat(cfg,settings,messages,schema,name,transport,progress=trace.progress if trace else None,cancel=getattr(trace,'cancel',None))
             if trace:
                 info=trace.state.get('request') or {}
                 spent=time.time()-started;tokens_got=info.get('tokens') or info.get('deltas') or 0
@@ -337,6 +337,10 @@ def traced_chat(config,settings,transport,trace,label,messages,schema,name,token
                 trace.request_end(False,'тайм-аут')
                 trace.note(f'Нет данных от сервера {cfg.timeoutSeconds} с — '+('повторяю запрос (модель могла загружаться в память)' if attempt<FIRST_TOKEN_RETRIES else 'попытки исчерпаны'),'warn')
             if attempt==FIRST_TOKEN_RETRIES: raise
+        except qwen_client.InferenceCancelled:
+            if trace:
+                trace.request_end(False,'прервано');trace.note('Запрос к модели прерван: соединение закрыто, модель перестаёт генерировать','warn')
+            raise
         except qwen_client.InferenceError as error:
             if trace:
                 trace.request_end(False,str(error)[:200])
@@ -426,6 +430,12 @@ class RecoveryWorker:
             try: worked=self.run_once()
             except Exception: log.exception('Local recovery worker failure');worked=False
             if not worked: self.stop_event.wait(2)
+    def lease_gone(self,job,token):
+        """Задание остановлено (пауза/отмена партии, остановка сервиса): текущий запрос к модели нужно прервать немедленно."""
+        if self.stop_event.is_set(): return True
+        conn=connect(self.settings.database_path)
+        try: return conn.execute("SELECT 1 FROM recovery_jobs j JOIN recovery_batches b ON b.id=j.batch_id WHERE j.id=? AND j.lease_token=? AND j.state='running' AND b.state='running'",(job,token)).fetchone() is None
+        finally: conn.close()
     def checkpoint(self,job,token,**fields):
         with transaction(self.settings.database_path) as conn:
             if self.stop_event.is_set() or not conn.execute("SELECT 1 FROM recovery_jobs j JOIN recovery_batches b ON b.id=j.batch_id WHERE j.id=? AND j.lease_token=? AND j.state='running' AND b.state='running'",(job,token)).fetchone(): raise LeaseLost()
@@ -475,7 +485,7 @@ class RecoveryWorker:
         keeper=threading.Thread(target=heartbeat,daemon=True);keeper.start()
         self.trace=None
         try: self.process(row,config,token)
-        except LeaseLost:
+        except (LeaseLost,qwen_client.InferenceCancelled):
             if self.trace: self.trace.finish('Задание остановлено (пауза или отмена партии)','warn')
         except Exception as error:
             if isinstance(error,ValidationError): message='Ответ Qwen не соответствует схеме: '+str(error.errors(include_url=False)[0]['loc'])
@@ -492,6 +502,7 @@ class RecoveryWorker:
     def process(self,row,config,token):
         job=row['id'];self.checkpoint(job,token,stage='prepare')
         trace=self.trace=Trace(self.settings,job,model=config.model,url=config.baseUrl)
+        trace.cancel=lambda: self.lease_gone(job,token)
         trace.note(f'Старт обработки: модель «{config.model}» ({"Ollama" if config.provider=="ollama" else "OpenAI-совместимый API"}), адрес {config.baseUrl}',
                    'info',timeout=config.timeoutSeconds,maxTokens=config.maxTokens,imageSide=config.imageSide,tiles=config.useTiles)
         trace.note(f'Параметры: тайм-аут простоя {config.timeoutSeconds} с, лимит ответа {config.maxTokens} токенов, длинная сторона изображения {config.imageSide} px, фрагменты листа {"да" if config.useTiles else "нет"}, лимит листов {config.maxPages}, попыток исправления {config.repairAttempts}','info')
