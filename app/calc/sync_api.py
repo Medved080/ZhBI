@@ -344,6 +344,8 @@ def build_sync_router(settings):
                 from .commercial_references import reference_catalog
                 from .document_models import catalog
                 catalog.cache_clear()
+                from . import collisions
+                collisions.clear_cache()
                 reference_catalog.cache_clear()
                 with transaction(settings.database_path) as conn:
                     from .discrepancies import sync_catalog_issues

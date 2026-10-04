@@ -3,14 +3,17 @@
 (verify_columns.py) с координатами примеров; по каждому классу пересечений в отчёте только часть примеров —
 общее число пар (`pairCount`) показывается рядом, чтобы «показано» не читалось как «всего».
 Статусы и комментарии принадлежат модели (а не изделию) и не удаляются."""
+import copy
 import hashlib
 import re
+from functools import lru_cache
 from uuid import uuid4
 
 from fastapi import HTTPException
 
 from .database import audit, now
 from .document_models import model
+from . import geometry_check
 
 STATUSES = {"open": "Открыта", "designer": "Передана проектировщику", "accepted": "Принята без изменений", "resolved": "Устранена"}
 COLLISION_WORDS = re.compile(r"пересек|пересеч|коллиз|проникнов|столкнов", re.I)
@@ -22,6 +25,16 @@ def is_collision_text(*parts):
 
 def _key(model_id, parts, a, b, at):
     return hashlib.sha1("|".join([model_id, parts or "", a or "", b or "", ",".join(str(v) for v in (at or []))]).encode()).hexdigest()[:16]
+
+
+@lru_cache(maxsize=512)
+def _own_check(model_id):
+    solid = (model(model_id) or {}).get("solidModel")
+    return geometry_check.tube_classes(model_id, solid) if solid else ([], {"tubes": 0, "bars": 0})
+
+
+def clear_cache():
+    _own_check.cache_clear()
 
 
 def extract(model_id):
@@ -37,16 +50,22 @@ def extract(model_id):
             items.append({"key": _key(model_id, violation.get("parts"), example.get("a"), example.get("b"), at),
                           "a": example.get("a"), "b": example.get("b"), "penetrationMm": example.get("penetrationMm"),
                           "at": at if isinstance(at, list) and len(at) == 3 else None})
-        classes.append({"id": "c%d" % index, "parts": violation.get("parts"), "pairCount": violation.get("pairCount"),
+        classes.append({"id": "c%d" % index, "origin": "report", "originLabel": "Отчёт проверки модели", "parts": violation.get("parts"), "pairCount": violation.get("pairCount"),
                         "uniqueBarPairs": violation.get("uniqueBarPairs"), "maxPenetrationMm": violation.get("maxPenetrationMm"),
                         "sourcePdfPages": violation.get("sourcePdfPages") or [], "declaredAsSourceConflict": bool(violation.get("declaredAsSourceConflict")),
                         "items": items})
+    own, own_scope = copy.deepcopy(_own_check(model_id)) if solid else ([], {"tubes": 0, "bars": 0})
+    for cls in own:
+        for item in cls["items"]:
+            item["key"] = _key(model_id, cls["parts"], item["a"], item["b"], item["at"])
+        cls["id"] = "c%d" % len(classes)
+        classes.append(cls)
     reason = None if solid else "У этого изделия нет восстановленной 3D-модели: данных о пересечениях нет."
-    if solid and not qa.get("geometricViolations") and not (qa.get("counts") or {}).get("geometricViolationPairs"):
-        reason = "В отчёте проверки модели пересечений не найдено."
+    if solid and not classes:
+        reason = "Пересечений не найдено ни в отчёте проверки модели, ни при собственной проверке труб (труб в модели: %d)." % own_scope.get("tubes", 0)
     return {"modelId": model_id, "classes": classes, "reason": reason,
             "scope": (qa.get("qaScope") or {}).get("tool") if isinstance(qa.get("qaScope"), dict) else None,
-            "totalPairs": sum(c["pairCount"] or 0 for c in classes)}
+            "totalPairs": sum(c["pairCount"] or 0 for c in classes), "ownCheck": own_scope}
 
 
 def listing(conn, model_id):

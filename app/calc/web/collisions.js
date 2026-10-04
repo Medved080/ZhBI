@@ -26,7 +26,7 @@
   const statuses=Object.entries(data.statuses).map(([k,v])=>`<option value="${k}" ${k===item.status?'selected':''}>${esc(v)}</option>`).join('');
   return `<article class="pc-collision-detail" data-collision-card="${esc(item.key)}" data-status="${esc(item.status)}">
    <h4>${esc(item.a)} × ${esc(item.b)}</h4>
-   <dl><dt>Класс</dt><dd>${esc(item.cls.parts)}</dd><dt>Проникновение</dt><dd>${num(item.penetrationMm)} мм</dd>${item.at?`<dt>Место, мм</dt><dd>X ${num(item.at[0])} · Y ${num(item.at[1])} · Z ${num(item.at[2])}</dd>`:''}<dt>Листы</dt><dd>${pages(item.cls)||'—'}</dd></dl>
+   <dl><dt>Класс</dt><dd>${esc(item.cls.parts)}</dd><dt>Источник</dt><dd>${esc(item.cls.originLabel||'')}</dd><dt>Проникновение</dt><dd>${num(item.penetrationMm)} мм</dd>${item.lengthMm!=null?`<dt>Длина участка</dt><dd>${num(item.lengthMm)} мм</dd>`:''}${item.at?`<dt>Место, мм</dt><dd>X ${num(item.at[0])} · Y ${num(item.at[1])} · Z ${num(item.at[2])}</dd>`:''}<dt>Листы</dt><dd>${pages(item.cls)||'—'}</dd></dl>
    ${item.cls.declaredAsSourceConflict?'<p class="pc-context">Класс заявлен как расхождение источника: нужен ответ проектировщика.</p>':''}
    <label class="pc-collision-status">Статус <select data-collision-status="${esc(item.key)}" ${canWrite()?'':'disabled'}>${statuses}</select></label>
    ${item.statusUpdatedBy?`<span class="pc-context">изменил: ${esc(item.statusUpdatedBy)}</span>`:''}
@@ -48,9 +48,9 @@
   else if(!data)html+='<p class="pc-context" role="status">Загрузка…</p>';
   else{
    const shown=items().length;
-   html+=`<p class="pc-context">Пересечения деталей и арматуры по отчёту проверки модели. Показано примеров: ${shown} из ${data.totalPairs} пар в ${data.classes.length} классах; остальные пары отчёт не перечисляет. Метки видны на вкладке «Модель и параметры» (флажок «Коллизии»).</p>`;
+   html+=`<p class="pc-context">Пересечения деталей и арматуры по отчёту проверки модели. Показано пересечений: ${shown} из ${data.totalPairs} пар в ${data.classes.length} классах (классы из отчёта проверки модели приводят только примеры, классы «труба × арматура» — собственная проверка калькулятора — перечислены полностью). Проникновение по трубам измеряется в пределах толщины стенки. Метки видны на вкладке «Модель и параметры» (флажок «Коллизии»).</p>`;
    if(data.reason)html+=`<p class="pc-context">${esc(data.reason)}</p>`;
-   html+=data.classes.map(c=>`<details class="pc-collision-class" ${c.declaredAsSourceConflict?'open':''}><summary><strong>${esc(c.parts)}</strong> · пар: ${num(c.pairCount)} · макс. проникновение ${num(c.maxPenetrationMm)} мм${c.declaredAsSourceConflict?' · расхождение источника':''}</summary>
+   html+=data.classes.map(c=>`<details class="pc-collision-class" ${c.declaredAsSourceConflict?'open':''}><summary><strong>${esc(c.parts)}</strong>${c.origin==='check'?' <span class="pc-collision-badge">проверка калькулятора</span>':''} · пар: ${num(c.pairCount)} · макс. проникновение ${num(c.maxPenetrationMm)} мм${c.declaredAsSourceConflict?' · расхождение источника':''}</summary>
     ${c.items.length?`<ul class="pc-collision-list">${c.items.map(i=>`<li class="${i.key===selected?'pc-selected':''}" data-collision-row="${esc(i.key)}"><button type="button" data-collision-open="${esc(i.key)}">${esc(i.a)} × ${esc(i.b)}</button><span>${num(i.penetrationMm)} мм</span>${badge(i)}<span class="pc-context">комментариев: ${i.notes.length}</span>${i.at?`<button type="button" data-collision-show="${esc(i.key)}">Показать в 3D</button>`:''}</li>`).join('')}</ul>`:'<p class="pc-context">Примеры с координатами в отчёте не приведены.</p>'}</details>`).join('');
    const selectedItem=selected&&find(selected);
    if(selectedItem)html+='<section class="pc-collision-selected">'+noteHtml(selectedItem)+'</section>';
