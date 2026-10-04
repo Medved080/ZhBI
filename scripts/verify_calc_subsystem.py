@@ -108,14 +108,20 @@ c.commit()
     return env
 
 
-def start(env, port, extra=None):
+def start(env, port, extra=None, tls=None):
     env = {**env, **(extra or {})}
-    proc = subprocess.Popen([PY, "-m", "uvicorn", "app.main:app", "--port", str(port), "--host", "127.0.0.1"], cwd=ROOT, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    base = f"http://127.0.0.1:{port}"
+    command = [PY, "-m", "uvicorn", "app.main:app", "--port", str(port), "--host", "127.0.0.1"]
+    if tls:
+        command += ["--ssl-keyfile", tls[0], "--ssl-certfile", tls[1]]
+    proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    base = f"{'https' if tls else 'http'}://127.0.0.1:{port}"
+    import ssl
+    unverified = ssl.create_default_context()
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
     for _ in range(120):
         try:
-            urllib.request.urlopen(base + "/health", timeout=1)
+            urllib.request.urlopen(base + "/health", timeout=1, context=unverified if tls else None)
             return proc, base
         except Exception:
             if proc.poll() is not None:
@@ -267,6 +273,32 @@ def main():
         check(st == 200 and not r["ok"] and "не принят" in r["message"], "A: неверный токен распознан проверкой связи")
         check(root.req("PUT", "/calc/api/sync/targets/BAD%20NAME", {"url": base_b})[0] in (404, 422), "A: недопустимое имя цели отклонено")
         check(root.req("PUT", "/calc/api/sync/targets/x", {"url": "http://example.com"})[0] == 422, "A: небезопасный адрес отклонён")
+        # самоподписанный сертификат: сначала отказ, затем доверие по отпечатку, неверный отпечаток — отказ
+        key, crt = str(work / "tls.key"), str(work / "tls.crt")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt, "-days", "2", "-subj", "/CN=127.0.0.1",
+                        "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True)
+        port_c = 18943
+        env_c = prepare(work / "c", port_c, with_assets=False)
+        pc, base_c = start(env_c, port_c, tls=(key, crt))
+        procs.append(pc)
+        import ssl
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        admin_c = Client(base_c)
+        admin_c.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(admin_c.jar), urllib.request.HTTPSHandler(context=ctx))
+        admin_c.login("admin", "Passw0rd-test-12"); admin_c.calc_me()
+        st, tc = admin_c.req("POST", "/calc/api/sync/tokens", {"login": "calcuser", "name": "tls"})
+        st, r = root.req("PUT", "/calc/api/sync/targets/tls", {"url": base_c, "token": tc["token"]})
+        st, r = root.req("POST", "/calc/api/sync/targets/tls/test", {})
+        check(st == 200 and not r["ok"] and "CERTIFICATE_VERIFY_FAILED" in r["message"], "A: самоподписанный сертификат без доверия отклонён")
+        st, cert = root.req("POST", "/calc/api/sync/targets/certificate", {"url": base_c})
+        check(st == 200 and len(cert["sha256"]) == 64, "A: отпечаток сертификата сервера получен")
+        root.req("PUT", "/calc/api/sync/targets/tls", {"url": base_c, "pinnedSha256": "00" * 32})
+        st, r = root.req("POST", "/calc/api/sync/targets/tls/test", {})
+        check(st == 200 and not r["ok"] and "не совпадает" in r["message"], "A: чужой отпечаток отклоняется")
+        root.req("PUT", "/calc/api/sync/targets/tls", {"url": base_c, "pinnedSha256": cert["formatted"]})
+        st, r = root.req("POST", "/calc/api/sync/targets/tls/test", {})
+        check(st == 200 and r["ok"], "A: после доверия по отпечатку связь работает: %s" % r.get("message"))
+        root.req("DELETE", "/calc/api/sync/targets/tls")
         st, r = root.req("DELETE", "/calc/api/sync/targets/ui")
         check(st == 200 and not any(t["name"] == "ui" for t in r["targets"]) and "ui" not in json.loads(secrets_path.read_text()), "A: цель и её токен удаляются")
 

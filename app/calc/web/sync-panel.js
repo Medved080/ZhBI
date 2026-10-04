@@ -19,6 +19,7 @@
    <label>Адрес сервера <input name="url" value="${esc(t.url)}" required placeholder="https://адрес-сервера"></label>
    <label>Токен приёма <input name="token" type="password" autocomplete="off" placeholder="${t.tokenConfigured?'задан — оставьте пустым, чтобы не менять':'czb_… (из окна «Токены приёма» на том сервере)'}"></label>
    <label class="pc-sync-check"><input name="requireConfirm" type="checkbox" ${t.requireConfirm?'checked':''}> Подтверждать отправку вводом имени цели (для боевого сервера)</label>
+   <div class="pc-sync-cert"><input type="hidden" name="pin" value="${esc(t.pinnedSha256||'')}"><span id="pc-sync-cert-state">Сертификат: ${t.pinnedSha256?'доверенный отпечаток '+esc(t.pinnedSha256.slice(0,16))+'…':'проверяется системным хранилищем'}</span> <button type="button" data-cert-fetch>Доверять сертификату этого сервера…</button>${t.pinnedSha256?' <button type="button" data-cert-clear>Убрать доверие</button>':''}<div class="pc-context">Нужно, если сервер использует самоподписанный или корпоративный сертификат и проверка связи пишет «CERTIFICATE_VERIFY_FAILED».</div></div>
    <details><summary>Корпоративный сертификат (если сервер ему не доверяет)</summary><label>Путь к файлу .pem на этом компьютере <input name="caFile" value="${esc(t.caFile||'')}" placeholder="/путь/к/корпоративный-ca.pem"></label></details>
    <div class="pc-sync-actions"><button type="submit">Сохранить</button>${editing.existing?'<button type="button" data-target-test>Проверить связь</button><button type="button" data-target-delete>Удалить</button>':''}<button type="button" data-target-cancel>Отмена</button></div>
    <div class="pc-context" id="pc-sync-form-msg" role="status" aria-live="polite"></div>
@@ -47,10 +48,18 @@
   if(form){
    const msg=form.querySelector('#pc-sync-form-msg');
    form.addEventListener('submit',async event=>{event.preventDefault();const f=form.elements;msg.textContent='Сохранение…';
-    try{await api.request('/calc/api/sync/targets/'+encodeURIComponent(f.name.value.trim()),{method:'PUT',body:JSON.stringify({url:f.url.value.trim(),token:f.token.value.trim(),requireConfirm:f.requireConfirm.checked,caFile:f.caFile.value.trim()})});editing=null;await render();dialog.querySelector('#pc-sync-progress').textContent='Сохранено. Нажмите «Проверить связь» в настройках цели, чтобы убедиться, что токен и VPN в порядке.';}
+    try{await api.request('/calc/api/sync/targets/'+encodeURIComponent(f.name.value.trim()),{method:'PUT',body:JSON.stringify({url:f.url.value.trim(),token:f.token.value.trim(),requireConfirm:f.requireConfirm.checked,caFile:f.caFile.value.trim(),pinnedSha256:f.pin.value})});editing=null;await render();dialog.querySelector('#pc-sync-progress').textContent='Сохранено. Нажмите «Проверить связь» в настройках цели, чтобы убедиться, что токен и VPN в порядке.';}
     catch(e){msg.textContent=e.message;}});
+   form.querySelector('[data-cert-fetch]').addEventListener('click',async()=>{
+    const f=form.elements;if(!f.url.value.trim()){msg.textContent='Сначала укажите адрес сервера.';return;}
+    msg.textContent='Запрашиваю сертификат сервера…';
+    try{const c=await api.request('/calc/api/sync/targets/certificate',{method:'POST',body:JSON.stringify({url:f.url.value.trim()})});
+     if(!window.confirm('Сервер предъявил сертификат с отпечатком SHA-256:\n\n'+c.formatted+'\n\nСверьте его с отпечатком на самом сервере (у администратора) и подтвердите. С этого момента передача будет идти только на сервер с этим сертификатом.\n\nДоверять?')){msg.textContent='Доверие не выдано.';return;}
+     f.pin.value=c.sha256;form.requestSubmit();
+    }catch(e){msg.textContent=e.message;}});
+   form.querySelector('[data-cert-clear]')?.addEventListener('click',()=>{form.elements.pin.value='';form.requestSubmit();});
    form.querySelector('[data-target-cancel]').addEventListener('click',()=>{editing=null;void render();});
-   form.querySelector('[data-target-test]')?.addEventListener('click',async()=>{msg.textContent='Проверка связи…';try{const r=await api.request('/calc/api/sync/targets/'+encodeURIComponent(editing.existing.name)+'/test',{method:'POST',body:'{}'});msg.textContent=(r.ok?'✓ ':'✗ ')+r.message;}catch(e){msg.textContent=e.message;}});
+   form.querySelector('[data-target-test]')?.addEventListener('click',async()=>{msg.textContent='Проверка связи…';try{const r=await api.request('/calc/api/sync/targets/'+encodeURIComponent(editing.existing.name)+'/test',{method:'POST',body:'{}'});msg.textContent=(r.ok?'✓ ':'✗ ')+r.message+(!r.ok&&/CERTIFICATE_VERIFY_FAILED/.test(r.message)?' — нажмите «Доверять сертификату этого сервера…» ниже.':'');}catch(e){msg.textContent=e.message;}});
    form.querySelector('[data-target-delete]')?.addEventListener('click',async()=>{if(!window.confirm('Удалить цель «'+editing.existing.name+'» и сохранённый токен?'))return;try{await api.request('/calc/api/sync/targets/'+encodeURIComponent(editing.existing.name),{method:'DELETE'});editing=null;await render();}catch(e){msg.textContent=e.message;}});
   }
   const tokenForm=body.querySelector('#pc-sync-token-form');

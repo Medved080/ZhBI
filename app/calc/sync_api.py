@@ -8,6 +8,7 @@
 в переменных окружения или файле с правами 600, в БД они не попадают.
 """
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -95,6 +97,7 @@ class Target:
         self.token_env = cfg.get("tokenEnv")
         self.token_file = cfg.get("tokenFile")
         self.ca_file = cfg.get("caFile")
+        self.pin = (cfg.get("pinnedSha256") or "").lower() or None
         self.secret = secret
         self.require_confirm = bool(cfg.get("requireConfirm", name == "prod"))
 
@@ -113,7 +116,7 @@ class Target:
 
     def public(self):
         return {"name": self.name, "url": self.url, "requireConfirm": self.require_confirm, "tokenConfigured": bool(self._safe_token()),
-                "caFile": self.ca_file, "tokenFromUi": bool(self.secret)}
+                "caFile": self.ca_file, "tokenFromUi": bool(self.secret), "pinnedSha256": self.pin}
 
     def _safe_token(self):
         try:
@@ -150,7 +153,7 @@ def load_targets(settings):
     return {name: Target(name, cfg, secrets_.get(name)) for name, cfg in config.get("targets", {}).items()}
 
 
-def save_target(settings, name, url, token, require_confirm, ca_file):
+def save_target(settings, name, url, token, require_confirm, ca_file, pin=None):
     if not TARGET_NAME.match(name or ""):
         raise HTTPException(422, "Название цели: латиница, цифры, «-» и «_», до 20 знаков (например test, prod)")
     url = (url or "").strip()
@@ -163,7 +166,12 @@ def save_target(settings, name, url, token, require_confirm, ca_file):
         raise HTTPException(422, "Файл сертификата не найден: %s" % ca_file)
     config = _read_json(_targets_path(settings))
     previous = config.setdefault("targets", {}).get(name, {})
-    entry = {k: v for k, v in previous.items() if k in {"tokenEnv", "tokenFile"}}
+    entry = {k: v for k, v in previous.items() if k in {"tokenEnv", "tokenFile", "pinnedSha256"}}
+    if pin is not None:  # "" снимает доверие к сертификату
+        pin = pin.strip().lower().replace(":", "")
+        if pin and not re.fullmatch(r"[0-9a-f]{64}", pin):
+            raise HTTPException(422, "Отпечаток сертификата — 64 шестнадцатеричных знака (SHA-256)")
+        entry["pinnedSha256"] = pin or None
     entry.update({"url": url.rstrip("/"), "requireConfirm": bool(require_confirm), "caFile": ca_file})
     config["targets"][name] = entry
     _write_json(_targets_path(settings), config, 0o644)
@@ -187,23 +195,67 @@ def delete_target(settings, name):
         _write_json(_secrets_path(settings), secrets_, 0o600)
 
 
+class _PinnedConnection(http.client.HTTPSConnection):
+    """Соединение, которое принимает сертификат сервера только с заданным отпечатком SHA-256 (для самоподписанных и
+    корпоративных сертификатов, которым не доверяет системное хранилище)."""
+
+    def __init__(self, *args, pin=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pin = pin
+
+    def connect(self):
+        super().connect()
+        fingerprint = hashlib.sha256(self.sock.getpeercert(True)).hexdigest()
+        if fingerprint != self._pin:
+            self.sock.close()
+            raise ssl.SSLError("отпечаток сертификата сервера (%s…) не совпадает с доверенным: сертификат сменили или адрес подменён" % fingerprint[:16])
+
+
+class _PinnedHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pin):
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        super().__init__(context=context)
+        self._pin = pin
+
+    def https_open(self, req):
+        return self.do_open(partial(_PinnedConnection, pin=self._pin), req, context=self._context)
+
+
+def server_fingerprint(url):
+    """Отпечаток SHA-256 сертификата, который предъявляет сервер (без проверки цепочки: проверка — на человеке)."""
+    parts = urlsplit(url)
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    import socket
+    with socket.create_connection((parts.hostname, parts.port or 443), timeout=15) as raw:
+        with context.wrap_socket(raw, server_hostname=parts.hostname) as tls:
+            return hashlib.sha256(tls.getpeercert(True)).hexdigest()
+
+
 class Remote:
     """Минимальный HTTP-клиент удалённого сервера (urllib: без новых зависимостей)."""
 
     def __init__(self, target):
         token = target.token()
         if not token:
-            raise ValueError("Токен цели «%s» не задан: переменная %s или tokenFile" % (target.name, target.token_env))
+            raise ValueError("Токен цели «%s» не задан: введите его в настройках цели" % target.name)
         self.base = target.url
         self.token = token
-        self.context = ssl.create_default_context(cafile=target.ca_file) if target.ca_file else ssl.create_default_context()
+        if target.pin:
+            self.opener = urllib.request.build_opener(_PinnedHandler(target.pin))
+        else:
+            context = ssl.create_default_context(cafile=target.ca_file) if target.ca_file else ssl.create_default_context()
+            self.opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context))
 
     def call(self, method, path, body=None, content_type="application/json", timeout=300):
         data = body if isinstance(body, (bytes, type(None))) else json.dumps(body, ensure_ascii=False).encode()
         request = urllib.request.Request(self.base + path, data=data, method=method,
                                          headers={"Authorization": "Bearer " + self.token, "Content-Type": content_type})
         try:
-            with urllib.request.urlopen(request, timeout=timeout, context=self.context) as response:
+            with self.opener.open(request, timeout=timeout) as response:
                 return json.loads(response.read().decode() or "{}")
         except urllib.error.HTTPError as error:
             raw = error.read().decode(errors="replace")
@@ -476,7 +528,7 @@ def build_sync_router(settings):
 
     @router.put("/targets/{name}")
     def put_target(name: str, body: dict, actor=Depends(admin_only)):
-        save_target(settings, name, body.get("url"), body.get("token"), body.get("requireConfirm", name == "prod"), body.get("caFile"))
+        save_target(settings, name, body.get("url"), body.get("token"), body.get("requireConfirm", name == "prod"), body.get("caFile"), body.get("pinnedSha256"))
         with transaction(settings.database_path) as conn:
             audit(conn, actor["id"], "sync.target.saved", name, {"url": body.get("url")})
         return {"targets": [t.public() for t in load_targets(settings).values()]}
@@ -487,6 +539,19 @@ def build_sync_router(settings):
         with transaction(settings.database_path) as conn:
             audit(conn, actor["id"], "sync.target.deleted", name)
         return {"targets": [t.public() for t in load_targets(settings).values()]}
+
+    @router.post("/targets/certificate")
+    def target_certificate(body: dict, actor=Depends(admin_only)):
+        """Отпечаток сертификата сервера по адресу — для подтверждения доверия человеком (самоподписанный/корпоративный сертификат)."""
+        url = str(body.get("url", "")).strip()
+        try:
+            Target("probe", {"url": url})
+            fingerprint = server_fingerprint(url)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except OSError as error:
+            raise HTTPException(502, "Не удалось подключиться к серверу (VPN включён, адрес верен?): %s" % error) from None
+        return {"sha256": fingerprint, "formatted": ":".join(fingerprint[i:i + 2] for i in range(0, 64, 2)).upper()}
 
     @router.post("/targets/{name}/test")
     def test_target(name: str, actor=Depends(admin_only)):
