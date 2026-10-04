@@ -7,9 +7,9 @@
  let report=null,previousView='model',page=0,request=0;
  function close(){if(panel.hidden)return;request++;panel.hidden=true;q('.pc-tabs').hidden=false;q('#pc-'+previousView+'-panel').hidden=false;}
  function renderProduct(product){
-  const items=[...(product.discrepancies||[]),...(product.dataIssues||[])],pending=product.documentModel?.solidModel?.pending||product.documentModel?.preview3d?.pendingReinforcement||[],host=q('#pc-product-discrepancies');
-  host.hidden=!items.length&&!pending.length;
-  host.innerHTML=`<h3>Расхождения и вопросы по изделию</h3>${items.map(i=>`<article class="pc-issue-card" data-severity="${esc(i.severity)}"><div class="pc-context">${esc(i.kindLabel)} · ${i.status==='resolved'?'Устранено':'Требует уточнения'}</div><strong>${esc(i.title)}</strong><p>${esc(i.description)}</p><p><b>Уточнить:</b> ${esc(i.recommendation)}</p><div class="pc-issue-sources">${sources(i,product.id)}</div></article>`).join('')}${pending.length?`<div class="pc-issue-pending"><strong>Не завершено в модели</strong><ul>${pending.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`:''}`;
+  const collisionText=/пересек|пересеч|коллиз|проникнов|столкнов/i,all=[...(product.discrepancies||[]),...(product.dataIssues||[])],items=all.filter(i=>!collisionText.test(i.title+' '+i.description)),allPending=product.documentModel?.solidModel?.pending||product.documentModel?.preview3d?.pendingReinforcement||[],pending=allPending.filter(p=>!collisionText.test(p)),host=q('#pc-product-discrepancies');
+  host.hidden=false;
+  host.innerHTML=`<h3>Технические вопросы</h3>${items.length||pending.length?'':'<p class="pc-context">Технических вопросов по изделию не зафиксировано.</p>'}${items.map(i=>`<article class="pc-issue-card" data-severity="${esc(i.severity)}"><div class="pc-context">${esc(i.kindLabel)} · ${i.status==='resolved'?'Устранено':'Требует уточнения'}</div><strong>${esc(i.title)}</strong><p>${esc(i.description)}</p><p><b>Уточнить:</b> ${esc(i.recommendation)}</p><div class="pc-issue-sources">${sources(i,product.id)}</div></article>`).join('')}${pending.length?`<div class="pc-issue-pending"><strong>Не завершено в модели</strong><ul>${pending.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`:''}`;
   const button=q('#pc-product-issues-link');button.hidden=!items.length&&!pending.length;button.textContent='Вопросы по изделию: '+items.filter(i=>i.status==='open').length+(pending.length?' · модель частичная':'');
  }
  function matches(){const term=q('#pc-report-search').value.toLocaleLowerCase('ru'),kind=q('#pc-report-kind').value;return report.issues.filter(i=>(!kind||(kind==='source'?i.kind!=='data_quality':i.kind===kind))&&(!term||(i.productName+' '+i.alias+' '+i.title+' '+i.description).toLocaleLowerCase('ru').includes(term)));}
@@ -32,7 +32,7 @@
   try{await window.CalcZhBIWorkspace?.flush();const result=await api.request('/calc/api/project-report');if(serial!==request||panel.hidden)return;report=result;page=0;render();}
   catch(e){if(serial===request){panel.innerHTML=`<p>${esc(e.message)}</p><button id="pc-report-close" type="button">Вернуться к изделию</button>`;q('#pc-report-close').addEventListener('click',close);}}
  }
- function open(){window.CalcZhBINorms?.close();previousView=q('.pc-tabs [data-view][aria-pressed="true"]')?.dataset.view||'model';q('.pc-tabs').hidden=true;for(const view of ['calculation','model','tech','sources','sheets','history'])q('#pc-'+view+'-panel').hidden=true;panel.hidden=false;void load();}
+ function open(){window.CalcZhBINorms?.close();previousView=q('.pc-tabs [data-view][aria-pressed="true"]')?.dataset.view||'model';q('.pc-tabs').hidden=true;for(const view of ['calculation','model','tech','issues','collisions','sources','sheets','history'])q('#pc-'+view+'-panel').hidden=true;panel.hidden=false;void load();}
  function table(workbook,name,headers,rows,widths){
   const sheet=workbook.addWorksheet(name,{views:[{state:'frozen',ySplit:1}],pageSetup:{orientation:'landscape',paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}});
   sheet.columns=headers.map((header,i)=>({header,width:widths[i]||25}));sheet.addRows(rows);sheet.autoFilter={from:{row:1,column:1},to:{row:rows.length+1,column:headers.length}};

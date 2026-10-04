@@ -37,7 +37,7 @@ def recovery_admin(request: Request):
 
 
 
-WEB_FILES = ["app.js", "recovery.js", "money-format.js", "api-client.js", "project-files.js", "history.js", "export-xlsx.js", "viewer-3d.js", "drawing-geometry.js", "solid-geometry.js", "edge-dimensions.js", "norms.js", "project-report.js", "source-sheets.js", "commercial-reference.js", "sketch-geometry.js", "styles.css", "theme.css", "sync-panel.js"]
+WEB_FILES = ["app.js", "recovery.js", "money-format.js", "api-client.js", "project-files.js", "history.js", "export-xlsx.js", "viewer-3d.js", "drawing-geometry.js", "solid-geometry.js", "edge-dimensions.js", "norms.js", "project-report.js", "source-sheets.js", "commercial-reference.js", "sketch-geometry.js", "styles.css", "theme.css", "sync-panel.js", "collisions.js"]
 
 
 def file_metadata(row):
@@ -72,6 +72,35 @@ def build_router(settings):
             return {"results": marks.resolve(conn, items)}
         finally:
             conn.close()
+
+    def effective_model(conn, product_id):
+        row = conn.execute("SELECT id,document_model_id FROM products WHERE id=?", (str(product_id),)).fetchone()
+        if not row:
+            raise HTTPException(404, "Изделие не найдено")
+        return recovery.effective_model_id(conn, row["id"], row["document_model_id"])
+
+    @router.get("/api/products/{product_id}/collisions")
+    def product_collisions(product_id: UUID, user=Depends(auth.current_user)):
+        from . import collisions
+        conn = connect(settings.database_path)
+        try:
+            return collisions.listing(conn, effective_model(conn, product_id))
+        finally:
+            conn.close()
+
+    @router.post("/api/products/{product_id}/collisions/{key}/notes", status_code=201)
+    def collision_note(product_id: UUID, key: str, body: dict, user=Depends(auth.writer)):
+        from . import collisions
+        with transaction(settings.database_path) as conn:
+            collisions.add_note(conn, effective_model(conn, product_id), key, str(body.get("text", "")), user)
+            return collisions.listing(conn, effective_model(conn, product_id))
+
+    @router.put("/api/products/{product_id}/collisions/{key}/status")
+    def collision_status(product_id: UUID, key: str, body: dict, user=Depends(auth.writer)):
+        from . import collisions
+        with transaction(settings.database_path) as conn:
+            collisions.set_status(conn, effective_model(conn, product_id), key, str(body.get("status", "")), user)
+            return collisions.listing(conn, effective_model(conn, product_id))
 
     @router.get("/api/workspace")
     def workspace(user=Depends(auth.current_user)):

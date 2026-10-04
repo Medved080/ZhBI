@@ -27,7 +27,7 @@
  open.addEventListener('click',async()=>{
   if(!panel.hidden){close();return;}
   window.CalcZhBIProjectReport?.close();await api.ready();previousView=document.querySelector('.pc-tabs [data-view][aria-pressed=true]')?.dataset.view||'model';
-  document.querySelector('.pc-tabs').hidden=true;for(const v of ['calculation','model','tech','sources','sheets','history'])document.getElementById('pc-'+v+'-panel').hidden=true;
+  document.querySelector('.pc-tabs').hidden=true;for(const v of ['calculation','model','tech','issues','collisions','sources','sheets','history'])document.getElementById('pc-'+v+'-panel').hidden=true;
   panel.hidden=false;open.setAttribute('aria-pressed','true');panel.textContent='Загрузка норм…';
   try{current=await api.request('/calc/api/norms');render();}catch(e){panel.textContent=e.message;}
  });window.CalcZhBINorms={close};

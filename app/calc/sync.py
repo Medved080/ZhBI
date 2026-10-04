@@ -125,6 +125,8 @@ def collect_package(conn, assets_dir, uploads_dir):
         "profiles": [dict(r) for r in profile],
         "norms": [dict(r) for r in norms],
         "products": products,
+        "collisionNotes": [dict(r) for r in conn.execute("SELECT * FROM collision_notes ORDER BY created_at,id")],
+        "collisionState": [dict(r) for r in conn.execute("SELECT * FROM collision_state")],
         "assets": asset_manifest(assets_dir),
         "blobs": [{"sha256": k, "size": v} for k, v in sorted(blobs.items())],
     }
@@ -237,7 +239,7 @@ def apply_package(conn, package, actor, staged_blobs=None, uploads_dir=None, dry
     report = {"profiles": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},
               "norms": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},
               "products": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": [], "senderOlder": []},
-              "attachmentsAdded": 0}
+              "attachmentsAdded": 0, "collisions": {"notesAdded": 0, "statesAdded": 0}}
 
     for p in package.get("profiles", []):
         bucket = report["profiles"]
@@ -312,6 +314,21 @@ def apply_package(conn, package, actor, staged_blobs=None, uploads_dir=None, dry
         if not dry_run:
             report["attachmentsAdded"] += _write_product(conn, bundle, existing, actor, staged_blobs, uploads_dir)
             _remember(conn, "product", pid, bundle["contentHash"], row["version"])
+    # Комментарии и статусы коллизий — работа людей: комментарии объединяются по идентификатору (ничего не удаляется),
+    # статус ставится только там, где на принимающей стороне его ещё не было (приоритет сервера).
+    for n in package.get("collisionNotes", []):
+        if conn.execute("SELECT 1 FROM collision_notes WHERE id=?", (n["id"],)).fetchone():
+            continue
+        report["collisions"]["notesAdded"] += 1
+        if not dry_run:
+            conn.execute("INSERT INTO collision_notes(id,model_id,collision_key,author_id,author_name,text,created_at) VALUES(?,?,?,?,?,?,?)",
+                         (n["id"], n["model_id"], n["collision_key"], n["author_id"], n["author_name"], n["text"], n["created_at"]))
+    for st in package.get("collisionState", []):
+        if conn.execute("SELECT 1 FROM collision_state WHERE model_id=? AND collision_key=?", (st["model_id"], st["collision_key"])).fetchone():
+            continue
+        report["collisions"]["statesAdded"] += 1
+        if not dry_run:
+            conn.execute("INSERT INTO collision_state VALUES(?,?,?,?,?)", (st["model_id"], st["collision_key"], st["status"], st["updated_by"], st["updated_at"]))
     return report
 
 

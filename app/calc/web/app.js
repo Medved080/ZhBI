@@ -264,7 +264,7 @@ function matchesProductName(product, query){
   q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td>${number(r.qty)}</td><td>${money(r.rate)}</td><td>${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
   q('#pc-calculation-heading').textContent=doc?.kind==='registry'?'Предварительная калькуляция на 1 изделие':'Калькуляция на 1 изделие';
   q('#pc-volume').textContent=p.volume?number(p.volume)+' м³':'Не задан';q('#pc-hours').textContent=doc?.kind==='registry'&&!p.hours?'Не задана':number(p.hours)+' чел·ч';
-  window.CalcZhBIProjectReport?.renderProduct(p);
+  window.CalcZhBIProjectReport?.renderProduct(p);window.CalcZhBICollisions?.setProduct(p);
   totals();model();updateSelection();
   if(!writeable)root.querySelectorAll('#pc-rows input').forEach(input=>{input.disabled=true;});
  }
@@ -272,13 +272,13 @@ function matchesProductName(product, query){
   const b=e.target.closest('button');if(!b)return;
   if(b.dataset.productGroup!==undefined){const key=b.dataset.productGroup,set=state.search.trim()?state.searchClosedGroups:state.openGroups;set.has(key)?set.delete(key):set.add(key);renderProducts();[...root.querySelectorAll('[data-product-group]')].find(el=>el.dataset.productGroup===key)?.focus({preventScroll:true});}
   if(b.dataset.product){window.CalcZhBIProjectReport?.close();window.CalcZhBINorms?.close();state.product=Number(b.dataset.product);render();persist();}
-  if(b.dataset.view){const view=b.dataset.view;root.querySelectorAll('.pc-tabs [data-view]').forEach(x=>x.setAttribute('aria-pressed',x.dataset.view===view));['calculation','model','tech','sources','sheets','history'].forEach(v=>q(`#pc-${v}-panel`).hidden=v!==view);}
+  if(b.dataset.view){const view=b.dataset.view;root.querySelectorAll('.pc-tabs [data-view]').forEach(x=>x.setAttribute('aria-pressed',x.dataset.view===view));['calculation','model','tech','issues','collisions','sources','sheets','history'].forEach(v=>q(`#pc-${v}-panel`).hidden=v!==view);window.dispatchEvent(new CustomEvent('calczhbi:view',{detail:view}));}
   if(b.dataset.detail){const el=q('#pc-detail-'+b.dataset.detail);el.hidden=!el.hidden;b.setAttribute('aria-expanded',!el.hidden);}
   if(b.id==='pc-clear'){state.overrides[state.product]={};state.extra[state.product]=[];render();persist();}
   if(b.id==='pc-add'){const i=state.extra[state.product].length+1;state.extra[state.product].push({id:'extra'+i,name:'Дополнительная статья '+i,unit:'компл.',qty:1,rate:0,detail:'Пользовательская статья включена в затраты и в базу прибыли. В полном сервисе можно выбрать группу и основание.'});render();persist();}
   if(b.id==='pc-export')void exportSelected();
   if(b.id==='pc-edit-product')openProductForm(state.product);
-  if(b.id==='pc-product-issues-link'){q('[data-view="sources"]').click();}
+  if(b.id==='pc-product-issues-link'){q('[data-view="issues"]').click();}
   if(b.id==='pc-model-results-open')void openModelResults();
   if(b.dataset.resultProduct){q('#pc-model-results-dialog').close();window.CalcZhBIWorkspace.select(b.dataset.resultProduct,'model');}
  });

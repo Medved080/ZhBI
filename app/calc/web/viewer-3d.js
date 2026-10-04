@@ -26,6 +26,7 @@ try {
  const dimensionSummary=document.createElement('span');dimensionSummary.className='pc-dimension-summary';host.append(dimensionSummary);
  const svgNS='http://www.w3.org/2000/svg',annotations=document.createElementNS(svgNS,'svg');
  annotations.classList.add('pc-model-annotations');annotations.setAttribute('aria-hidden','true');host.append(annotations);
+ let lastFocus=null,builtPoint=null,markerGroup=null,collisionItems=[],collisionSelected=null,collisionVisible=true;
  let group=new THREE.Group(),concrete,edges,steel,edgeLabels=[],overallLabels=[],rulerBounds=null,key='',modelSize=new THREE.Vector3(8,1,1),layers=new Map(),modelRequest=0,annotationKey='';
  const modelCache=new Map(),layerControls=document.getElementById('pc-model-layers'),pickInfo=document.getElementById('pc-model-pick');
  const numberFormat=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}),formatMM=value=>numberFormat.format(Math.abs(value)<.05?0:value);
@@ -162,7 +163,7 @@ try {
  }
  function disposeModel(){
   group.traverse(object=>{object.geometry?.dispose();if(object.material){for(const material of Array.isArray(object.material)?object.material:[object.material]){material.map?.dispose();material.dispose();}}});
-  group.clear();edgeLabels=[];overallLabels=[];rulerBounds=null;annotations.replaceChildren();annotationKey='';
+  group.clear();edgeLabels=[];overallLabels=[];rulerBounds=null;annotations.replaceChildren();annotationKey='';markerGroup=null;builtPoint=null;
  }
  function rod(start,end,radius,material){
   const delta=new THREE.Vector3().subVectors(end,start);
@@ -335,10 +336,10 @@ try {
    key=nextKey;disposeModel();layers=new Map();layerControls.replaceChildren();pickInfo.textContent='';
    preferredDirection=drawing?.preview3d?.shape==='profile-prism'?new THREE.Vector3(.82,.35,.65).normalize():new THREE.Vector3(.15,.22,.96).normalize();
    if(drawing?.solidModel){
-    const built=buildSolidModel(drawing.solidModel);({concrete,edges,steel,layers}=built);group.add(concrete,edges,steel);modelSize.copy(built.size);
+    const built=buildSolidModel(drawing.solidModel);({concrete,edges,steel,layers}=built);builtPoint=built.point;group.add(concrete,edges,steel);modelSize.copy(built.size);
     addEdgeDimensions(built.edgeRecords,built.point);dimensionSummary.textContent+=' Размеры бетона по поставленным частям; вопросы сборки сохранены в описании.';
     for(const [id,layer] of layers)addLayerControl(id,layer,layer.userData.record.shortLabel);
-    grid.position.y=-modelSize.y/2-.2;home();
+    grid.position.y=-modelSize.y/2-.2;home();buildMarkers();
    }else if(drawing?.preview3d){
     const built=buildProjectSketch(drawing.preview3d);({concrete,edges,steel,layers}=built);group.add(concrete,edges,steel);modelSize.copy(built.viewSize||built.size);
     addEdgeDimensions(built.edgeRecords,built.point);dimensionSummary.textContent+=' '+(drawing.preview3d.notes[0]||'');
@@ -393,9 +394,31 @@ try {
  }
  const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();let pointerStart=null;
  renderer.domElement.addEventListener('pointerdown',event=>{pointerStart=[event.clientX,event.clientY];});
- renderer.domElement.addEventListener('pointerup',event=>{if(!pointerStart||Math.hypot(event.clientX-pointerStart[0],event.clientY-pointerStart[1])>5||!steel?.visible)return;const rect=renderer.domElement.getBoundingClientRect();pointer.set((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(pointer,camera);const hit=raycaster.intersectObjects([...layers.values()].filter(layer=>layer.visible),true)[0];if(!hit)return;const data=hit.object.userData,record=data.record,segment=data.segments?.[hit.instanceId],position=segment?.path.position||data.position,note=segment?.path.note||data.note;pickInfo.textContent=record.name+' · '+record.quantity+' '+record.unit+' · лист '+record.sheet+(data.partName?' · '+data.partName:'')+(position?' · поз. '+position:'')+(data.diameter?' · Ø'+data.diameter+' мм':'')+(note?' · '+note:'');});
- function resize(){const {width,height}=host.getBoundingClientRect();if(width<1||height<1)return;const changed=Math.abs(camera.aspect-width/height)>.001;camera.aspect=width/height;camera.updateProjectionMatrix();renderer.setSize(width,height,false);if(changed&&concrete)home(camera.position.clone().sub(controls.target).normalize());}
+ renderer.domElement.addEventListener('pointerup',event=>{if(pointerStart&&Math.hypot(event.clientX-pointerStart[0],event.clientY-pointerStart[1])<=5&&markerGroup&&collisionVisible){const box=renderer.domElement.getBoundingClientRect();pointer.set((event.clientX-box.left)/box.width*2-1,-(event.clientY-box.top)/box.height*2+1);raycaster.setFromCamera(pointer,camera);const marker=raycaster.intersectObjects(markerGroup.children,false)[0];if(marker){window.dispatchEvent(new CustomEvent('calczhbi:collision-pick',{detail:{key:marker.object.userData.collisionKey}}));return;}}if(!pointerStart||Math.hypot(event.clientX-pointerStart[0],event.clientY-pointerStart[1])>5||!steel?.visible)return;const rect=renderer.domElement.getBoundingClientRect();pointer.set((event.clientX-rect.left)/rect.width*2-1,-(event.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(pointer,camera);const hit=raycaster.intersectObjects([...layers.values()].filter(layer=>layer.visible),true)[0];if(!hit)return;const data=hit.object.userData,record=data.record,segment=data.segments?.[hit.instanceId],position=segment?.path.position||data.position,note=segment?.path.note||data.note;pickInfo.textContent=record.name+' · '+record.quantity+' '+record.unit+' · лист '+record.sheet+(data.partName?' · '+data.partName:'')+(position?' · поз. '+position:'')+(data.diameter?' · Ø'+data.diameter+' мм':'')+(note?' · '+note:'');});
+ function resize(){const {width,height}=host.getBoundingClientRect();if(width<1||height<1)return;const changed=Math.abs(camera.aspect-width/height)>.001;camera.aspect=width/height;camera.updateProjectionMatrix();renderer.setSize(width,height,false);if(changed&&concrete){home(camera.position.clone().sub(controls.target).normalize());if(lastFocus&&performance.now()-lastFocus.time<4000)focusCollision(lastFocus.key,true);}}
  const observer=new ResizeObserver(resize);observer.observe(host);resize();
+// Коллизии: метки на 3D-модели (данные — app/calc/collisions.py, интерфейс — collisions.js). Метка не имеет физического
+ // размера: её экранный размер постоянен, рисуется поверх бетона и арматуры (depthTest выключен).
+ const markerColors={open:0xd62828,designer:0xe08a00,accepted:0x6b7c93,resolved:0x2b9348};
+ function clearMarkers(){if(markerGroup){group.remove(markerGroup);markerGroup.traverse(o=>{o.geometry?.dispose();o.material?.dispose?.();});markerGroup=null;}}
+ function buildMarkers(){
+  clearMarkers();if(!builtPoint||!collisionVisible||!collisionItems.length)return;
+  markerGroup=new THREE.Group();
+  for(const item of collisionItems){
+   const mesh=new THREE.Mesh(new THREE.SphereGeometry(1,16,12),new THREE.MeshBasicMaterial({color:markerColors[item.status]||markerColors.open,transparent:true,opacity:.88,depthTest:false}));
+   mesh.position.copy(builtPoint(item.at));mesh.renderOrder=20;mesh.userData.collisionKey=item.key;markerGroup.add(mesh);
+  }
+  group.add(markerGroup);
+ }
+ function focusCollision(collisionKey,again){
+  if(!again)lastFocus={key:collisionKey,time:performance.now()};
+  const marker=markerGroup?.children.find(m=>m.userData.collisionKey===collisionKey);if(!marker)return;
+  const direction=camera.position.clone().sub(controls.target).normalize(),current=camera.position.distanceTo(controls.target);
+  controls.target.copy(marker.position);camera.position.copy(marker.position).addScaledVector(direction,Math.max(.7,Math.min(2.2,current)));controls.update();annotationKey='';
+ }
+ window.addEventListener('calczhbi:collisions',event=>{collisionItems=event.detail.items||[];collisionSelected=event.detail.selected||null;collisionVisible=event.detail.visible!==false;buildMarkers();});
+ window.addEventListener('calczhbi:collision-focus',event=>focusCollision(event.detail.key));
+ document.getElementById('pc-collisions')?.addEventListener('change',event=>{collisionVisible=event.target.checked;buildMarkers();});
  window.addEventListener('calczhbi:model',event=>setProduct(event.detail));
  if(window.CalcZhBIModelSpec)setProduct(window.CalcZhBIModelSpec);
  controls.addEventListener('change',()=>{host.dataset.camera=camera.position.toArray().map(v=>v.toFixed(4)).join(',');});
@@ -423,6 +446,7 @@ try {
  renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();host.dataset.modelReady='false';viewer.querySelector('.pc-viewport-help').textContent='3D-контекст потерян. Обновите страницу.';});
  function frame(){requestAnimationFrame(frame);if(host.clientHeight>0&&document.visibilityState==='visible'){
   controls.update();
+  if(markerGroup){const pulse=1+.18*Math.sin(performance.now()/260);for(const marker of markerGroup.children){const selected=marker.userData.collisionKey===collisionSelected;marker.scale.setScalar(camera.position.distanceTo(marker.position)*(selected?.017*pulse:.0085));}}
   // Плоскости отсечения следуют за расстоянием до модели: при near=.01 точность буфера глубины на расстоянии в десяток единиц
   // около 0,2 мм реальных размеров, и совпадающие грани мерцают при вращении и масштабировании.
   {const distance=camera.position.distanceTo(controls.target),near=Math.max(.05,distance*.04),far=Math.max(60,distance*12);
