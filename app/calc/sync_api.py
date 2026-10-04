@@ -10,6 +10,7 @@
 import hashlib
 import json
 import os
+import re
 import secrets
 import ssl
 import threading
@@ -80,8 +81,11 @@ def make_actor_dependency(settings, need):
 
 
 # ------------------------------------------------------------------ цели отправки
+TARGET_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,19}$")
+
+
 class Target:
-    def __init__(self, name, cfg):
+    def __init__(self, name, cfg, secret=None):
         self.name = name
         self.url = cfg["url"].rstrip("/")
         parts = urlsplit(self.url)
@@ -91,9 +95,12 @@ class Target:
         self.token_env = cfg.get("tokenEnv")
         self.token_file = cfg.get("tokenFile")
         self.ca_file = cfg.get("caFile")
+        self.secret = secret
         self.require_confirm = bool(cfg.get("requireConfirm", name == "prod"))
 
     def token(self):
+        if self.secret:  # введён в окне «Передача на серверы» (data/calc/sync-secrets.json, права 600)
+            return self.secret
         if self.token_env and os.environ.get(self.token_env):
             return os.environ[self.token_env].strip()
         if self.token_file:
@@ -105,7 +112,8 @@ class Target:
         return None
 
     def public(self):
-        return {"name": self.name, "url": self.url, "requireConfirm": self.require_confirm, "tokenConfigured": bool(self._safe_token())}
+        return {"name": self.name, "url": self.url, "requireConfirm": self.require_confirm, "tokenConfigured": bool(self._safe_token()),
+                "caFile": self.ca_file, "tokenFromUi": bool(self.secret)}
 
     def _safe_token(self):
         try:
@@ -114,12 +122,69 @@ class Target:
             return None
 
 
+def _targets_path(settings):
+    return Path(settings.data_dir) / "sync-targets.json"
+
+
+def _secrets_path(settings):
+    return Path(settings.data_dir) / "sync-secrets.json"
+
+
+def _read_json(path):
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def _write_json(path, data, mode):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(data, stream, ensure_ascii=False, indent=1)
+    os.replace(temporary, path)
+    os.chmod(path, mode)
+
+
 def load_targets(settings):
-    path = Path(settings.data_dir) / "sync-targets.json"
-    if not path.is_file():
-        return {}
-    config = json.loads(path.read_text(encoding="utf-8"))
-    return {name: Target(name, cfg) for name, cfg in config.get("targets", {}).items()}
+    config = _read_json(_targets_path(settings))
+    secrets_ = _read_json(_secrets_path(settings))
+    return {name: Target(name, cfg, secrets_.get(name)) for name, cfg in config.get("targets", {}).items()}
+
+
+def save_target(settings, name, url, token, require_confirm, ca_file):
+    if not TARGET_NAME.match(name or ""):
+        raise HTTPException(422, "Название цели: латиница, цифры, «-» и «_», до 20 знаков (например test, prod)")
+    url = (url or "").strip()
+    try:
+        Target(name, {"url": url})
+    except (ValueError, KeyError) as error:
+        raise HTTPException(422, str(error) if isinstance(error, ValueError) else "Укажите адрес сервера") from None
+    ca_file = (ca_file or "").strip() or None
+    if ca_file and not Path(ca_file).expanduser().is_file():
+        raise HTTPException(422, "Файл сертификата не найден: %s" % ca_file)
+    config = _read_json(_targets_path(settings))
+    previous = config.setdefault("targets", {}).get(name, {})
+    entry = {k: v for k, v in previous.items() if k in {"tokenEnv", "tokenFile"}}
+    entry.update({"url": url.rstrip("/"), "requireConfirm": bool(require_confirm), "caFile": ca_file})
+    config["targets"][name] = entry
+    _write_json(_targets_path(settings), config, 0o644)
+    token = (token or "").strip()
+    if token:
+        if not token.startswith("czb_") or len(token) > 200 or not token.isascii():
+            raise HTTPException(422, "Токен приёма начинается с «czb_»: скопируйте его целиком из окна «Токены приёма» на принимающем сервере")
+        secrets_ = _read_json(_secrets_path(settings))
+        secrets_[name] = token
+        _write_json(_secrets_path(settings), secrets_, 0o600)
+
+
+def delete_target(settings, name):
+    config = _read_json(_targets_path(settings))
+    if name not in config.get("targets", {}):
+        raise HTTPException(404, "Цель не найдена")
+    del config["targets"][name]
+    _write_json(_targets_path(settings), config, 0o644)
+    secrets_ = _read_json(_secrets_path(settings))
+    if secrets_.pop(name, None) is not None:
+        _write_json(_secrets_path(settings), secrets_, 0o600)
 
 
 class Remote:
@@ -408,6 +473,40 @@ def build_sync_router(settings):
         if actor["token"] or not actor["admin"]:
             raise HTTPException(403, "Токены выдаёт администратор сервиса")
         return actor
+
+    @router.put("/targets/{name}")
+    def put_target(name: str, body: dict, actor=Depends(admin_only)):
+        save_target(settings, name, body.get("url"), body.get("token"), body.get("requireConfirm", name == "prod"), body.get("caFile"))
+        with transaction(settings.database_path) as conn:
+            audit(conn, actor["id"], "sync.target.saved", name, {"url": body.get("url")})
+        return {"targets": [t.public() for t in load_targets(settings).values()]}
+
+    @router.delete("/targets/{name}")
+    def remove_target(name: str, actor=Depends(admin_only)):
+        delete_target(settings, name)
+        with transaction(settings.database_path) as conn:
+            audit(conn, actor["id"], "sync.target.deleted", name)
+        return {"targets": [t.public() for t in load_targets(settings).values()]}
+
+    @router.post("/targets/{name}/test")
+    def test_target(name: str, actor=Depends(admin_only)):
+        """Проверка связи: адрес, VPN, сертификат, токен и право «Калькулятор» на принимающей стороне. Ничего не передаёт."""
+        target = load_targets(settings).get(name)
+        if target is None:
+            raise HTTPException(404, "Цель не найдена")
+        try:
+            info = Remote(target).call("GET", "/calc/api/sync/state", timeout=20)
+        except ValueError as error:
+            return {"ok": False, "message": str(error)}
+        except RemoteError as error:
+            hints = {0: "Нет связи с сервером (включён ли VPN, верен ли адрес, доверяется ли сертификат?): ",
+                     401: "Токен не принят принимающим сервером (неверный, отозван или принадлежит удалённому пользователю): ",
+                     403: "У владельца токена нет права «Обмен данными калькулятора» (нужна роль «Калькулятор»): ",
+                     404: "Подсистема «Калькулятор» на сервере не подключена (старая версия или не Python 3.12): ",
+                     503: "Подсистема на сервере не запущена: "}
+            return {"ok": False, "message": hints.get(error.status, "Ошибка %s: " % error.status) + str(error.detail.get("detail", "") if isinstance(error.detail, dict) else error.detail)}
+        project = (info.get("project") or {}).get("zhbi_project_name")
+        return {"ok": True, "message": "Связь есть. Проект на сервере: %s. Источники на сервере: %s." % (project or "не привязан", "есть" if info.get("assetsPresent") else "ещё не переданы")}
 
     @router.get("/tokens")
     def tokens(actor=Depends(admin_only)):

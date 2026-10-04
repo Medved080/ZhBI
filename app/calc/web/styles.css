@@ -472,3 +472,13 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-collision-notes{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:13px}
 #precast-concept .pc-collision-notes li{border-left:3px solid var(--pc-line);padding-left:8px;overflow-wrap:anywhere}
 #precast-concept #pc-collisions-count{color:var(--pc-muted);font-size:12px}
+#pc-sync-dialog .pc-sync-form{display:grid;gap:10px;border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0}
+#pc-sync-dialog .pc-sync-form h3{margin:0}
+#pc-sync-dialog .pc-sync-form label{display:grid;gap:4px;font-size:13px}
+#pc-sync-dialog .pc-sync-form .pc-sync-check{display:flex;gap:8px;align-items:center}
+#pc-sync-dialog .pc-sync-actions{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+#pc-sync-dialog .pc-sync-help ol{margin:6px 0;padding-left:20px;font-size:13px}
+#pc-sync-dialog{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-height:calc(100dvh - 40px);overflow:auto}
+#pc-sync-dialog h2{font-size:21px;font-weight:600;margin:0}
+#pc-sync-dialog .pc-results-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
+#pc-sync-dialog .pc-context{color:var(--muted);font-size:12px}

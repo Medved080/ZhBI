@@ -253,6 +253,23 @@ def main():
         now_b = next(p for p in wsb["products"] if p["product"]["id"] == new_id)["product"]
         check(now_b["name"] == "Правка на сервере B", "B: серверная правка не затёрта")
 
+        # ---- цели настраиваются из интерфейса (без терминала): токен хранится в файле с правами 600 и не возвращается
+        root = Client(base_a); root.login("admin", "Passw0rd-test-12"); root.calc_me()
+        check(a.req("PUT", "/calc/api/sync/targets/ui", {"url": base_b, "token": token})[0] == 403, "A: цели настраивает только администратор")
+        st, r = root.req("PUT", "/calc/api/sync/targets/ui", {"url": base_b, "token": token, "requireConfirm": False})
+        check(st == 200 and any(t["name"] == "ui" and t["tokenConfigured"] and t["tokenFromUi"] for t in r["targets"]) and token not in json.dumps(r), "A: цель сохранена из интерфейса, токен в ответе не возвращается")
+        secrets_path = work / "a" / "calc" / "sync-secrets.json"
+        check(secrets_path.exists() and (secrets_path.stat().st_mode & 0o777) == 0o600, "A: файл токенов с правами 600")
+        st, r = root.req("POST", "/calc/api/sync/targets/ui/test", {})
+        check(st == 200 and r["ok"], "A: проверка связи с целью прошла: %s" % r.get("message"))
+        st, r = root.req("PUT", "/calc/api/sync/targets/ui", {"url": base_b, "token": "czb_wrong"})
+        st, r = root.req("POST", "/calc/api/sync/targets/ui/test", {})
+        check(st == 200 and not r["ok"] and "не принят" in r["message"], "A: неверный токен распознан проверкой связи")
+        check(root.req("PUT", "/calc/api/sync/targets/BAD%20NAME", {"url": base_b})[0] in (404, 422), "A: недопустимое имя цели отклонено")
+        check(root.req("PUT", "/calc/api/sync/targets/x", {"url": "http://example.com"})[0] == 422, "A: небезопасный адрес отклонён")
+        st, r = root.req("DELETE", "/calc/api/sync/targets/ui")
+        check(st == 200 and not any(t["name"] == "ui" for t in r["targets"]) and "ui" not in json.loads(secrets_path.read_text()), "A: цель и её токен удаляются")
+
         # ---- токен: отозванный и чужой
         st, toks = admin.req("GET", "/calc/api/sync/tokens")
         check(st == 200 and len(toks) == 1, "B: список токенов")
