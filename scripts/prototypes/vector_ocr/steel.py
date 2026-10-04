@@ -9,9 +9,14 @@ _LAT = str.maketrans('ABCEHKMOPTXYabcehkmoptxy', 'АВСЕНКМОРТХУАВС
 DIAM_RE = re.compile(r'^[ØøОо]\s*(\d[\dОо]*)$')           # в цифрах диаметра буква «О» — неразличимый с нулём знак шрифта («Ø2О» = Ø20)
 
 
+_DIGITS = str.maketrans('ОоЗзйб', '003306')      # знаки шрифта, неотличимые от цифр: О, о — нуль, З, з — тройка, й — нуль, б — шестёрка («5,1З» = 5,13)
+
+
 def num(s):
     s = re.sub(r'\s', '', s or '').replace(',', '.')
     try: return float(s)
+    except ValueError: pass
+    try: return float(s.translate(_DIGITS))          # только если иначе число не читается: подмена касается лишь прежде нечитаемых значений
     except ValueError: return None
 
 
@@ -22,18 +27,21 @@ def class_of(text):
     m = re.search(r'А(\d{3})([А-ЯA-Z]?)', t)
     if m and len(t) <= 14: return 'А' + m.group(1) + m.group(2)
     if re.match(r'^ВР-?[I1]?$', t): return 'ВрI'
+    if re.match(r'^К-?7$', t): return 'К7'                      # напрягаемая арматура: канат К7 (ГОСТ Р 53772)
     return None
 
 
 def resource_id(cls, diameter):
-    """Код ресурса каталога: steel16A500C, steel3Vr1 (латиница, как в каталоге моделей)."""
-    c = cls.translate(str.maketrans('АС', 'AC'))
+    """Код ресурса каталога: steel16A500C, steel3Vr1, steel12K7 (латиница, как в каталоге моделей)."""
+    c = cls.translate(str.maketrans('АСК', 'ACK'))
     if cls.upper().startswith('ВР'): c = 'Vr1'
     return 'steel%d%s' % (diameter, c)
 
 
 def resource_name(cls, diameter):
-    return ('Проволока Ø%d Вр1' % diameter) if cls.upper().startswith('ВР') else 'Арматура Ø%d %s' % (diameter, cls)
+    if cls.upper().startswith('ВР'): return 'Проволока Ø%d Вр1' % diameter
+    if cls == 'К7': return 'Канат К7 Ø%d' % diameter
+    return 'Арматура Ø%d %s' % (diameter, cls)
 
 
 def parse_steel(boxes):
@@ -50,7 +58,7 @@ def parse_steel(boxes):
         path = [' '.join(t2) for b2, t2 in sorted(((b2, t2) for b2, t2 in boxes.items() if b2[0] <= cx <= b2[1] and b2[2] >= bb[3] - 0.5 and b2 != bb), key=lambda x: x[0][2])
                 if len(' '.join(t2)) < 40][:6]
         text = ' '.join(path)
-        section = 'rebar' if 'арматурные' in text.lower() else 'embedded' if 'закладные' in text.lower() else None
+        section = 'rebar' if ('арматурные' in text.lower() or 'напрягаемая' in text.lower()) else 'embedded' if 'закладные' in text.lower() else None
         head = path[0] if path else ''
         cls = next((class_of(x) for x in path if class_of(x)), None)
         if head.startswith('Всего'):
@@ -62,12 +70,31 @@ def parse_steel(boxes):
             if m: rods[(cls, int(m.group(1).replace('О', '0').replace('о', '0')))] += value; ok = True
             elif head.startswith('Итого'): class_totals[cls] = value
     if not ok: return None
+    return {'rods': dict(rods), 'class_totals': class_totals, 'rebar_total': rebar_total, 'embedded_total': embedded_total, 'grand_total': grand,
+            'checks': compute_checks(rods, class_totals, rebar_total)}
+
+
+def compute_checks(rods, class_totals, rebar_total):
+    """Самопроверки ведомости: сумма по диаметрам класса равна «Итого» класса, сумма классов равна «Всего»."""
     checks = {}
     for cls, total in class_totals.items():
         s = sum(v for (c, d), v in rods.items() if c == cls); checks[cls] = abs(s - total) <= max(0.02, 0.005 * total)
     if rebar_total is not None:
         s = sum(rods.values()); checks['total'] = abs(s - rebar_total) <= max(0.05, 0.005 * rebar_total)
-    return {'rods': dict(rods), 'class_totals': class_totals, 'rebar_total': rebar_total, 'embedded_total': embedded_total, 'grand_total': grand, 'checks': checks}
+    return checks
+
+
+def fill_strand(sheet, rows):
+    """Масса каната К7 по «Итого» класса есть, а по диаметру не прочиталась: диаметр берётся из строки каната в спецификации того же листа
+    (только если он там один — Ø12 и Ø15 в альбомах встречаются оба), самопроверки пересчитываются."""
+    total = (sheet.get('class_totals') or {}).get('К7')
+    if not total: return sheet
+    rods = sheet['rods']; have = sum(v for (c, d), v in rods.items() if c == 'К7'); missing = total - have
+    diameters = {x[1] for x in (parse_rod(r.get('name')) for r in rows or []) if x and x[0] == 'К7'}
+    if missing > 0.02 and len(diameters) == 1:
+        rods[('К7', next(iter(diameters)))] = rods.get(('К7', next(iter(diameters))), 0) + missing
+        sheet['checks'] = compute_checks(rods, sheet['class_totals'], sheet.get('rebar_total'))
+    return sheet
 
 
 # ------------------------------------------------------------------ сборка по спецификациям (рекурсивно по листам-составляющим)
@@ -109,6 +136,7 @@ def pipe_length_m(name, qty):
     return qty if re.search(r'п\.\s?м', name or '') else None
 
 
+STRAND_RE = re.compile(r'^\s*К\s?-?\s?7\s?-\s?(\d+(?:[.,]\d+)?)\s?-')
 STANDARD_DIAMETERS = (6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 32, 36, 40)
 INFER_RE = re.compile(r'([АA]\s?\d{3}\s?[СC]?)\s*ГОСТ[^L]*L\s*=\s*(\d[\d\s]*\d|\d)')      # «Ø ·· А600С ГОСТ 34028-2016, L= 10030»: цифры диаметра не прочитаны
 
@@ -124,6 +152,8 @@ def infer_diameter(mass_kg, length_mm):
 def parse_rod(name, mass=None):
     """«Ø 32 А500С ГОСТ 34028-2016, L=11375» → ((класс, диаметр)) или None. Цифры диаметра не прочитаны («Ø ·· А600С … L= 10030») — диаметр выводится по массе единицы
     (mass, кг) и длине из названия."""
+    strand = STRAND_RE.match(name or '')
+    if strand: return ('К7', int(float(strand.group(1).replace(',', '.'))))      # «К7-12,5-1770 ГОСТ Р 53772-2010 L=5950» → канат К7 Ø12
     m = ROD_RE.search(name or '')
     if m:
         cls = class_of(m.group(2).replace(' ', ''))
@@ -162,8 +192,9 @@ class RebarAssembler:
     assemble(doc, page, mark, mass) → {'rods': {(класс, диаметр): кг на 1 шт.}, 'unresolved': кг, 'issues': [...]}.
     Лист может быть спецификацией одного узла или серии марок (строки с полем 'mark', итог по марке — в 'note'): тогда берутся строки марки узла,
     а если марка прочитана с ошибкой — марка, чья масса изделия равна массе узла."""
-    def __init__(self, rows, offset, window=12):
+    def __init__(self, rows, offset, window=12, pages=None):
         self.rows, self.offset, self.cache, self.window = rows, offset, {}, window
+        self.pages = pages      # pages(doc) → номера уже прочитанных листов альбома (для поиска листа узла по марке и массе, когда ссылка «л.NNN» прочитана неверно)
         self.problems = set()      # (альбом, страница) вокруг которых не удалось найти лист узла: сборщик слоя дочитывает окно и повторяет
 
     @staticmethod
@@ -188,6 +219,16 @@ class RebarAssembler:
         """Лист узла по массе в окне вокруг ожидаемой страницы (когда ссылка «л.NNN» прочитана с ошибкой): ровно один подходящий лист или None."""
         hits = [p for p in range(max(1, center - self.window), center + self.window + 1)
                 if self.rows(doc, p) is not None and any(abs(m / mass - 1) <= 0.005 for m in self.sheet_masses(doc, p))]
+        return hits[0] if len(hits) == 1 else None
+
+    def find_by_mark(self, doc, mark, mass):
+        """Лист узла среди ВСЕХ прочитанных листов альбома: на листе есть строки марки узла с массой изделия, равной массе узла (±0,5%). Ровно один лист или None."""
+        if not self.pages or not mark: return None
+        hits = []
+        for q in self.pages(doc):
+            rows = self.rows(doc, q) or []
+            if any(r.get('mark') and mark_key(r['mark']) == mark and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005 for r in rows):
+                hits.append(q)
         return hits[0] if len(hits) == 1 else None
 
     def pick_rows(self, rows, mark, mass):
@@ -228,7 +269,7 @@ class RebarAssembler:
             sub = self.assemble(doc, center, node_mark(name), mass_e, depth + 1, stack + (key,)) if refs else None
             got = self.node_mass(sub, mass_e)
             if not got or abs(got / mass_e - 1) > 0.03:                  # ссылки нет или масса узла по его листу не сходится — ищем лист по массе
-                found = self.find_by_mass(doc, center, mass_e)
+                found = self.find_by_mass(doc, center, mass_e) or self.find_by_mark(doc, node_mark(name), mass_e)
                 if found and found != page:
                     sub = self.assemble(doc, found, node_mark(name), mass_e, depth + 1, stack + (key,))
                     got = self.node_mass(sub, mass_e)

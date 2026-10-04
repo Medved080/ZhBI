@@ -31,6 +31,7 @@ def read_rows(args):
         segs = vo.segments(tf.D + "doc%02d.pdf" % n, p); H, V = tb.frame_lines(segs); gl, Ls = tf.load_sheet(n, p, minlen=1)
         boxes = tb.text_in_boxes(gl, Ls, FONT, H, V); sp = tb.parse_spec(boxes)
         sheet = steel.parse_steel(boxes)
+        if sheet: sheet = steel.fill_strand(sheet, sp["rows"] if sp else None)
         return (n, p, sp["rows"] if sp else None, _plain(sheet) if sheet else None)
     except Exception as error:
         return (n, p, None, None)
@@ -85,7 +86,8 @@ def main(out, families):
     if os.environ.get("VOCR_REPARSE"):
         # после правок разбора ведомости: перечитать только листы, где она не разобралась или не сошлись проверки (остальные остаются из кэша)
         stale = [k for k, v in cache.items() if v.get("steel") is None or not all(v["steel"]["checks"].values())
-                 or not v.get("rows") or not any(r.get("qty") for r in v["rows"])]      # спецификация не разобрана или разобрана без столбца «Кол.»      # и листы, где спецификация разобрана без столбца «Кол.»
+                 or not v.get("rows") or not any(r.get("qty") for r in v["rows"])      # спецификация не разобрана или разобрана без столбца «Кол.»
+                 or any(r.get("mark") and not r.get("name") for r in v["rows"])]      # таблица серии без наименований стержней      # и листы, где спецификация разобрана без столбца «Кол.»
         for k in stale: del cache[k]
         print("перечитываем листы без сошедшейся ведомости:", len(stale), flush=True)
     frontier = {(int(v["source"]["id"][3:]), int(v["source"]["productPage"])) for v in models.values()}
@@ -119,7 +121,7 @@ def main(out, families):
             print("слой: прочитано листов", len(todo), "следующий слой", len(nxt), flush=True)
             frontier = nxt
     def make_assembler():
-        return steel.RebarAssembler(lambda d, p: (cache.get((d, p)) or {}).get("rows"), offset)
+        return steel.RebarAssembler(lambda d, p: (cache.get((d, p)) or {}).get("rows"), offset, pages=lambda d: [p for (dd, p) in cache if dd == d])
 
     def assemble_all():
         asm = make_assembler()

@@ -72,7 +72,7 @@ def readiness(conn):
         origin = {
             "volume": "вручную" if "volume" in manual else "чтение листа" if "объём" in applied else "каталог поставщика",
             "concreteClass": "чтение листа" if "класс" in applied else "каталог поставщика",
-            "rebar": "чтение листа" if "арматура" in applied else "каталог поставщика",
+            "rebar": "оценка по нормативу" if "steelEstimate" in ids else "чтение листа" if "арматура" in applied else "каталог поставщика",
         }
         if doc and _unset(doc.get("concreteClass")):
             entry = types_without_class[type_key(doc)]; entry["count"] += 1; entry["family"] = family

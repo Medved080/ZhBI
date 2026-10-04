@@ -1,3 +1,4 @@
+import re
 """Таблицы листа по линиям рамки: каждый символ текста относится к охватывающей его рамке (ближайшие линии слева/справа/сверху/снизу,
 перекрывающие его центр), из символов рамки собирается текст; затем спецификация разбирается по заголовкам столбцов."""
 import os, sys, collections, math
@@ -146,12 +147,33 @@ def parse_spec(boxes):
         oboz = [k for k, r in cols.items() if r == 'oboz']
         if not oboz: return None
         cols[oboz[0]] = 'name'
-    body = [(b, t, cols[(b[0], b[1])]) for b, t in boxes.items() if b[3] <= ylo + 0.5 and (b[0], b[1]) in cols]
+    def role_in(b):
+        """Роль столбца для рамки тела: точное совпадение границ с шапкой, иначе — рамка целиком внутри столбца шапки (столбец «Наименование» разделён
+        внутренними линиями на «Ø | класс | длина»; рамка, накрывающая несколько столбцов, по-прежнему отбрасывается)."""
+        if (b[0], b[1]) in cols: return cols[(b[0], b[1])]
+        inside = [r for (x0, x1), r in cols.items() if b[0] >= x0 - 0.5 and b[1] <= x1 + 0.5]
+        return inside[0] if len(inside) == 1 else None
+    by_role = {r: k for k, r in cols.items()}
+    body = []
+    for b, t in boxes.items():
+        if b[3] > ylo + 0.5: continue
+        # в строках таблицы серий нет линии между «Поз.» и «Наименование»: одна рамка накрывает оба столбца («1 ø 12 А500С ГОСТ …, L=3930») — делим на позицию и наименование
+        if 'pos' in by_role and 'name' in by_role and abs(b[0] - by_role['pos'][0]) < 0.5 and abs(b[1] - by_role['name'][1]) < 0.5 and (b[0], b[1]) not in cols:
+            m = re.match(r'^\s*(\S{1,2})\s+(.+)$', ' '.join(t))
+            if m:
+                body.append(((by_role['pos'][0], by_role['pos'][1], b[2], b[3]), [m.group(1)], 'pos'))
+                body.append(((by_role['name'][0], by_role['name'][1], b[2], b[3]), [m.group(2)], 'name'))
+                continue
+        r = role_in(b)
+        if r: body.append((b, t, r))
     lines = sorted({(round(b[2], 1), round(b[3], 1)) for b, t, r in body if r == 'name'}, key=lambda k: -k[1])
     rows = collections.defaultdict(dict)
+    parts = collections.defaultdict(list)       # (строка, роль) → [(x, текст)]: разделённый внутри столбец склеивается слева направо
     for b, t, r in body:
         covered = [k for k in lines if b[2] - 0.5 <= (k[0] + k[1]) / 2 <= b[3] + 0.5]    # строки, которые накрывает рамка (объединённая ячейка — несколько)
         for k in (covered or [(round(b[2], 1), round(b[3], 1))]):
-            rows[k][r] = ' '.join(t)
+            parts[(k, r)].append((b[0], ' '.join(t)))
+    for (k, r), items in parts.items():
+        rows[k][r] = ' '.join(text for _, text in sorted(items))
     table = [rows[k] for k in sorted(rows, key=lambda k: -k[1]) if any(v.strip() for v in rows[k].values())]
     return {'columns': [cols[k] for k in sorted(cols)], 'rows': table}

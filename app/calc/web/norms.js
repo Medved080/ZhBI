@@ -21,8 +21,8 @@
   if(!families.length)return '';
   const when=g=>g.confirmed&&g.confirmedAt?' · '+esc(new Date(g.confirmedAt).toLocaleDateString('ru-RU')):'';
   return `<h3>Нормы по группам изделий</h3><p class="pc-context">Пустое поле — действует общая норма. «Подтверждено» ставит технолог после проверки норм группы: пока норма не подтверждена, расчёт группы считается предварительным.</p>
-  <div class="pc-norms-table"><table id="pc-groups-table"><thead><tr><th>Группа</th><th>Изделий</th><th>Труд на 1 м³, чел·ч</th><th>Расход бетона, коэфф.</th><th>Подтверждено технологом</th></tr></thead><tbody>${families.map(f=>{const g=gs[f.name]||{};
-   return `<tr><td>${esc(f.name)}</td><td>${n(f.total)}</td><td><input type="number" step="any" min="0" max="1000" name="g:${esc(f.name)}:hoursPerM3" value="${esc(g.hoursPerM3??'')}" placeholder="${esc(n(np.hoursPerM3))}"></td><td><input type="number" step="any" min="1" max="3" name="g:${esc(f.name)}:concreteFactor" value="${esc(g.concreteFactor??'')}" placeholder="${esc(n(np.concreteFactor))}"></td><td><label><input type="checkbox" name="g:${esc(f.name)}:confirmed" ${g.confirmed?'checked':''}> ${g.confirmed?'подтверждено'+when(g):'нет'}</label></td></tr>`;}).join('')}</tbody></table></div>`;
+  <div class="pc-norms-table"><table id="pc-groups-table"><thead><tr><th>Группа</th><th>Изделий</th><th>Труд на 1 м³, чел·ч</th><th>Расход бетона, коэфф.</th><th title="Только изделиям, у которых арматуры по чертежам нет (плиты): отдельная позиция «оценка по нормативу» со своей ценой в прайсе">Арматура без чертежа, кг на м³</th><th>Подтверждено технологом</th></tr></thead><tbody>${families.map(f=>{const g=gs[f.name]||{};
+   return `<tr><td>${esc(f.name)}</td><td>${n(f.total)}</td><td><input type="number" step="any" min="0" max="1000" name="g:${esc(f.name)}:hoursPerM3" value="${esc(g.hoursPerM3??'')}" placeholder="${esc(n(np.hoursPerM3))}"></td><td><input type="number" step="any" min="1" max="3" name="g:${esc(f.name)}:concreteFactor" value="${esc(g.concreteFactor??'')}" placeholder="${esc(n(np.concreteFactor))}"></td><td><input type="number" step="any" min="0" max="500" name="g:${esc(f.name)}:steelKgPerM3" value="${esc(g.steelKgPerM3??'')}" placeholder="нет"></td><td><label><input type="checkbox" name="g:${esc(f.name)}:confirmed" ${g.confirmed?'checked':''}> ${g.confirmed?'подтверждено'+when(g):'нет'}</label></td></tr>`;}).join('')}</tbody></table></div>`;
  }
  // Класс бетона по типам изделий, у которых на листах чертежей класса нет (например, плиты): цена бетона таких изделий считается по этому классу
  function typesSection(np){
@@ -84,7 +84,7 @@
    if(normInputs.some(changed)||extraChanged){
     const body={expectedVersion:norms.version,resources:{}};for(const k of ['concreteFactor','hoursPerM3'])body[k]=read(field(k));
     for(const el of group('f:'))body.resources[el.name.slice(2)]={factor:read(el)};
-    if(group('g:').length){body.groups={};for(const el of group('g:')){const [,family,key]=el.name.split(':');const g=body.groups[family]??={confirmed:false,hoursPerM3:null,concreteFactor:null};if(key==='confirmed')g.confirmed=el.checked;else g[key]=el.value===''?null:el.value;}}
+    if(group('g:').length){body.groups={};for(const el of group('g:')){const [,family,key]=el.name.split(':');const g=body.groups[family]??={confirmed:false,hoursPerM3:null,concreteFactor:null,steelKgPerM3:null};if(key==='confirmed')g.confirmed=el.checked;else g[key]=el.value===''?null:el.value;}}
     if(group('t:').length){body.classByType={};for(const el of group('t:'))body.classByType[el.name.slice(2)]=el.value.trim();}
     norms=await api.request('/calc/api/norms',{method:'PUT',body:JSON.stringify(body)});messages.push('нормы v'+norms.version);
    }

@@ -29,6 +29,8 @@ def catalog_materials():
     for doc in catalog().values():
         for resource in doc.get("resources") or []:
             found.setdefault(resource["id"], {"name": resource["name"], "unit": resource["unit"]})
+    from .norms import ESTIMATE_ID, ESTIMATE_NAME
+    found.setdefault(ESTIMATE_ID, {"name": ESTIMATE_NAME, "unit": "т"})      # оценка арматуры по нормативу группы (norms.parameters_for) — цена задаётся в прайсе
     return dict(sorted(found.items()))
 
 

@@ -7,6 +7,8 @@ from .database import PROFILE,audit,dumps,now
 from .document_models import catalog
 
 D=lambda value:Decimal(str(value))
+ESTIMATE_ID='steelEstimate'
+ESTIMATE_NAME='Арматура (оценка по нормативу расхода на м³)'
 
 
 def initial_norms():
@@ -39,6 +41,7 @@ class GroupNorm(BaseModel):
     confirmed:bool=False
     hoursPerM3:Decimal|None=Field(default=None,ge=0,le=1000,allow_inf_nan=False)
     concreteFactor:Decimal|None=Field(default=None,ge=1,le=3,allow_inf_nan=False)
+    steelKgPerM3:Decimal|None=Field(default=None,ge=0,le=500,allow_inf_nan=False)      # расход арматуры, кг на м³ бетона: оценка для изделий, у которых арматуры по чертежам нет
 
 
 class NormsSave(BaseModel):
@@ -80,8 +83,8 @@ def update_norms(conn,body,actor):
         groups=params.setdefault('groups',{})
         for family,g in body.groups.items():
             before=groups.get(family) or {}
-            entry={'hoursPerM3':str(g.hoursPerM3) if g.hoursPerM3 is not None else None,'concreteFactor':str(g.concreteFactor) if g.concreteFactor is not None else None,'confirmed':g.confirmed}
-            if g.confirmed and before.get('confirmed') and before.get('hoursPerM3')==entry['hoursPerM3'] and before.get('concreteFactor')==entry['concreteFactor']:
+            entry={'hoursPerM3':str(g.hoursPerM3) if g.hoursPerM3 is not None else None,'concreteFactor':str(g.concreteFactor) if g.concreteFactor is not None else None,'steelKgPerM3':str(g.steelKgPerM3) if g.steelKgPerM3 is not None else None,'confirmed':g.confirmed}
+            if g.confirmed and before.get('confirmed') and before.get('hoursPerM3')==entry['hoursPerM3'] and before.get('concreteFactor')==entry['concreteFactor'] and before.get('steelKgPerM3')==entry['steelKgPerM3']:
                 entry.update(confirmedBy=before.get('confirmedBy'),confirmedAt=before.get('confirmedAt'))     # подтверждение осталось в силе
             elif g.confirmed:
                 entry.update(confirmedBy=actor,confirmedAt=now())
@@ -124,6 +127,11 @@ def parameters_for(doc,norms,prices,volume=None,concrete_class=None,concrete_pri
         norm=match_resource(r,p);qty=D(r['projectQty'])*(D(norm['factor']) if norm else D(1))
         if norm:qty=qty.quantize(D('.001'),rounding=ROUND_CEILING)
         resources.append({**r,'qty':str(qty),'rate':str(material_rate(prices,r['id'],r['rate']))})
+    estimate=group.get('steelKgPerM3')
+    if estimate not in (None,'') and D(estimate)>0 and volume>0 and not any(r['id'].startswith(('steel','mainsteel','wire')) for r in resources):
+        # арматуры по чертежам нет (плиты: на листах только сечения): оценка по нормативу группы, отдельной позицией со своей ценой
+        tons=(volume*D(estimate)/1000).quantize(D('.001'),rounding=ROUND_CEILING)
+        resources.append({'id':ESTIMATE_ID,'name':ESTIMATE_NAME,'unit':'т','projectQty':str(tons),'qty':str(tons),'rate':str(material_rate(prices,ESTIMATE_ID,0))})
     cost=sum((D(r['qty'])*D(r['rate']) for r in resources),D(0))
     # В исходном Excel есть припуск 1% на прочие материалы — та же расчётная база.
     rate=D(concrete_price) if concrete_price is not None else concrete_rate(prices,concrete_class or doc.get('concreteClass'));allowance=(volume*rate+cost)*D('.01')

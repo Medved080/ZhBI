@@ -11,14 +11,18 @@ SOURCE_FILE = "promka-readings.json"
 
 
 def resource_id(cls, diameter):
-    """Код ресурса каталога: steel16A500C, steel3Vr1 (латиница, как в каталоге моделей)."""
+    """Код ресурса каталога: steel16A500C, steel3Vr1, steel12K7 (латиница, как в каталоге моделей)."""
     if cls.upper().startswith("ВР"):
         return "steel%dVr1" % diameter
-    return "steel%d%s" % (diameter, cls.translate(str.maketrans("АС", "AC")))
+    return "steel%d%s" % (diameter, cls.translate(str.maketrans("АСК", "ACK")))
 
 
 def resource_name(cls, diameter):
-    return ("Проволока Ø%d Вр1" % diameter) if cls.upper().startswith("ВР") else "Арматура Ø%d %s" % (diameter, cls)
+    if cls.upper().startswith("ВР"):
+        return "Проволока Ø%d Вр1" % diameter
+    if cls == "К7":
+        return "Канат К7 Ø%d" % diameter
+    return "Арматура Ø%d %s" % (diameter, cls)
 
 
 def rebar_of(reading):

@@ -264,5 +264,26 @@ if types:
     check(next(t for t in classed["classTypes"] if t["key"] == kind)["assigned"] == "В30", "класс типа «%s» сохранён как В30" % kind)
     check(classed["funnel"][1]["alone"] >= after_norms["funnel"][1]["alone"] + types[0]["count"] - 0, "изделия типа получили класс бетона (%d)" % types[0]["count"])
 
+# 11. оценка арматуры по нормативу группы (плиты: арматуры по чертежам нет)
+with transaction(settings.database_path) as conn:
+    norms = get_norms(conn)
+    resources = {k: {"factor": v["factor"]} for k, v in norms["parameters"]["resources"].items()}
+    update_norms(conn, NormsSave(expectedVersion=norms["version"], concreteFactor=norms["parameters"]["concreteFactor"], hoursPerM3=norms["parameters"]["hoursPerM3"], resources=resources,
+                                 groups={"Плиты": GroupNorm(confirmed=False, steelKgPerM3="60")}), "технолог")
+conn = connect(settings.database_path); conn.execute("BEGIN"); ctx3 = pricing_context(conn)
+plate_id = next(r["id"] for r in conn.execute("SELECT id,document_model_id FROM products").fetchall() if (dm.model(r["document_model_id"]) or {}).get("family") == "Плиты" and (dm.model(r["document_model_id"]) or {}).get("projectVolume"))
+entry = get_product(conn, plate_id, ctx3)
+est = [r for r in entry["product"]["documentModel"]["resources"] if r["id"] == "steelEstimate"]
+volume = entry["product"]["volume"]
+check(est and est[0]["unit"] == "т" and abs(est[0]["qty"] - volume * 60 / 1000) < 0.0011, "плите без арматуры по чертежам добавлена оценка по нормативу: %s т при %.2f м³" % (est[0]["qty"] if est else "—", volume))
+row_ids = {r["id"] for r in entry["snapshot"]["rows"]}
+check("steelEstimate" in row_ids, "оценка арматуры есть в строках калькуляции")
+conn.close()
+from app.calc.prices import catalog_materials
+check("steelEstimate" in catalog_materials(), "оценка арматуры есть в прайс-листе материалов (цена задаётся там)")
+with transaction(settings.database_path) as conn:
+    sources = readiness(conn)["origin"]["rebar"]
+check(sources.get("оценка по нормативу", 0) > 0, "на главной оценка по нормативу видна в источниках арматуры (%s)" % sources)
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)
