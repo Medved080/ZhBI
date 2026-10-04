@@ -20,8 +20,8 @@ def commercial_reference(conn, product_id):
     result = {
         'productId': product['id'], 'productVersion': product['version'],
         'available': False, 'filename': data['filename'], 'sheet': data['sheet'],
-        'sourceUrl': '/api/commercial-reference-source', 'auditUrl': '/api/commercial-reference-audit',
-        'instructionUrl': '/api/document-source/' + data['instructionSourceId'] + '#page=1',
+        'sourceUrl': '/calc/api/commercial-reference-source', 'auditUrl': '/calc/api/commercial-reference-audit',
+        'instructionUrl': '/calc/api/document-source/' + data['instructionSourceId'] + '#page=1',
         'sourceSha256': data['sha256'], 'vatNote': data['vatNote'], 'revisionNote': data['revisionNote'],
     }
     if not entry:
@@ -43,7 +43,7 @@ def commercial_reference(conn, product_id):
         result.update({
             'available': True, 'row': entry['row'], 'sourceTitle': entry['title'],
             'priceCell': entry['priceCell'], 'priceFormula': entry['priceFormula'],
-            'drawingUrl': '/api/document-source/' + entry['drawing']['sourceId'] + '#page=' + str(entry['drawing']['pdfPage']),
+            'drawingUrl': '/calc/api/document-source/' + entry['drawing']['sourceId'] + '#page=' + str(entry['drawing']['pdfPage']),
             'drawingRevision': entry['drawing']['revision'], 'sourceQuantity': entry['sourceQuantity'],
             'sourceVolume': entry['sourceVolume'], 'pricePerM3Gross': str(price),
             'unitPriceGross': str(unit), 'sourceLotGross': str(unit * quantity) if quantity else None,

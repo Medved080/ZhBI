@@ -53,7 +53,7 @@
  document.addEventListener('click',e=>{if(e.target.closest('#precast-concept [data-view="sheets"]'))void load();});
  document.addEventListener('click',e=>{
   const link=e.target.closest('#precast-concept a[href]');if(!link||link.hasAttribute('download'))return;
-  const url=new URL(link.href,location.href),match=url.pathname.match(/^\/api\/document-source\/([^/]+)$/);
+  const url=new URL(link.href,location.href),match=url.pathname.match(/^\/calc\/api\/document-source\/([^/]+)$/);
   const pdfPage=Number(new URLSearchParams(url.hash.slice(1)).get('page'));
   if(url.origin!==location.origin||!match||!Number.isInteger(pdfPage)||pdfPage<1)return;
   e.preventDefault();openSource(link.dataset.sourceProduct||window.CalcZhBIProjectKey,decodeURIComponent(match[1]),pdfPage);

@@ -37,7 +37,7 @@ def sheets_for(conn,product_id):
         if key in sheets:
             if title not in sheets[key]['titles']:sheets[key]['titles'].append(title)
             return
-        sheets[key]={'id':key,'sourceId':sid,'pdfPage':page,'sheet':sheet,'kind':kind,'titles':[title],'filename':linked_info['filename'],'albumUrl':f'/api/document-source/{sid}#page={page}','imageUrl':f'/api/products/{product_id}/source-sheets/{key}/image'}
+        sheets[key]={'id':key,'sourceId':sid,'pdfPage':page,'sheet':sheet,'kind':kind,'titles':[title],'filename':linked_info['filename'],'albumUrl':f'/calc/api/document-source/{sid}#page={page}','imageUrl':f'/calc/api/products/{product_id}/source-sheets/{key}/image'}
     verified=source.get('pageVerified',True)
     if verified:add(source['productPage'],'Изделие '+doc.get('alias',row['name']),'product',source.get('sheet'))
     else:unresolved.append('Актуальный чертёж изделия: связь с листом требует проверки')

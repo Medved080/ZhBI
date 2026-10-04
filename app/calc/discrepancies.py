@@ -38,7 +38,7 @@ def for_model(conn, model_id):
     if not model_id: return []
     result = []
     for row in conn.execute('SELECT * FROM model_discrepancies WHERE model_id=? ORDER BY created_at,id',(model_id,)):
-        sources = [{**source,'url':f"/api/document-source/{source['sourceId']}#page={source['pdfPage']}"} for source in json.loads(row['sources_json'])]
+        sources = [{**source,'url':f"/calc/api/document-source/{source['sourceId']}#page={source['pdfPage']}"} for source in json.loads(row['sources_json'])]
         result.append({'id':row['id'],'issueKey':row['issue_key'],'kind':row['kind'],'kindLabel':KIND_NAMES[row['kind']],
                        'severity':row['severity'],'title':row['title'],'description':row['description'],
                        'recommendation':row['recommendation'],'sources':sources,'status':row['status'],
@@ -51,7 +51,7 @@ def quality_issues(product):
     if not doc: return []
     source = doc['source']; source_id = source.get('id','promka-columns')
     sources = [{'sourceId':source_id,'pdfPage':source['productPage'],'label':'Лист изделия' if source.get('pageVerified',True) else 'Ведомость',
-                'url':f"/api/document-source/{source_id}#page={source['productPage']}"}]
+                'url':f"/calc/api/document-source/{source_id}#page={source['productPage']}"}]
     checks = []
     if doc.get('projectVolume') is None: checks.append(('volume','Проектный объём бетона не подтверждён','Сверить объём по спецификации; нулевое значение не означает отсутствие бетона.'))
     if doc.get('projectSteel') is None: checks.append(('steel','Общий расход стали не распознан','Проверить ведомость расхода стали; масса не должна определяться по объёму модели.'))
