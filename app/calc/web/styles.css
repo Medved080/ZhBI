@@ -304,6 +304,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept #pc-norms-form input{width:100%;min-width:0;font:inherit;padding:8px;border:1px solid var(--pc-line);border-radius:5px;background:var(--pc-bg);color:var(--pc-ink)}
 #precast-concept .pc-norms-fields small{font-size:11px;color:var(--pc-muted)}
 #precast-concept .pc-norms-table{overflow-x:auto}
+#precast-concept .pc-norms-table:has(#pc-prices-table){max-height:420px;overflow:auto}
+#precast-concept .pc-prices-bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:8px 0}
+#precast-concept .pc-prices-bar input[type=search]{min-width:280px;padding:7px 8px;font:inherit;border:1px solid var(--pc-line);border-radius:5px;background:var(--pc-bg);color:var(--pc-ink)}
+#precast-concept #pc-prices-table tbody tr[hidden]{display:none}
 #precast-concept .pc-norms-table table{min-width:760px;font-size:12px;table-layout:fixed}
 #precast-concept .pc-norms-table th:first-child{width:27%}
 #precast-concept .pc-norms-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}

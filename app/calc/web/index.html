@@ -14,12 +14,12 @@
   <script defer src="api-client.js?v=20261004-probe-1"></script>
   <script defer src="project-files.js"></script>
   <script defer src="history.js?v=20261002-money-1"></script>
-  <script defer src="norms.js?v=20261004-collisions-1"></script>
+  <script defer src="norms.js?v=20261005-prices-1"></script>
   <script defer src="source-sheets.js?v=20261004-calc-path-1"></script>
   <script defer src="commercial-reference.js?v=20261003-workspace-2"></script>
   <script defer src="project-report.js?v=20261004-lite-1"></script>
   <script defer src="collisions.js?v=20261004-collisions-4"></script>
-  <script defer src="app.js?v=20261004-lite-1"></script>
+  <script defer src="app.js?v=20261005-prices-1"></script>
   <script defer src="sync-panel.js?v=20261004-sync-3"></script>
   <script defer src="recovery.js?v=20261004-live-5"></script>
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
@@ -47,9 +47,9 @@
       <div class="pc-context pc-bottom"><span id="pc-current-user">Подключение к серверу…</span><button id="pc-logout" type="button" hidden>К трекеру ЖБИ</button><span id="pc-migration-status" role="status"></span></div>
     </aside>
     <main class="pc-main">
-      <header class="pc-header"><div><div class="pc-card-context"><span class="pc-context">Карточка изделия</span><span id="pc-model-readiness" class="pc-model-readiness"></span></div><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-edit-product" class="cursor-interaction" type="button">Параметры изделия</button><button id="pc-open-norms" type="button" aria-pressed="false">Производственные нормы</button></div></header>
+      <header class="pc-header"><div><div class="pc-card-context"><span class="pc-context">Карточка изделия</span><span id="pc-model-readiness" class="pc-model-readiness"></span></div><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-edit-product" class="cursor-interaction" type="button">Параметры изделия</button><button id="pc-open-norms" type="button" aria-pressed="false">Расценки и нормы</button></div></header>
       <nav class="pc-tabs" aria-label="Разделы изделия"><button class="cursor-interaction" data-view="calculation" aria-pressed="true" aria-controls="pc-calculation-panel">Калькуляция</button><button class="cursor-interaction" data-view="model" aria-pressed="false" aria-controls="pc-model-panel">Модель и параметры</button><button class="cursor-interaction" data-view="tech" aria-pressed="false">Технология</button><button class="cursor-interaction" data-view="issues" aria-pressed="false">Расхождения и вопросы</button><button class="cursor-interaction" data-view="collisions" aria-pressed="false">Коллизии</button><button class="cursor-interaction" data-view="sources" aria-pressed="false">Файлы и основания</button><button class="cursor-interaction" data-view="sheets" aria-pressed="false">Исходные листы</button><button class="cursor-interaction" data-view="history" aria-pressed="false">История</button></nav>
-      <section id="pc-norms-panel" hidden aria-label="Производственные нормы"></section>
+      <section id="pc-norms-panel" hidden aria-label="Расценки и нормы"></section>
       <section id="pc-project-report-panel" hidden aria-label="Отчёт по всему проекту"></section>
       <div id="pc-model-panel" hidden>
         <div class="pc-view-row">
