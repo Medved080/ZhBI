@@ -183,6 +183,11 @@ old_format = {"sheet": {"doc": 1, "page": 3}, "method": "vector_ocr", "confirmed
 (tmp3 / SOURCE_FILE).write_text(json.dumps({plain: old_format}, ensure_ascii=False))
 models5 = copy.deepcopy(base); apply_readings(models5, tmp3)
 check(not models5[plain].get("readings", {}).get("embeddedChecked"), "чтение прежнего формата не засчитывает закладные прочитанными")
+by_mass = {**old_format, "volumeSource": "масса ÷ 2500", "volume": 0.78}
+(tmp3 / SOURCE_FILE).write_text(json.dumps({plain: by_mass}, ensure_ascii=False))
+models6 = copy.deepcopy(base); apply_readings(models6, tmp3)
+check(models6[plain]["projectVolume"] == 0.78 and any("масса ÷ 2500" in a for a in models6[plain]["readings"]["applied"]), "объём по массе ÷ 2500 помечен источником")
+check(without_readings(models6[plain])["projectVolume"] is None, "без_чтений убирает объём, вычисленный по массе")
 
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

@@ -85,7 +85,9 @@ def apply_readings(models, directory):
             continue
         applied = []
         if not model.get("projectVolume") and reading.get("volume"):
-            model["projectVolume"] = reading["volume"]; applied.append("объём бетона")
+            model["projectVolume"] = reading["volume"]
+            source = reading.get("volumeSource")      # спецификация / таблица плит / масса ÷ 2500 (где объём на листе не указан, а масса есть)
+            applied.append("объём бетона" + (" (" + source + ")" if source and source != "спецификация" else ""))
         if model.get("concreteClass") in (None, "", "Не указан") and reading.get("concreteClass"):
             model["concreteClass"] = reading["concreteClass"]; applied.append("класс бетона")
         rods, source = rebar_of(reading)

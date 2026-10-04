@@ -114,7 +114,7 @@ ROLES = [('mark', 'Марка'), ('pos', 'Поз'), ('oboz', 'Обозн'), ('na
 def role_of(text):
     t = ' '.join(text) if isinstance(text, list) else text
     for role, key in ROLES:
-        if t.startswith(key): return role
+        if t.lower().startswith(key.lower()): return role
     return None
 
 def parse_spec(boxes):
