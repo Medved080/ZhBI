@@ -37,6 +37,7 @@ def evaluate(doc, page, font, with_text=True):
     dd = [(int(d[0]), d[4]) for d in dims]
     k, n = analyze.calibrate(dd) if dd else (1.0, 0)
     out['fail'] = fail_kinds(dd, k); out['geo'] = analyze.geometry_dims(segs)
+    cl_n, cl_r = analyze.scale_cluster(dd) if dd else (0, 0.0); out['scale_cluster'] = cl_n; out['unscaled'] = bool(dd) and cl_n < max(4, 0.25 * len(dd))
     out.update(strokes=len(segs), digits=len(res), numbers=sum(1 for w in words if w['n'] >= 2), dims=len(dd), k=k, agree=n,
                agree_k1=analyze.calibrate(dd, [1.0])[1] if dd else 0, null=round(analyze.null_rate(dd, k), 3) if dd else None)
     if with_text:
@@ -54,4 +55,4 @@ if __name__ == '__main__':
         except Exception as e: print(a, 'ERR', repr(e)); continue
         sp = r.pop('spec_table', None); r.pop('all_text', None); rows.append(r)
         print('doc%02d p%d: геометрически %d; размеров %d, согл. %d (k=%.3f; при k=1: %d; нуль %.0f%%) | спец: %s | сбои %s | %.1fс' % (d, p, r['geo'], r['dims'], r['agree'], r['k'], r['agree_k1'], 100 * (r['null'] or 0), r['spec'], r['fail'], r['sec']))
-    json.dump(rows, open(os.path.join(HERE, 'evaluate_last.json'), 'w'), ensure_ascii=False, indent=1)
+    json.dump(rows, open(os.environ.get('VOCR_OUT') or os.path.join(HERE, 'evaluate_last.json'), 'w'), ensure_ascii=False, indent=1)

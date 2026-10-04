@@ -71,3 +71,15 @@ def geometry_dims(segs):
                     if key not in seen: seen.add(key); n += 1
     intervals(H, 'h'); intervals(V, 'v')
     return n
+
+def scale_cluster(dims, tol=0.025):
+    """Крупнейший кластер размеров с одинаковым отношением «значение / интервал» (±tol): масштаб вида. dims: [(значение, интервал_pt)].
+    Возвращает (число размеров в кластере, отношение). Мало размеров в кластере на фоне прочитанных — лист (или его части) не в масштабе:
+    схемы сеток, виды с разрывами; сверка с масштабом к такому листу неприменима."""
+    import math
+    rs = sorted(v / (pt * 0.3528) for v, pt in dims if pt > 3 and v > 0 and v < 30000)
+    best = (0, 0.0); j = 0
+    for i, r in enumerate(rs):
+        while rs[j] < r * (1 - 2 * tol): j += 1
+        if i - j + 1 > best[0]: best = (i - j + 1, r)
+    return best
