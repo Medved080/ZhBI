@@ -131,5 +131,19 @@ for row in conn.execute("SELECT id FROM products").fetchall():
 conn.close()
 check(errors == 0, "после цен на все материалы все изделия считаются (ошибок %d)" % errors)
 
+# 7. готовность калькуляций (домашняя страница): воронка согласована, цены считаются от прайса
+from app.calc.readiness import readiness
+
+conn = connect(settings.database_path); conn.execute("BEGIN")
+result = readiness(conn)
+conn.close()
+steps = [f["cumulative"] for f in result["funnel"]]
+check(result["total"] == len(dm.catalog()) or result["total"] > 900, "готовность считает все изделия (%d)" % result["total"])
+check(all(a >= b for a, b in zip(steps, steps[1:])), "воронка не растёт по шагам: %s" % steps)
+check(all(f["cumulative"] <= f["alone"] for f in result["funnel"]), "«по порядку» не больше «самого по себе»")
+check(result["ready"] == steps[-1] and 0 <= result["percent"] <= 100, "итог совпадает с последним шагом воронки, процент %.1f" % result["percent"])
+check(sum(f["total"] for f in result["families"]) == result["total"], "группы в сумме дают все изделия")
+check(result["funnel"][0]["alone"] > 0 and result["prices"]["materials"] > 0, "объём и перечень материалов есть")
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

@@ -18,6 +18,7 @@ from .database import PROFILE_ID, PROJECT_ID, SCHEMA_VERSION, audit, connect, du
 from .repository import get_product, save_product, pricing_context, profile_with_prices
 from .schemas import BrowserImport, ProductSave, ProfileSave
 from .prices import PricesSave, get_prices, update_prices, get_profile, update_profile
+from .readiness import readiness
 from .document_models import ASSETS, model as document_model, model_readiness
 from .norms import NormsSave,get_norms,update_norms,apply_norms
 from .source_sheets import sheets_for,preview_path
@@ -38,7 +39,7 @@ def recovery_admin(request: Request):
 
 
 
-WEB_FILES = ["app.js", "recovery.js", "money-format.js", "api-client.js", "project-files.js", "history.js", "export-xlsx.js", "viewer-3d.js", "drawing-geometry.js", "solid-geometry.js", "edge-dimensions.js", "norms.js", "project-report.js", "source-sheets.js", "commercial-reference.js", "sketch-geometry.js", "styles.css", "theme.css", "sync-panel.js", "collisions.js"]
+WEB_FILES = ["app.js", "recovery.js", "money-format.js", "api-client.js", "project-files.js", "history.js", "export-xlsx.js", "viewer-3d.js", "drawing-geometry.js", "solid-geometry.js", "edge-dimensions.js", "norms.js", "project-report.js", "source-sheets.js", "commercial-reference.js", "sketch-geometry.js", "styles.css", "theme.css", "sync-panel.js", "collisions.js", "home.js"]
 
 
 def file_metadata(row):
@@ -124,7 +125,7 @@ def build_router(settings):
         return (conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0], conn.execute("SELECT MAX(version) FROM price_list").fetchone()[0], conn.execute("SELECT MAX(version) FROM calculation_profiles").fetchone()[0],
                 conn.execute("SELECT COUNT(*),MAX(updated_at) FROM model_discrepancies").fetchone()[:], conn.execute("SELECT COUNT(*) FROM recovery_publications").fetchone()[0],
                 conn.execute("SELECT zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()[0],
-                mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"))
+                mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"), mtime("promka-readings.json"))
 
     @router.get("/api/workspace")
     def workspace(request: Request, lite: int = 0, user=Depends(auth.current_user)):
@@ -313,6 +314,21 @@ def build_router(settings):
         if not source:
             raise HTTPException(404, "Альбом не найден")
         return FileResponse(ASSETS / "sources" / source["storageName"], media_type="application/pdf", content_disposition_type="inline", filename=source["filename"])
+
+    readiness_cache = {}
+
+    @router.get('/api/readiness')
+    def project_readiness(user=Depends(auth.current_user)):
+        """Готовность калькуляций по всем изделиям: воронка условий, таблица по группам, пробелы, расценки (домашняя страница). Кешируется до изменения данных."""
+        conn = connect(settings.database_path)
+        try:
+            conn.execute("BEGIN")
+            key = workspace_signature(conn)
+            if readiness_cache.get("key") != key:
+                readiness_cache.update(key=key, value=readiness(conn))
+            return readiness_cache["value"]
+        finally:
+            conn.close()
 
     @router.get('/api/norms')
     def norms(user=Depends(auth.current_user)):

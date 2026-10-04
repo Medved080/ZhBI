@@ -39,7 +39,10 @@ def dynamic_values(row, ctx):
     document = model(row["document_model_id"]) if row["document_model_id"] else None
     result = {}
     if ctx["norms"] and document and document.get("kind") == "registry" and row["norms_version"] is not None:
-        values = parameters_for(document, ctx["norms"], prices, volume=Decimal(row["volume"]) if "volume" in manual else None, concrete_class=row["concrete_class"],
+        concrete_class = row["concrete_class"]
+        if (concrete_class or "").strip().lower() in ("", "не указан") and (document.get("concreteClass") or "").strip().lower() not in ("", "не указан"):
+            concrete_class = result["concreteClass"] = document["concreteClass"]     # у изделия класс не задан, а лист его даёт — берём прочитанный
+        values = parameters_for(document, ctx["norms"], prices, volume=Decimal(row["volume"]) if "volume" in manual else None, concrete_class=concrete_class,
                                 concrete_price=Decimal(row["concrete_rate"]) if "concreteRate" in manual else None)
         for field in MANUAL:
             if field not in manual:
@@ -74,6 +77,7 @@ def get_product(conn, product_id, ctx=None):
     for field in MANUAL:
         if field in dynamic:
             product[field] = float(dynamic[field])
+    if dynamic.get('concreteClass'): product['concreteClass'] = dynamic['concreteClass']
     product['manualFields'] = json.loads(row['manual_fields'] or '[]')
     product['pricesVersion'] = ctx['prices']['version']
     product['normsLabourRate'] = None if dynamic.get('registry') else (float(row['norms_labour_rate']) if row['norms_labour_rate'] else None)

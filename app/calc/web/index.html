@@ -20,6 +20,7 @@
   <script defer src="project-report.js?v=20261004-lite-1"></script>
   <script defer src="collisions.js?v=20261004-collisions-4"></script>
   <script defer src="app.js?v=20261005-prices-1"></script>
+  <script defer src="home.js?v=20261005-home-2"></script>
   <script defer src="sync-panel.js?v=20261004-sync-3"></script>
   <script defer src="recovery.js?v=20261004-live-5"></script>
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
@@ -30,6 +31,7 @@
   <div class="pc-shell">
     <aside class="pc-sidebar">
       <div class="pc-brand">Калькулятор ЖБИ</div>
+      <button id="pc-home-open" class="pc-home-open" type="button" aria-pressed="true">Главная · готовность</button>
       <div class="pc-context">Промышленный корпус</div>
       <div class="pc-section-label">Изделия</div>
       <input id="pc-product-search" class="pc-product-search" type="search" placeholder="Наименование или марка" aria-label="Поиск изделий">
@@ -46,7 +48,8 @@
       <button id="pc-sync-open" class="pc-project-report-button" type="button" hidden>Передача на серверы</button>
       <div class="pc-context pc-bottom"><span id="pc-current-user">Подключение к серверу…</span><button id="pc-logout" type="button" hidden>К трекеру ЖБИ</button><span id="pc-migration-status" role="status"></span></div>
     </aside>
-    <main class="pc-main">
+    <main class="pc-main" data-home="1">
+      <section id="pc-home-panel" class="pc-home" aria-label="Готовность калькуляций" aria-live="polite"></section>
       <header class="pc-header"><div><div class="pc-card-context"><span class="pc-context">Карточка изделия</span><span id="pc-model-readiness" class="pc-model-readiness"></span></div><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-edit-product" class="cursor-interaction" type="button">Параметры изделия</button><button id="pc-open-norms" type="button" aria-pressed="false">Расценки и нормы</button></div></header>
       <nav class="pc-tabs" aria-label="Разделы изделия"><button class="cursor-interaction" data-view="calculation" aria-pressed="true" aria-controls="pc-calculation-panel">Калькуляция</button><button class="cursor-interaction" data-view="model" aria-pressed="false" aria-controls="pc-model-panel">Модель и параметры</button><button class="cursor-interaction" data-view="tech" aria-pressed="false">Технология</button><button class="cursor-interaction" data-view="issues" aria-pressed="false">Расхождения и вопросы</button><button class="cursor-interaction" data-view="collisions" aria-pressed="false">Коллизии</button><button class="cursor-interaction" data-view="sources" aria-pressed="false">Файлы и основания</button><button class="cursor-interaction" data-view="sheets" aria-pressed="false">Исходные листы</button><button class="cursor-interaction" data-view="history" aria-pressed="false">История</button></nav>
       <section id="pc-norms-panel" hidden aria-label="Расценки и нормы"></section>
