@@ -23,7 +23,7 @@ def calculate(product, extra, overrides, profile=None):
         definitions = [
             ("concrete", "Бетон " + product["concreteClass"], "м³", volume, concrete_rate),
             *((r["id"], r["name"], r["unit"], D(r["qty"]), D(r["rate"])) for r in resources),
-            ("rest", "Прочие материалы" if document else "Арматура и прочие материалы", "компл.", D(1), D(product["otherMaterials"]) - resource_amount),
+            ("rest", "Прочие материалы" if document else "Арматура и прочие материалы", "компл.", D(1), max(D(0), D(product["otherMaterials"]) - resource_amount)),   # ручная сумма материалов меньше ресурсов (цены или расход выросли) — остаток 0, а не ошибка на весь список
             ("labour", "Производственный труд", "чел·ч", labour_hours, D(product["normsLabourRate"] if product.get("normsLabourRate") is not None else profile["labourRate"])),
             ("soc", "Страховые взносы", "%", D(profile["socialPercent"]), labour / 100),
         ]

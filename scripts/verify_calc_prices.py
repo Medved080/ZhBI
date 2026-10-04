@@ -149,5 +149,16 @@ try:
 except HTTPException as error:
     check(error.status_code == 409, "устаревшая версия расценок → 409")
 
+# 6. цена на все материалы: ручная сумма материалов меньше ресурсов не должна ронять расчёт (раньше — ValueError на весь список)
+prices = with_conn(get_prices)
+body = PricesSave(expectedVersion=prices["version"], concrete=prices["parameters"]["concrete"], labour=prices["parameters"]["labour"]["rate"],
+                  materials={k: "60000" for k in prices["parameters"]["materials"]})
+with_conn(lambda c: update_prices(c, body, "тест"))
+try:
+    final = totals()
+    check(all(row["effective"]["rate"] >= 0 for _, _, _, e in final.values() for row in e["snapshot"]["rows"]), "после цен на все материалы все изделия считаются, отрицательных строк нет (%d)" % len(final))
+except ValueError as error:
+    check(False, "все изделия считаются после цен на материалы: " + str(error))
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

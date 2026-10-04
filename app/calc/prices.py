@@ -147,20 +147,24 @@ def _diff(before, after):
     return changes
 
 
-def _mark_manual_fields(conn, parameters):
+def _mark_manual_fields(conn, parameters, ids=None):
     """Один раз при создании прайса: у изделий, где сохранённое значение расходится с расчётом по нормам и начальным расценкам,
-    поле было правкой пользователя — оно помечается ручным и дальше не пересчитывается. Совпадающие поля становятся расчётными."""
+    поле было правкой пользователя — оно помечается ручным и дальше не пересчитывается. Совпадающие поля становятся расчётными.
+    ids — пересчитать пометки только у этих изделий (починка), иначе у всех."""
     from .document_models import model
     from .norms import get_norms, parameters_for
+    from .readings import without_readings
     try:
         norms = get_norms(conn)
     except (FileNotFoundError, KeyError):
         norms = None
     for row in conn.execute("SELECT id,concrete_class,volume,labour_hours,concrete_rate,other_materials,document_model_id,norms_version FROM products").fetchall():
+        if ids is not None and row["id"] not in ids: continue
         manual = []
         if abs(D(row["concrete_rate"]) - concrete_rate(parameters, row["concrete_class"])) > D("0.005"):
             manual.append("concreteRate")
         doc = model(row["document_model_id"]) if row["document_model_id"] else None
+        if doc: doc = without_readings(doc)      # значения, сохранённые до появления чтений с листов, ручными правками не считаются
         if norms and doc and doc.get("kind") == "registry" and row["norms_version"] is not None:
             values = parameters_for(doc, norms, parameters)
             if abs(D(row["volume"]) - values["volume"]) > D("0.005"):

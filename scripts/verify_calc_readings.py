@@ -91,5 +91,45 @@ again = copy.deepcopy(models)
 apply_readings(again, tmp)
 check(again == models, "повторное наложение ничего не меняет")
 
+# 6. изделия сохранены ДО появления чтений: создание прайса (миграция) не должно считать значения от чтений ручными правками, а расчёт — падать
+os.environ["ZHBI_DB_PATH"] = str(tmp / "zhbi.db"); os.environ["ZHBI_CALC_DIR"] = str(tmp / "calc")
+from app.calc.config import Settings
+from app.calc.database import connect, initialize, transaction
+from app.calc.import_register import import_register
+from app.calc.prices import PricesSave, get_prices, update_prices
+from app.calc.repository import get_product, pricing_context
+
+settings = Settings.embedded()
+initialize(settings)
+import_register(settings)                       # каталог без чтений (dm.ASSETS = bare)
+dm.ASSETS = Path(assets)                         # чтения появились
+(tmp2 := tmp / "with").mkdir()
+for item in Path(assets).iterdir():
+    if item.name != SOURCE_FILE and not (tmp2 / item.name).exists():
+        (tmp2 / item.name).symlink_to(item)
+(tmp2 / SOURCE_FILE).write_text(json.dumps(data, ensure_ascii=False))
+dm.ASSETS = tmp2
+dm.catalog.cache_clear()
+with transaction(settings.database_path) as conn:
+    conn.execute("DELETE FROM price_list")      # как при миграции на сервере, где изделия уже есть
+    prices = get_prices(conn)
+with_readings = [k for k in data if (dm.catalog().get(k) or {}).get("readings")]
+conn = connect(settings.database_path)
+rows = conn.execute("SELECT manual_fields,document_model_id FROM products WHERE document_model_id IN (%s)" % ",".join("?" * len(with_readings)), with_readings).fetchall()
+conn.close()
+check(rows and all(r["manual_fields"] in (None, "[]") for r in rows), "изделия с чтениями не помечены ручными при создании прайса (%d)" % len(rows))
+body = PricesSave(expectedVersion=prices["version"], concrete=prices["parameters"]["concrete"], labour=prices["parameters"]["labour"]["rate"], materials={k: "60000" for k in prices["parameters"]["materials"]})
+with transaction(settings.database_path) as conn:
+    update_prices(conn, body, "тест")
+conn = connect(settings.database_path); conn.execute("BEGIN"); ctx = pricing_context(conn)
+errors = 0
+for row in conn.execute("SELECT id FROM products").fetchall():
+    try:
+        get_product(conn, row["id"], ctx)
+    except ValueError:
+        errors += 1
+conn.close()
+check(errors == 0, "после цен на все материалы все изделия считаются (ошибок %d)" % errors)
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

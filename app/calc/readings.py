@@ -35,6 +35,19 @@ def rebar_of(reading):
     return None, None
 
 
+def without_readings(model):
+    """Копия модели в состоянии ДО наложения чтений: объём, класс бетона и ресурсы, которые подставило чтение, возвращены в пробелы.
+    Нужна там, где сравнивается сохранённое значение изделия с расчётом по каталогу поставщика (пометка ручных правок): значения, сохранённые до появления
+    чтений, ручными правками не являются."""
+    info = model.get("readings")
+    if not info: return model
+    copy = dict(model); applied = " ".join(info.get("applied") or [])
+    if "объём" in applied: copy["projectVolume"] = None
+    if "класс" in applied: copy["concreteClass"] = "Не указан"
+    if "арматура" in applied: copy["resources"] = []
+    return copy
+
+
 def apply_readings(models, directory):
     """Накладывает прочитанное на каталог (изменяет models). Возвращает число изменённых моделей."""
     path = Path(directory) / SOURCE_FILE
