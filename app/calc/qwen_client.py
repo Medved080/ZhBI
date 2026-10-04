@@ -86,7 +86,9 @@ def chat(config, settings, messages, schema, name='recovery', transport=None):
                 if len(raw)>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
             response=json.loads(raw)
         except HTTPError as error:
-            raise InferenceError(f'Qwen вернул HTTP {error.code}. Проверьте модель, поддержку изображений и JSON Schema') from None
+            try: snippet=error.read(600).decode('utf-8','replace').strip()
+            except OSError: snippet=''
+            raise InferenceError(diagnose(config,settings,url,error.code,snippet)) from None
         except (URLError,TimeoutError,OSError):
             raise InferenceError('Qwen недоступен или истекло время ожидания. Проверьте адрес и сеть') from None
         except (json.JSONDecodeError,UnicodeError):
@@ -105,6 +107,43 @@ def chat(config, settings, messages, schema, name='recovery', transport=None):
         return value
     except (KeyError,IndexError,TypeError,ValueError,AttributeError):
         raise InferenceError('Qwen не вернул полный объект по JSON-схеме') from None
+
+
+def _get_json(url,timeout=6):
+    try:
+        with build_opener(ProxyHandler({}),NoRedirect()).open(Request(url,method='GET'),timeout=timeout) as result:
+            return json.loads(result.read(1048576))
+    except (HTTPError,URLError,TimeoutError,OSError,ValueError,InferenceError):
+        return None
+
+
+def diagnose(config,settings,url,code,snippet):
+    """Понятное объяснение HTTP-ошибки API нейросети: что за адрес ответил и какие модели там установлены."""
+    parsed=urlsplit(config.baseUrl);origin=f'{parsed.scheme}://{parsed.netloc}'
+    text=f'Qwen вернул HTTP {code} по адресу {url}.'
+    if snippet: text+=f' Ответ сервера: {re.sub(r"<[^>]+>"," ",snippet)[:300].strip()}.'
+    if code in {404,405}:
+        health=_get_json(origin+'/health')
+        if isinstance(health,dict) and health.get('status')=='ok':
+            return text+f' Этот адрес ({origin}) отвечает как сам сервис ЖБИ, а не как нейросеть: порт 8000 занят ЖБИ. Укажите адрес сервера нейросети (Ollama — http://127.0.0.1:11434 с типом API «Ollama»; vLLM/LM Studio — их адрес с /v1 и тип «OpenAI-совместимый»).'
+        models=None
+        tags=_get_json(origin+'/api/tags')
+        if isinstance(tags,dict) and isinstance(tags.get('models'),list): models=[m.get('name') for m in tags['models'] if isinstance(m,dict)]
+        else:
+            listing=_get_json(origin+'/v1/models')
+            if isinstance(listing,dict) and isinstance(listing.get('data'),list): models=[m.get('id') for m in listing['data'] if isinstance(m,dict)]
+        if models is not None:
+            if config.model not in models: text+=f' Модель «{config.model}» не найдена на сервере. Установленные модели: {", ".join(m for m in models if m)[:400] or "нет"}.'
+            else: text+=f' Модель «{config.model}» на сервере есть, но адрес API не подходит: проверьте тип API (Ollama /api/chat или OpenAI-совместимый /v1/chat/completions).'
+        else:
+            text+=' Не удалось определить тип сервера: проверьте тип API (Ollama или OpenAI-совместимый), адрес и порт.'
+    elif code in {400,422}:
+        text+=' Сервер отклонил запрос: модель может не поддерживать изображения или JSON Schema.'
+    elif code in {401,403}:
+        text+=' Сервер требует ключ доступа: задайте CALCZHB_QWEN_API_KEY на backend.'
+    else:
+        text+=' Проверьте модель, поддержку изображений и JSON Schema.'
+    return text
 
 
 def probe(config,settings,transport=None):

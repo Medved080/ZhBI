@@ -15,8 +15,8 @@ Evidence = Annotated[list[str], Field(min_length=1, max_length=30)]
 
 
 class ConnectionConfig(StrictModel):
-    provider: Literal['openai', 'ollama'] = 'openai'
-    baseUrl: str = Field(default='http://127.0.0.1:8000/v1', max_length=500)
+    provider: Literal['openai', 'ollama'] = 'ollama'
+    baseUrl: str = Field(default='http://127.0.0.1:11434', max_length=500)
     model: str = Field(default='', max_length=200)
     timeoutSeconds: int = Field(default=180, ge=10, le=600)
     maxTokens: int = Field(default=8192, ge=512, le=16384)
