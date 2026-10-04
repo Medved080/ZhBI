@@ -362,6 +362,13 @@ def traced_chat(config,settings,transport,trace,label,messages,schema,name,token
                 trace.request_end(False,'прервано');trace.note('Запрос к модели прерван: соединение закрыто, модель перестаёт генерировать','warn')
             raise
         except qwen_client.InferenceError as error:
+            # Сервер нейросети сам оборвал поток («terminated», сброс соединения): модель выгружали или перезагружали — повторяем запрос
+            if type(error) is qwen_client.InferenceError and attempt<FIRST_TOKEN_RETRIES and re.search(r'terminated|reset by peer|connection (?:closed|aborted)|broken pipe|incomplete read|remote end closed',str(error),re.I):
+                if trace:
+                    trace.request_end(False,'обрыв соединения')
+                    trace.note(f'Сервер нейросети оборвал ответ ({str(error)[:120]}) — жду 10 с и повторяю запрос (попытка {attempt+1} из {FIRST_TOKEN_RETRIES})','warn')
+                time.sleep(10)
+                continue
             if trace:
                 trace.request_end(False,str(error)[:200])
                 if isinstance(error,qwen_client.InferenceTruncated): trace.note(str(error)[:300]+(f'; конец ответа: «…{error.partial[-160:]}»' if error.partial else '; содержательного текста нет — модель, вероятно, «рассуждала»: отключите режим рассуждений у модели'),'warn')
