@@ -99,7 +99,10 @@ def role_of(text):
 def parse_spec(boxes):
     """Спецификация: столбцы — по рамкам в строке заголовка с «Поз.» (роль столбца по тексту заголовка, лишние столбцы пропускаются);
     строки — рамки столбцов ниже заголовка. → {'columns': [роли], 'rows': [{роль: текст}]}; пустые строки отбрасываются."""
-    hdr = [(b, t) for b, t in boxes.items() if any(x.startswith('Поз') for x in t)]
+    # шапка столбца «Поз.» — короткая подпись (до 10 символов): подпись детали вроде «Поз.1, Поз.2» над эскизом шапкой не считается;
+    # из кандидатов берётся тот, в чьей строке есть столбец «Наименование»
+    hdr = [(b, t) for b, t in boxes.items() if 0 < len(' '.join(t)) <= 10 and ' '.join(t).startswith('Поз')]
+    hdr = [(b, t) for b, t in hdr if any(role_of(t2) == 'name' and abs(b2[2] - b[2]) < 1 and abs(b2[3] - b[3]) < 1 for b2, t2 in boxes.items())]
     if not hdr: return None
     hb = max(hdr, key=lambda bt: bt[0][3])[0]
     ylo, top = hb[2], hb[3]
