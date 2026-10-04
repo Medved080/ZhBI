@@ -162,7 +162,7 @@ def _read_stream(request,config,progress,cancel=None):
             if text:
                 content.append(text);tail=(tail+text)[-4200:]
                 if info['deltas']%40==39 and looping(tail): raise InferenceTruncated('Модель зациклилась: выдаёт одно и то же. Ответ прерван',''.join(content),info['deltas'],info['reasoningDeltas'],True)
-            if thought and info['deltas']==0 and info['reasoningDeltas']+1>0.4*config.maxTokens: raise InferenceTruncated(f'Модель только рассуждает: {info["reasoningDeltas"]+1} фрагментов рассуждения и ни одного знака ответа за {time.time()-started:.0f} с — режим рассуждений съедает лимит. Запрос прерван','',0,info['reasoningDeltas']+1,False,True)
+            if thought and info['deltas']==0 and info['reasoningDeltas']+1>0.75*config.maxTokens: raise InferenceTruncated(f'Модель только рассуждает: {info["reasoningDeltas"]+1} фрагментов рассуждения и ни одного знака ответа за {time.time()-started:.0f} с — режим рассуждений съедает лимит. Запрос прерван','',0,info['reasoningDeltas']+1,False,True)
             fields={'state':'generating','chars':info['chars']+len(text)}
             if text: fields['deltas']=info['deltas']+1
             if thought: fields['reasoningDeltas']=info['reasoningDeltas']+1
