@@ -12,7 +12,7 @@ function matchesProductName(product, query){
  const readJSON=key=>{try{return JSON.parse(localStorage.getItem(key));}catch{return null;}};
  let workspace,user,migrationMapping=null;
  try{
-  user=await api.ready();workspace=await api.request('/calc/api/workspace');{const label=document.querySelector('.pc-sidebar .pc-context');if(label)label.textContent=workspace.project.name+(workspace.project.linked?'':' · не привязан к проекту ЖБИ');}
+  user=await api.ready();workspace=await api.request('/calc/api/workspace?lite=1');{const label=document.querySelector('.pc-sidebar .pc-context');if(label)label.textContent=workspace.project.name+(workspace.project.linked?'':' · не привязан к проекту ЖБИ');}
   const legacy=readJSON('calczhbi-workspace-v1');
   const migrationKey='calczhbi-migrated-'+workspace.installationId;
   const migrated=readJSON(migrationKey);
@@ -20,12 +20,13 @@ function matchesProductName(product, query){
    let browserId=localStorage.getItem('calczhbi-browser-id');if(!browserId){browserId=crypto.randomUUID();localStorage.setItem('calczhbi-browser-id',browserId);}
    const legacyProducts=legacy.products||workspace.products.map(entry=>entry.product);
    const response=await api.request('/calc/api/migrate-browser',{method:'POST',body:JSON.stringify({browserId,products:legacyProducts.map((product,i)=>({product:{...product,source:product.source||'excel'},extra:legacy.extra?.[i]||[],overrides:legacy.overrides?.[i]||{},legacyKey:'product-'+i}))})});
-   migrationMapping=response.mapping;localStorage.setItem(migrationKey,JSON.stringify(migrationMapping));workspace=await api.request('/calc/api/workspace');
+   migrationMapping=response.mapping;localStorage.setItem(migrationKey,JSON.stringify(migrationMapping));workspace=await api.request('/calc/api/workspace?lite=1');
    q('#pc-migration-status').textContent='Изделия перенесены из браузера в БД.';
   }else migrationMapping=migrated;
  }catch(error){q('#pc-save-status').textContent=error.message;q('#pc-title').textContent='Сервер недоступен';q('#pc-save-retry').hidden=false;q('#pc-save-retry').addEventListener('click',()=>location.reload());return;}
  const profile=Object.fromEntries(Object.entries(workspace.profile).map(([key,value])=>[key,Number(value)]));
  const products=workspace.products.map(entry=>entry.product);
+ const detailLoading=new Set();
  const storageKey='calczhbi-ui-'+workspace.installationId+'-'+user.id;
  const saved=readJSON(storageKey);
  const selected=Array.isArray(saved?.selectedIds)?saved.selectedIds.map(id=>products.findIndex(p=>p.id===id)).filter(i=>i>=0):[0];
@@ -264,6 +265,8 @@ function matchesProductName(product, query){
   q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td>${number(r.qty)}</td><td>${money(r.rate)}</td><td>${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
   q('#pc-calculation-heading').textContent=doc?.kind==='registry'?'Предварительная калькуляция на 1 изделие':'Калькуляция на 1 изделие';
   q('#pc-volume').textContent=p.volume?number(p.volume)+' м³':'Не задан';q('#pc-hours').textContent=doc?.kind==='registry'&&!p.hours?'Не задана':number(p.hours)+' чел·ч';
+  // Первая загрузка отдаёт каталог без реестра расхождений (десятки МБ): он догружается для открытого изделия.
+  if(p.discrepancies===undefined&&!detailLoading.has(p.id)){detailLoading.add(p.id);api.request('/calc/api/products/'+p.id).then(entry=>{Object.assign(p,{discrepancies:entry.product.discrepancies||[],dataIssues:entry.product.dataIssues||[]});if(products[state.product]===p){window.CalcZhBIProjectReport?.renderProduct(p);window.CalcZhBICollisions?.setProduct(p);}}).catch(()=>detailLoading.delete(p.id));}
   window.CalcZhBIProjectReport?.renderProduct(p);window.CalcZhBICollisions?.setProduct(p);
   totals();model();updateSelection();
   if(!writeable)root.querySelectorAll('#pc-rows input').forEach(input=>{input.disabled=true;});
@@ -334,7 +337,8 @@ function matchesProductName(product, query){
   const index=products.findIndex(p=>p.id===id);if(index<0)return;
   window.CalcZhBIProjectReport?.close();window.CalcZhBINorms?.close();state.product=index;render();persist();q(`[data-view="${view}"]`)?.click();
  },refresh:async()=>{
-  const refreshed=await api.request('/calc/api/workspace');
+  const refreshed=await api.request('/calc/api/workspace?lite=1');
+  detailLoading.clear();
   for(const remote of refreshed.products){const i=products.findIndex(p=>p.id===remote.product.id);if(i<0)continue;products[i]=remote.product;state.overrides[i]=remote.overrides;state.extra[i]=remote.extra;acknowledged.set(remote.product.id,fingerprint(i));}
   render();
  }};

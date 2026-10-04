@@ -185,15 +185,26 @@ def list_models(config,settings,getter=None):
     raise InferenceError('Список моделей не получен: сервер нейросети не ответил по адресам '+', '.join(urls))
 
 
+def _probe_image(code):
+    image=Image.new('RGB',(640,260),'white')
+    ImageDraw.Draw(image).text((70,20),code,fill='black',font=ImageFont.load_default(size=190))
+    output=io.BytesIO();image.save(output,format='PNG');image.close()
+    return base64.b64encode(output.getvalue()).decode()
+
+
 def probe(config,settings,transport=None):
     if not config.model.strip(): raise ValueError('Укажите название установленной модели')
-    code=str(secrets.randbelow(900)+100)
-    image=Image.new('RGB',(400,160),'white')
-    ImageDraw.Draw(image).text((35,25),code,fill='black',font=ImageFont.load_default(size=90))
-    output=io.BytesIO();image.save(output,format='PNG');image.close()
     schema={'type':'object','properties':{'code':{'type':'string'}},'required':['code'],'additionalProperties':False}
-    response=chat(config,settings,[{'role':'user','content':'Прочитай три цифры на изображении. Верни только JSON с полем code.','images':[base64.b64encode(output.getvalue()).decode()]}],schema,'vision_probe',transport)
-    if response.get('code')!=code:
-        raise InferenceError('Тест чтения изображения не пройден. Проверьте мультимодальную модель и передачу изображений')
-    return {'ok':True,'vision':True,'structuredOutput':True,'model':config.model,
-            'note':'Проверено чтение тестового изображения. Точность на проектных чертежах оценивается отдельно.'}
+    answers=[];used=set()
+    for _ in range(2):  # две попытки с разными числами: одиночная ошибка чтения не должна браковать модель
+        code=str(secrets.randbelow(900)+100)
+        while code in used: code=str(secrets.randbelow(900)+100)
+        used.add(code)
+        response=chat(config,settings,[{'role':'user','content':'На изображении трёхзначное число. Прочитай его. Верни только JSON с полем code.','images':[_probe_image(code)]}],schema,'vision_probe',transport)
+        got=str(response.get('code','')).strip()
+        answers.append((code,got))
+        if got==code:
+            return {'ok':True,'vision':True,'structuredOutput':True,'model':config.model,
+                    'note':'Модель прочитала число на тестовом изображении. Точность на проектных чертежах оценивается отдельно.'}
+    shown='; '.join(f'ожидалось «{c}», модель ответила «{g or "пусто"}»' for c,g in answers)
+    raise InferenceError('Тест чтения изображения не пройден (' + shown + '). Если ответы не похожи на цифры или пустые — модель не получает изображение: загрузите в LM Studio мультимодальную (VLM) версию модели, проверьте поддержку изображений и контекст не меньше 8192 токенов, отключите режим рассуждений (thinking). Если цифры близки, но неточны — модель слабовата для чертежей, возьмите крупнее')

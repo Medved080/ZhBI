@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import auth
@@ -102,20 +102,58 @@ def build_router(settings):
             collisions.set_status(conn, effective_model(conn, product_id), key, str(body.get("status", "")), user)
             return collisions.listing(conn, effective_model(conn, product_id))
 
+    ws_cache = {}
+
+    def packed(request, data):
+        """JSON, сжатый gzip, если клиент это принимает и ответ большой: каталог из 1008 изделий весит десятки мегабайт, и без сжатия
+        первая загрузка страницы по сети (VPN, корпоративный прокси) занимала минуты."""
+        body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+        headers = {"Vary": "Accept-Encoding", "Cache-Control": "no-store"}
+        if len(body) > 65536 and "gzip" in request.headers.get("accept-encoding", ""):
+            import gzip
+            return Response(gzip.compress(body, 5), media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
+        return Response(body, media_type="application/json", headers=headers)
+
+    def workspace_signature(conn):
+        import os as _os
+        def mtime(name):
+            try: return _os.stat(ASSETS / name).st_mtime_ns
+            except OSError: return 0
+        return (conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0],
+                conn.execute("SELECT COUNT(*),MAX(updated_at) FROM model_discrepancies").fetchone()[:], conn.execute("SELECT COUNT(*) FROM recovery_publications").fetchone()[0],
+                conn.execute("SELECT zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()[0],
+                mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"))
+
     @router.get("/api/workspace")
-    def workspace(user=Depends(auth.current_user)):
+    def workspace(request: Request, lite: int = 0, user=Depends(auth.current_user)):
+        """lite=1 — для первой загрузки страницы: без снимков расчёта и без реестра расхождений по каждому изделию (это десятки МБ);
+        расхождения догружаются для открытого изделия через GET /api/products/{id}. Ответ кешируется до изменения данных."""
         conn = connect(settings.database_path)
         try:
             conn.execute("BEGIN")
-            rows = conn.execute("SELECT id FROM products ORDER BY created_at,id").fetchall()
-            profile = conn.execute("SELECT parameters_json FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()
-            installation = conn.execute("SELECT value FROM application_meta WHERE key='installation_id'").fetchone()[0]
             project = conn.execute("SELECT name,zhbi_project_id,zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()
             if project["zhbi_project_id"] is None:  # проект «Москвич» мог появиться в ЖБИ после старта
                 from .link import link_project
                 if link_project(settings)["linked"]:
                     project = conn.execute("SELECT name,zhbi_project_id,zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()
-            return {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": [get_product(conn, r[0]) for r in rows], "profile": json.loads(profile[0]), "installationId": installation}
+            key = (bool(lite), "gzip" in request.headers.get("accept-encoding", ""), workspace_signature(conn))
+            if key in ws_cache:
+                return ws_cache[key]
+            rows = conn.execute("SELECT id FROM products ORDER BY created_at,id").fetchall()
+            profile = conn.execute("SELECT parameters_json FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()
+            installation = conn.execute("SELECT value FROM application_meta WHERE key='installation_id'").fetchone()[0]
+            entries = [get_product(conn, r[0]) for r in rows]
+            if lite:
+                for entry in entries:
+                    entry.pop("snapshot", None)
+                    entry["product"].pop("discrepancies", None)
+                    entry["product"].pop("dataIssues", None)
+            payload = {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": entries, "profile": json.loads(profile[0]), "installationId": installation, "lite": bool(lite)}
+            response = packed(request, payload)
+            if len(ws_cache) > 6:
+                ws_cache.clear()
+            ws_cache[key] = response
+            return response
         finally:
             conn.close()
 
@@ -218,11 +256,11 @@ def build_router(settings):
         return FileResponse(preview_path(settings,sheet),media_type='image/png')
 
     @router.get("/api/document-models/{model_id}")
-    def drawing_model(model_id: str, user=Depends(auth.current_user)):
+    def drawing_model(request: Request, model_id: str, user=Depends(auth.current_user)):
         entry = document_model(model_id)
         if not entry:
             raise HTTPException(404, "Модель по чертежам не найдена")
-        return entry
+        return packed(request, entry)
 
     @router.get("/api/document-models/{model_id}/qa")
     def model_qa(model_id: str, user=Depends(auth.current_user)):

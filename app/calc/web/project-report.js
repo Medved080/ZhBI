@@ -7,6 +7,7 @@
  let report=null,previousView='model',page=0,request=0;
  function close(){if(panel.hidden)return;request++;panel.hidden=true;q('.pc-tabs').hidden=false;q('#pc-'+previousView+'-panel').hidden=false;}
  function renderProduct(product){
+  if(product.discrepancies===undefined){q('#pc-product-discrepancies').hidden=false;q('#pc-product-discrepancies').innerHTML='<h3>Технические вопросы</h3><p class="pc-context" role="status">Загрузка…</p>';return;}
   const collisionText=/пересек|пересеч|коллиз|проникнов|столкнов/i,all=[...(product.discrepancies||[]),...(product.dataIssues||[])],items=all.filter(i=>!collisionText.test(i.title+' '+i.description)),allPending=product.documentModel?.solidModel?.pending||product.documentModel?.preview3d?.pendingReinforcement||[],pending=allPending.filter(p=>!collisionText.test(p)),host=q('#pc-product-discrepancies');
   host.hidden=false;
   host.innerHTML=`<h3>Технические вопросы</h3>${items.length||pending.length?'':'<p class="pc-context">Технических вопросов по изделию не зафиксировано.</p>'}${items.map(i=>`<article class="pc-issue-card" data-severity="${esc(i.severity)}"><div class="pc-context">${esc(i.kindLabel)} · ${i.status==='resolved'?'Устранено':'Требует уточнения'}</div><strong>${esc(i.title)}</strong><p>${esc(i.description)}</p><p><b>Уточнить:</b> ${esc(i.recommendation)}</p><div class="pc-issue-sources">${sources(i,product.id)}</div></article>`).join('')}${pending.length?`<div class="pc-issue-pending"><strong>Не завершено в модели</strong><ul>${pending.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`:''}`;
