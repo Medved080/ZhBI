@@ -52,7 +52,8 @@ def build_router(settings):
         try:
             version = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
             conn.execute("SELECT 1 FROM products LIMIT 1").fetchone()
-            return {"ok": version == SCHEMA_VERSION, "schema": version, "schema_expected": SCHEMA_VERSION}
+            from . import BUILD
+            return {"ok": version == SCHEMA_VERSION, "schema": version, "schema_expected": SCHEMA_VERSION, "build": BUILD}
         finally:
             conn.close()
 
@@ -178,6 +179,10 @@ def build_router(settings):
     @router.get('/api/recovery/connection-test')
     def recovery_probe_state(user=Depends(auth.current_user)):
         return recovery.probe_state()
+
+    @router.post('/api/recovery/force-stop')
+    def recovery_force_stop(user=Depends(recovery_admin)):
+        return recovery.force_stop(settings,user['id'])
 
     @router.post('/api/recovery/batches',status_code=201)
     def recovery_start_batch(body: BatchCreate,user=Depends(auth.writer)):

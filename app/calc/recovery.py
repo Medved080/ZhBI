@@ -195,7 +195,7 @@ def list_jobs(settings,batch_id=None,offset=0):
         jobs=[job_summary(r) for r in rows]
         for job in jobs:
             if job['state']=='running': job['live']=compact_live(live_snapshot(conn,job['id']))
-        return {'jobs':jobs,'batches':batches,'total':total,'offset':offset,'limit':100}
+        return {'jobs':jobs,'batches':batches,'total':total,'offset':offset,'limit':100,'gpu':gpu_state(conn)}
     finally: conn.close()
 
 
@@ -232,6 +232,26 @@ def control_batch(settings,identifier,action,actor):
             conn.execute("UPDATE recovery_jobs SET state=?,lease_token=NULL,lease_until=NULL,updated_at=? WHERE batch_id=? AND state IN ('queued','running')",('cancelled' if action=='cancel' else 'queued',now(),str(identifier)))
         audit(conn,actor,'recovery.batch-'+action,str(identifier))
     return {'ok':True,'state':target}
+
+
+def force_stop(settings,actor):
+    """Остановить всё: отменить работающие и приостановленные партии, снять блокировку GPU. Для случая, когда обработка «зависла» или запрос к
+    модели идёт слишком долго. Обработчик, если он ещё ждёт ответ модели, прерывает запрос при ближайшей проверке (до секунды)."""
+    with transaction(settings.database_path) as conn:
+        batches=conn.execute("UPDATE recovery_batches SET state='cancelled' WHERE state IN ('running','paused')").rowcount
+        jobs=conn.execute("UPDATE recovery_jobs SET state='cancelled',lease_token=NULL,lease_until=NULL,updated_at=? WHERE state IN ('queued','running')",(now(),)).rowcount
+        lease=conn.execute("SELECT value FROM application_meta WHERE key='recovery_gpu_lease'").fetchone()
+        conn.execute("DELETE FROM application_meta WHERE key='recovery_gpu_lease'")
+        audit(conn,actor,'recovery.force-stop','qwen',{'batches':batches,'jobs':jobs,'leaseCleared':bool(lease)})
+    return {'ok':True,'batches':batches,'jobs':jobs,'leaseCleared':bool(lease)}
+
+
+def gpu_state(conn):
+    row=conn.execute("SELECT value FROM application_meta WHERE key='recovery_gpu_lease'").fetchone()
+    if not row: return None
+    lease=json.loads(row[0])
+    if lease.get('expires',0)<=time.time(): return None
+    return {'kind':lease.get('kind','job'),'startedAt':lease.get('startedAt'),'secondsLeft':int(lease['expires']-time.time())}
 
 
 def retry_job(settings,identifier,stage,actor):

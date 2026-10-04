@@ -43,10 +43,14 @@
  async function refresh(){
   if(refreshing)return;refreshing=true;
   try{
+   if(!window.CalcBuild)window.CalcBuild='…',fetch('/calc/api/health').then(r=>r.json()).then(h=>{window.CalcBuild=h.build||'старая (без метки)';const b=q('#pc-recovery-worker');if(b)b.textContent+=' Сборка: '+window.CalcBuild+'.';}).catch(()=>{window.CalcBuild='?';});
    const response=await api.request('/calc/api/recovery/jobs?offset='+offset+(batch?'&batchId='+encodeURIComponent(batch):''));total=response.total;
    const selected=q('#pc-recovery-batch');selected.innerHTML='<option value="">Все партии</option>'+response.batches.map(b=>`<option value="${escape(b.id)}">${escape(new Date(b.created_at).toLocaleString('ru-RU'))} · ${b.finished}/${b.total} · ${escape({running:'работает',paused:'пауза',cancelled:'отмена'}[b.state])}</option>`).join('');selected.value=batch;
    const current=response.batches.find(b=>b.id===batch),writer=api.user?.role!=='viewer';
    q('#pc-recovery-batch-controls').innerHTML=current&&current.state!=='cancelled'&&writer?`<button type="button" data-batch-action="${current.state==='paused'?'resume':'pause'}">${current.state==='paused'?'Продолжить':'Пауза'}</button><button type="button" data-batch-action="cancel">Отменить партию</button>`:'';
+   const busy=response.gpu||response.batches.some(b=>b.state==='running'||b.state==='paused');
+   q('#pc-recovery-batch-controls').insertAdjacentHTML('beforeend',busy&&api.user?.role==='admin'?`<button type="button" data-force-stop title="Отменить все партии и снять блокировку GPU">Остановить всё и освободить GPU</button>`:'');
+   if(response.gpu)q('#pc-recovery-batch-controls').insertAdjacentHTML('beforeend',`<span class="pc-context"> GPU занят (${response.gpu.kind==='probe'?'проверка изображения':'обработка'}), блокировка истекает через ${response.gpu.secondsLeft} с.</span>`);
    // Таблица пересоздаётся только при изменении состава/этапов; обычный ход (секунды, токены) обновляется на месте: иначе кнопка «Открыть»
    // исчезала из-под мыши между нажатием и отпусканием, и клик не срабатывал.
    const signature=response.jobs.map(j=>[j.id,j.state,j.error||'',j.batchState].join(':')).join('|'),host=q('#pc-recovery-jobs');
@@ -119,7 +123,7 @@
  function logText(j){
   const l=j.live||{},events=j.events||[];
   const head=[`Журнал обработки чертежей · ${j.productName}`,`Задание: ${j.id} · партия ${j.batch_id}`,`Состояние: ${states[j.state]||j.state} · этап: ${stageLabel(j.stage)}`,j.error?`Ошибка: ${j.error}`:null,
-   (l.model||events[0]?.text)?`Модель: ${l.model||'см. первую запись'}`:null,`Скопировано: ${new Date().toLocaleString('ru-RU')} · записей: ${events.length}`].filter(Boolean);
+   (l.model||events[0]?.text)?`Модель: ${l.model||'см. первую запись'}`:null,`Скопировано: ${new Date().toLocaleString('ru-RU')} · записей: ${events.length} · сборка: ${window.CalcBuild||'?'}`].filter(Boolean);
   return head.join('\n')+'\n\n'+events.map((e,i)=>`${i+1}. ${new Date(e.ts).toLocaleTimeString('ru-RU')} ${levelMark[e.level]||'•'} ${e.text}`).join('\n');
  }
  async function copyText(text){
@@ -214,6 +218,7 @@
   if(b.hasAttribute('data-recovery-close')){dialog.close();return;}
   if(b.dataset.job)void openJob(b.dataset.job).then(()=>q('#pc-recovery-detail').scrollIntoView({behavior:'smooth',block:'start'})).catch(error=>status(error.message,true));
   if(b.dataset.batchAction)void act(b,async()=>{await api.request('/calc/api/recovery/batches/'+batch+'/'+b.dataset.batchAction,{method:'POST'});await refresh();status('Состояние партии обновлено.');});
+  if(b.hasAttribute('data-force-stop')&&confirm('Отменить все партии обработки и освободить GPU? Идущий запрос к модели будет прерван.'))void act(b,async()=>{const r=await api.request('/calc/api/recovery/force-stop',{method:'POST'});await refresh();status(`Остановлено: партий ${r.batches}, заданий ${r.jobs}${r.leaseCleared?', блокировка GPU снята':''}. Если модель в LM Studio всё ещё генерирует, нажмите там «Stop» или выгрузите модель.`);});
   if(b.dataset.retry)void act(b,async()=>{await api.request('/calc/api/recovery/jobs/'+b.dataset.retry+'/retry',{method:'POST',body:JSON.stringify({stage:q('#pc-recovery-retry-stage').value})});await refresh();await openJob(b.dataset.retry);status('Задание возвращено в очередь.');});
   if(b.dataset.preview)void act(b,async()=>{const result=await api.request('/calc/api/recovery/jobs/'+b.dataset.preview+'/candidate');await window.CalcZhBIRecoveryUI.preview(result);dialog.close();});
   if(b.dataset.publish)void act(b,async()=>{if(!q('#pc-recovery-ack').checked)return;await window.CalcZhBIFlushSaves();const result=await api.request('/calc/api/recovery/jobs/'+b.dataset.publish+'/publish',{method:'POST',body:JSON.stringify({expectedSha256:b.dataset.sha,acknowledgePartial:true})});await window.CalcZhBIRecoveryUI.published(result);await refresh();await openJob(b.dataset.publish);status('Подключена новая частичная редакция. Калькуляции сохранены.');});
