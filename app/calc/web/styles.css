@@ -507,3 +507,5 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-recovery-log li[data-level="ok"] .pc-log-mark{color:var(--good)}
 #precast-concept .pc-recovery-log li[data-level="warn"]{color:#90601d}
 #precast-concept .pc-recovery-log li[data-level="error"]{color:var(--bad);font-weight:600}
+#precast-concept .pc-recovery-logbar{display:flex;gap:10px;align-items:center;margin:6px 0}
+#precast-concept .pc-recovery-logbar button{font-size:12px;padding:5px 10px}

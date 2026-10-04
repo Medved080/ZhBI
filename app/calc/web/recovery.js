@@ -24,7 +24,7 @@
  <div id="pc-recovery-running" class="pc-recovery-running" role="status" aria-live="polite" hidden></div><div id="pc-recovery-jobs"></div><div class="pc-recovery-actions"><button type="button" id="pc-recovery-prev">←</button><span id="pc-recovery-page"></span><button type="button" id="pc-recovery-next">→</button></div>
  <section id="pc-recovery-detail" hidden></section></section></div>`;
  document.getElementById('precast-concept').append(dialog);
- const q=s=>dialog.querySelector(s),form=q('#pc-recovery-config');let timer=null,detailTimer=null,detailState=null,autoOpened=false,batch='',offset=0,total=0,detailId=null,connection=null,refreshing=false,pendingLaunch=null;
+ const q=s=>dialog.querySelector(s),form=q('#pc-recovery-config');let lastJob=null,timer=null,detailTimer=null,detailState=null,autoOpened=false,batch='',offset=0,total=0,detailId=null,connection=null,refreshing=false,pendingLaunch=null;
  const states={queued:'В очереди',running:'Обработка',review:'На просмотре',failed:'Ошибка',cancelled:'Отменено',published:'Подключена частично'};
  function stageLabel(stage){if(stage.startsWith('reading:')){const [,source,page]=stage.split(':');return 'Чтение · '+source+' · PDF '+page.slice(1);}if(stage.startsWith('repair:'))return 'Исправление · попытка '+stage.split(':')[1];return {prepare:'Подготовка листов',reading:'Чтение листов',assembly:'Сборка',checking:'Численная проверка',review:'Просмотр результата',published:'Подключена'}[stage]||stage;}
  function status(text,kind='info'){const host=q('#pc-recovery-status'),value=kind===true?'error':kind===false?'info':kind;host.textContent=text;host.dataset.kind=value;host.dataset.error=String(value==='error');}
@@ -102,10 +102,30 @@
   return events.length?events.map(e=>`<li data-level="${escape(e.level)}"><time>${escape(new Date(e.ts).toLocaleTimeString('ru-RU'))}</time><span class="pc-log-mark">${levelMark[e.level]||'•'}</span><span>${escape(e.text)}</span></li>`).join(''):'<li class="pc-recovery-muted">Записей пока нет.</li>';
  }
  function paintLive(j){
-  const card=q('#pc-recovery-live'),log=q('#pc-recovery-log');if(!card||!log)return;
+  lastJob=j;const card=q('#pc-recovery-live'),log=q('#pc-recovery-log');if(!card||!log)return;
   card.innerHTML=['running','queued'].includes(j.state)?liveCard(j):'';
   const box=log.parentElement,atEnd=box.scrollTop+box.clientHeight>=box.scrollHeight-24;log.innerHTML=logHtml(j.events||[]);if(atEnd)box.scrollTop=box.scrollHeight;
  }
+
+ // Журнал одним текстом — чтобы его можно было вставить в обращение (формат: «№. время • текст»).
+ function logText(j){
+  const l=j.live||{},events=j.events||[];
+  const head=[`Журнал обработки чертежей · ${j.productName}`,`Задание: ${j.id} · партия ${j.batch_id}`,`Состояние: ${states[j.state]||j.state} · этап: ${stageLabel(j.stage)}`,j.error?`Ошибка: ${j.error}`:null,
+   (l.model||events[0]?.text)?`Модель: ${l.model||'см. первую запись'}`:null,`Скопировано: ${new Date().toLocaleString('ru-RU')} · записей: ${events.length}`].filter(Boolean);
+  return head.join('\n')+'\n\n'+events.map((e,i)=>`${i+1}. ${new Date(e.ts).toLocaleTimeString('ru-RU')} ${levelMark[e.level]||'•'} ${e.text}`).join('\n');
+ }
+ async function copyText(text){
+  try{await navigator.clipboard.writeText(text);return true;}catch{}
+  const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';dialog.append(area);area.select();
+  let ok=false;try{ok=document.execCommand('copy');}catch{}area.remove();return ok;
+ }
+ dialog.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-copy-log]');if(!button||!lastJob)return;
+  const note=q('#pc-recovery-copy-note'),fresh=await api.request('/calc/api/recovery/jobs/'+lastJob.id).catch(()=>lastJob);
+  const ok=await copyText(logText(fresh));
+  note.textContent=ok?`Журнал скопирован (${(fresh.events||[]).length} записей) — вставьте его в сообщение`:'Не удалось скопировать автоматически: выделите журнал мышью и скопируйте вручную';
+  setTimeout(()=>{if(note.isConnected)note.textContent='';},6000);
+ });
  async function pollDetail(id){
   clearTimeout(detailTimer);if(detailId!==id||!dialog.open)return;
   try{const j=await api.request('/calc/api/recovery/jobs/'+id);if(detailId!==id)return;paintLive(j);
@@ -124,7 +144,7 @@
   <details><summary>Состав по спецификации</summary><table class="pc-recovery-table"><thead><tr><th>Позиция</th><th>По источнику</th><th>Построено</th><th>Основания</th></tr></thead><tbody>${qa.specCoverage.map(c=>`<tr><td>${escape(c.name)}</td><td>${c.expected??'Неизвестно'}</td><td>${c.modeled}</td><td>${sourceLinks(c.sources,id)}</td></tr>`).join('')}</tbody></table></details>
   <details><summary>Прочитанные факты и исходные листы</summary>${qa.readings.map(p=>`<h4>${sourceLinks([p],id)}</h4><ul>${p.facts.map(f=>`<li>${escape(f.subject)} · ${escape(f.property)}: ${escape(f.value??'неизвестно')} ${escape(f.unit)}<div class="pc-recovery-muted">${escape(f.quote)} ${sourceLinks([{...p,bbox:f.bbox}],id)}</div></li>`).join('')}</ul>`).join('')}</details>`:''}
   ${admin&&j.state==='review'&&qa?.publishable?`<div class="pc-recovery-publish"><label class="pc-recovery-check"><input id="pc-recovery-ack" type="checkbox"> Подключить как частичную модель с открытыми замечаниями. Полнота и проектная точность требуют проверки.</label><button type="button" data-publish="${id}" data-sha="${escape(j.candidate_sha)}" disabled>Подключить частичную версию</button></div>`:''}
-  <details><summary>Этапы и комплект исходников</summary><p>${escape(j.steps.map(s=>s.key).join(' → '))}</p><ul>${(j.input.sheets||[]).map(s=>`<li>${sourceLinks([s],id)} · ${escape(s.titles.join(', '))}</li>`).join('')}</ul></details><details class="pc-recovery-logbox" open><summary>Журнал выполнения (${(j.events||[]).length})</summary><div class="pc-recovery-logscroll"><ol id="pc-recovery-log" class="pc-recovery-log"></ol></div></details><figure id="pc-recovery-evidence" hidden></figure>`;
+  <details><summary>Этапы и комплект исходников</summary><p>${escape(j.steps.map(s=>s.key).join(' → '))}</p><ul>${(j.input.sheets||[]).map(s=>`<li>${sourceLinks([s],id)} · ${escape(s.titles.join(', '))}</li>`).join('')}</ul></details><details class="pc-recovery-logbox" open><summary>Журнал выполнения (${(j.events||[]).length})</summary><div class="pc-recovery-logbar"><button type="button" data-copy-log="${escape(id)}">Копировать журнал</button><span class="pc-recovery-muted" id="pc-recovery-copy-note" role="status"></span></div><div class="pc-recovery-logscroll"><ol id="pc-recovery-log" class="pc-recovery-log"></ol></div></details><figure id="pc-recovery-evidence" hidden></figure>`;
   paintLive(j);if(keepPolling&&['running','queued'].includes(j.state))detailTimer=setTimeout(()=>void pollDetail(id),1500);
  }
  async function act(button,operation){button.disabled=true;try{await operation();}catch(error){status(error.message,true);}finally{if(button.isConnected)button.disabled=false;}}

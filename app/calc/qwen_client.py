@@ -24,8 +24,8 @@ class InferenceCancelled(InferenceError):
 
 class InferenceTruncated(InferenceError):
     """Ответ оборван лимитом токенов или признан зациклившимся. partial — всё, что модель успела выдать (для спасения готовых фактов и диагностики)."""
-    def __init__(self,message,partial='',deltas=0,reasoning=0,loop=False):
-        super().__init__(message);self.partial=partial;self.deltas=deltas;self.reasoning=reasoning;self.loop=loop
+    def __init__(self,message,partial='',deltas=0,reasoning=0,loop=False,thinking=False):
+        super().__init__(message);self.partial=partial;self.deltas=deltas;self.reasoning=reasoning;self.loop=loop;self.thinking=thinking
 
 
 class InferenceTimeout(InferenceError):
@@ -162,6 +162,7 @@ def _read_stream(request,config,progress,cancel=None):
             if text:
                 content.append(text);tail=(tail+text)[-4200:]
                 if info['deltas']%40==39 and looping(tail): raise InferenceTruncated('Модель зациклилась: выдаёт одно и то же. Ответ прерван',''.join(content),info['deltas'],info['reasoningDeltas'],True)
+            if thought and info['deltas']==0 and info['reasoningDeltas']+1>0.4*config.maxTokens: raise InferenceTruncated(f'Модель только рассуждает: {info["reasoningDeltas"]+1} фрагментов рассуждения и ни одного знака ответа за {time.time()-started:.0f} с — режим рассуждений съедает лимит. Запрос прерван','',0,info['reasoningDeltas']+1,False,True)
             fields={'state':'generating','chars':info['chars']+len(text)}
             if text: fields['deltas']=info['deltas']+1
             if thought: fields['reasoningDeltas']=info['reasoningDeltas']+1
@@ -194,6 +195,7 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
         body={'model':config.model,'messages':converted,'temperature':0,'max_tokens':config.maxTokens,
               'response_format':{'type':'json_schema','json_schema':{'name':name,'schema':schema}}}
         if transport is None: body.update(stream=True,stream_options={'include_usage':True})
+        if 'qwen' in config.model.lower(): body['chat_template_kwargs']={'enable_thinking':False}   # у части серверов (vLLM и др.) отключает рассуждение гибридных моделей Qwen3
     else:
         url=api_base(config)+'/api/chat'
         body={'model':config.model,'messages':messages,'stream':transport is None,'format':schema,
@@ -204,8 +206,12 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
         response=transport(url,body,headers,config.timeoutSeconds)
     else:
         try:
-            request=Request(url,data=dumps(body).encode(),headers=headers,method='POST')
-            response=_read_stream(request,config,progress,cancel)
+            try:
+                response=_read_stream(Request(url,data=dumps(body).encode(),headers=headers,method='POST'),config,progress,cancel)
+            except HTTPError as first:
+                if first.code!=400 or 'chat_template_kwargs' not in body: raise
+                body.pop('chat_template_kwargs')   # сервер не принял параметр шаблона — повторяем без него
+                response=_read_stream(Request(url,data=dumps(body).encode(),headers=headers,method='POST'),config,progress,cancel)
         except HTTPError as error:
             try: snippet=error.read(600).decode('utf-8','replace').strip()
             except OSError: snippet=''
@@ -225,7 +231,7 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
             choice=response['choices'][0]
             if choice.get('finish_reason')=='length':
                 st=response.get('stats') or {}
-                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов (получено ~{st.get("deltas","?")} токенов ответа'+(f', рассуждение {st["reasoningDeltas"]}' if st.get('reasoningDeltas') else '')+')',choice.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0))
+                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов (получено ~{st.get("deltas","?")} токенов ответа'+(f', рассуждение {st["reasoningDeltas"]}' if st.get('reasoningDeltas') else '')+')',choice.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0),False,bool(st.get('reasoningDeltas')) and not st.get('deltas'))
             content=choice['message']['content']
         else:
             if response.get('done_reason')=='length':

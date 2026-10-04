@@ -199,14 +199,14 @@ def list_jobs(settings,batch_id=None,offset=0):
     finally: conn.close()
 
 
-def get_job(settings,identifier):
+def get_job(settings,identifier):  # events — до 600 записей (для копирования журнала целиком)
     conn=connect(settings.database_path)
     try:
         row=conn.execute('SELECT j.*,p.name product_name,b.state batch_state FROM recovery_jobs j JOIN products p ON p.id=j.product_id JOIN recovery_batches b ON b.id=j.batch_id WHERE j.id=?',(str(identifier),)).fetchone()
         if not row: raise HTTPException(404,'Задание не найдено')
         steps=[{'key':r['step_key'],'createdAt':r['created_at']} for r in conn.execute('SELECT step_key,created_at FROM recovery_steps WHERE job_id=? ORDER BY created_at',(str(identifier),))]
         return {**job_summary(row),'input':json.loads(row['input_json'] or '{}'),'draft':json.loads(row['draft_json'] or 'null'),
-                'qaDetail':json.loads(row['qa_json'] or 'null'),'steps':steps,'live':compact_live(live_snapshot(conn,identifier)),'events':live_events(conn,identifier)}
+                'qaDetail':json.loads(row['qa_json'] or 'null'),'steps':steps,'live':compact_live(live_snapshot(conn,identifier)),'events':live_events(conn,identifier,limit=600)}
     finally: conn.close()
 
 
@@ -396,6 +396,8 @@ def read_with_fallback(config,settings,transport,system,prompt,images,trace=None
                 if trace: trace.note(f'{region}: ответ Qwen не соответствует схеме чтения листа','error')
                 raise
         except qwen_client.InferenceTruncated as error:
+            if error.thinking and not facts and not error.partial:
+                raise qwen_client.InferenceError(f'Модель «{config.model}» тратит весь лимит на рассуждение и не отдаёт ответ (остальные части листа не запрашиваются, чтобы не терять время). Выберите модель без режима рассуждений (например google/gemma-4-31b-qat) или отключите рассуждение у модели в LM Studio') from None
             salvaged=salvage_facts(error.partial)
             if trace: trace.note(f'{region}: ответ оборван ({"зацикливание" if error.loop else "лимит токенов"}); из частичного ответа спасено фактов: {len(salvaged)}','warn' if salvaged else 'error',tail=error.partial[-300:])
             part={'facts':salvaged,'unreadable':[f'Часть листа ({region}): ответ Qwen оборван ({"зацикливание" if error.loop else "лимит токенов"}), прочитано фактов {len(salvaged)}'],'references':[]}
@@ -503,8 +505,9 @@ class RecoveryWorker:
         job=row['id'];self.checkpoint(job,token,stage='prepare')
         trace=self.trace=Trace(self.settings,job,model=config.model,url=config.baseUrl)
         trace.cancel=lambda: self.lease_gone(job,token)
-        trace.note(f'Старт обработки: модель «{config.model}» ({"Ollama" if config.provider=="ollama" else "OpenAI-совместимый API"}), адрес {config.baseUrl}',
-                   'info',timeout=config.timeoutSeconds,maxTokens=config.maxTokens,imageSide=config.imageSide,tiles=config.useTiles)
+        api_kind='Ollama' if config.provider=='ollama' else 'OpenAI-совместимый API'
+        api_address=config.baseUrl if config.provider=='ollama' else qwen_client.api_base(config)
+        trace.note(f'Старт обработки: модель «{config.model}» ({api_kind}), адрес {api_address}','info',timeout=config.timeoutSeconds,maxTokens=config.maxTokens,imageSide=config.imageSide,tiles=config.useTiles)
         trace.note(f'Параметры: тайм-аут простоя {config.timeoutSeconds} с, лимит ответа {config.maxTokens} токенов, длинная сторона изображения {config.imageSide} px, фрагменты листа {"да" if config.useTiles else "нет"}, лимит листов {config.maxPages}, попыток исправления {config.repairAttempts}','info')
         trace.phase('prepare','Подготовка: подбор листов изделия и проверка исходных PDF')
         conn=connect(self.settings.database_path)
