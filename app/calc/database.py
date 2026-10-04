@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 PROFILE_ID = "msu-1-v1"
 PROJECT_ID = "84b8c4ae-7400-4e80-8d51-cd21d5d6b252"
 SEED_IDS = ["ee285265-9a26-41bc-b402-399c183938fa", "f79f3f74-68be-45da-96c7-88c17bfa6058"]
@@ -94,6 +94,8 @@ def initialize(settings):
             get_norms(conn)
         except (FileNotFoundError, KeyError):
             pass  # источники ещё не поставлены: нормы заведёт первый запуск после отправки пакета
+        from .prices import get_prices
+        get_prices(conn)   # прайс-лист: создаётся из норм и каталога; до первой правки пользователем достраивается при поставке каталога
         from .discrepancies import sync_catalog_issues
         sync_catalog_issues(conn)
         if not conn.execute("SELECT 1 FROM products LIMIT 1").fetchone():

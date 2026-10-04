@@ -15,8 +15,9 @@ from . import auth
 from .config import Settings
 from .paths import WEB_DIR
 from .database import PROFILE_ID, PROJECT_ID, SCHEMA_VERSION, audit, connect, dumps, initialize, now, transaction
-from .repository import get_product, save_product
-from .schemas import BrowserImport, ProductSave
+from .repository import get_product, save_product, pricing_context, profile_with_prices
+from .schemas import BrowserImport, ProductSave, ProfileSave
+from .prices import PricesSave, get_prices, update_prices, get_profile, update_profile
 from .document_models import ASSETS, model as document_model, model_readiness
 from .norms import NormsSave,get_norms,update_norms,apply_norms
 from .source_sheets import sheets_for,preview_path
@@ -120,7 +121,7 @@ def build_router(settings):
         def mtime(name):
             try: return _os.stat(ASSETS / name).st_mtime_ns
             except OSError: return 0
-        return (conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0],
+        return (conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0], conn.execute("SELECT MAX(version) FROM price_list").fetchone()[0], conn.execute("SELECT MAX(version) FROM calculation_profiles").fetchone()[0],
                 conn.execute("SELECT COUNT(*),MAX(updated_at) FROM model_discrepancies").fetchone()[:], conn.execute("SELECT COUNT(*) FROM recovery_publications").fetchone()[0],
                 conn.execute("SELECT zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()[0],
                 mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"))
@@ -143,13 +144,14 @@ def build_router(settings):
             rows = conn.execute("SELECT id FROM products ORDER BY created_at,id").fetchall()
             profile = conn.execute("SELECT parameters_json FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()
             installation = conn.execute("SELECT value FROM application_meta WHERE key='installation_id'").fetchone()[0]
-            entries = [get_product(conn, r[0]) for r in rows]
+            ctx = pricing_context(conn)
+            entries = [get_product(conn, r[0], ctx) for r in rows]
             if lite:
                 for entry in entries:
                     entry.pop("snapshot", None)
                     entry["product"].pop("discrepancies", None)
                     entry["product"].pop("dataIssues", None)
-            payload = {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": entries, "profile": json.loads(profile[0]), "installationId": installation, "lite": bool(lite)}
+            payload = {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": entries, "profile": profile_with_prices(json.loads(profile[0]), ctx["prices"]["parameters"]), "settings": {"pricesVersion": ctx["prices"]["version"], "profileVersion": conn.execute("SELECT version FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()[0]}, "installationId": installation, "lite": bool(lite)}
             response = packed(request, payload)
             if len(ws_cache) > 6:
                 ws_cache.clear()
@@ -316,6 +318,22 @@ def build_router(settings):
     def norms(user=Depends(auth.current_user)):
         with transaction(settings.database_path) as conn:
             return get_norms(conn)
+
+    @router.get('/api/prices')
+    def prices(user=Depends(auth.current_user)):
+        with transaction(settings.database_path) as conn:
+            return {**get_prices(conn), "profile": get_profile(conn)}
+
+    @router.put('/api/prices')
+    def save_prices(body: PricesSave, user=Depends(auth.writer)):
+        with transaction(settings.database_path) as conn:
+            return {**update_prices(conn, body, user['id']), "profile": get_profile(conn)}
+
+    @router.put('/api/profile')
+    def save_profile(body: ProfileSave, user=Depends(auth.writer)):
+        with transaction(settings.database_path) as conn:
+            update_profile(conn, body, user['id'])
+            return {**get_prices(conn), "profile": get_profile(conn)}
 
     @router.get('/api/project-report')
     def whole_project_report(user=Depends(auth.current_user)):

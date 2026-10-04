@@ -32,15 +32,13 @@ def get_norms(conn):
 
 class ResourceNorm(BaseModel):
     factor: Decimal=Field(ge=1,le=10,allow_inf_nan=False)
-    rate: Decimal=Field(ge=0,le=Decimal('1e9'),allow_inf_nan=False)
 
 
 class NormsSave(BaseModel):
+    """Нормы расхода и труда. Цены (бетон, труд, материалы) — в прайс-листе сервиса (prices.py), не здесь."""
     expectedVersion:int=Field(ge=1)
     concreteFactor:Decimal=Field(ge=1,le=3,allow_inf_nan=False)
     hoursPerM3:Decimal=Field(ge=0,le=1000,allow_inf_nan=False)
-    labourRate:Decimal=Field(ge=0,le=Decimal('1e9'),allow_inf_nan=False)
-    concreteRate:Decimal=Field(ge=0,le=Decimal('1e9'),allow_inf_nan=False)
     resources:dict[str,ResourceNorm]
 
 
@@ -72,30 +70,29 @@ def match_resource(resource,params):
     return params['resources'].get(key) if key else None
 
 
-def parameters_for(doc,norms):
+def parameters_for(doc,norms,prices,volume=None,concrete_class=None,concrete_price=None):
+    """Расчётные параметры изделия из каталога: объём, труд, цена бетона, ресурсы и стоимость материалов.
+    norms — get_norms(); prices — параметры прайса (prices.get_prices()['parameters']); volume — объём, если он задан вручную
+    (иначе проектный × коэффициент норм); concrete_class — класс бетона изделия (иначе из каталога);
+    concrete_price — цена бетона, если она задана вручную (иначе из прайса по классу)."""
+    from .prices import concrete_rate,material_rate
     p=norms['parameters'];project=D(doc['projectVolume'] or 0)
-    volume=(project*D(p['concreteFactor'])).quantize(D('.01'),rounding=ROUND_HALF_UP) if project else D(0)
+    if volume is None:
+        volume=(project*D(p['concreteFactor'])).quantize(D('.01'),rounding=ROUND_HALF_UP) if project else D(0)
     hours=volume*D(p['hoursPerM3']);resources=[]
     for r in doc['resources']:
         norm=match_resource(r,p);qty=D(r['projectQty'])*(D(norm['factor']) if norm else D(1))
         if norm:qty=qty.quantize(D('.001'),rounding=ROUND_CEILING)
-        resources.append({**r,'qty':str(qty),'rate':norm['rate'] if norm else r['rate']})
+        resources.append({**r,'qty':str(qty),'rate':str(material_rate(prices,r['id'],r['rate']))})
     cost=sum((D(r['qty'])*D(r['rate']) for r in resources),D(0))
-    # Original Excel has a 1% allowance for other materials; same reference basis.
-    concrete_rate=D(p['concreteRate']);allowance=(volume*concrete_rate+cost)*D('.01')
-    return {'volume':volume,'hours':hours,'concreteRate':concrete_rate,'otherMaterials':cost+allowance,'resources':resources,'labourRate':p['labourRate']}
+    # В исходном Excel есть припуск 1% на прочие материалы — та же расчётная база.
+    rate=D(concrete_price) if concrete_price is not None else concrete_rate(prices,concrete_class or doc.get('concreteClass'));allowance=(volume*rate+cost)*D('.01')
+    return {'volume':volume,'hours':hours,'concreteRate':rate,'otherMaterials':cost+allowance,'resources':resources,'labourRate':prices['labour']['rate']}
 
 
 def apply_norms(conn,actor):
-    from .repository import get_product,save_product
-    from .schemas import ProductSave
-    norms=get_norms(conn);changed=0
-    rows=conn.execute('SELECT id,document_model_id,norms_version FROM products WHERE document_model_id LIKE ? ORDER BY id',('reg-%',)).fetchall()
-    for row in rows:
-        if row['norms_version']==norms['version']:continue
-        doc=catalog()[row['document_model_id']];entry=get_product(conn,row['id']);values=parameters_for(doc,norms)
-        product={**entry['product'],**{k:v for k,v in values.items() if k not in {'resources','labourRate'}}}
-        body=ProductSave.model_validate({'product':product,'expectedVersion':product['version'],'requestId':str(uuid4()),'overrides':entry['overrides'],'extra':entry['extra']})
-        save_product(conn,body,actor,baseline_resources=values['resources'],norms_version=norms['version'],labour_rate=values['labourRate']);changed+=1
-    audit(conn,actor,'norms.applied','msu-1-columns',{'version':norms['version'],'products':changed})
-    return {'version':norms['version'],'products':changed}
+    """Оставлено для совместимости: изделия из КЖИ считаются от текущих норм и расценок на лету (repository.get_product),
+    массового пересохранения больше нет."""
+    norms=get_norms(conn)
+    audit(conn,actor,'norms.applied','msu-1-columns',{'version':norms['version'],'products':0,'dynamic':True})
+    return {'version':norms['version'],'products':0}

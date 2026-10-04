@@ -80,6 +80,9 @@ class ProductSave(BaseModel):
     extra: list[ExtraLine] = Field(default_factory=list, max_length=1000)
     expectedVersion: int = Field(ge=0)
     requestId: UUID = Field(default_factory=uuid4)
+    # Поля, которые пользователь задал вручную и которые поэтому не пересчитываются при смене норм и расценок.
+    # None — не менять то, что уже сохранено; [] — вернуть все поля к расчёту по нормам и прайсу.
+    manualFields: list[Literal["volume", "hours", "concreteRate", "otherMaterials"]] | None = None
 
     @model_validator(mode="after")
     def rows(self):
@@ -96,6 +99,20 @@ class ProductSave(BaseModel):
         if margin and margin.qty is not None and margin.qty >= 100:
             raise ValueError("Маржа должна быть меньше 100%")
         return self
+
+
+class ProfileSave(BaseModel):
+    """Проценты начислений и НДС профиля расчёта (ставка труда и цена бетона живут в прайс-листе)."""
+    model_config = ConfigDict(extra="forbid")
+    expectedVersion: int = Field(ge=1)
+    socialPercent: Annotated[Decimal, Field(ge=0, lt=100)]
+    energyPercent: Annotated[Decimal, Field(ge=0, lt=1000)]
+    overheadPercent: Annotated[Decimal, Field(ge=0, lt=1000)]
+    adminPercent: Annotated[Decimal, Field(ge=0, lt=1000)]
+    commercialPercent: Annotated[Decimal, Field(ge=0, lt=1000)]
+    profitPercent: Annotated[Decimal, Field(ge=0, lt=100)]
+    deliveryPercent: Annotated[Decimal, Field(ge=0, lt=1000)]
+    vatPercent: Annotated[Decimal, Field(ge=0, lt=100)]
 
 
 class Login(BaseModel):

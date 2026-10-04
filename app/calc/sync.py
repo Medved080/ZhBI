@@ -115,6 +115,7 @@ def product_bundle(conn, product_id, with_versions=True):
 def collect_package(conn, assets_dir, uploads_dir):
     products = [product_bundle(conn, r["id"]) for r in conn.execute("SELECT id FROM products ORDER BY created_at, id")]
     norms = conn.execute("SELECT * FROM production_norms").fetchall()
+    prices = conn.execute("SELECT * FROM price_list").fetchall()
     profile = conn.execute("SELECT * FROM calculation_profiles").fetchall()
     blobs = {}
     for product in products:
@@ -124,6 +125,7 @@ def collect_package(conn, assets_dir, uploads_dir):
         "format": FORMAT, "schema": SCHEMA_VERSION, "projectKey": PROJECT_ID, "createdAt": now(),
         "profiles": [dict(r) for r in profile],
         "norms": [dict(r) for r in norms],
+        "prices": [dict(r) for r in prices],
         "products": products,
         "collisionNotes": [dict(r) for r in conn.execute("SELECT * FROM collision_notes ORDER BY created_at,id")],
         "collisionState": [dict(r) for r in conn.execute("SELECT * FROM collision_state")],
@@ -182,7 +184,7 @@ def _validate_package(package):
 
 PRODUCT_INSERT_COLUMNS = ["id", "project_id", "profile_id", "name", "concrete_class", "volume", "steel_weight", "labour_hours",
                           "concrete_rate", "other_materials", "geometry_json", "volume_from_geometry", "source", "version",
-                          "legacy_key", "created_at", "updated_at", "document_model_id", "norms_version", "norms_labour_rate"]
+                          "legacy_key", "created_at", "updated_at", "document_model_id", "norms_version", "norms_labour_rate", "manual_fields"]
 
 
 def _write_product(conn, bundle, existing, actor, staged_blobs, uploads_dir):
@@ -238,6 +240,7 @@ def apply_package(conn, package, actor, staged_blobs=None, uploads_dir=None, dry
     staged_blobs = staged_blobs or {}
     report = {"profiles": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},
               "norms": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},
+              "prices": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},
               "products": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": [], "senderOlder": []},
               "attachmentsAdded": 0, "collisions": {"notesAdded": 0, "statesAdded": 0}}
 
@@ -281,6 +284,32 @@ def apply_package(conn, package, actor, staged_blobs=None, uploads_dir=None, dry
                 conn.execute("UPDATE production_norms SET version=?,parameters_json=?,updated_at=?,actor_id=? WHERE id=?",
                              (n["version"], n["parameters_json"], n["updated_at"], actor, n["id"]))
                 _remember(conn, "norms", n["id"], incoming_hash, n["version"])
+        else:
+            bucket["serverPriority"].append(n["id"])
+
+    for n in package.get("prices", []):
+        bucket = report["prices"]
+        existing = conn.execute("SELECT * FROM price_list WHERE id=?", (n["id"],)).fetchone()
+        incoming_hash = sha_of({"v": n["version"], "p": n["parameters_json"]})
+        if existing is None:
+            bucket["created"] += 1
+            if not dry_run:
+                conn.execute("INSERT INTO price_list VALUES(?,?,?,?,?)", (n["id"], n["version"], n["parameters_json"], n["updated_at"], actor))
+                _remember(conn, "prices", n["id"], incoming_hash, n["version"])
+            continue
+        if existing["parameters_json"] == n["parameters_json"] and existing["version"] == n["version"]:
+            bucket["unchanged"] += 1
+            if not dry_run:
+                _remember(conn, "prices", n["id"], incoming_hash, existing["version"])
+            continue
+        state = _state(conn, "prices", n["id"])
+        untouched = (state["local_version"] == existing["version"]) if state else (existing["version"] == 1 and existing["actor_id"] == "system")
+        if untouched and n["version"] > existing["version"]:
+            bucket["updated"] += 1
+            if not dry_run:
+                conn.execute("UPDATE price_list SET version=?,parameters_json=?,updated_at=?,actor_id=? WHERE id=?",
+                             (n["version"], n["parameters_json"], n["updated_at"], actor, n["id"]))
+                _remember(conn, "prices", n["id"], incoming_hash, n["version"])
         else:
             bucket["serverPriority"].append(n["id"])
 

@@ -509,6 +509,8 @@ def build_sync_router(settings):
                         get_norms(conn)
                     except (FileNotFoundError, KeyError):
                         pass  # каталог моделей в пакете не пришёл: нормы заведутся при следующей отправке
+                    from .prices import get_prices
+                    get_prices(conn)
             for sha in {b["sha256"] for b in package.get("blobs", [])}:
                 staging.done("blob", sha).unlink(missing_ok=True)
             if package_file is not None:
