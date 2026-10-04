@@ -98,7 +98,8 @@ def read_digits(segs,thr=17,ambiguity=3.0):
         top=min(allc,key=lambda k:allc[k][0])
         # «1» — наклонная палочка: её форма слабо различает повороты, поэтому для неё допустимы все повороты с приемлемой схожестью
         wide=allc[top][1]=='1'
-        cands={rt:v for rt,v in allc.items() if v[0]<thr and (wide or v[0]<=best+ambiguity)}
+        # «1» — тонкая наклонная палочка: в повёрнутом тексте её расстояние до эталона вдвое-втрое выше (до 30), порог ослаблен, иначе цепочка рвётся
+        cands={rt:v for rt,v in allc.items() if (v[0]<thr and (wide or v[0]<=best+ambiguity)) or (wide and v[1]=='1' and v[0]<30)}
         out.append({'bb':(x0,y0,x1,y1),'cands':cands,'d':best})
     return out
 def chain_words(res):
