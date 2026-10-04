@@ -27,7 +27,7 @@
  const q=s=>dialog.querySelector(s),form=q('#pc-recovery-config');let timer=null,batch='',offset=0,total=0,detailId=null,connection=null,refreshing=false,pendingLaunch=null;
  const states={queued:'В очереди',running:'Обработка',review:'На просмотре',failed:'Ошибка',cancelled:'Отменено',published:'Подключена частично'};
  function stageLabel(stage){if(stage.startsWith('reading:')){const [,source,page]=stage.split(':');return 'Чтение · '+source+' · PDF '+page.slice(1);}if(stage.startsWith('repair:'))return 'Исправление · попытка '+stage.split(':')[1];return {prepare:'Подготовка листов',reading:'Чтение листов',assembly:'Сборка',checking:'Численная проверка',review:'Просмотр результата',published:'Подключена'}[stage]||stage;}
- function status(text,error=false){const host=q('#pc-recovery-status');host.textContent=text;host.dataset.error=String(error);}
+ function status(text,kind='info'){const host=q('#pc-recovery-status'),value=kind===true?'error':kind===false?'info':kind;host.textContent=text;host.dataset.kind=value;host.dataset.error=String(value==='error');}
  function selection(){return window.CalcZhBIRecoveryUI?.selection(q('#pc-recovery-scope').value)||[];}
  function updateSelection(){const selected=selection();q('#pc-recovery-selection').textContent=selected.length===1?selected[0].name:`Изделий: ${selected.length}`;q('#pc-recovery-extra-label').hidden=q('#pc-recovery-scope').value!=='active';q('#pc-recovery-start').disabled=!selected.length||api.user?.role==='viewer'||!connection?.probe?.ok;}
  function configPayload(){const result={};for(const name of ['provider','baseUrl','model'])result[name]=form.elements[name].value.trim();for(const name of ['timeoutSeconds','maxTokens','imageSide','maxPages','repairAttempts'])result[name]=Number(form.elements[name].value);result.useTiles=form.elements.useTiles.checked;return result;}
@@ -96,7 +96,19 @@
  modelSelect.addEventListener('change',()=>{if(modelSelect.value==='__manual__'){showManualModel('');form.elements.model.focus();return;}form.elements.model.value=modelSelect.value;});
  form.elements.baseUrl.addEventListener('change',scheduleModels);form.elements.provider.addEventListener('change',scheduleModels);
  q('#pc-recovery-list-models').addEventListener('click',event=>void act(event.currentTarget,()=>refreshModels({manual:true})));
- q('#pc-recovery-test').addEventListener('click',event=>void act(event.currentTarget,async()=>{if(!form.reportValidity())return;await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});status('Проверяю чтение тестового изображения на вашем сервере…');const result=await api.request('/calc/api/recovery/connection-test',{method:'POST'});await loadConfig();status(result.note);}));
+ q('#pc-recovery-test').addEventListener('click',event=>void act(event.currentTarget,async()=>{
+  if(!form.reportValidity())return;
+  await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});
+  // Проверка идёт в фоне на сервере (крупная модель грузится в память долго, прокси оборвал бы обычный запрос): здесь опрос состояния.
+  status('Проверка запущена…','busy');
+  let state=await api.request('/calc/api/recovery/connection-test',{method:'POST'});
+  while(state.state==='running'&&dialog.open){
+   status(`Идёт проверка модели «${state.model}»: ${state.elapsedSeconds} с из ${state.timeout} с. Крупная модель может загружаться в память сервера нейросети — это нормально, ждите.`,'busy');
+   await new Promise(resolve=>setTimeout(resolve,1500));state=await api.request('/calc/api/recovery/connection-test');
+  }
+  if(state.state==='done'){await loadConfig();status('✓ Проверка пройдена. '+state.result.note,'ok');}
+  else if(state.state==='failed')status('✗ Проверка не пройдена: '+state.error,'error');
+ }));
  q('#pc-recovery-scope').addEventListener('change',updateSelection);
  q('#pc-recovery-start').addEventListener('click',event=>void act(event.currentTarget,async()=>{
   const ids=selection().map(p=>p.id);let pages=[];const text=q('#pc-recovery-extra').value.trim();

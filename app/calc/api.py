@@ -133,9 +133,13 @@ def build_router(settings):
         try: return qwen_client.list_models(body,settings)
         except (ValueError,qwen_client.InferenceError) as error: raise HTTPException(422,str(error))
 
-    @router.post('/api/recovery/connection-test')
+    @router.post('/api/recovery/connection-test',status_code=202)
     def recovery_probe(user=Depends(recovery_admin)):
-        return recovery.test_connection(settings)
+        return recovery.start_probe(settings)
+
+    @router.get('/api/recovery/connection-test')
+    def recovery_probe_state(user=Depends(auth.current_user)):
+        return recovery.probe_state()
 
     @router.post('/api/recovery/batches',status_code=201)
     def recovery_start_batch(body: BatchCreate,user=Depends(auth.writer)):

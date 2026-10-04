@@ -76,7 +76,7 @@ def test_connection(settings,transport=None):
     finally: conn.close()
     token=str(uuid4())
     with transaction(settings.database_path) as conn:
-        if not claim_gpu(conn,token,config.timeoutSeconds): raise HTTPException(409,'GPU занят текущей обработкой. Повторите тест после окончания запроса')
+        if not claim_gpu(conn,token,config.timeoutSeconds,'probe'): raise HTTPException(409,gpu_busy_message())
     try:
         try: result=qwen_client.probe(config,settings,transport)
         except (ValueError,qwen_client.InferenceError) as error: raise HTTPException(422,str(error))
@@ -88,12 +88,51 @@ def test_connection(settings,transport=None):
     return result
 
 
-def claim_gpu(conn,token,timeout):
+_PROBE_STATE={'state':'idle'}
+_PROBE_LOCK=threading.Lock()
+
+
+def start_probe(settings,transport=None):
+    """Проверка подключения идёт в фоне: большая модель может грузиться в память дольше минуты, а прокси (nginx, 60 с) оборвал бы
+    обычный запрос — человек видел «Ошибка сервера», а GPU оставался занятым до конца тайм-аута."""
+    conn=connect(settings.database_path)
+    try: config=configuration(conn)
+    finally: conn.close()
+    with _PROBE_LOCK:
+        if _PROBE_STATE.get('state')=='running' and time.time()-_PROBE_STATE['startedAt']<_PROBE_STATE['timeout']+90:
+            return probe_state()
+        _PROBE_STATE.clear();_PROBE_STATE.update(state='running',startedAt=time.time(),timeout=config.timeoutSeconds,model=config.model,url=config.baseUrl)
+    def work():
+        try:
+            result=test_connection(settings,transport)
+            _PROBE_STATE.update(state='done',result=result,finishedAt=time.time())
+        except HTTPException as error:
+            _PROBE_STATE.update(state='failed',error=str(error.detail),finishedAt=time.time())
+        except Exception as error:  # noqa: BLE001
+            log.exception('recovery probe')
+            _PROBE_STATE.update(state='failed',error='Непредвиденная ошибка проверки: '+type(error).__name__+': '+str(error)[:200],finishedAt=time.time())
+    threading.Thread(target=work,name='recovery-probe',daemon=True).start()
+    return probe_state()
+
+
+def probe_state():
+    state=dict(_PROBE_STATE)
+    if 'startedAt' in state: state['elapsedSeconds']=int((state.get('finishedAt') or time.time())-state['startedAt'])
+    return state
+
+
+def claim_gpu(conn,token,timeout,kind='job'):
     row=conn.execute("SELECT value FROM application_meta WHERE key='recovery_gpu_lease'").fetchone()
     current=json.loads(row[0]) if row else {}
-    if current.get('expires',0)>time.time(): return False
-    conn.execute("INSERT INTO application_meta VALUES('recovery_gpu_lease',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(dumps({'token':token,'expires':time.time()+timeout+60}),))
+    # Блокировку проверки подключения можно перехватить: она не защищает ничего ценного, а зависшая проверка
+    # (прокси оборвал запрос, модель долго загружалась) иначе держала бы GPU до конца тайм-аута.
+    if current.get('expires',0)>time.time() and current.get('kind')!='probe': return False
+    conn.execute("INSERT INTO application_meta VALUES('recovery_gpu_lease',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(dumps({'token':token,'kind':kind,'startedAt':now(),'expires':time.time()+timeout+60}),))
     return True
+
+
+def gpu_busy_message():
+    return 'GPU занят обработкой чертежей. Дождитесь окончания задания или остановите партию, затем повторите тест'
 
 
 def release_gpu(conn,token):

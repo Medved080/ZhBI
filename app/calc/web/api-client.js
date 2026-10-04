@@ -9,7 +9,7 @@
   let response;
   try{response=await fetch(path,{...options,headers,credentials:'same-origin'});}catch{throw new ApiError('Не удалось связаться с сервером. Изменения сохранены как локальный черновик.',0);}
   const payload=await response.json().catch(()=>null);
-  if(!response.ok){const detail=payload?.detail;const message=typeof detail==='string'?detail:detail?.message||(Array.isArray(detail)?'Проверьте параметры изделия: '+(detail[0]?.msg||'недопустимые значения'):'Ошибка сервера');throw new ApiError(message,response.status,detail);}
+  if(!response.ok){const detail=payload?.detail;const message=typeof detail==='string'?detail:detail?.message||(Array.isArray(detail)?'Проверьте параметры изделия: '+(detail[0]?.msg||'недопустимые значения'):(response.status===502||response.status===504?'Прокси не дождался ответа сервера (HTTP '+response.status+'). Операция могла продолжиться на сервере — подождите и обновите состояние':'Ошибка сервера (HTTP '+response.status+')'));throw new ApiError(message,response.status,detail);}
   return payload;
  }
  // Гамма и тёмная/светлая схема — те же, что в ЖБИ (v2/main.js applyThemeFamily); значения токенов — theme.css.

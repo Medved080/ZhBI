@@ -101,8 +101,11 @@ def chat(config, settings, messages, schema, name='recovery', transport=None):
             try: snippet=error.read(600).decode('utf-8','replace').strip()
             except OSError: snippet=''
             raise InferenceError(diagnose(config,settings,url,error.code,snippet)) from None
-        except (URLError,TimeoutError,OSError):
-            raise InferenceError('Qwen недоступен или истекло время ожидания. Проверьте адрес и сеть') from None
+        except (URLError,TimeoutError,OSError) as error:
+            reason=str(getattr(error,'reason',error))[:160]
+            if isinstance(error,TimeoutError) or 'timed out' in reason.lower():
+                raise InferenceError(f'Qwen не ответил за {config.timeoutSeconds} с ({url}). Крупная модель может загружаться в память сервера нейросети — увеличьте «Тайм-аут» (300–600 с) и повторите, лучше сначала загрузив модель в LM Studio/Ollama') from None
+            raise InferenceError(f'Qwen недоступен по адресу {url}: {reason}. Проверьте адрес, порт и что сервер нейросети запущен') from None
         except (json.JSONDecodeError,UnicodeError):
             raise InferenceError('API Qwen вернул некорректный JSON') from None
     try:
