@@ -18,7 +18,9 @@ def source_info(source_id):
     return {**source,'path':ASSETS/'sources'/source['storageName']}
 
 
-def sheets_for(conn,product_id):
+def sheets_for(conn,product_id,recovery=False):
+    """recovery=True — комплект для чтения чертежей нейросетью: только листы самого изделия (изделие, каркас, группы, связанные виды),
+    без листов-оснований готовой модели поставщика (их сотни) и без листов замечаний."""
     row=conn.execute('SELECT name,document_model_id FROM products WHERE id=?',(str(product_id),)).fetchone()
     if not row:raise HTTPException(404,'Изделие не найдено')
     from .recovery import effective_model_id
@@ -41,14 +43,14 @@ def sheets_for(conn,product_id):
     verified=source.get('pageVerified',True)
     if verified:add(source['productPage'],'Изделие '+doc.get('alias',row['name']),'product',source.get('sheet'))
     else:unresolved.append('Актуальный чертёж изделия: связь с листом требует проверки')
-    for evidence in doc.get('solidModel', {}).get('evidence', []):
+    for evidence in ([] if recovery else doc.get('solidModel', {}).get('evidence', [])):
         add(evidence['pdfPage'], evidence.get('subject', 'Основание 3D-модели'), 'component', evidence.get('sheet'))
     associated=ASSETS/'promka-associated-sheets.json'
     related=json.loads(associated.read_text()).get(doc.get('recoveryBaseModelId',doc['id']),[]) if associated.exists() else []
     for page in related:
         if page!=source['productPage']:add(page,'Связанный вид, сечения или спецификация','view')
     mounting=ASSETS/'promka-mounting-links.json'
-    for linked in (json.loads(mounting.read_text()).get(doc['id'],[]) if mounting.exists() else []):
+    for linked in (json.loads(mounting.read_text()).get(doc['id'],[]) if mounting.exists() and not recovery else []):
         add(linked['pdfPage'],linked['title'],'mounting',linked.get('sheet'),linked_source=linked['sourceId'])
     if doc.get('kind')=='registry':
         if source_id=='doc10':
@@ -65,7 +67,7 @@ def sheets_for(conn,product_id):
     # A cited issue page is an associated source too, even when it is not in the cage specification.
     # Image access still requires a stored relation and authenticated product access.
     from .discrepancies import for_model
-    for issue in for_model(conn,doc['id']):
+    for issue in ([] if recovery else for_model(conn,doc['id'])):
         for cited in issue['sources']:
             add(cited['pdfPage'],'Лист замечаний · PDF стр. '+str(cited['pdfPage']),
                 'issue',linked_source=cited['sourceId'])
