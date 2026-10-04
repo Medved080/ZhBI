@@ -7,7 +7,15 @@ import pypdfium2 as pdfium, pypdfium2.raw as raw, ctypes
 import os
 HERE=os.path.dirname(os.path.abspath(__file__))
 def segments(path,pageno):
+    """Штрихи страницы в ЭКРАННЫХ координатах (с учётом /Rotate и смещения MediaBox): так текст на всех листах идёт слева направо."""
     page=pdfium.PdfDocument(path)[pageno-1]; segs=[]
+    mx0,my0,mx1,my1=page.get_mediabox(); W0,H0=mx1-mx0,my1-my0; rotation=page.get_rotation()
+    def disp(X,Y):
+        X-=mx0;Y-=my0
+        if rotation==90: return Y,W0-X
+        if rotation==180: return W0-X,H0-Y
+        if rotation==270: return H0-Y,X
+        return X,Y
     for pi,o in enumerate(page.get_objects()):
         if o.type!=2: continue
         m=o.get_matrix(); a,b,c,d,e,f=m.a,m.b,m.c,m.d,m.e,m.f
@@ -15,7 +23,7 @@ def segments(path,pageno):
         for i in range(raw.FPDFPath_CountSegments(o.raw)):
             sg=raw.FPDFPath_GetPathSegment(o.raw,i); x=ctypes.c_float();y=ctypes.c_float(); raw.FPDFPathSegment_GetPoint(sg,x,y)
             t=raw.FPDFPathSegment_GetType(sg); cl=raw.FPDFPathSegment_GetClose(sg)
-            X=a*x.value+c*y.value+e; Y=b*x.value+d*y.value+f
+            X,Y=disp(a*x.value+c*y.value+e,b*x.value+d*y.value+f)
             if t==2: cur=start=(X,Y)
             elif t==0 and cur is not None: segs.append((cur[0],cur[1],X,Y,pi)); cur=(X,Y)
             if cl and cur is not None and start is not None and cur!=start: segs.append((cur[0],cur[1],start[0],start[1],pi)); cur=start
@@ -49,7 +57,15 @@ def raster(lines,H=20,W=14):
 def rot(lines,deg):
     c,s=math.cos(math.radians(deg)),math.sin(math.radians(deg))
     return [(a[0]*c-a[1]*s,a[0]*s+a[1]*c,a[2]*c-a[3]*s,a[2]*s+a[3]*c) for a in lines]
-PROTOS={ch:[np.array(p) for p in pl] for ch,pl in json.load(open(os.path.join(HERE,'digit_protos.json'))).items()}
+def load_protos():
+    """Эталоны цифр: основной набор (гарнитура альбомов doc01…) и дополнительный (digit_protos_alt.json — вторая гарнитура, например doc14); классификатор ищет по обоим."""
+    out={}
+    for name in ('digit_protos.json','digit_protos_alt.json'):
+        path=os.path.join(HERE,name)
+        if os.path.exists(path):
+            for ch,pl in json.load(open(path)).items(): out.setdefault(ch,[]).extend(np.array(p) for p in pl)
+    return out
+PROTOS=load_protos()
 def classify(lines):
     best=(1e9,None,0)
     for rt in (0,90,270):
@@ -151,7 +167,7 @@ def measure(segs,words):
                     if lo and hi and (best is None or (b-a)>best[1]): best=(min(hi)-max(lo),b-a)
         if best and best[0]>0.5:
             err,scale=min((abs(best[0]-v/(s*0.3528)),s) for s in STD)
-            out.append((w['text'],scale,err<=0.8))
+            out.append((w['text'],scale,err<=0.8,v/(best[0]*0.3528),best[0],w['bb']))
     return out
 
 if __name__=='__main__':

@@ -98,3 +98,6 @@ data/shell_check/
 
 # Подсистема «Калькулятор»: база, вложения и PDF-источники заказчика — не в git (Docs/calc-sync.md)
 data/calc/
+
+# результаты прогонов прототипа vector_ocr (марки и числа заказчика)
+scripts/prototypes/vector_ocr/*_last.json
