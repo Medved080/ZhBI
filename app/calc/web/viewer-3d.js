@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {OrbitControls} from './vendor/three/OrbitControls.js';
 import {buildDrawing} from './drawing-geometry.js';
-import {buildSolidModel} from './solid-geometry.js?v=20261003-seven-wire-2';
+import {buildSolidModel} from './solid-geometry.js?v=20261004-depth-1';
 import {buildProjectSketch} from './sketch-geometry.js?v=20261002-short-rigels-3';
 import {prismEdges,drawingEdges} from './edge-dimensions.js';
 
@@ -358,7 +358,7 @@ try {
    const length=dimensions.length*scale,width=dimensions.width*scale,height=dimensions.height*scale;
    modelSize.set(length,height,width);
    const geometry=new THREE.BoxGeometry(length,height,width);
-   concrete=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x8e9dac,roughness:.88,transparent:true,opacity:.3,depthWrite:false}));
+   concrete=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color:0x8e9dac,roughness:.88,transparent:true,opacity:.3,depthWrite:false,polygonOffset:true,polygonOffsetFactor:2,polygonOffsetUnits:2}));
    concrete.renderOrder=2;group.add(concrete);
    edges=new THREE.LineSegments(new THREE.EdgesGeometry(geometry),new THREE.LineBasicMaterial({color:0x61748a,transparent:true,opacity:.65}));edges.renderOrder=3;group.add(edges);
    steel=new THREE.Group();group.add(steel);
@@ -423,6 +423,10 @@ try {
  renderer.domElement.addEventListener('webglcontextlost',event=>{event.preventDefault();host.dataset.modelReady='false';viewer.querySelector('.pc-viewport-help').textContent='3D-контекст потерян. Обновите страницу.';});
  function frame(){requestAnimationFrame(frame);if(host.clientHeight>0&&document.visibilityState==='visible'){
   controls.update();
+  // Плоскости отсечения следуют за расстоянием до модели: при near=.01 точность буфера глубины на расстоянии в десяток единиц
+  // около 0,2 мм реальных размеров, и совпадающие грани мерцают при вращении и масштабировании.
+  {const distance=camera.position.distanceTo(controls.target),near=Math.max(.05,distance*.04),far=Math.max(60,distance*12);
+   if(Math.abs(near-camera.near)>near*.02||Math.abs(far-camera.far)>far*.02){camera.near=near;camera.far=far;camera.updateProjectionMatrix();}}
   positionAnnotations();renderer.render(scene,camera);
  }}frame();
 }catch(error){

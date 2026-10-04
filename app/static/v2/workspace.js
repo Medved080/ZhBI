@@ -397,7 +397,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
         <p class="v2-muted">Нажмите на элемент схемы, чтобы увидеть его свойства. Shift + перетаскивание — выбор рамкой.</p>
         <dl class="ws-dl">${row("Показано на схеме", `${sc.shown} из ${sc.total}`)}${row("Активных фильтров", sc.excluded ? String(sc.excluded) : "нет")}</dl></div>`;
     }
-    return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "" }) + calcLinkHtml(e);
+    return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "", topExtra: calcLinkHtml(e) });
   }
 
   // Переход в «Калькулятор» по марке элемента (2026-10-04, одна логика с V1: static/calc-link.js). Ответ кешируется по
@@ -413,7 +413,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
       return "";
     }
     const res = calcRes.get(key);
-    return res ? `<div class="ws-pad ws-calc-link">${L.html(res)}</div>` : "";
+    return res ? `<div class="ws-calc-link">${L.html(res)}</div>` : "";
   }
 
   // Вкладка «Статус» — как в V1: легенда «Статус по элементам» (статус × тип показанных элементов, цвет статуса, итоги),

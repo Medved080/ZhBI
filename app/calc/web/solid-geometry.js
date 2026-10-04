@@ -90,7 +90,8 @@ export function buildSolidModel(data){
  const point=p=>new THREE.Vector3(...p).sub(center).multiplyScalar(scale);
  const transform=new THREE.Matrix4().makeTranslation(-center.x*scale,-center.y*scale,-center.z*scale).scale(new THREE.Vector3(scale,scale,scale));
  const concrete=new THREE.Group(),edges=new THREE.Group(),steel=new THREE.Group(),layers=new Map(),edgeRecords=[],dedup=new Set();
- const material=new THREE.MeshStandardMaterial({color:0x95a6b7,roughness:.88,transparent:true,opacity:.3,depthWrite:false,side:THREE.DoubleSide});
+ const material=new THREE.MeshStandardMaterial({color:0x95a6b7,roughness:.88,transparent:true,opacity:.3,depthWrite:false,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:2,polygonOffsetUnits:2});
+ // Бетон уходит вглубь по буферу глубины: грани закладных на поверхности бетона (z=0) не мерцают при движении камеры.
  const edgeMaterial=new THREE.LineBasicMaterial({color:0x60738a,transparent:true,opacity:.7});
  for(const {part,geometry} of concreteParts){
   for(const edge of partEdges(part,geometry)){const k=[edge.a,edge.b].map(p=>p.map(v=>v.toFixed(3)).join(',')).sort().join('|');if(!dedup.has(k)){edgeRecords.push(edge);dedup.add(k);}}
@@ -121,9 +122,14 @@ export function buildSolidModel(data){
    mesh.instanceMatrix.needsUpdate=true;mesh.computeBoundingBox();mesh.computeBoundingSphere();layer.add(mesh);
   }
  }
+ let metalIndex=0;
  for(const {part,geometry} of metalParts){
   const id=part.groupId||part.group||'metal',layer=layerFor(id,{id,name:part.name||'Металлические детали',quantity:1,unit:'шт',sheet:part.sheet||'см. исходные листы'});
-  geometry.applyMatrix4(transform);const mesh=new THREE.Mesh(geometry,layer.userData.material);
+  geometry.applyMatrix4(transform);
+  // Свой материал у детали и свой сдвиг глубины: совпадающие (компланарные) грани соседних пластин и труб получают устойчивый порядок
+  // вместо мерцания z-fighting. Цвет по-прежнему задаётся обходом сетки (viewer-3d.js), поэтому клон его не теряет.
+  const partMaterial=layer.userData.material.clone();partMaterial.polygonOffset=true;partMaterial.polygonOffsetFactor=partMaterial.polygonOffsetUnits=-1-(metalIndex++%12)*.3;
+  const mesh=new THREE.Mesh(geometry,partMaterial);
   mesh.userData={record:layer.userData.record,partName:part.name,position:part.position,diameter:part.outerDiameter};layer.add(mesh);
  }
  for(const layer of layers.values())layer.userData.empty=!layer.children.length;

@@ -252,7 +252,7 @@ export function createElementOps(ctx) {
   const consText = (cons, target) => consequenceLines(cons, statusLabel(target));
 
   // ================================================================ ОДНО ИЗДЕЛИЕ: карточка
-  function cardHtml(e, { detail, detailError }) {
+  function cardHtml(e, { detail, detailError, topExtra }) {
     const z = e.zones || {};
     const f = F(e.id);
     const hist = detail?.history || [];
@@ -266,6 +266,7 @@ export function createElementOps(ctx) {
         <div class="ws-mark">${esc(e.mark || "—")}</div>
         <div class="ws-type">${esc(e.element_type)}${e.subtype ? ` <span class="v2-muted">· ${esc(e.subtype)}</span>` : ""}</div>
         <div class="ws-chip"><i class="ws-sw" style="background:${esc(sw(e.current_status))}"></i>${esc(statusLabel(e.current_status))}</div></div>
+      ${topExtra || ""}
       <div class="ws-actions"><button type="button" class="v2-btn" data-act="locate">Показать на схеме</button><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button>${R.fields ? `<button type="button" class="v2-btn" data-eo="ef-open">Форма элемента…</button>` : ""}</div>
       ${f.ef.done ? `<p class="ws-ok" role="status">${esc(f.ef.done)}</p>` : ""}
       <h4>Размещение</h4><dl class="ws-dl">${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
