@@ -7,12 +7,15 @@ def agree(v, pt, k, std=STD):
     """Минимальная невязка (pt) между измеренным интервалом и ожидаемым для числа v при масштабе 1:s и коэффициенте печати k."""
     return min((abs(pt - v / (s * 0.3528) * k), s) for s in std)
 def calibrate(dims, grid=None):
-    """dims: [(значение:int, интервал_pt)]. Возвращает (k, число согласованных). k перебирается по сетке; k=1 предпочтительнее при равенстве."""
-    grid = grid or ([1.0] + [round(0.5 + 0.005 * i, 3) for i in range(0, 101) if abs(0.5 + 0.005 * i - 1) > 1e-9])
-    best = (1.0, -1)
+    """dims: [(значение:int, интервал_pt)]. Возвращает (k, число согласованных). Лист мог быть уменьшен с большего формата при печати в A3
+    (по замерам k = 0,70 и 0,705 — A2→A3 с полями, а не точные 0,7071), поэтому k перебирается вокруг отношений сторон ISO шагом 0,005.
+    k≠1 принимается только при заметном выигрыше (≥5 размеров и ≥15% от всех): произвольная подгонка k даёт ложные +1…2 размера."""
+    grid = grid or ([1.0] + [round(0.5 + 0.005 * i, 3) for i in range(0, 5)] + [round(0.68 + 0.005 * i, 3) for i in range(0, 11)] + [0.35, 0.355])
+    n1 = sum(1 for v, pt in dims if agree(v, pt, 1.0)[0] <= TOL); best = (1.0, n1)
     for k in grid:
+        if k == 1.0: continue
         n = sum(1 for v, pt in dims if agree(v, pt, k)[0] <= TOL)
-        if n > best[1] + 0.5 or (n > best[1] and k == 1.0): best = (k, n)
+        if n > best[1] and n - n1 >= max(5, 0.15 * len(dims)): best = (k, n)
     return best
 def null_rate(dims, k, trials=20, seed=1):
     rnd = random.Random(seed); vals = [v for v, _ in dims]; pts = [p for _, p in dims]; acc = []
