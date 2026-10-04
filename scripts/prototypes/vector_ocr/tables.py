@@ -32,21 +32,22 @@ def char_pos(gl, c):
     bbs = [gl[i]['bb'] for i in c['ids']]
     return min(b[0] for b in bbs), min(b[1] for b in bbs), max(b[2] for b in bbs), max(b[3] for b in bbs)
 
-DIGLIKE = set('0123456789оОвбзЗчЧØ|')   # символы, за которыми может скрываться цифра
+DIGLIKE = set('0123456789оОвбзЗчЧØ|·')   # символы, за которыми может скрываться цифра
 DIGIT_THR = 17.0
 
-def cell_digit(gl, c):
-    """Цифра по эталонам цифр vector_ocr (поворот 0): (цифра, расстояние) или None, если не похоже ни на одну."""
+def cell_digit(gl, c, thr=None):
+    """Цифра по эталонам цифр vector_ocr (поворот 0): (цифра, расстояние) или None, если не похоже ни на одну (порог thr, по умолчанию DIGIT_THR)."""
     lines = [tuple(l) for i in c['ids'] for l in gl[i]['lines']]
-    ch, d = vo.classify_all(lines)[0][1], vo.classify_all(lines)[0][0]
-    return (ch, d) if ch is not None and d < DIGIT_THR else None
+    d, ch = vo.classify_all(lines)[0]
+    return (ch, d) if ch is not None and d < (thr or DIGIT_THR) else None
 
 def resolve(tok):
     """tok: [(символ текстового классификатора, цифра-кандидат или None)] одного слова. Цифры берутся из классификатора цифр; двусмысленные
     символы (в/6, о/0, З/3) разрешаются по соседям: рядом цифры → цифра; рядом буквы → буква."""
     n = len(tok); kind = []
+    tok = [(x[0], x[1]) for x in tok]
     for ch, dg in tok:
-        if dg is not None and (ch.isdigit() or ch in tc.DIG_OF or ch in ('|',)): kind.append('a' if (ch in tc.DIG_OF or ch == '|') else 'd')
+        if dg is not None and (ch.isdigit() or ch in tc.DIG_OF or ch in ('|', '·')): kind.append('a' if (ch in tc.DIG_OF or ch in ('|', '·')) else 'd')
         elif ch.isdigit(): kind.append('d')
         elif ch in tc.LETTERS: kind.append('l')
         else: kind.append('p')
@@ -63,6 +64,20 @@ def resolve(tok):
         out.append(ch)
     return ''.join(out)
 
+def numeric_fix(gl, tok, force=False):
+    """Числовой токен (в основном цифры, запятая, точка — масса, количество, ведомость стали): символы, не распознанные как цифры буквенным
+    классификатором («1й5,·6» вместо «105,36»), перечитываются классификатором цифр; если он тоже не узнал символ — остаётся как есть."""
+    if len(tok) > 3 and tok[0][0] == 'л' and tok[1][0] == '.':      # ссылка на лист «л.206»: цифры после «л.» читаются как число
+        return tok[:2] + numeric_fix(gl, [x for x in tok[2:]], force=True)
+    digits = sum(1 for x in tok if x[0].isdigit()); other = [x for x in tok if not x[0].isdigit() and x[0] not in ',.-']
+    if len(tok) < 3 or digits < max(2, 0.4 * len(tok)) or not other or not (force or (tok[0][0].isdigit() and tok[-1][0].isdigit())): return tok   # «А500С», «8КП84» — не числа
+    out = []
+    for ch, dg, c in tok:
+        if not ch.isdigit() and ch not in ',.-' and (dg is None or force): dg = cell_digit(gl, c, 45 if force else None) or dg   # в ссылке на лист («л.108») возможны только цифры: порог мягче
+        out.append((dg[0] if (dg is not None and not ch.isdigit() and ch not in ',.-') else ch, dg, c))
+    return out
+
+
 def text_in_boxes(gl, lines, font, H, V):
     """Распознаёт строки и раскладывает символы по рамкам. → {рамка: [строки текста сверху вниз]}; символы вне рамки (подписи на чертеже) пропускаются."""
     groups = collections.defaultdict(lambda: collections.defaultdict(list))
@@ -72,23 +87,29 @@ def text_in_boxes(gl, lines, font, H, V):
             x0, y0, x1, y1 = char_pos(gl, c); cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
             l, rr, lo, hi = enclosing_box(H, V, cx, cy)
             if None in (l, rr, lo, hi): continue
+            if ch == '·' and c['botrel'] < -0.12: ch = '/'      # слэш (шифр «77/113/114»): уходит под базовую линию, цифра — нет
             dg = cell_digit(gl, c) if ch in DIGLIKE else None
             groups[(round(l, 1), round(rr, 1), round(lo, 1), round(hi, 1))][(li, round(L['base']))].append((ch, c, r['cap'], dg))
     out = {}
     for box, byline in groups.items():
         rows = []
-        for (li, base), items in byline.items():
+        # символы одной ячейки на близких базовых линиях («Ø» выступает над строкой цифр) — одна строка текста
+        merged = []
+        for (li, base), items in sorted(byline.items(), key=lambda kv: -kv[0][1]):
+            if merged and abs(merged[-1][0] - base) < 0.55 * items[0][2]: merged[-1][1].extend(items)
+            else: merged.append([base, list(items)])
+        for base, items in merged:
             items.sort(key=lambda t: t[1]['x0']); gaps = sorted(b[1]['x0'] - a[1]['x1'] for a, b in zip(items, items[1:])); med = gaps[len(gaps) // 2] if gaps else 0
             cap = items[0][2]; spc = max(0.33 * cap, 2.2 * med); toks = [[]]; prev = None
             for ch, c, _, dg in items:
                 if prev is not None and c['x0'] - prev['x1'] > spc: toks.append([])
-                toks[-1].append((ch, dg)); prev = c
-            txt = ' '.join(resolve(t) for t in toks)
+                toks[-1].append((ch, dg, c)); prev = c
+            txt = ' '.join(resolve(numeric_fix(gl, t)) for t in toks)
             rows.append((base, lx.fix_code(lx.snap_text(txt.replace('ь|', 'ы')))))
         rows.sort(key=lambda t: -t[0]); out[box] = [t for _, t in rows]
     return out
 
-ROLES = [('pos', 'Поз'), ('oboz', 'Обозн'), ('name', 'Наимен'), ('qty', 'Кол'), ('mass', 'Масса ед'), ('mass_item', 'Масса изд'), ('note', 'Прим')]
+ROLES = [('mark', 'Марка'), ('pos', 'Поз'), ('oboz', 'Обозн'), ('name', 'Наимен'), ('qty', 'Кол'), ('mass', 'Масса ед'), ('mass_item', 'Масса изд'), ('note', 'Прим')]
 
 def role_of(text):
     t = ' '.join(text) if isinstance(text, list) else text
@@ -97,11 +118,16 @@ def role_of(text):
     return None
 
 def parse_spec(boxes):
-    """Спецификация: столбцы — по рамкам в строке заголовка с «Поз.» (роль столбца по тексту заголовка, лишние столбцы пропускаются);
-    строки — рамки столбцов ниже заголовка. → {'columns': [роли], 'rows': [{роль: текст}]}; пустые строки отбрасываются."""
-    # шапка столбца «Поз.» — короткая подпись (до 10 символов): подпись детали вроде «Поз.1, Поз.2» над эскизом шапкой не считается;
+    """Спецификация: столбцы — по рамкам в строке шапки с «Поз.» (одиночная спецификация) или «Марка, поз.» (спецификация серии изделий: столбец марки
+    и «Масса изделия» объединены на несколько строк). Роль столбца — по тексту шапки, лишние столбцы пропускаются; строки — рамки столбца «Наименование»,
+    значения объединённых ячеек (марка, масса изделия) присваиваются каждой строке, которую они накрывают.
+    → {'columns': [роли], 'rows': [{роль: текст}]}; пустые строки отбрасываются."""
+    # шапка — короткая подпись (до 10 символов «Поз…», до 14 «Марка…»): подпись детали вроде «Поз.1, Поз.2» над эскизом шапкой не считается;
     # из кандидатов берётся тот, в чьей строке есть столбец «Наименование»
-    hdr = [(b, t) for b, t in boxes.items() if 0 < len(' '.join(t)) <= 10 and ' '.join(t).startswith('Поз')]
+    def short(t):
+        text = ' '.join(t)
+        return 0 < len(text) <= 14 and (text.startswith('Поз') and len(text) <= 10 or text.startswith('Марка'))
+    hdr = [(b, t) for b, t in boxes.items() if short(t)]
     hdr = [(b, t) for b, t in hdr if any(role_of(t2) == 'name' and abs(b2[2] - b[2]) < 1 and abs(b2[3] - b[3]) < 1 for b2, t2 in boxes.items())]
     if not hdr: return None
     hb = max(hdr, key=lambda bt: bt[0][3])[0]
@@ -112,10 +138,12 @@ def parse_spec(boxes):
             r = role_of(t)
             if r and r not in cols.values(): cols[(b[0], b[1])] = r
     if 'name' not in cols.values(): return None
+    body = [(b, t, cols[(b[0], b[1])]) for b, t in boxes.items() if b[3] <= ylo + 0.5 and (b[0], b[1]) in cols]
+    lines = sorted({(round(b[2], 1), round(b[3], 1)) for b, t, r in body if r == 'name'}, key=lambda k: -k[1])
     rows = collections.defaultdict(dict)
-    for b, t in boxes.items():
-        if b[3] > ylo + 0.5: continue
-        r = cols.get((b[0], b[1]))
-        if r: rows[(round(b[2], 1), round(b[3], 1))][r] = ' '.join(t)
+    for b, t, r in body:
+        covered = [k for k in lines if b[2] - 0.5 <= (k[0] + k[1]) / 2 <= b[3] + 0.5]    # строки, которые накрывает рамка (объединённая ячейка — несколько)
+        for k in (covered or [(round(b[2], 1), round(b[3], 1))]):
+            rows[k][r] = ' '.join(t)
     table = [rows[k] for k in sorted(rows, key=lambda k: -k[1]) if any(v.strip() for v in rows[k].values())]
     return {'columns': [cols[k] for k in sorted(cols)], 'rows': table}

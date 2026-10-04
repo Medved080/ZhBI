@@ -58,6 +58,8 @@ def catalog():
                 *solid.get('notes', []),
                 *[p.get('description', str(p)) if isinstance(p, dict) else p
                   for p in solid.get('pending', [])], *limitations]
+    from .readings import apply_readings
+    apply_readings(result, ASSETS)    # прочитанное с листов — только в пробелы каталога (readings.py)
     return result
 
 
