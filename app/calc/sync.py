@@ -375,7 +375,17 @@ class Staging:
             if not valid_asset_path(key):
                 raise SyncError("Недопустимый путь файла")
             return hashlib.sha256(key.encode()).hexdigest()
+        if kind == "package":  # сжатый JSON с данными расчётов: передаётся блоками, чтобы не упираться в лимит тела запроса прокси
+            if not re.fullmatch(r"[0-9a-f]{32}", key):
+                raise SyncError("Недопустимый ключ пакета")
+            return key
         raise SyncError("Неизвестный вид файла")
+
+    def purge_old(self, kind, seconds=86400):
+        import time
+        for path in self._dir(kind).glob("*"):
+            if time.time() - path.stat().st_mtime > seconds:
+                path.unlink(missing_ok=True)
 
     def part(self, kind, key):
         return self._dir(kind) / (self.key_name(kind, key) + ".part")

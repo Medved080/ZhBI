@@ -136,7 +136,8 @@ def main():
     procs = []
     try:
         port_a, port_b = 18941, 18942
-        env_b = prepare(work / "b", port_b, with_assets=False)
+        # лимит тела запроса 1 МБ, как у nginx по умолчанию: передача обязана сама подобрать размер блока (413 → блок меньше)
+        env_b = {**prepare(work / "b", port_b, with_assets=False), "ZHBI_MAX_UPLOAD_MB": "1"}
         pb, base_b = start(env_b, port_b)
         procs.append(pb)
 

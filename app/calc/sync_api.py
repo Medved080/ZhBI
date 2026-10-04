@@ -36,6 +36,7 @@ from .database import PROJECT_ID, audit, connect, dumps, now, transaction
 from .sync import CHUNK, SyncError, Staging, apply_package, asset_manifest, collect_package, file_sha256, install_assets, needed
 
 _COMMIT_LOCK = threading.Lock()
+MIN_CHUNK = 32 * 1024
 
 
 # ------------------------------------------------------------------ доступ
@@ -244,6 +245,7 @@ class Remote:
             raise ValueError("Токен цели «%s» не задан: введите его в настройках цели" % target.name)
         self.base = target.url
         self.token = token
+        self.chunk = CHUNK
         if target.pin:
             self.opener = urllib.request.build_opener(_PinnedHandler(target.pin))
         else:
@@ -276,30 +278,37 @@ class RemoteError(Exception):
 
 
 def upload_file(remote, kind, key, path, sha256, progress=None):
+    """Блочная загрузка с докачкой. Размер блока подбирается сам: на 413 (прокси режет тело, nginx по умолчанию 1 МБ)
+    блок уменьшается и тот же запрос повторяется."""
     size = Path(path).stat().st_size
     offset = 0
     with Path(path).open("rb") as stream:
         while True:
             stream.seek(offset)
-            chunk = stream.read(CHUNK)
+            chunk = stream.read(remote.chunk)
             if not chunk and size:
                 break
             query = "/calc/api/sync/upload?kind=%s&key=%s&sha256=%s&size=%d&offset=%d" % (kind, urllib.request.quote(key, safe=""), sha256, size, offset)
+            retry = False
             for attempt in range(4):
                 try:
                     remote.call("PUT", query, chunk, "application/octet-stream", timeout=600)
                     break
                 except RemoteError as error:
+                    # 413 — прокси режет тело; обрыв соединения на большом блоке (прокси закрывает, не дочитав) трактуется так же
+                    if (error.status == 413 or (error.status == 0 and remote.chunk > 256 * 1024 and attempt == 0)) and remote.chunk > MIN_CHUNK:
+                        remote.chunk = max(MIN_CHUNK, remote.chunk // 4)
+                        retry = True
+                        break
                     if error.status == 409 and isinstance(error.detail, dict) and "received" in error.detail:
                         offset = error.detail["received"]  # сервер уже принял больше: продолжаем с его позиции
-                        stream.seek(offset)
-                        chunk = None
+                        retry = True
                         break
                     if error.status in {0, 502, 503, 504} and attempt < 3:
                         time.sleep(2 ** attempt)
                         continue
                     raise
-            if chunk is None:
+            if retry:
                 continue
             offset += len(chunk)
             if progress:
@@ -310,6 +319,10 @@ def upload_file(remote, kind, key, path, sha256, progress=None):
 
 JOBS = {}
 _JOBS_LOCK = threading.Lock()
+
+
+def size_text(n):
+    return "%.1f МБ" % (n / 1048576) if n >= 1048576 else "%d КБ" % max(1, n // 1024)
 
 
 def run_push(settings, target, dry_run, job):
@@ -330,7 +343,17 @@ def run_push(settings, target, dry_run, job):
     note("Пакет собран: изделий %d, файлов исходников %d, вложений %d" % (len(package["products"]), len(package["assets"]), len(package["blobs"])))
     remote = Remote(target)
     note("Согласование с сервером «%s»…" % target.name)
-    plan = remote.call("POST", "/calc/api/sync/plan", package)
+    import gzip
+    import tempfile
+    package_bytes = gzip.compress(json.dumps(package, ensure_ascii=False).encode("utf-8"), 6)
+    package_id = uuid4().hex
+    package_sha = hashlib.sha256(package_bytes).hexdigest()
+    with tempfile.NamedTemporaryFile(suffix=".gz") as stream:
+        stream.write(package_bytes)
+        stream.flush()
+        note("Передача описания данных (%s)…" % size_text(len(package_bytes)))
+        upload_file(remote, "package", package_id, stream.name, package_sha)
+    plan = remote.call("POST", "/calc/api/sync/plan", {"packageId": package_id})
     job["plan"] = plan
     note("Нужно передать: файлов исходников %d, вложений %d" % (len(plan["assetsNeeded"]), len(plan["blobsNeeded"])))
     if dry_run:
@@ -354,7 +377,7 @@ def run_push(settings, target, dry_run, job):
         note("Файл исходников %s…" % relative)
         upload_file(remote, "asset", relative, Path(ASSETS) / relative, hashes[relative], progress)
     note("Применение на сервере…")
-    result = remote.call("POST", "/calc/api/sync/commit", package, timeout=900)
+    result = remote.call("POST", "/calc/api/sync/commit", {"packageId": package_id}, timeout=900)
     job["result"] = result
     note("Готово")
 
@@ -408,9 +431,21 @@ def build_sync_router(settings):
         return {"targets": targets, "targetsError": error, "log": log, "assetsPresent": assets_dir().is_dir() and any(assets_dir().iterdir()),
                 "project": dict(project) if project else None, "canAdminister": actor["admin"]}
 
+    def load_package(body):
+        """Пакет приходит либо целиком в теле, либо как {"packageId"} — сжатым файлом, переданным блоками (так обходится лимит
+        размера запроса у прокси, например nginx 1 МБ по умолчанию)."""
+        if isinstance(body, dict) and "packageId" in body:
+            import gzip
+            try:
+                path = staging.done("package", str(body["packageId"]))
+                return json.loads(gzip.decompress(path.read_bytes()).decode("utf-8")), path
+            except (OSError, ValueError, SyncError):
+                raise HTTPException(409, "Пакет данных не найден на сервере или повреждён: повторите отправку")
+        return body, None
+
     @router.post("/plan")
     async def plan(request: Request, actor=Depends(write)):
-        package = await request.json()
+        package, _ = load_package(await request.json())
         conn = connect(settings.database_path)
         try:
             conn.execute("BEGIN")
@@ -428,6 +463,8 @@ def build_sync_router(settings):
     @router.put("/upload")
     async def upload(request: Request, kind: str, key: str, sha256: str, size: int, offset: int, actor=Depends(write)):
         data = await request.body()
+        if kind == "package" and offset == 0:
+            staging.purge_old("package")
         try:
             received = staging.write_chunk(kind, key, sha256, size, offset, data)
         except SyncError as error:
@@ -436,7 +473,7 @@ def build_sync_router(settings):
 
     @router.post("/commit")
     async def commit(request: Request, actor=Depends(write)):
-        package = await request.json()
+        package, package_file = load_package(await request.json())
         started = now()
         if not _COMMIT_LOCK.acquire(blocking=False):
             raise HTTPException(409, "На сервере уже выполняется другой приём пакета")
@@ -474,6 +511,8 @@ def build_sync_router(settings):
                         pass  # каталог моделей в пакете не пришёл: нормы заведутся при следующей отправке
             for sha in {b["sha256"] for b in package.get("blobs", [])}:
                 staging.done("blob", sha).unlink(missing_ok=True)
+            if package_file is not None:
+                package_file.unlink(missing_ok=True)
             result = {"report": report, "assetsUpdated": updated_assets}
             _log(settings, "receive", None, actor["id"], "ok", result, started)
             return result
