@@ -56,12 +56,25 @@ def validate_endpoint(config, settings, resolve=False):
     return parsed
 
 
+def api_base(config):
+    """Базовый адрес API из того, что ввёл человек. Допускается ссылка на любой маршрут сервера (…/v1/models, …/api/v1/models,
+    …/v1/chat/completions, …/api/tags): лишнее отбрасывается. OpenAI-совместимый API: …/v1 (у LM Studio ссылка …/api/v1 — это
+    тот же сервер, чат — по …/v1). Ollama: адрес без пути."""
+    parsed=urlsplit(config.baseUrl.strip());origin=f'{parsed.scheme}://{parsed.netloc}'
+    path='/'+parsed.path.strip('/') if parsed.path.strip('/') else ''
+    for suffix in ('/chat/completions','/completions','/models','/api/chat','/api/tags','/api/generate'):
+        if path.endswith(suffix): path=path[:-len(suffix)]
+    if config.provider=='ollama':
+        return origin+('' if path in {'','/api'} else path.removesuffix('/api'))
+    if path in {'','/api'}: path='/v1'
+    elif path.endswith('/api/v1'): path=path[:-len('/api/v1')]+'/v1'
+    return origin+path
+
+
 def chat(config, settings, messages, schema, name='recovery', transport=None):
     validate_endpoint(config,settings,resolve=transport is None)
     if config.provider=='openai':
-        base=config.baseUrl.rstrip('/')
-        if not urlsplit(base).path.rstrip('/'): base+='/v1'
-        url=base+'/chat/completions'
+        url=api_base(config)+'/chat/completions'
         converted=[]
         for message in messages:
             content=[{'type':'text','text':message['content']}]
@@ -70,8 +83,7 @@ def chat(config, settings, messages, schema, name='recovery', transport=None):
         body={'model':config.model,'messages':converted,'temperature':0,'max_tokens':config.maxTokens,
               'response_format':{'type':'json_schema','json_schema':{'name':name,'schema':schema}}}
     else:
-        base=config.baseUrl.rstrip('/')
-        url=base+('/chat' if urlsplit(base).path.rstrip('/').endswith('/api') else '/api/chat')
+        url=api_base(config)+'/api/chat'
         body={'model':config.model,'messages':messages,'stream':False,'format':schema,
               'options':{'temperature':0,'num_predict':config.maxTokens}}
     headers={'Content-Type':'application/json'}
@@ -151,8 +163,7 @@ def list_models(config,settings,getter=None):
     LM Studio /api/v1/models. Запрос идёт с backend: адрес может быть доступен только серверу, а не браузеру."""
     validate_endpoint(config,settings,resolve=getter is None)
     getter=getter or _get_json
-    parsed=urlsplit(config.baseUrl);origin=f'{parsed.scheme}://{parsed.netloc}';base=config.baseUrl.rstrip('/')
-    if not parsed.path.rstrip('/'): base+='/v1'
+    parsed=urlsplit(config.baseUrl);origin=f'{parsed.scheme}://{parsed.netloc}';base=api_base(config)
     urls=[origin+'/api/tags'] if config.provider=='ollama' else [base+'/models',origin+'/api/v1/models',origin+'/v1/models']
     for url in dict.fromkeys(urls):
         payload=getter(url)
