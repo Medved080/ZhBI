@@ -42,6 +42,10 @@ def dynamic_values(row, ctx):
         concrete_class = row["concrete_class"]
         if (concrete_class or "").strip().lower() in ("", "не указан") and (document.get("concreteClass") or "").strip().lower() not in ("", "не указан"):
             concrete_class = result["concreteClass"] = document["concreteClass"]     # у изделия класс не задан, а лист его даёт — берём прочитанный
+        elif (concrete_class or "").strip().lower() in ("", "не указан"):
+            from .norms import type_key
+            assigned = (ctx["norms"]["parameters"].get("classByType") or {}).get(type_key(document))      # класс типа изделия из таблицы технолога
+            if assigned: concrete_class = result["concreteClass"] = assigned
         values = parameters_for(document, ctx["norms"], prices, volume=Decimal(row["volume"]) if "volume" in manual else None, concrete_class=concrete_class,
                                 concrete_price=Decimal(row["concrete_rate"]) if "concreteRate" in manual else None)
         for field in MANUAL:
@@ -79,6 +83,8 @@ def get_product(conn, product_id, ctx=None):
             product[field] = float(dynamic[field])
     if dynamic.get('concreteClass'): product['concreteClass'] = dynamic['concreteClass']
     product['manualFields'] = json.loads(row['manual_fields'] or '[]')
+    verification = conn.execute("SELECT actor_id,verified_at,note FROM product_verifications WHERE product_id=?", (row["id"],)).fetchone()
+    product['verification'] = {"actorId": verification["actor_id"], "verifiedAt": verification["verified_at"], "note": verification["note"]} if verification else None
     product['pricesVersion'] = ctx['prices']['version']
     product['normsLabourRate'] = None if dynamic.get('registry') else (float(row['norms_labour_rate']) if row['norms_labour_rate'] else None)
     product['normsVersion'] = row['norms_version']

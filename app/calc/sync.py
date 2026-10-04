@@ -91,6 +91,7 @@ PRODUCT_CHILDREN = [
     ("extra_lines", "SELECT * FROM extra_lines WHERE product_id=? ORDER BY sort_order, code"),
     ("line_overrides", "SELECT * FROM line_overrides WHERE product_id=? ORDER BY line_code"),
     ("baselines", "SELECT * FROM product_resource_baselines WHERE product_id=? ORDER BY code"),
+    ("verifications", "SELECT * FROM product_verifications WHERE product_id=?"),
 ]
 
 
@@ -195,7 +196,7 @@ def _write_product(conn, bundle, existing, actor, staged_blobs, uploads_dir):
         sets = ",".join(f"{c}=?" for c in PRODUCT_INSERT_COLUMNS if c not in {"id", "created_at"})
         conn.execute(f"UPDATE products SET {sets} WHERE id=?",
                      [row.get(c) for c in PRODUCT_INSERT_COLUMNS if c not in {"id", "created_at"}] + [pid])
-        for table in ("extra_lines", "line_overrides", "product_resource_baselines"):
+        for table in ("extra_lines", "line_overrides", "product_resource_baselines", "product_verifications"):
             conn.execute(f"DELETE FROM {table} WHERE product_id=?", (pid,))
     else:
         if row.get("legacy_key") and conn.execute("SELECT 1 FROM products WHERE legacy_key=?", (row["legacy_key"],)).fetchone():
@@ -209,6 +210,8 @@ def _write_product(conn, bundle, existing, actor, staged_blobs, uploads_dir):
         conn.execute("INSERT INTO line_overrides VALUES(?,?,?,?,?)", (pid, r["line_code"], r["quantity"], r["rate"], r["amount"]))
     for r in bundle["baselines"]:
         conn.execute("INSERT INTO product_resource_baselines VALUES(?,?,?,?)", (pid, r["code"], r["quantity"], r["rate"]))
+    for r in bundle.get("verifications", []):
+        conn.execute("INSERT INTO product_verifications VALUES(?,?,?,?)", (pid, r["actor_id"], r["verified_at"], r["note"]))
     for v in bundle.get("versions", []):
         conn.execute("INSERT OR IGNORE INTO calculation_versions VALUES(?,?,?,?,?,?,?,?)",
                      (v["id"], pid, v["product_version"], v["profile_id"], v["profile_version"], v["snapshot_json"], v["actor_id"], v["created_at"]))

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 PROFILE_ID = "msu-1-v1"
 PROJECT_ID = "84b8c4ae-7400-4e80-8d51-cd21d5d6b252"
 SEED_IDS = ["ee285265-9a26-41bc-b402-399c183938fa", "f79f3f74-68be-45da-96c7-88c17bfa6058"]

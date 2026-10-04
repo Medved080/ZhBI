@@ -34,12 +34,38 @@ class ResourceNorm(BaseModel):
     factor: Decimal=Field(ge=1,le=10,allow_inf_nan=False)
 
 
+class GroupNorm(BaseModel):
+    """Нормы группы изделий: свои значения (пусто — общая норма) и подтверждение технологом."""
+    confirmed:bool=False
+    hoursPerM3:Decimal|None=Field(default=None,ge=0,le=1000,allow_inf_nan=False)
+    concreteFactor:Decimal|None=Field(default=None,ge=1,le=3,allow_inf_nan=False)
+
+
 class NormsSave(BaseModel):
-    """Нормы расхода и труда. Цены (бетон, труд, материалы) — в прайс-листе сервиса (prices.py), не здесь."""
+    """Нормы расхода и труда. Цены (бетон, труд, материалы) — в прайс-листе сервиса (prices.py), не здесь.
+    groups — нормы по группам изделий (не передано — не менять); classByType — класс бетона по типам изделий, у которых на листе класса нет (не передано — не менять)."""
     expectedVersion:int=Field(ge=1)
     concreteFactor:Decimal=Field(ge=1,le=3,allow_inf_nan=False)
     hoursPerM3:Decimal=Field(ge=0,le=1000,allow_inf_nan=False)
     resources:dict[str,ResourceNorm]
+    groups:dict[str,GroupNorm]|None=None
+    classByType:dict[str,str]|None=None
+
+    @model_validator(mode='after')
+    def check_classes(self):
+        import re
+        for key,value in (self.classByType or {}).items():
+            if value and not re.fullmatch(r'[ВB]\d{2}',value.strip().upper().replace(' ','')):raise ValueError('Класс бетона записывается как В30, В40 (тип «%s»)'%key)
+        return self
+
+
+def type_key(doc):
+    """Тип изделия для таблицы «тип → класс бетона»: группа и буквенная часть марки без номера («Плиты · 4Пд» для 4Пд-9 и 4Пg-9; «Плиты · Пл» для Пл2.1)."""
+    import re
+    alias=(doc.get('alias') or '').replace(' ','')
+    prefix=re.match(r'^[\d.]*[^\d\-\s.]+',alias)
+    letters=(prefix.group(0) if prefix else alias).replace('g','д').replace('Pg','Пд')
+    return '%s · %s'%(doc.get('family') or 'Вне каталога',letters)
 
 
 def update_norms(conn,body,actor):
@@ -48,8 +74,20 @@ def update_norms(conn,body,actor):
     if current['version']!=body.expectedVersion:raise HTTPException(409,'Нормы изменены другим пользователем. Обновите раздел.')
     params=deepcopy(current['parameters'])
     if set(body.resources)!=set(params['resources']):raise HTTPException(422,'Изменился состав нормативных ресурсов')
-    for key in ['concreteFactor','hoursPerM3','labourRate','concreteRate']:params[key]=str(getattr(body,key))
-    for key,value in body.resources.items():params['resources'][key].update(factor=str(value.factor),rate=str(value.rate))
+    for key in ['concreteFactor','hoursPerM3']:params[key]=str(getattr(body,key))      # цены (труд, бетон, материалы) — в прайс-листе, не в нормах
+    for key,value in body.resources.items():params['resources'][key].update(factor=str(value.factor))
+    if body.groups is not None:
+        groups=params.setdefault('groups',{})
+        for family,g in body.groups.items():
+            before=groups.get(family) or {}
+            entry={'hoursPerM3':str(g.hoursPerM3) if g.hoursPerM3 is not None else None,'concreteFactor':str(g.concreteFactor) if g.concreteFactor is not None else None,'confirmed':g.confirmed}
+            if g.confirmed and before.get('confirmed') and before.get('hoursPerM3')==entry['hoursPerM3'] and before.get('concreteFactor')==entry['concreteFactor']:
+                entry.update(confirmedBy=before.get('confirmedBy'),confirmedAt=before.get('confirmedAt'))     # подтверждение осталось в силе
+            elif g.confirmed:
+                entry.update(confirmedBy=actor,confirmedAt=now())
+            groups[family]=entry
+    if body.classByType is not None:
+        params['classByType']={k:v.strip().upper().replace(' ','').replace('B','В') for k,v in body.classByType.items() if v and v.strip()}
     version=current['version']+1
     conn.execute("UPDATE production_norms SET version=?,parameters_json=?,updated_at=?,actor_id=? WHERE id='msu-1-columns'",(version,dumps(params),now(),actor))
     audit(conn,actor,'norms.updated','msu-1-columns',{'version':version,'before':current['parameters'],'after':params})
@@ -77,9 +115,11 @@ def parameters_for(doc,norms,prices,volume=None,concrete_class=None,concrete_pri
     concrete_price — цена бетона, если она задана вручную (иначе из прайса по классу)."""
     from .prices import concrete_rate,material_rate
     p=norms['parameters'];project=D(doc['projectVolume'] or 0)
+    group=(p.get('groups') or {}).get(doc.get('family')) or {}      # нормы группы, если заданы; иначе общая норма
+    factor=D(group.get('concreteFactor') or p['concreteFactor']);hours_per_m3=D(group['hoursPerM3'] if group.get('hoursPerM3') not in (None,'') else p['hoursPerM3'])
     if volume is None:
-        volume=(project*D(p['concreteFactor'])).quantize(D('.01'),rounding=ROUND_HALF_UP) if project else D(0)
-    hours=volume*D(p['hoursPerM3']);resources=[]
+        volume=(project*factor).quantize(D('.01'),rounding=ROUND_HALF_UP) if project else D(0)
+    hours=volume*hours_per_m3;resources=[]
     for r in doc['resources']:
         norm=match_resource(r,p);qty=D(r['projectQty'])*(D(norm['factor']) if norm else D(1))
         if norm:qty=qty.quantize(D('.001'),rounding=ROUND_CEILING)

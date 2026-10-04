@@ -92,7 +92,7 @@ function matchesProductName(product, query){
   document.getElementById('pc-conflict-dialog').close();conflictId=null;
  });
  q('#pc-current-user').textContent=user.displayName+(user.local?'':' · '+({admin:'администратор',editor:'редактор',viewer:'просмотр'}[user.role]));q('#pc-logout').hidden=user.local||Boolean(window.frameElement?.dataset?.calcEmbed);q('#pc-logout').addEventListener('click',()=>void flushSaves().then(()=>api.logout()).catch(error=>saveStatus(error.message,true)));
- if(!writeable){q('#pc-edit-product').hidden=true;q('#pc-add').hidden=true;q('#pc-clear').hidden=true;}
+ if(!writeable){q('#pc-edit-product').hidden=true;q('#pc-verify-product').hidden=true;q('#pc-add').hidden=true;q('#pc-clear').hidden=true;}
  window.addEventListener('beforeunload',event=>{if(jobs.size){event.preventDefault();event.returnValue='';}});
  const albumNames={doc01:'Колонны · нижние',doc02:'Колонны · средние, ч. 1',doc03:'Колонны · средние, ч. 2',doc04:'Колонны · верхние',doc05:'Колонны · АБК',doc06:'Ригели · 6.9',doc07:'Ригели · 6.6',doc08:'Ригели · 4.6.5 / 4.4.5',doc09:'Ригели · АБК',doc10:'Плиты · корпус',doc11:'Плиты · АБК',doc12:'Подъёмники',doc13:'Шахты лифтов',doc14:'Лестничные балки',doc15:'Цокольные панели'};
  const albumOptions=[...new Map(products.filter(p=>p.documentModel?.source.id).map(p=>[p.documentModel.source.id,{family:p.documentModel.family,title:p.documentModel.source.title}])).entries()];
@@ -260,6 +260,9 @@ function matchesProductName(product, query){
   q('#pc-source-label').textContent=p.documentModel?.kind==='registry'?'КЖИ · предварительно':p.source==='manual'?'Ручной ввод':'Excel МСУ-1';
   q('#pc-weight-label').textContent=p.source==='manual'||p.documentModel?.kind==='registry'?'Арматура':'Арматура, без Вр1';
   if(p.documentModel?.kind==='registry'&&p.documentModel.projectSteel===null)q('#pc-weight').textContent='Не подтверждена';
+  {const v=p.verification;      // «проверено человеком»: изделие сверено с чертежом, прочитанные и каталожные значения подтверждены
+   q('#pc-verification-state').textContent=v?'Проверено человеком · '+new Date(v.verifiedAt).toLocaleDateString('ru-RU')+(v.note?' · '+v.note:''):'Не проверено человеком: значения из чтения листа и каталога поставщика не подтверждены.';
+   q('#pc-verify-product').textContent=v?'Снять отметку проверки':'Отметить: проверено по чертежу';}
   q('#pc-geometry-note').textContent=p.geometry?`${number(p.geometry.length)} × ${number(p.geometry.width)} × ${number(p.geometry.height)} м`:'Габариты не заданы.';
   q('#pc-source-description').textContent=p.source==='manual'?'Источник: параметры введены пользователем. Методика начислений — профиль Excel МСУ-1.':'Источник: «Ресурсная Калькуляция МСУ-1 Колонны.xlsx»';
   q('#pc-geometry-description').textContent=p.geometry?'Внешний контур построен по введённым габаритам прямоугольного изделия. Армирование условное.':'Геометрия и армирование показаны условно: исходный Excel не содержит конструктива.';
@@ -310,6 +313,7 @@ function matchesProductName(product, query){
   if(b.id==='pc-export')void exportSelected();
   if(b.id==='pc-export-one')void exportSelected(true);
   if(b.id==='pc-edit-product'||b.id==='pc-edit-calculation')openProductForm(state.product);
+  if(b.id==='pc-verify-product')void toggleVerification();
   if(b.id==='pc-product-issues-link'){q('[data-view="issues"]').click();}
   if(b.id==='pc-model-results-open')void openModelResults();
   if(b.dataset.resultProduct){q('#pc-model-results-dialog').close();window.CalcZhBIWorkspace.select(b.dataset.resultProduct,'model');}
@@ -337,6 +341,11 @@ function matchesProductName(product, query){
   const auto=field('hasGeometry').checked&&field('volumeFromGeometry').checked;
   field('volume').readOnly=auto;
   if(auto){const volume=['length','width','height'].map(name=>Number(field(name).value)).reduce((a,b)=>a*b,1);if(Number.isFinite(volume)&&volume>0)field('volume').value=Number(volume.toFixed(9));}
+ }
+ async function toggleVerification(){
+  const p=products[state.product];
+  try{const result=await api.request('/calc/api/products/'+p.id+'/verification',{method:'POST',body:JSON.stringify({verified:!p.verification})});p.verification=result.verification;render();}
+  catch(error){saveStatus(error.message,true);}
  }
  function openProductForm(index){
   editing=index;form.reset();const p=index===null?null:products[index];

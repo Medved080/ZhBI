@@ -73,7 +73,12 @@ def parse_steel(boxes):
 # ------------------------------------------------------------------ сборка по спецификациям (рекурсивно по листам-составляющим)
 ROD_RE = re.compile(r'(?:^|[ØøОо\s])(\d(?:\s?\d)?)\s*([АA]\s?\d{3}\s?[СC]?|Вр\S*)', re.I)   # «Ø» из ячейки может не прочитаться — берём «диаметр класс»
 SKIP_RE = re.compile(r'^(Закладн|Труба|Петл|Бетон|Масса|Документация|Сборочные|Материалы|Технические)', re.I)
-REF_RE = re.compile(r'л\.\s*(\d+)')
+REF_RE = re.compile(r'л\.\s*([\dйОо]+)')           # в номере листа OCR путает нуль с «й» и «О» («л.8й» = л.80)
+
+
+def ref_numbers(text):
+    """Номера листов из ссылок «л.NNN» в графе «Обозначение» (нуль, прочитанный как «й» или «О», исправляется)."""
+    return [int(x.translate(str.maketrans('йОо', '000'))) for x in REF_RE.findall(text or '')]
 EMB_RE = re.compile(r'^(Закладн|Труба|Петл)', re.I)   # закладные детали, трубы, петли и петлевые выпуски: считаются отдельно от арматуры
 PIPE_RE = re.compile(r'Труба\s*(\d+)\s*[хx×]\s*(\d+(?:[.,]\d+)?)', re.I)
 LEN_RE = re.compile(r'L\s*=\s*(\d+)')
@@ -104,12 +109,31 @@ def pipe_length_m(name, qty):
     return qty if re.search(r'п\.\s?м', name or '') else None
 
 
-def parse_rod(name):
-    """«Ø 32 А500С ГОСТ 34028-2016, L=11375» → ((класс, диаметр)) или None."""
+STANDARD_DIAMETERS = (6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 32, 36, 40)
+INFER_RE = re.compile(r'([АA]\s?\d{3}\s?[СC]?)\s*ГОСТ[^L]*L\s*=\s*(\d[\d\s]*\d|\d)')      # «Ø ·· А600С ГОСТ 34028-2016, L= 10030»: цифры диаметра не прочитаны
+
+
+def infer_diameter(mass_kg, length_mm):
+    """Диаметр стержня по массе единицы и длине: масса погонного метра = 0,00617 · d² (d, мм). Ближайший стандартный диаметр, если сходится в пределах 3%; иначе None."""
+    if not mass_kg or not length_mm or length_mm < 100: return None
+    d = (mass_kg / (length_mm / 1000.0) / 0.00617) ** 0.5
+    nearest = min(STANDARD_DIAMETERS, key=lambda s: abs(s - d))
+    return nearest if abs(d / nearest - 1) <= 0.03 else None
+
+
+def parse_rod(name, mass=None):
+    """«Ø 32 А500С ГОСТ 34028-2016, L=11375» → ((класс, диаметр)) или None. Цифры диаметра не прочитаны («Ø ·· А600С … L= 10030») — диаметр выводится по массе единицы
+    (mass, кг) и длине из названия."""
     m = ROD_RE.search(name or '')
-    if not m: return None
-    cls = class_of(m.group(2).replace(' ', ''))
-    return (cls, int(m.group(1).replace(' ', ''))) if cls else None
+    if m:
+        cls = class_of(m.group(2).replace(' ', ''))
+        if cls: return (cls, int(m.group(1).replace(' ', '')))
+    m = INFER_RE.search(name or '')
+    if m and mass:
+        cls = class_of(m.group(1).replace(' ', ''))
+        d = infer_diameter(mass, int(re.sub(r'\s', '', m.group(2))))
+        if cls and d: return (cls, d)
+    return None
 
 
 def sheet_offsets(catalog_docs):
@@ -157,7 +181,7 @@ class RebarAssembler:
         """Массы, которыми лист может быть узлом: итог «Масса, кг» листа или массы изделий серии (колонка «Примечание» строк с маркой)."""
         rows = self.rows(doc, page) or []
         out = {num(r.get('qty')) or num(r.get('mass')) for r in rows if re.match(r'^Масса', r.get('name', '') or '')}
-        out |= {num(r.get('note')) for r in rows if r.get('mark') and num(r.get('note'))}
+        out |= {num(r.get('mass_item') or r.get('note')) for r in rows if r.get('mark') and num(r.get('mass_item') or r.get('note'))}
         return {m for m in out if m}
 
     def find_by_mass(self, doc, center, mass):
@@ -171,11 +195,11 @@ class RebarAssembler:
         if not marks: return rows, None
         chosen = mark if mark in marks else None
         if chosen is None and mass:
-            hits = {mark_key(r['mark']) for r in rows if r.get('mark') and num(r.get('note')) and abs(num(r['note']) / mass - 1) <= 0.005}
+            hits = {mark_key(r['mark']) for r in rows if r.get('mark') and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005}
             if len(hits) == 1: chosen = next(iter(hits))
         if chosen is None: return [], None
         picked = [r for r in rows if mark_key(r.get('mark')) == chosen]
-        total = next((num(r['note']) for r in picked if num(r.get('note'))), None)
+        total = next((num(r.get('mass_item') or r['note']) for r in picked if num(r.get('mass_item') or r.get('note'))), None)
         return picked, total
 
     def assemble(self, doc, page, mark=None, mass=None, depth=0, stack=()):
@@ -197,10 +221,10 @@ class RebarAssembler:
                 continue
             if not name or SKIP_RE.match(name) or not qty or not mass_e: continue
             kg = qty * mass_e; out['sum'] += kg
-            rod = parse_rod(name)
+            rod = parse_rod(name, mass_e)
             if rod: out['rods'][rod] += kg; continue
-            refs = REF_RE.findall(r.get('oboz', '') or '')
-            center = (int(refs[-1]) + self.offset.get(doc, 0)) if refs else page          # ожидаемая страница узла; без ссылки — окрестность листа-родителя
+            refs = ref_numbers(r.get('oboz', '') or '')
+            center = (refs[-1] + self.offset.get(doc, 0)) if refs else page          # ожидаемая страница узла; без ссылки — окрестность листа-родителя
             sub = self.assemble(doc, center, node_mark(name), mass_e, depth + 1, stack + (key,)) if refs else None
             got = self.node_mass(sub, mass_e)
             if not got or abs(got / mass_e - 1) > 0.03:                  # ссылки нет или масса узла по его листу не сходится — ищем лист по массе
@@ -211,7 +235,7 @@ class RebarAssembler:
                 else:
                     self.problems.add((doc, center))
             if not got or abs(got / mass_e - 1) > 0.03:
-                out['issues'].append('узел «%s»%s: по листу %.2f кг, в спецификации %.2f кг' % (name[:30], (' л.' + refs[-1]) if refs else ' без листа', got, mass_e))
+                out['issues'].append('узел «%s»%s: по листу %.2f кг, в спецификации %.2f кг' % (name[:30], (' л.%d' % refs[-1]) if refs else ' без листа', got, mass_e))
                 out['unresolved'] += kg; continue
             out['issues'] += sub['issues']
             for k, v in sub['rods'].items(): out['rods'][k] += v * qty

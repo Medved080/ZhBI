@@ -577,3 +577,4 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-home-origin dd{text-align:left}
 #precast-concept .pc-home-table{min-width:0}
 #precast-concept .pc-edit-product{margin-top:10px;align-self:flex-start}
+#precast-concept .pc-verification{margin-top:10px;display:grid;gap:4px}#precast-concept .pc-verification button{justify-self:start}

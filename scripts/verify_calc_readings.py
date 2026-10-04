@@ -19,6 +19,10 @@ assets = os.environ.get("ZHBI_CALC_ASSETS_DIR")
 if not assets or not (Path(assets) / "promka-models.json").exists():
     sys.exit("Нужен каталог моделей: задайте ZHBI_CALC_ASSETS_DIR=…/data/calc/assets")
 
+# база и каталог данных теста — во временном каталоге, ДО импорта приложения: пути вычисляются при импорте (app/calc/paths.py)
+RUN_DIR = Path(tempfile.mkdtemp(prefix="calc-readings-run-"))
+os.environ["ZHBI_DB_PATH"] = str(RUN_DIR / "zhbi.db"); os.environ["ZHBI_CALC_DIR"] = str(RUN_DIR / "calc")
+
 from app.calc import document_models as dm
 from app.calc.readings import SOURCE_FILE, apply_readings, rebar_of, resource_id
 
@@ -92,7 +96,6 @@ apply_readings(again, tmp)
 check(again == models, "повторное наложение ничего не меняет")
 
 # 6. изделия сохранены ДО появления чтений: создание прайса (миграция) не должно считать значения от чтений ручными правками, а расчёт — падать
-os.environ["ZHBI_DB_PATH"] = str(tmp / "zhbi.db"); os.environ["ZHBI_CALC_DIR"] = str(tmp / "calc")
 from app.calc.config import Settings
 from app.calc.database import connect, initialize, transaction
 from app.calc.import_register import import_register
@@ -208,6 +211,58 @@ check(models9[plain]["readings"]["embeddedVerified"] is True and "embeddedParts"
 models10 = copy.deepcopy(base); apply_readings(models10, tmp3)
 check(not any(r["id"] in ("embeddedParts", "loopParts") or r["id"].startswith("pipe") for r in models10[plain].get("resources") or []) and not models10[plain]["readings"]["embeddedChecked"],
       "закладные не сошлись с итогом ведомости: не накладываются и не засчитаны прочитанными")
+
+# 10. подтверждение человеком, нормы по группам, класс бетона по типу изделия
+from app.calc.norms import GroupNorm, NormsSave, get_norms, type_key, update_norms
+
+with transaction(settings.database_path) as conn:
+    before = readiness(conn)
+    plate_row = conn.execute("SELECT id,document_model_id FROM products WHERE document_model_id IN (SELECT 'x' WHERE 0)").fetchone()
+    victim = conn.execute("SELECT id FROM products LIMIT 1").fetchone()["id"]
+    conn.execute("INSERT INTO product_verifications VALUES(?,?,?,?)", (victim, "тест", "2026-10-05T00:00:00", "сверено с чертежом"))
+    after = readiness(conn)
+check(after["funnel"][-1]["alone"] == before["funnel"][-1]["alone"] + 1, "подтверждённое человеком изделие попало в условие «проверено»")
+check(get_product(connect(settings.database_path), victim)["product"]["verification"]["note"] == "сверено с чертежом", "в карточке изделия есть отметка проверки")
+from app.calc.sync import product_bundle
+with transaction(settings.database_path) as conn:
+    with_mark = product_bundle(conn, victim)
+    conn.execute("DELETE FROM product_verifications WHERE product_id=?", (victim,))
+    without_mark = product_bundle(conn, victim)
+    conn.execute("INSERT INTO product_verifications VALUES(?,?,?,?)", (victim, "тест", "2026-10-05T00:00:00", "сверено с чертежом"))
+check(len(with_mark["verifications"]) == 1 and with_mark["verifications"][0]["note"] == "сверено с чертежом", "отметка проверки входит в пакет передачи изделия")
+check(with_mark["contentHash"] != without_mark["contentHash"] and not without_mark["verifications"], "отметка проверки меняет контрольную сумму изделия")
+
+with transaction(settings.database_path) as conn:
+    norms = get_norms(conn)
+    families = sorted({(dm.model(r["document_model_id"]) or {}).get("family") for r in conn.execute("SELECT document_model_id FROM products WHERE document_model_id IS NOT NULL").fetchall()} - {None})
+    resources = {k: {"factor": v["factor"]} for k, v in norms["parameters"]["resources"].items()}
+    family = "Ригели" if "Ригели" in families else families[0]
+    body = NormsSave(expectedVersion=norms["version"], concreteFactor=norms["parameters"]["concreteFactor"], hoursPerM3=norms["parameters"]["hoursPerM3"], resources=resources,
+                     groups={family: GroupNorm(confirmed=True, hoursPerM3="11.5")}, classByType={})
+    update_norms(conn, body, "технолог")
+    after_norms = readiness(conn)
+    saved = get_norms(conn)["parameters"]["groups"][family]
+check(saved["confirmed"] and saved["confirmedBy"] == "технолог" and saved["hoursPerM3"] == "11.5", "нормы группы сохранены с подтверждением (%s)" % family)
+check(family in after_norms["norms"]["confirmed"], "подтверждённая группа учтена в готовности")
+conn = connect(settings.database_path); conn.execute("BEGIN"); ctx2 = pricing_context(conn)
+member = next(r["id"] for r in conn.execute("SELECT id,document_model_id FROM products").fetchall() if (dm.model(r["document_model_id"]) or {}).get("family") == family and (dm.model(r["document_model_id"]) or {}).get("projectVolume"))
+entry = get_product(conn, member, ctx2)["product"]
+check(abs(entry["hours"] - entry["volume"] * 11.5) < 0.01, "труд на м³ взят из норм группы, не из общей нормы")
+conn.close()
+
+with transaction(settings.database_path) as conn:
+    types = readiness(conn)["classTypes"]
+check(isinstance(types, list), "список типов без класса есть (%d)" % len(types))
+if types:
+    kind = types[0]["key"]
+    with transaction(settings.database_path) as conn:
+        norms = get_norms(conn)
+        resources = {k: {"factor": v["factor"]} for k, v in norms["parameters"]["resources"].items()}
+        update_norms(conn, NormsSave(expectedVersion=norms["version"], concreteFactor=norms["parameters"]["concreteFactor"], hoursPerM3=norms["parameters"]["hoursPerM3"], resources=resources,
+                                     classByType={kind: "в 30"}), "технолог")
+        classed = readiness(conn)
+    check(next(t for t in classed["classTypes"] if t["key"] == kind)["assigned"] == "В30", "класс типа «%s» сохранён как В30" % kind)
+    check(classed["funnel"][1]["alone"] >= after_norms["funnel"][1]["alone"] + types[0]["count"] - 0, "изделия типа получили класс бетона (%d)" % types[0]["count"])
 
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

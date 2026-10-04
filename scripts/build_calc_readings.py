@@ -85,7 +85,7 @@ def main(out, families):
     if os.environ.get("VOCR_REPARSE"):
         # после правок разбора ведомости: перечитать только листы, где она не разобралась или не сошлись проверки (остальные остаются из кэша)
         stale = [k for k, v in cache.items() if v.get("steel") is None or not all(v["steel"]["checks"].values())
-                 or (v.get("rows") and not any(r.get("qty") for r in v["rows"]))]      # и листы, где спецификация разобрана без столбца «Кол.»
+                 or not v.get("rows") or not any(r.get("qty") for r in v["rows"])]      # спецификация не разобрана или разобрана без столбца «Кол.»      # и листы, где спецификация разобрана без столбца «Кол.»
         for k in stale: del cache[k]
         print("перечитываем листы без сошедшейся ведомости:", len(stale), flush=True)
     frontier = {(int(v["source"]["id"][3:]), int(v["source"]["productPage"])) for v in models.values()}
@@ -112,9 +112,9 @@ def main(out, families):
             nxt = set()
             for key in frontier:
                 for row in (cache[key]["rows"] or []):
-                    if steel.SKIP_RE.match(row.get("name", "") or "") or steel.parse_rod(row.get("name")): continue
-                    for ref in steel.REF_RE.findall(row.get("oboz", "") or ""):
-                        target = (key[0], int(ref) + offset.get(key[0], 0))
+                    if steel.SKIP_RE.match(row.get("name", "") or "") or steel.parse_rod(row.get("name"), steel.num(row.get("mass"))): continue
+                    for ref in steel.ref_numbers(row.get("oboz", "") or ""):
+                        target = (key[0], ref + offset.get(key[0], 0))
                         if target[1] >= 1 and target not in cache: nxt.add(target)
             print("слой: прочитано листов", len(todo), "следующий слой", len(nxt), flush=True)
             frontier = nxt

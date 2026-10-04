@@ -7,7 +7,7 @@
   <title>Калькулятор ЖБИ — ЖБИ</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23165d98'/%3E%3Cpath d='M9 6h14v20H9zM9 12h14M9 19h14M16 6v20' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="theme.css?v=20261004-skin-1">
-  <link rel="stylesheet" href="styles.css?v=20261005-home-2">
+  <link rel="stylesheet" href="styles.css?v=20261005-home-3">
   <link rel="stylesheet" href="workspace.css?v=20261005-workspace-1">
   <script defer src="vendor/exceljs.min.js"></script>
   <script defer src="money-format.js?v=20261002-money-1"></script>
@@ -16,13 +16,13 @@
   <script defer src="workspace-ui.js?v=20261005-workspace-1"></script>
   <script defer src="project-files.js"></script>
   <script defer src="history.js?v=20261002-money-1"></script>
-  <script defer src="norms.js?v=20261005-prices-1-workspace-1"></script>
+  <script defer src="norms.js?v=20261005-groups-2-workspace-1"></script>
   <script defer src="source-sheets.js?v=20261004-calc-path-1"></script>
   <script defer src="commercial-reference.js?v=20261003-workspace-2"></script>
   <script defer src="project-report.js?v=20261004-lite-1-workspace-1"></script>
   <script defer src="collisions.js?v=20261004-collisions-4"></script>
-  <script defer src="app.js?v=20261005-readings-2-workspace-1"></script>
-  <script defer src="home.js?v=20261005-home-2-workspace-1"></script>
+  <script defer src="app.js?v=20261005-verify-1-workspace-1"></script>
+  <script defer src="home.js?v=20261005-home-3-workspace-1"></script>
   <script defer src="sync-panel.js?v=20261004-sync-3"></script>
   <script defer src="recovery.js?v=20261004-live-5"></script>
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
@@ -77,7 +77,7 @@
             <div id="pc-model-layers" class="pc-model-layers" aria-label="Группы армирования"></div>
             <div id="pc-model-pick" class="pc-context" role="status" aria-live="polite"></div>
           </div>
-          <div class="pc-properties"><div class="pc-section-label" id="pc-property-heading">Параметры изделия</div><span id="pc-model-readiness" class="pc-model-readiness"></span><dl><dt>Расход бетона</dt><dd id="pc-volume"></dd><dt id="pc-weight-label">Арматура</dt><dd id="pc-weight"></dd><dt>Трудоёмкость</dt><dd id="pc-hours"></dd><dt>Основание расчёта</dt><dd id="pc-source-label"></dd></dl><button id="pc-edit-product" class="cursor-interaction pc-edit-product" type="button">Изменить параметры изделия…</button><dl id="pc-project-properties" hidden></dl><div class="pc-context" id="pc-geometry-note"></div><div id="pc-collision-card" class="pc-collision-card" hidden></div><button id="pc-product-issues-link" type="button" hidden></button></div>
+          <div class="pc-properties"><div class="pc-section-label" id="pc-property-heading">Параметры изделия</div><span id="pc-model-readiness" class="pc-model-readiness"></span><dl><dt>Расход бетона</dt><dd id="pc-volume"></dd><dt id="pc-weight-label">Арматура</dt><dd id="pc-weight"></dd><dt>Трудоёмкость</dt><dd id="pc-hours"></dd><dt>Основание расчёта</dt><dd id="pc-source-label"></dd></dl><button id="pc-edit-product" class="cursor-interaction pc-edit-product" type="button">Изменить параметры изделия…</button><div class="pc-verification"><button id="pc-verify-product" class="cursor-interaction" type="button">Отметить: проверено по чертежу</button><div id="pc-verification-state" class="pc-context" role="status"></div></div><dl id="pc-project-properties" hidden></dl><div class="pc-context" id="pc-geometry-note"></div><div id="pc-collision-card" class="pc-collision-card" hidden></div><button id="pc-product-issues-link" type="button" hidden></button></div>
         </div>
       </div>
       <div id="pc-calculation-panel">

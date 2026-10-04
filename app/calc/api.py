@@ -28,6 +28,11 @@ from .recovery_schema import ConnectionConfig, BatchCreate, PublishRequest, Stri
 from typing import Literal
 
 
+class VerificationBody(StrictModel):
+    verified: bool
+    note: str | None = None
+
+
 class RecoveryRetry(StrictModel):
     stage: Literal['continue','reading','assembly'] = 'continue'
 
@@ -125,7 +130,7 @@ def build_router(settings):
         return (conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0], conn.execute("SELECT MAX(version) FROM price_list").fetchone()[0], conn.execute("SELECT MAX(version) FROM calculation_profiles").fetchone()[0],
                 conn.execute("SELECT COUNT(*),MAX(updated_at) FROM model_discrepancies").fetchone()[:], conn.execute("SELECT COUNT(*) FROM recovery_publications").fetchone()[0],
                 conn.execute("SELECT zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()[0],
-                mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"), mtime("promka-readings.json"))
+                mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"), mtime("promka-readings.json"), conn.execute("SELECT COUNT(*),MAX(verified_at) FROM product_verifications").fetchone()[:])
 
     @router.get("/api/workspace")
     def workspace(request: Request, lite: int = 0, user=Depends(auth.current_user)):
@@ -329,6 +334,22 @@ def build_router(settings):
             return readiness_cache["value"]
         finally:
             conn.close()
+
+    @router.post('/api/products/{product_id}/verification')
+    def verify_product(product_id: UUID, body: VerificationBody, user=Depends(auth.writer)):
+        """Отметка «проверено человеком»: изделие сверено с чертежом (значения, прочитанные с листа, подтверждены). Снимается тем же вызовом с verified=false."""
+        with transaction(settings.database_path) as conn:
+            if not conn.execute("SELECT 1 FROM products WHERE id=?", (str(product_id),)).fetchone():
+                raise HTTPException(404, "Изделие не найдено")
+            if body.verified:
+                note = (body.note or "").strip()[:500] or None
+                conn.execute("INSERT OR REPLACE INTO product_verifications VALUES(?,?,?,?)", (str(product_id), user["id"], now(), note))
+                audit(conn, user["id"], "product.verified", str(product_id), {"note": note})
+            else:
+                conn.execute("DELETE FROM product_verifications WHERE product_id=?", (str(product_id),))
+                audit(conn, user["id"], "product.unverified", str(product_id), {})
+            row = conn.execute("SELECT actor_id,verified_at,note FROM product_verifications WHERE product_id=?", (str(product_id),)).fetchone()
+            return {"verification": {"actorId": row["actor_id"], "verifiedAt": row["verified_at"], "note": row["note"]} if row else None}
 
     @router.get('/api/norms')
     def norms(user=Depends(auth.current_user)):

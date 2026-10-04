@@ -109,7 +109,7 @@ def text_in_boxes(gl, lines, font, H, V):
         rows.sort(key=lambda t: -t[0]); out[box] = [t for _, t in rows]
     return out
 
-ROLES = [('mark', 'Марка'), ('pos', 'Поз'), ('oboz', 'Обозн'), ('name', 'Наимен'), ('qty', 'Кол'), ('mass', 'Масса ед'), ('mass_item', 'Масса изд'), ('note', 'Прим')]
+ROLES = [('mark', 'Марка'), ('pos', 'Поз'), ('oboz', 'Обозн'), ('name', 'Наимен'), ('qty', 'Кол'), ('mass', 'Масса ед'), ('mass', 'Масса 1 дет'), ('mass_item', 'Масса изд'), ('note', 'Прим')]
 
 def role_of(text):
     t = ' '.join(text) if isinstance(text, list) else text
@@ -128,7 +128,12 @@ def parse_spec(boxes):
         text = ' '.join(t)
         return 0 < len(text) <= 14 and (text.startswith('Поз') and len(text) <= 10 or text.startswith('Марка'))
     hdr = [(b, t) for b, t in boxes.items() if short(t)]
-    hdr = [(b, t) for b, t in hdr if any(role_of(t2) == 'name' and abs(b2[2] - b[2]) < 1 and abs(b2[3] - b[3]) < 1 for b2, t2 in boxes.items())]
+    # в таблицах серий сеток и каркасов («Марка изделия | Поз. дет. | Обозначение | Кол. | Масса 1 дет. | Масса изделия») столбца «Наименование» нет:
+    # описание стержня («ø 12 А500С ГОСТ …, L=2130») стоит в «Обозначении» — для шапки с «Марка» достаточно столбца «Обозначение»
+    def has_name(b, t):
+        roles = {role_of(t2) for b2, t2 in boxes.items() if abs(b2[2] - b[2]) < 1 and abs(b2[3] - b[3]) < 1}
+        return 'name' in roles or ('oboz' in roles and ' '.join(t).startswith('Марка'))
+    hdr = [(b, t) for b, t in hdr if has_name(b, t)]
     if not hdr: return None
     hb = max(hdr, key=lambda bt: bt[0][3])[0]
     ylo, top = hb[2], hb[3]
@@ -137,7 +142,10 @@ def parse_spec(boxes):
         if abs(b[2] - ylo) < 1 and abs(b[3] - top) < 1:
             r = role_of(t)
             if r and r not in cols.values(): cols[(b[0], b[1])] = r
-    if 'name' not in cols.values(): return None
+    if 'name' not in cols.values():
+        oboz = [k for k, r in cols.items() if r == 'oboz']
+        if not oboz: return None
+        cols[oboz[0]] = 'name'
     body = [(b, t, cols[(b[0], b[1])]) for b, t in boxes.items() if b[3] <= ylo + 0.5 and (b[0], b[1]) in cols]
     lines = sorted({(round(b[2], 1), round(b[3], 1)) for b, t, r in body if r == 'name'}, key=lambda k: -k[1])
     rows = collections.defaultdict(dict)

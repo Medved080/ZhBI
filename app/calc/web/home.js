@@ -42,13 +42,13 @@
  }
 
  function owners(d){
-  const sum=key=>d.funnel.find(s=>s.key===key);
+  const groups=d.norms.families.filter(f=>f!=='Вне каталога'),sum=key=>d.funnel.find(s=>s.key===key);
   const miss=key=>d.total-sum(key).alone;
   const cards=[
    ['Разработка · чтение листов',[`нет объёма бетона: ${num(miss('volume'))}`,`не указан класс бетона: ${num(miss('concreteClass'))}`,`нет арматуры: ${num(miss('rebar'))}`,`нет закладных, труб, петель: ${num(miss('embedded'))}`],'изделий'],
    ['Вы · расценки',[`материалов без цены: ${num(d.prices.unpriced)} из ${num(d.prices.materials)}`,`изделий без полного набора цен: ${num(miss('prices'))}`,`классов бетона без цены: ${num(d.prices.classes.filter(c=>!c.priced&&c.name!=='Не указан').length)}`],''],
-   ['Технолог · нормы',[`групп без подтверждённых норм: ${num(d.norms.families.length-d.norms.confirmed.length)} из ${num(d.norms.families.length)}`,'сейчас одна общая норма по двум колоннам'],''],
-   ['Проверка человеком',[`не проверено: ${num(miss('verified'))} из ${num(d.total)}`,'в сервисе ещё нет механизма подтверждения'],'']];
+   ['Технолог · нормы и классы',[`групп без подтверждённых норм: ${num(groups.length-d.norms.confirmed.length)} из ${num(groups.length)}`,`типов изделий без класса бетона: ${num(d.classTypes.filter(x=>!x.assigned).length)}`,'подтверждение и классы — в «Расценки и нормы»'],''],
+   ['Проверка человеком',[`не проверено: ${num(miss('verified'))} из ${num(d.total)}`,'отметка — кнопкой в карточке изделия'],'']];
   return `<section class="pc-home-block"><h3>Что осталось до финала, по исполнителям</h3><div class="pc-home-owners">${cards.map(([t,items])=>`<article><h4>${esc(t)}</h4><ul>${items.map(i=>`<li>${esc(i)}</li>`).join('')}</ul></article>`).join('')}</div></section>`;
  }
 

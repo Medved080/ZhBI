@@ -6,7 +6,7 @@
  const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const n=s=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:6}).format(Number(s));
  const LABELS={socialPercent:'Страховые взносы, % от оплаты труда',energyPercent:'Энергоуслуги, % от материалов',overheadPercent:'Общепроизводственные, % от материалов',adminPercent:'Административные, % от материалов',commercialPercent:'Коммерческие, % от материалов',profitPercent:'Маржа (прибыль), %',deliveryPercent:'Доставка, % от материалов',vatPercent:'НДС, %'};
- let prices,norms,previousView='model';
+ let prices,norms,readiness,previousView='model';
  function close(){if(panel.hidden)return;panel.hidden=true;document.querySelector('.pc-tabs').hidden=false;document.querySelector('.pc-header').hidden=false;document.getElementById('pc-'+previousView+'-panel').hidden=false;open.setAttribute('aria-pressed','false');if(window.CalcZhBIUI?.section==='norms')window.CalcZhBIUI.enter('products');}
  // Денежное поле: хранит точное значение в data-exact; если пользователь не менял показанное округлённое — уходит точное
  function money(name,value,max=1e9){const display=String(Number(Number(value).toFixed(2)));return `<input type="text" inputmode="decimal" data-money required min="0" max="${max}" name="${esc(name)}" value="${window.CalcZhBIMoney.editable(display)}" data-exact="${esc(value)}" data-default="${display}">`;}
@@ -14,6 +14,23 @@
  const read=el=>{const value=el.hasAttribute('data-money')?window.CalcZhBIMoney.read(el):el.value;return value===el.dataset.default?el.dataset.exact:value;};
  const changed=(el)=>Number(read(el))!==Number(el.dataset.exact);
  function unpriced(){return Object.values(prices.parameters.materials).filter(m=>Number(m.rate)===0).length;}
+
+ // Нормы по группам изделий: свои значения (пусто — общая норма) и подтверждение технологом; список групп и число изделий — из готовности (/api/readiness)
+ function groupsSection(np){
+  const gs=np.groups||{},families=(readiness?.families||[]).filter(f=>f.name!=='Вне каталога');
+  if(!families.length)return '';
+  const when=g=>g.confirmed&&g.confirmedAt?' · '+esc(new Date(g.confirmedAt).toLocaleDateString('ru-RU')):'';
+  return `<h3>Нормы по группам изделий</h3><p class="pc-context">Пустое поле — действует общая норма. «Подтверждено» ставит технолог после проверки норм группы: пока норма не подтверждена, расчёт группы считается предварительным.</p>
+  <div class="pc-norms-table"><table id="pc-groups-table"><thead><tr><th>Группа</th><th>Изделий</th><th>Труд на 1 м³, чел·ч</th><th>Расход бетона, коэфф.</th><th>Подтверждено технологом</th></tr></thead><tbody>${families.map(f=>{const g=gs[f.name]||{};
+   return `<tr><td>${esc(f.name)}</td><td>${n(f.total)}</td><td><input type="number" step="any" min="0" max="1000" name="g:${esc(f.name)}:hoursPerM3" value="${esc(g.hoursPerM3??'')}" placeholder="${esc(n(np.hoursPerM3))}"></td><td><input type="number" step="any" min="1" max="3" name="g:${esc(f.name)}:concreteFactor" value="${esc(g.concreteFactor??'')}" placeholder="${esc(n(np.concreteFactor))}"></td><td><label><input type="checkbox" name="g:${esc(f.name)}:confirmed" ${g.confirmed?'checked':''}> ${g.confirmed?'подтверждено'+when(g):'нет'}</label></td></tr>`;}).join('')}</tbody></table></div>`;
+ }
+ // Класс бетона по типам изделий, у которых на листах чертежей класса нет (например, плиты): цена бетона таких изделий считается по этому классу
+ function typesSection(np){
+  const types=readiness?.classTypes||[],assigned=np.classByType||{};
+  if(!types.length)return '';
+  return `<h3>Класс бетона по типам изделий</h3><p class="pc-context">Для типов, у которых класс бетона не указан на листах чертежей. Запишите класс (В30, В40…): цена бетона этих изделий считается по нему.</p>
+  <div class="pc-norms-table"><table id="pc-types-table"><thead><tr><th>Тип изделия</th><th>Изделий</th><th>Класс бетона</th></tr></thead><tbody>${types.map(x=>`<tr><td>${esc(x.key)}</td><td>${n(x.count)}</td><td><input type="text" maxlength="4" name="t:${esc(x.key)}" value="${esc(assigned[x.key]||'')}" placeholder="не задан" pattern="[ВBвb]?\\s?\\d{2}"></td></tr>`).join('')}</tbody></table></div>`;
+ }
  function render(){
   const writer=api.user.role!=='viewer',pp=prices.parameters,np=norms.parameters,profile=prices.profile.parameters;
   const classes=Object.keys(pp.concrete).filter(k=>k!=='default');
@@ -33,6 +50,7 @@
    <label>Бетон: производственный / проектный расход${plain('concreteFactor',np.concreteFactor,1,3)}<small>Коэффициент ${n(np.concreteFactor)} · припуск ${n((Number(np.concreteFactor)-1)*100)}%</small></label>
    <label>Труд на 1 м³ производственного бетона, чел·ч${plain('hoursPerM3',np.hoursPerM3,0,1000)}</label></div>
   <div class="pc-norms-table"><table><thead><tr><th>Ресурс</th><th>Ед.</th><th>По проекту, сумма</th><th>В Excel, сумма</th><th>Коэффициент расхода</th></tr></thead><tbody>${Object.entries(np.resources).map(([k,r])=>`<tr><td>${esc(r.name)}</td><td>${esc(r.unit)}</td><td>${n(r.projectTotal)}</td><td>${n(r.productionTotal)}</td><td>${plain('f:'+k,r.factor,1,10)}</td></tr>`).join('')}</tbody></table></div>
+  ${groupsSection(np)}${typesSection(np)}
   </section></fieldset><div class="pc-norms-actions"><button type="submit" ${writer?'':'disabled'}>Сохранить расценки и нормы</button><span id="pc-norms-status" class="pc-context" role="status" aria-live="polite"></span></div></form>
   <details><summary>Основание норм и методика</summary><h3>Основание норм</h3><table class="pc-norms-basis"><thead><tr><th>Изделие</th><th>Бетон по проекту, м³</th><th>Бетон в Excel, м³</th><th>Труд в Excel, чел·ч</th><th>Труд / м³</th></tr></thead><tbody>${np.basis.map(b=>`<tr><td>${esc(b.name)}</td><td>${n(b.projectVolume)}</td><td>${n(b.productionVolume)}</td><td>${n(b.hours)}</td><td>${n(b.hoursPerM3)}</td></tr>`).join('')}</tbody></table>
   <p class="pc-context">Нормы и расценки хранятся в базе с историей изменений. Бетон округляется до 0,01 м³, нормируемая сталь — вверх до 0,001 т. Материал без цены считается по нулю — стоимость такого изделия занижена, пока цена не задана. Неподтверждённый объём не участвует в оценке труда.</p></details>`;
@@ -62,9 +80,12 @@
     prices=await api.request('/calc/api/profile',{method:'PUT',body:JSON.stringify(body)});messages.push('профиль v'+prices.profile.version);
    }
    const normInputs=[field('concreteFactor'),field('hoursPerM3'),...group('f:')];
-   if(normInputs.some(changed)){
+   const extra=[...group('g:'),...group('t:')],extraChanged=extra.some(el=>el.type==='checkbox'?el.checked!==el.defaultChecked:el.value!==el.defaultValue);
+   if(normInputs.some(changed)||extraChanged){
     const body={expectedVersion:norms.version,resources:{}};for(const k of ['concreteFactor','hoursPerM3'])body[k]=read(field(k));
     for(const el of group('f:'))body.resources[el.name.slice(2)]={factor:read(el)};
+    if(group('g:').length){body.groups={};for(const el of group('g:')){const [,family,key]=el.name.split(':');const g=body.groups[family]??={confirmed:false,hoursPerM3:null,concreteFactor:null};if(key==='confirmed')g.confirmed=el.checked;else g[key]=el.value===''?null:el.value;}}
+    if(group('t:').length){body.classByType={};for(const el of group('t:'))body.classByType[el.name.slice(2)]=el.value.trim();}
     norms=await api.request('/calc/api/norms',{method:'PUT',body:JSON.stringify(body)});messages.push('нормы v'+norms.version);
    }
    if(messages.length)await window.CalcZhBIWorkspace.refresh();
@@ -76,6 +97,6 @@
   window.CalcZhBIProjectReport?.close();window.CalcZhBIUI?.enter('norms');await api.ready();if(window.CalcZhBIUI?.section!=='norms')return;previousView=document.querySelector('.pc-tabs [data-view][aria-pressed=true]')?.dataset.view||'model';
   document.querySelector('.pc-tabs').hidden=true;for(const v of ['calculation','model','tech','issues','collisions','sources','sheets','history'])document.getElementById('pc-'+v+'-panel').hidden=true;
   panel.hidden=false;open.setAttribute('aria-pressed','true');panel.textContent='Загрузка расценок и норм…';
-  try{[prices,norms]=await Promise.all([api.request('/calc/api/prices'),api.request('/calc/api/norms')]);render();}catch(e){panel.textContent=e.message;}
+  try{[prices,norms,readiness]=await Promise.all([api.request('/calc/api/prices'),api.request('/calc/api/norms'),api.request('/calc/api/readiness').catch(()=>null)]);render();}catch(e){panel.textContent=e.message;}
  });window.CalcZhBINorms={close};
 })();
