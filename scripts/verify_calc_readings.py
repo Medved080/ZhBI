@@ -31,8 +31,14 @@ def check(cond, label):
         FAILS.append(label)
 
 
-# каталог без чтений (в каталоге данных файла чтений может не быть; если он есть — берём копию до наложения)
-base = {k: copy.deepcopy(v) for k, v in dm.catalog().items() if "readings" not in v}
+# каталог без чтений: временный каталог с ссылками на файлы каталога, кроме файла чтений (в настоящем каталоге данных он может лежать)
+bare = Path(tempfile.mkdtemp(prefix="calc-bare-"))
+for item in Path(assets).iterdir():
+    if item.name != SOURCE_FILE:
+        (bare / item.name).symlink_to(item)
+dm.ASSETS = bare
+dm.catalog.cache_clear()
+base = {k: copy.deepcopy(v) for k, v in dm.catalog().items()}
 check(len(base) > 900, "каталог прочитан (%d моделей)" % len(base))
 
 path = os.environ.get("READINGS_JSON")
