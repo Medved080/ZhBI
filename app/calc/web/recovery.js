@@ -6,8 +6,8 @@
  <aside><details id="pc-recovery-connection" open><summary>Подключение к серверу</summary><form id="pc-recovery-config">
  <label>API<select name="provider"><option value="openai">OpenAI-совместимый (vLLM, LM Studio)</option><option value="ollama">Ollama</option></select></label>
  <label>Адрес API<input name="baseUrl" type="url" required maxlength="500" placeholder="LM Studio: http://192.168.87.220:1234/v1 · Ollama: http://192.168.1.10:11434"></label>
- <label>Название модели<input name="model" list="pc-recovery-models" required maxlength="200" placeholder="Название установленного Qwen"><datalist id="pc-recovery-models"></datalist></label>
- <div class="pc-recovery-actions"><button type="button" id="pc-recovery-list-models">Показать модели сервера</button></div>
+ <label>Название модели<select id="pc-recovery-model-select" hidden aria-label="Модель с сервера нейросети"></select><input name="model" list="pc-recovery-models" required maxlength="200" placeholder="Название установленного Qwen"><datalist id="pc-recovery-models"></datalist></label><div class="pc-context" id="pc-recovery-models-note" role="status"></div>
+ <div class="pc-recovery-actions"><button type="button" id="pc-recovery-list-models">Обновить список моделей</button></div>
  <details><summary>Параметры обработки</summary>
  <label>Ожидание ответа, секунд<input name="timeoutSeconds" type="number" min="10" max="600" required></label>
  <label>Лимит ответа, токенов<input name="maxTokens" type="number" min="512" max="16384" required></label>
@@ -34,6 +34,7 @@
  async function loadConfig(){
   connection=await api.request('/calc/api/recovery/config');for(const [key,value] of Object.entries(connection.config)){if(form.elements[key]){if(key==='useTiles')form.elements[key].checked=value;else form.elements[key].value=value;}}
   const admin=api.user?.role==='admin';for(const el of form.elements)el.disabled=!admin;
+  if(admin)scheduleModels();
   q('#pc-recovery-test').disabled=!admin;
   q('#pc-recovery-probe').textContent=connection.probe?.ok?'Изображения и JSON проверены · '+connection.probe.model:'Перед запуском нужен успешный тест чтения изображения.';
   updateSelection();
@@ -68,13 +69,33 @@
  document.getElementById('pc-recovery-open').addEventListener('click',async()=>{if(!window.CalcZhBIRecoveryUI)return;dialog.showModal();status('');updateSelection();try{await loadConfig();await refresh();}catch(error){status(error.message,true);}clearInterval(timer);timer=setInterval(()=>{if(dialog.open&&!document.hidden)void refresh().catch(error=>status(error.message,true));},4000);});
  dialog.addEventListener('close',()=>{clearInterval(timer);timer=null;});
  form.addEventListener('submit',event=>{event.preventDefault();void act(form.querySelector('[type=submit]'),async()=>{await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});await loadConfig();status('Подключение сохранено. Проверьте чтение изображения.');});});
- q('#pc-recovery-list-models').addEventListener('click',event=>void act(event.currentTarget,async()=>{
-  const payload=configPayload();status('Запрашиваю список моделей с сервера нейросети…');
-  const result=await api.request('/calc/api/recovery/models',{method:'POST',body:JSON.stringify(payload)});
-  q('#pc-recovery-models').replaceChildren(...result.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.label=m.id+(m.vision?' · с изображениями':'');return o;}));
-  const vision=result.models.filter(m=>m.vision);if(!form.elements.model.value&&(vision[0]||result.models[0]))form.elements.model.value=(vision[0]||result.models[0]).id;
-  status('Моделей на сервере: '+result.models.length+(vision.length?' (с поддержкой изображений: '+vision.length+')':'')+'. Выберите в поле «Название модели»: '+result.models.slice(0,6).map(m=>m.id).join(', ')+(result.models.length>6?'…':''));
- }));
+ // Список моделей подгружается сам: при открытии формы, смене типа API и адреса. Сервер нейросети может быть виден только backend,
+ // поэтому запрос идёт через сервер. Не получили список — остаётся ручной ввод названия.
+ const modelSelect=q('#pc-recovery-model-select'),modelNote=q('#pc-recovery-models-note');let modelsTimer=0,modelsSerial=0;
+ function showModels(models){
+  const usable=models.filter(m=>m.vision||!/embed/i.test(m.id)).sort((x,y)=>Number(!!y.vision)-Number(!!x.vision)||x.id.localeCompare(y.id));
+  const current=form.elements.model.value.trim();
+  q('#pc-recovery-models').replaceChildren(...usable.map(m=>{const o=document.createElement('option');o.value=m.id;return o;}));
+  const options=usable.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.id+(m.vision?' · с изображениями':m.vision===false?'':'');return o;});
+  const manual=document.createElement('option');manual.value='';manual.textContent='— выберите модель —';
+  const typed=document.createElement('option');typed.value='__manual__';typed.textContent='Ввести название вручную…';
+  modelSelect.replaceChildren(manual,...options,typed);
+  modelSelect.value=usable.some(m=>m.id===current)?current:'';
+  modelSelect.hidden=false;form.elements.model.hidden=true;
+  const vision=usable.filter(m=>m.vision);
+  modelNote.textContent='Моделей на сервере: '+usable.length+(vision.length?' (с изображениями: '+vision.length+'). Для чертежей нужна модель с изображениями.':'.');
+ }
+ function showManualModel(note){modelSelect.hidden=true;form.elements.model.hidden=false;modelNote.textContent=note||'';}
+ async function refreshModels({manual=false}={}){
+  if(api.user?.role!=='admin'||!form.elements.baseUrl.value.trim()||!form.elements.baseUrl.validity.valid){return;}
+  const serial=++modelsSerial;modelNote.textContent='Запрашиваю список моделей у сервера нейросети…';
+  try{const result=await api.request('/calc/api/recovery/models',{method:'POST',body:JSON.stringify(configPayload())});if(serial!==modelsSerial)return;showModels(result.models);if(manual)status('Список моделей обновлён.');}
+  catch(error){if(serial!==modelsSerial)return;showManualModel('Список моделей не получен ('+error.message+'). Введите название модели вручную.');}
+ }
+ function scheduleModels(){clearTimeout(modelsTimer);modelsTimer=setTimeout(()=>void refreshModels(),700);}
+ modelSelect.addEventListener('change',()=>{if(modelSelect.value==='__manual__'){showManualModel('');form.elements.model.focus();return;}form.elements.model.value=modelSelect.value;});
+ form.elements.baseUrl.addEventListener('change',scheduleModels);form.elements.provider.addEventListener('change',scheduleModels);
+ q('#pc-recovery-list-models').addEventListener('click',event=>void act(event.currentTarget,()=>refreshModels({manual:true})));
  q('#pc-recovery-test').addEventListener('click',event=>void act(event.currentTarget,async()=>{if(!form.reportValidity())return;await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});status('Проверяю чтение тестового изображения на вашем сервере…');const result=await api.request('/calc/api/recovery/connection-test',{method:'POST'});await loadConfig();status(result.note);}));
  q('#pc-recovery-scope').addEventListener('change',updateSelection);
  q('#pc-recovery-start').addEventListener('click',event=>void act(event.currentTarget,async()=>{
