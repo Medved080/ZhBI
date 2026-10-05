@@ -225,7 +225,7 @@
   (`app/error_log.py`), руками их логировать не нужно.
 - **Подсистема «Калькулятор»** (2026-10-04, ветка `claude/calc-subsystem`, не влита) — `app/calc/`, страница `/calc/`, разделы
   прав `calc`/`calc_sync`, роль «Калькулятор», отдельная база `data/calc/`; перенос в тест/бой — отправкой пакета по токену
-  (только из-под VPN). Нужен Python 3.12 (`.venv312`). Подробности — `Docs/calc-sync.md`. Общие настройки ИИ и помощник V1/V2/Калькулятора — `app/ai_integration.py`, `app/assistant.py`/`assistant_data.py` (поиск по разрешённому снимку), `assistant_period.py`, `assistant_llm.py` (бюджет каждого запроса, повтор переполнения/рассуждения); дизайн и ограничения — `Docs/ai-assistant-design.md`.
+  (только из-под VPN). Нужен Python 3.12 (`.venv312`). Подробности — `Docs/calc-sync.md`. Общие настройки ИИ и помощник V1/V2/Калькулятора — `app/ai_integration.py`, `app/assistant.py`/`assistant_data.py` (поиск по разрешённому снимку), `assistant_period.py`, `assistant_evidence.py` (контекст/источники), `assistant_llm.py` (бюджет каждого запроса, повтор переполнения/рассуждения); дизайн и ограничения — `Docs/ai-assistant-design.md`.
 - **Внешние 3D-модели объекта** (благоустройство, FBX, 09-10) — таблица
   `object_external_models`, роутер `app/external_models.py`, ES-модули
   `app/static/external-models/`, вендоринг FBXLoader r160. Координатный

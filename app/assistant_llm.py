@@ -32,6 +32,10 @@ class Dialogue:
                     if thinking_retry and available > base_output:
                         output = min(output, available)
                         break
+                    if not thinking_retry and available >= 512:
+                        output = min(output, available)
+                        self.stage("compact", "Сохраняем необходимые данные и уменьшаем резерв ответа", outputTokens=output)
+                        break
                     raise qwen_client.InferenceError("Вопрос и необходимые данные не помещаются в контекст модели. Разделите вопрос на несколько частей.")
             try:
                 return qwen_client.chat(self.cfg.model_copy(update={"maxTokens": output}), runtime.settings(), messages, schema, name,

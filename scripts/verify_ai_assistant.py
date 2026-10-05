@@ -94,12 +94,20 @@ class Inference(BaseHTTPRequestHandler):
                 sql="SELECT COUNT(*) AS count FROM elements WHERE is_current=1 AND element_type='Ригель' AND floor=1"
             if "из них смонтировали" in question:
                 assert any("ригелей на первом этаже" in m["content"] for m in instruction["history"])
-                sql=f"SELECT COUNT(*) AS installed FROM elements e WHERE e.is_current=1 AND e.element_type='Ригель' AND e.floor=1 AND e.current_status IN ('installed','accepted') AND (SELECT date(MIN(h.changed_at)) FROM status_history h WHERE h.element_id=e.id AND h.status IN ('installed','accepted')) > '{instruction['period']['from']}' AND (SELECT date(MIN(h.changed_at)) FROM status_history h WHERE h.element_id=e.id AND h.status IN ('installed','accepted')) <= '{instruction['period']['to']}'"
+                sql="SELECT COALESCE(SUM(montage_change),0) AS installed FROM element_facts WHERE element_type='Ригель' AND floor=1"
             if "__large_rows__" in question:sql="SELECT id, comment FROM elements ORDER BY id"
             value={"queries":[{"title":"Найденные показатели","sql":sql}] if len(data["messages"])==2 or "__repair__" in question else [],"needsMore":False}
+            if "__huge_sql__" in question:
+                value["queries"] = [{"title":"Общий монтаж за сентябрь (штатный факт)","sql":"SELECT SUM(montage_change) AS installed FROM period_facts /*"+"x"*5300+"*/"},
+                                    {"title":"Монтаж по типам (серверный факт)","sql":"SELECT element_type, SUM(montage_change) AS installed FROM element_facts GROUP BY element_type /*"+"x"*5300+"*/"}]
         else:
             context=json.loads(text.split("Данные сервиса (JSON):\n",1)[1].split("\nВопрос:",1)[0])
+            assert all("sql" not in s["data"] for s in context["sources"] if isinstance(s["data"],dict))
             value={"answer":"Проверка: локальный ответ по данным сервиса.","sourceIds":[s["id"] for s in context["sources"][:3]] + [s["id"] for s in context["sources"] if s["scope"]=="search"]}
+            if context.get("sourceDiscussion"):
+                assert "Общий монтаж за сентябрь" in json.dumps(context,ensure_ascii=False)
+                assert all(s["id"].startswith("previous-") for s in context["sources"])
+                value["answer"]="Это выборки данных сервиса. Общий итог и разбивка используют один серверный факт; различие методик не установлено."
         if "__unknown_source__" in text:value["sourceIds"]=["invented-source"]
         if "__hold__" in text:
             hold_received.set();hold_release.wait(10)
@@ -223,6 +231,12 @@ legacy_start=len(calls)
 legacy_cfg=ConnectionConfig(provider="openai",model="Qwen-test",baseUrl=f"http://127.0.0.1:{server.server_port}",maxTokens=2048)
 value=qwen_client.chat(legacy_cfg,runtime.settings(),[{"role":"user","content":"reasoning-regression-legacy400"}],reasoning_schema)
 check(value["answer"]=="OK" and len(calls)-legacy_start==2 and "chat_template_kwargs" not in calls[-1],"старый HTTP400 fallback чтения чертежей сохранён")
+# Не сокращаем обязательные данные, когда можно уменьшить только резерв генерации.
+fixed_messages=[{"role":"user","content":"reasoning-regression "+"d"*8800}]
+cfg=ConnectionConfig(provider="ollama",model="test-dialog",baseUrl=f"http://127.0.0.1:{server.server_port}",maxTokens=4096)
+fixed_steps=[]
+value=Dialogue(cfg,8192,lambda:False,lambda info:None,lambda *args,**kwargs:fixed_steps.append(args)).call(fixed_messages,reasoning_schema,"fixed",lambda:False)
+check(value["answer"]=="OK" and 512<=calls[-1]["options"]["num_predict"]<2000 and fixed_steps[0][0]=="compact","обязательные данные помещаются с меньшим резервом ответа")
 calls.clear()
 
 with TestClient(app) as admin:
@@ -303,6 +317,37 @@ with TestClient(app) as admin:
     large=await_result(admin,r.json()["id"]).json();check(large["state"]=="done","большой экран, история и список помещаются в контекст")
     large_source=next(s for s in large["sources"] if s["scope"]=="search")
     check(admin.get(large_source["url"]).json()["returnedRows"]==200,"в источнике сохранены все 200 строк несмотря на сокращение запроса к модели")
+    r=admin.post("/assistant/requests",json={**body,"scope":"auto","question":"__huge_sql__ Сколько смонтировали за сентябрь с разбивкой по типам?"})
+    huge=await_result(admin,r.json()["id"]).json()
+    check(huge["state"]=="done","два SQL по 5300 знаков не переполняют итоговый ответ")
+    searched=[s for s in huge["sources"] if s["scope"]=="search"]
+    total_source=admin.get(searched[0]["url"]).json()
+    breakdown_source=admin.get(searched[1]["url"]).json()
+    sent_context=json.loads(calls[-1]["messages"][-1]["content"].split("Данные сервиса (JSON):\n",1)[1].split("\nВопрос:",1)[0])
+    sent_breakdown=next(s["data"] for s in sent_context["sources"] if s["id"]==searched[1]["id"])
+    check(sent_breakdown["aggregate"] and sent_breakdown["rows"]==breakdown_source["rows"],"агрегированная разбивка передаётся целиком, даже при сокращении контекста")
+    check(sum(row["installed"] for row in breakdown_source["rows"])==total_source["rows"][0]["installed"],"общая сумма и разбивка по типам используют один серверный факт")
+    from app.assistant import _JOBS
+    preserved=_JOBS[huge["id"]]["evidence"][searched[0]["id"]]
+    check(len(preserved["sql"])>5300,"исходный SQL сохранён для проверки, сокращено только представление модели")
+    final_payload=calls[-1]["messages"][-1]["content"]
+    check("x"*100 not in final_payload,"SQL не отправляется в финальное объяснение")
+    previous_calls=len(calls)
+    r=admin.post("/assistant/requests",json={**body,"question":"какие отчеты показывают разные данные?","previousRequestId":huge["id"],"history":[{"role":"assistant","content":huge["answer"]}]})
+    discussion=await_result(admin,r.json()["id"]).json()
+    check(discussion["state"]=="done" and len(calls)==previous_calls+1,"вопрос об источниках использует предыдущие выборки без нового поиска")
+    check(discussion["capturedAt"]==huge["capturedAt"] and discussion["period"]==huge["period"],"обсуждение сохраняет дату снимка и период предыдущего ответа")
+    old_ref=next(s for s in discussion["sources"] if s["scope"]=="search")
+    check(admin.get(old_ref["url"]).json()["rows"]==total_source["rows"],"источник продолжения содержит те же числа")
+    report_link=next(s for s in discussion["sources"] if s["scope"]!="search")
+    check(report_link["url"].count("assistant_request=")==1,"ссылка предыдущего отчёта содержит только текущее задание")
+    r=admin.post("/assistant/requests",json={**body,"question":"Откуда эти цифры?","previousRequestId":discussion["id"]})
+    discussion_again=await_result(admin,r.json()["id"]).json()
+    check(discussion_again["state"]=="done" and all(s["id"].startswith("previous-") and s["id"].count("previous-")==1 for s in discussion_again["sources"]),"повторное обсуждение не наращивает ID и сохраняет источники")
+    check(user.post("/assistant/requests",json={**body,"previousRequestId":huge["id"]}).status_code==404,"чужой предыдущий ответ нельзя добавить в контекст")
+    r=admin.post("/assistant/requests",json={**body,"previousRequestId":"expired-request"})
+    expired=await_result(admin,r.json()["id"]).json()
+    check(expired["state"]=="done" and any("Источники предыдущего" in warning for warning in expired["warnings"]),"истёкший предыдущий ответ не ломает новый поиск")
     for payload in calls:
         check(payload["options"]["num_ctx"]<=8192 and sum(len(m["content"]) for m in payload["messages"])/1.4+payload["options"]["num_predict"]+512+len(json.dumps(payload["format"],ensure_ascii=False,separators=(",",":")))/1.4<=8193, "каждый этап соблюдает бюджет включая ответ и схему")
     r=admin.post("/assistant/requests",json={**body,"question":"__bad_scope__"});bad_scope=await_result(admin,r.json()["id"]).json()
@@ -329,8 +374,15 @@ with TestClient(app) as admin:
     snap=Snapshot(broad,adminrow,list(DATASETS),scoped_objects(broad,adminrow),date(2026,9,5),end)
     check({"elements","contracts","block_works","schedule_versions","revit_elements","calc_products","training_attempts","users","attachments"}.issubset(snap.catalog),"поиск охватывает бизнес-данные, калькулятор и разрешённое администрирование")
     check("password_hash" not in snap.catalog["users"] and "sessions" not in snap.catalog and "recovery_settings" not in snap.catalog,"секреты не копируются в снимок")
+    sums=snap.query("SELECT SUM(montage_change) AS installed, SUM(delivery_change) AS delivered FROM element_facts")["rows"][0]
+    aggregate=snap.query("SELECT SUM(montage_change) AS installed, SUM(delivery_change) AS delivered FROM period_facts")["rows"][0]
+    check(sums==aggregate,"поэлементный факт складывается в тот же общий итог монтажа и поставки")
+    by_type=snap.query("SELECT element_type,SUM(montage_change) AS installed FROM element_facts GROUP BY element_type")["rows"]
+    check(sum(row["installed"] for row in by_type)==aggregate["installed"],"разбивка включает все типы, в том числе пустой")
+    check(snap.query("SELECT COUNT(*) AS n FROM element_facts WHERE montage_day IS NULL AND montage_change<>0")["rows"][0]["n"]==0,"недатированные факты не создают прирост")
     total=snap.query("SELECT COUNT(*) AS n FROM elements")["rows"][0]["n"]
     limited=snap.query("SELECT id FROM elements ORDER BY id")
+    check(snap.query("SELECT element_type,SUM(montage_change) FROM element_facts GROUP BY element_type")["aggregate"] and not limited["aggregate"],"EXPLAIN отличает агрегат от детального списка")
     check(total>200 and limited["returnedRows"]==200 and limited["truncated"],"счётчик по всем данным и честное ограничение списка")
     check(snap.query("SELECT COUNT(*) AS n FROM elements")["tables"]==["elements"],"повторный SQL сохраняет перечень прав")
     for sql in ["SELECT password_hash FROM users", "SELECT * FROM sqlite_master", "SELECT load_extension('x')", "ATTACH DATABASE '/tmp/x' AS other", "PRAGMA table_info(users)", "WITH x AS (SELECT 1) DELETE FROM elements", "SELECT 1; DELETE FROM elements", "SELECT randomblob(10000000)"]:
@@ -378,6 +430,7 @@ with TestClient(app) as admin:
     check(admin.get("/assistant/requests/"+probe.json()["id"]).status_code==200,"тест без данных доступен владельцу")
     check(admin.get("/assistant/requests/"+next(j["id"] for j in __import__('app.assistant',fromlist=['_JOBS'])._JOBS.values() if j.get('sources'))).status_code==403,"права перепроверяются при чтении ответа")
     check(admin.get(path).status_code==403,"доступ к параметрам ссылки перепроверяется")
+    check(admin.post("/assistant/requests",json={**body,"previousRequestId":huge["id"]}).status_code==403,"отозванные права проверяются перед обсуждением старых источников")
     user.close()
 server.shutdown();server.server_close()
 print(f"OK: {checks} проверок; временная копия удалена")

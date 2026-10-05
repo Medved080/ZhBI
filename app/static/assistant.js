@@ -44,7 +44,7 @@ export function mountAssistant({getContext}) {
     </section>`;
   document.body.append(host);
   const $=s=>host.querySelector(s), form=$("#ai-form"), panel=$("#ai-panel"), launch=$(".ai-launch"), messages=$("#ai-messages"), status=$("#ai-status");
-  let history=[], busy=false, requestId=null, generation=0, contextKey="", contextTimer;
+  let lastResultId=null, history=[], busy=false, requestId=null, generation=0, contextKey="", contextTimer;
   const evidenceDialogs=new Set();
   async function showEvidence(source) {
     try {
@@ -82,7 +82,7 @@ export function mountAssistant({getContext}) {
     messages.append(item);messages.scrollTop=messages.scrollHeight;
   }
   async function stop() { const id=requestId;if(id){try{await aiRequest(`/assistant/requests/${id}/cancel`,{});}catch(e){say(e.message);}} }
-  function reset(note="") { for(const dialog of evidenceDialogs)dialog.close();history=[];messages.replaceChildren();steps.hidden=true;steps.replaceChildren();say(note); }
+  function reset(note="") { for(const dialog of evidenceDialogs)dialog.close();lastResultId=null;history=[];messages.replaceChildren();steps.hidden=true;steps.replaceChildren();say(note); }
   function syncContext() {
     const ctx=getContext();
     const selection=JSON.stringify([ctx.page?.filters,ctx.page?.selectedIds,ctx.page?.elementIds?.length,ctx.page?.elementIds?.reduce((h,id)=>(h*31+id)|0,0)]);
@@ -109,7 +109,7 @@ export function mountAssistant({getContext}) {
   form.addEventListener("submit",async e=>{
     e.preventDefault();if(busy)return;if(!form.reportValidity())return;
     const ctx=syncContext(),question=form.elements.question.value.trim();if(!question)return;
-    const body={question,objectId:ctx.objectId||null,projectId:ctx.projectId||null,page:ctx.page||{},history:history.slice(-8)};
+    const body={question,previousRequestId:lastResultId,objectId:ctx.objectId||null,projectId:ctx.projectId||null,page:ctx.page||{},history:history.slice(-8)};
     const my=++generation;busy=true;controls();append("user",question);steps.hidden=true;steps.replaceChildren();say("Отправляем вопрос…");
     try{
       let result=await aiRequest("/assistant/requests",body);const id=result.id;
@@ -123,7 +123,7 @@ export function mountAssistant({getContext}) {
       }
       if(my!==generation)return;
       if(result.state!=="done"){showProgress(result);throw new Error(result.error||"Запрос остановлен");}
-      append("assistant",result.answer,result);history.push({role:"user",content:question.slice(0,6000)},{role:"assistant",content:(result.answer.slice(0,5400)+`\nПериод ответа: ${result.period.from} → ${result.period.to}. Область ответа: ${result.area||"доступные данные сервиса"}`).slice(0,6000)});history=history.slice(-8);steps.hidden=true;say("");
+      lastResultId=result.id;append("assistant",result.answer,result);history.push({role:"user",content:question.slice(0,6000)},{role:"assistant",content:(result.answer.slice(0,5400)+`\nПериод ответа: ${result.period.from} → ${result.period.to}. Область ответа: ${result.area||"доступные данные сервиса"}`).slice(0,6000)});history=history.slice(-8);steps.hidden=true;say("");
     }catch(error){if(my===generation)say(error.message);}
     finally{if(my===generation){busy=false;requestId=null;controls();}}
   });

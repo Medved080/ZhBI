@@ -2,6 +2,7 @@
 SQL модели ограничен разрешённым снимком в assistant_data; исходные БД и запись недоступны.
 """
 import json
+from copy import deepcopy
 import logging
 import threading
 import time
@@ -20,6 +21,7 @@ from app.calc import qwen_client, runtime
 from app.calc.recovery_schema import StrictModel
 from app.ai_integration import gpu_slot, read_config
 from app.assistant_llm import Dialogue, encoded, trim_history
+from app.assistant_evidence import AnswerContext, explains_sources, previous_context
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -32,7 +34,9 @@ SYSTEM = """Ты помощник сервиса строительства. О�
 отсылкой к отчёту, когда ответ есть в данных. Для простого вопроса достаточно
 нескольких предложений; на подробный вопрос отвечай подробно.
 Используй только предоставленные источники. Числа, единицы, область и даты должны
-совпадать с источниками. Итоги поиска посчитаны по всем разрешённым данным,
+совпадать с источниками. Выборка scope=search — запрос к данным, а не отдельный штатный отчёт.
+При расхождении итогов укажи источники и проверенные определения. Не объясняй разницу методиками
+или причинами, которых нет в данных. Несогласованные итог и разбивку не выдавай за единый результат. Итоги поиска посчитаны по всем разрешённым данным,
 но строки с truncated=true — только часть списка, нельзя называть его полным.
 Основной период period уже определён по вопросу; не подменяй его датами
 страницы или предыдущей реплики. Не утверждай отсутствие данных во всей
@@ -71,6 +75,7 @@ class Ask(StrictModel):
     dateFrom: date | None = None
     dateTo: date | None = None
     page: PageContext = Field(default_factory=PageContext)
+    previousRequestId: str | None = Field(default=None, max_length=36)
     history: list[Message] = Field(default_factory=list, max_length=8)
     @model_validator(mode="after")
     def valid_period(self):
@@ -225,6 +230,19 @@ def start_request(body, user, context_override=None):
         qwen_client.validate_endpoint(cfg, runtime.settings())
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    previous = None
+    missing_previous = False
+    if body.previousRequestId:
+        with _LOCK:
+            exists = body.previousRequestId in _JOBS
+        if exists:
+            prior = owned_job(body.previousRequestId, user)
+            if prior["state"] == "done" and time.time() - prior["created"] <= 3600:
+                previous = previous_context(prior)
+            else:
+                missing_previous = True
+        else:
+            missing_previous = True
     with _LOCK:
         for key, job in list(_JOBS.items()):
             if time.time()-job["created"] > 3600 and job["state"] != "running":
@@ -255,9 +273,14 @@ def start_request(body, user, context_override=None):
                 dialogue = Dialogue(cfg, config.assistantContextTokens, job["cancel"].is_set, progress, stage)
                 if context_override is not None:
                     data = context_override
+                elif previous and explains_sources(body.question):
+                    stage("previous_sources", "Читаем источники предыдущего ответа")
+                    data = previous
                 else:
                     from app.assistant_data import search_context
                     data = search_context(body, dict(user), dialogue, job["cancel"].is_set, stage)
+                if missing_previous:
+                    data["warnings"].append("Источники предыдущего ответа истекли или сервер перезапущен; выполнен новый поиск по истории диалога.")
                 source_params = {s["id"]: {"objectId": s["objectId"], "reportId": s["url"].split("#/")[1], "params": s.pop("reportParams")}
                                  for s in data["sources"] if "reportParams" in s}
                 evidence = {s["id"]: {"title": s["title"], **s["data"]} for s in data["sources"] if s["scope"] == "search"}
@@ -267,52 +290,16 @@ def start_request(body, user, context_override=None):
                 if job["cancel"].is_set():
                     raise qwen_client.InferenceCancelled()
                 stage("answer", "Формируем ответ по найденным данным", sourceCount=len(data["sources"]))
-                # Сведения об объектах уже проверены при поиске; полный перечень не нужен для ответа.
-                data["objectCount"] = len(data.get("objects", []))
-                data["objects"] = [{"id": o["id"], "name": o["name"]} for o in data.get("objects", [])] if data["objectCount"] <= 3 else []
-                if data.get("page"):
-                    data["page"]["text"] = data["page"]["text"][:3000]
+                answer_context = AnswerContext(data)
                 history = [{"role": m.role, "content": (m.content if len(m.content) <= 1500 else m.content[:1000]+"…"+m.content[-500:])} for m in body.history[-4:]]
                 messages = []
                 def rebuild():
-                    messages[:] = [{"role": "system", "content": SYSTEM}, *history, {"role": "user", "content": "Данные сервиса (JSON):\n" + encoded({**data, "sources": [{k: v for k, v in source.items() if k not in {"url", "feature", "projectName"}} for source in data["sources"]]}) + "\nВопрос: " + body.question}]
+                    messages[:] = [{"role": "system", "content": SYSTEM}, *history, {"role": "user", "content": "Данные сервиса (JSON):\n" + encoded(answer_context.data) + "\nВопрос: " + body.question}]
                 def shrink_answer():
-                    if data.get("page") and data["page"].get("text"):
-                        data["page"]["text"] = ""
-                    elif data.get("page") and data["page"].get("filters"):
-                        data["page"]["filters"] = ""
-                    elif trim_history(history):
-                        pass
-                    else:
-                        candidates = []
-                        def details(value):
-                            if isinstance(value, dict):
-                                if isinstance(value.get("rows"), list) and len(value["rows"]) > 1:
-                                    candidates.append((value, "rows"))
-                                for child in value.values():
-                                    details(child)
-                            elif isinstance(value, list):
-                                for child in value:
-                                    details(child)
-                        for source in data["sources"]:
-                            details(source["data"])
-                            if isinstance(source["data"], list) and len(source["data"]) > 1:
-                                candidates.append((source, "data"))
-                        if not candidates:
-                            for source in data["sources"]:
-                                block = source["data"]
-                                if isinstance(block, dict) and block.get("conclusions"):
-                                    block.pop("conclusions")
-                                    block["omittedFields"] = ["conclusions"]
-                                    rebuild()
-                                    return True
-                            return False
-                        largest, key = max(candidates, key=lambda item: len(encoded(item[0][item[1]])))
-                        largest[key] = largest[key][:max(1, len(largest[key])//2)]
-                        largest["returnedRows"] = len(largest[key])
-                        largest["truncated"] = True
-                    rebuild()
-                    return True
+                    changed = answer_context.shrink() or trim_history(history)
+                    if changed:
+                        rebuild()
+                    return changed
                 rebuild()
                 schema = {"type": "object", "properties": {"answer": {"type": "string"}, "sourceIds": {"type": "array", "items": {"type": "string"}}}, "required": ["answer", "sourceIds"], "additionalProperties": False}
                 value = dialogue.call(messages, schema, "construction_assistant", shrink_answer)
@@ -332,6 +319,15 @@ def start_request(body, user, context_override=None):
                     path, fragment = source["url"].split("#", 1)
                     source["url"] = f"{path}&assistant_request={identifier}&assistant_source={source['id']}#{fragment}"
             stage("done", "Ответ готов")
+            context_sources = []
+            for source in data["sources"]:
+                if source["id"] in refs:
+                    saved = deepcopy(source)
+                    if source["id"] in source_params:
+                        saved["reportParams"] = deepcopy(source_params[source["id"]]["params"])
+                        saved["url"] = f"/v2?object_id={saved['objectId']}#/{source_params[source['id']]['reportId']}"
+                    context_sources.append(saved)
+            job["contextSources"] = context_sources
             job.update(answer=value["answer"], sources=[{k: s[k] for k in ("id", "title", "objectName", "url", "scope")} for s in data["sources"] if s["id"] in refs], state="done")
             if data["sources"] and not refs:
                 job["warnings"].append("Модель не указала источники ответа. Сверьте утверждения с отчётами.")
