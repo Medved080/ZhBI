@@ -7499,7 +7499,41 @@ function setStageLoading(on, text) {
   box.style.display = on ? "" : "none";
 }
 
+// Карточка объекта на месте пустой схемы (2026-10-05, B1): у объекта без чертежа вместо пустого поля — паспорт (проект, статус,
+// адрес, СМУ, проектная команда). Прячется при любой следующей загрузке схемы.
+const OBJECT_STATUS_RU = { perspective: "Перспективный", active: "В работе", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
+function hideObjectCard() {
+  const box = document.getElementById("stage-object-card");
+  if (box) box.hidden = true;
+}
+// Дерево проектов (`/projects-tree`) несёт только навигацию, без адреса и команды, поэтому паспорт читается из справочника
+// объектов (`GET /objects`, тот же ответ, что у формы «Проекты и объекты»).
+async function showObjectCard(текущий) {
+  const box = document.getElementById("stage-object-card");
+  if (!box || !текущий) return;
+  const id = текущий.object.id;
+  let o;
+  try {
+    o = (await api("/objects")).find((x) => x.id === id);
+  } catch (e) {
+    return;   // без паспорта остаётся прежнее сообщение «нет чертежа»
+  }
+  if (!o || state.objectId !== id) return;   // за время запроса сменили объект
+  const строка = (подпись, значение) => значение === null || значение === undefined || значение === ""
+    ? "" : `<dt>${escapeHtml(подпись)}</dt><dd>${escapeHtml(String(значение))}</dd>`;
+  const координаты = o.lat != null && o.lon != null ? `${o.lat}, ${o.lon}` : "";
+  const команда = OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] && o.team[ключ].name)).join("");
+  box.innerHTML = `<h4>Карточка объекта</h4><dl>
+      ${строка("Проект", текущий.project && текущий.project.name)}${строка("Объект", o.name)}
+      ${строка("Статус", OBJECT_STATUS_RU[o.status] || o.status)}${строка("Адрес", o.address)}${строка("Координаты", координаты)}
+      ${строка("СМУ", o.smu_name)}${строка("Директор СМУ", o.smu_director_name)}${строка("Ответственный (ДП/РП)", o.responsible_name)}
+      ${строка("Старт СМР", o.smr_start_reported)}</dl>
+    ${команда ? `<h4>Проектная команда</h4><dl>${команда}</dl>` : '<div class="hint-text">Проектная команда не заполнена — «Проекты и объекты».</div>'}`;
+  box.hidden = false;
+}
+
 async function loadPlan(preserveView = true) {
+  hideObjectCard();
   setStageLoading(true);
   try {
     return await loadPlanInner(preserveView);
@@ -7533,6 +7567,7 @@ async function loadPlanInner(preserveView = true) {
       // адресовано и вводило в заблуждение (2026-10-05, живой репорт: всплывало при смене ЖБИ → МФР в V2, где кадр
       // с рабочим местом МФР стартует с этого вызова). Тот же признак, что в switchObject выше.
       if (!can("plan", "read")) return;
+      showObjectCard(текущий);
       showToast(`У объекта «${текущий.object.name}» ещё нет чертежа — загрузите его в «Обмен данными → Загрузить чертёж»`, "info");
       return;
     }
@@ -12272,7 +12307,19 @@ function catalogFieldsHtml(запись, тип, редактируем) {
       <div class="catalog-pin-map" id="catalog-pin-map"></div>
     </div>`;
 
-  return реквизиты + реквизитыЗаказчика + адрес;
+  // Проектная команда: восемь ролей → физлицо из того же справочника (2026-10-05, B1).
+  const командаПроекта = тип === "object" ? `
+    <div class="form-card">
+      <h4>Проектная команда</h4>
+      <div class="object-fields">
+        ${OBJECT_TEAM_ROLES.map(([ключ, подпись]) => `
+        <label class="object-field"><span>${подпись}</span>
+          <select data-field="team_${ключ}" ${выкл}>
+            <option value="">— не назначен —</option>${опцииФизлиц(запись && запись.team && запись.team[ключ] ? запись.team[ключ].id : null)}
+          </select></label>`).join("")}
+      </div>
+    </div>` : "";
+  return реквизиты + реквизитыЗаказчика + командаПроекта + адрес;
 }
 
 function catalogSummaryHtml(запись, тип) {
@@ -12291,6 +12338,10 @@ function catalogSummaryHtml(запись, тип) {
     ${запись.drawings.length > 1 ? `Загружалось версий: ${запись.drawings.length}.` : ""}
   </div></div>`;
 }
+
+// Роли проектной команды объекта (2026-10-05, B1) — ТОТ ЖЕ список и порядок, что TEAM_ROLES в app/object_team.py.
+const OBJECT_TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
+  ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 
 function renderCatalogForm() {
   const место = document.getElementById("catalog-form");
@@ -12715,6 +12766,11 @@ function readCatalogForm() {
       значение = значение === "" ? null : Number(значение);
     } else if (поле === "lat" || поле === "lon") значение = значение === "" ? null : Number(значение);
     else if (значение === "") значение = null;
+    if (поле.startsWith("team_")) {
+      // Назначения проектной команды уходят одним объектом {роль: id | null}, а не плоскими полями.
+      (тело.team = тело.team || {})[поле.slice(5)] = значение === null || значение === "" ? null : Number(значение);   // пустое уже стало null выше
+      return;
+    }
     тело[поле] = значение;
   });
   // Адрес приходит не из полей формы, а из виджета — целиком, включая
@@ -18471,6 +18527,9 @@ const OBJECTS_IMPORT_FIELD_LABELS = {
   status: "Статус", lat: "Широта", lon: "Долгота",
   media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР",
   postal_code: "Почтовый индекс",
+  // «Справочник ОС WEB» (2026-10-05, B1): проект и проектная команда
+  project: "Проект", project_id: "Проект",
+  ...Object.fromEntries(OBJECT_TEAM_ROLES.map(([ключ, подпись]) => ["team_" + ключ, подпись])),
 };
 
 const objectsImportBackdrop = document.getElementById("objects-import-backdrop");
@@ -18557,7 +18616,10 @@ function renderObjectsImportTable() {
       tr.appendChild(tdWas);
       const tdNow = document.createElement("td");
       tdNow.className = "now";
-      tdNow.textContent = objectsImportFieldsSummary(первая.fields);
+      tdNow.textContent = objectsImportFieldsSummary({
+        ...(первая.project ? { project: первая.project } : {}), ...первая.fields,
+        ...Object.fromEntries(Object.entries(первая.team || {}).map(([k, v]) => ["team_" + k, v])),
+      });
       tr.appendChild(tdNow);
       tbody.appendChild(tr);
       continue;

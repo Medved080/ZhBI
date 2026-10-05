@@ -749,6 +749,14 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
   .loading-inline { display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 12px; }
+  .stage-object-card { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); z-index: 5; width: min(560px, calc(100% - 32px));
+    max-height: calc(100% - 48px); overflow: auto; padding: 14px 18px; background: var(--color-surface); border: 1px solid var(--color-border);
+    border-radius: var(--radius); box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  .stage-object-card[hidden] { display: none; }
+  .stage-object-card h4 { margin: 10px 0 4px; font-size: 13px; }
+  .stage-object-card h4:first-child { margin-top: 0; }
+  .stage-object-card dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: 13px; }
+  .stage-object-card dd { margin: 0; }
   .stage-loading {
     position: absolute; inset: 0; z-index: 15;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
@@ -6048,6 +6056,8 @@
       <span class="spinner spinner-lg"></span>
       <div id="stage-loading-text">Загрузка схемы…</div>
     </div>
+    <!-- Карточка объекта на месте пустой схемы (2026-10-05, B1): у объекта без чертежа — паспорт вместо пустого поля. -->
+    <div id="stage-object-card" class="stage-object-card" hidden></div>
     <div id="multi-select-panel">
       <span id="multi-select-count">Выделено: 0</span>
       <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус</button>
