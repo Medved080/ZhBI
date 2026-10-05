@@ -606,3 +606,6 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-sh-more[open]>summary::before{content:"▾"}
 #precast-concept .pc-sh-more>summary:hover{background:var(--sel)}
 #precast-concept .pc-sh-more[open]>summary{margin-bottom:8px}
+/* значки строки изделия: признак 3D-модели и статус расчёта */
+#precast-concept .pc-row-badges{display:inline-flex;align-items:center;gap:6px;flex-shrink:0}
+#precast-concept .pc-product .pc-model-indicator{width:auto;height:auto;padding:1px 5px;font-size:10px;font-weight:700;border:1px solid currentColor;border-radius:4px;line-height:1.3}

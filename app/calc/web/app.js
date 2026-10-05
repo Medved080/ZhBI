@@ -107,11 +107,22 @@ function matchesProductName(product, query){
   }catch(error){host.textContent=error.message;}
  }
  q('#pc-model-results-close').addEventListener('click',()=>q('#pc-model-results-dialog').close());
+ // Статусы изделия в списке и что они значат (подсказка на значке): Нет данных → Нет цены → Предварительно → Готово
+ const STATUS_TIPS={
+  'Нет данных':'Не хватает объёма или класса бетона: стоимость посчитать нельзя. Данные берутся с листов чертежей; недостающее вводится в форме «Изменить параметры изделия» или в «Цены и нормы» → «Класс бетона по типам изделий».',
+  'Нет цены':'Не задана цена хотя бы одного материала изделия или бетона его класса (цена 0). Задайте её в «Цены и нормы» → «Цены»: когда цены на все материалы изделия заданы, статус сменится на «Предварительно», а в калькуляции появится полная стоимость.',
+  'Предварительно':'Цены заданы, но нормы группы ещё не подтверждены технологом и/или изделие не проверено по чертежу. Статус станет «Готово», когда выполнены оба условия.',
+  'Готово':'Цены на все материалы заданы, нормы группы подтверждены технологом, изделие проверено по чертежу.',
+  'Расчёт':'Изделие из исходного Excel: расчёт по его собственным нормам.',
+ };
  function productRow({p,i}){
   const label=p.documentModel?.alias||p.name,details=p.name+' · '+(p.concreteClass||'класс не указан')+' · '+(p.volume?number(p.volume)+' м³':'объём не подтверждён');
   const missingData=!p.volume||!p.concreteClass||/не указан/i.test(p.concreteClass),missingPrice=(p.documentModel?.resources||[]).some(r=>Number(r.rate)===0)||Number(p.concreteRate)===0;
-  const status=missingData?'Нет данных':missingPrice?'Нет цены':p.documentModel?.kind==='registry'?'Предварительно':'Расчёт';
-  return `<div class="pc-product-row"><input class="pc-export-check" type="checkbox" data-select-product="${i}" aria-label="Включить ${escapeHTML(p.name)} в выгрузку"><button class="pc-product cursor-interaction" data-product="${i}" aria-label="${escapeHTML(p.name+' · '+status)}" title="${escapeHTML(details)}" aria-pressed="${state.product===i}"><strong>${escapeHTML(label)}</strong><span class="pc-row-status" data-attention="${missingData||missingPrice}">${status}</span></button></div>`;
+  const registry=p.documentModel?.kind==='registry',normsConfirmed=(workspace.settings?.normGroups||[]).includes(p.documentModel?.family||'Вне каталога');
+  const status=missingData?'Нет данных':missingPrice?'Нет цены':registry?(normsConfirmed&&p.verification?'Готово':'Предварительно'):'Расчёт';
+  const model=readiness(p),mark=model.status==='complete'?'✓':model.status==='partial'?'◐':'';
+  const badge=mark?`<span class="pc-model-indicator" data-model-status="${model.status}" title="${escapeHTML('3D-модель: '+model.label+'. '+model.description)}">3D ${mark}</span>`:'';
+  return `<div class="pc-product-row"><input class="pc-export-check" type="checkbox" data-select-product="${i}" aria-label="Включить ${escapeHTML(p.name)} в выгрузку"><button class="pc-product cursor-interaction" data-product="${i}" aria-label="${escapeHTML(p.name+' · '+status+(mark?' · 3D-модель: '+model.label:''))}" title="${escapeHTML(details)}" aria-pressed="${state.product===i}"><strong>${escapeHTML(label)}</strong><span class="pc-row-badges">${badge}<span class="pc-row-status" data-attention="${missingData||missingPrice}" title="${escapeHTML(STATUS_TIPS[status])}">${status}</span></span></button></div>`;
  }
  function productGroups(visible){
   const groups=new Map();
@@ -390,6 +401,7 @@ function matchesProductName(product, query){
  },refresh:async()=>{
   const refreshed=await api.request('/calc/api/workspace?lite=1');
   detailLoading.clear();
+  workspace.settings=refreshed.settings;
   for(const remote of refreshed.products){const i=products.findIndex(p=>p.id===remote.product.id);if(i<0)continue;products[i]=remote.product;state.overrides[i]=remote.overrides;state.extra[i]=remote.extra;acknowledged.set(remote.product.id,fingerprint(i));}
   render();
  }};

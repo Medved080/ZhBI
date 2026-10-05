@@ -165,7 +165,7 @@ def build_router(settings):
                     entry.pop("snapshot", None)
                     entry["product"].pop("discrepancies", None)
                     entry["product"].pop("dataIssues", None)
-            payload = {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": entries, "profile": profile_with_prices(json.loads(profile[0]), ctx["prices"]["parameters"]), "settings": {"pricesVersion": ctx["prices"]["version"], "profileVersion": conn.execute("SELECT version FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()[0]}, "installationId": installation, "lite": bool(lite)}
+            payload = {"project": {"id": PROJECT_ID, "name": project["zhbi_project_name"] or project["name"], "zhbiProjectId": project["zhbi_project_id"], "linked": project["zhbi_project_id"] is not None}, "products": entries, "profile": profile_with_prices(json.loads(profile[0]), ctx["prices"]["parameters"]), "settings": {"normGroups": sorted({f for f, g in ((ctx["norms"] or {"parameters": {}})["parameters"].get("groups") or {}).items() if g.get("confirmed")} | {"Вне каталога"}), "pricesVersion": ctx["prices"]["version"], "profileVersion": conn.execute("SELECT version FROM calculation_profiles WHERE id=?", (PROFILE_ID,)).fetchone()[0]}, "installationId": installation, "lite": bool(lite)}
             response = packed(request, payload)
             if len(ws_cache) > 6:
                 ws_cache.clear()
