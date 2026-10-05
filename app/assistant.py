@@ -19,6 +19,7 @@ from app.db import get_connection
 from app.calc import qwen_client, runtime
 from app.calc.recovery_schema import StrictModel
 from app.ai_integration import gpu_slot, read_config
+from app.assistant_llm import Dialogue, encoded, trim_history
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -204,7 +205,9 @@ def collect_context(body, user, objects_override=None, connection=None):
 
 
 def _public(job):
-    return {k: job[k] for k in ("id", "state", "answer", "sources", "warnings", "capturedAt", "period", "area", "model", "error") if k in job}
+    public = {k: job[k] for k in ("id", "state", "answer", "sources", "warnings", "capturedAt", "period", "area", "model", "error", "progress") if k in job}
+    public["elapsedSeconds"] = round((job.get("finished", time.time()) - job["created"]), 1)
+    return public
 
 
 @router.get("/status")
@@ -232,17 +235,29 @@ def start_request(body, user, context_override=None):
             raise HTTPException(429, "Слишком много запросов. Повторите позже.")
         identifier = str(uuid4())
         job = {"id": identifier, "owner": user["id"], "state": "running", "created": time.time(),
-               "cancel": threading.Event(), "model": config.assistantModel, "guard": []}
+               "cancel": threading.Event(), "model": config.assistantModel, "guard": [],
+               "progress": {"phase": "accepted", "label": "Вопрос принят", "steps": []}}
         _JOBS[identifier] = job
     # Отчёты считаются вне глобальной блокировки и без ожидания модели в HTTP-запросе.
+    def stage(phase, label, **fields):
+        previous = job["progress"]
+        steps = previous["steps"]
+        if previous["phase"] != phase:
+            steps = (steps + [{"phase": previous["phase"], "label": previous["label"], "state": "failed" if phase in {"failed", "cancelled"} else "retry" if phase == "compact" else "done"}])[-10:]
+        job["progress"] = {"phase": phase, "label": label, "steps": steps, **fields}
     def work():
         try:
-            with gpu_slot(cfg, job["cancel"]) as progress:
+            stage("connection", "Подключаемся к локальной модели")
+            with gpu_slot(cfg, job["cancel"]) as lease_progress:
+                def progress(info):
+                    lease_progress(info)
+                    job["progress"] = {**job["progress"], "modelState": info.get("state"), "chars": info.get("chars", 0), "modelElapsedSeconds": round(info.get("elapsed", 0), 1)}
+                dialogue = Dialogue(cfg, config.assistantContextTokens, job["cancel"].is_set, progress, stage)
                 if context_override is not None:
                     data = context_override
                 else:
                     from app.assistant_data import search_context
-                    data = search_context(body, dict(user), cfg, config.assistantContextTokens, job["cancel"].is_set, progress)
+                    data = search_context(body, dict(user), dialogue, job["cancel"].is_set, stage)
                 source_params = {s["id"]: {"objectId": s["objectId"], "reportId": s["url"].split("#/")[1], "params": s.pop("reportParams")}
                                  for s in data["sources"] if "reportParams" in s}
                 evidence = {s["id"]: {"title": s["title"], **s["data"]} for s in data["sources"] if s["scope"] == "search"}
@@ -251,29 +266,57 @@ def start_request(body, user, context_override=None):
                 owned_job(identifier, user)  # Проверка отзыва прав после поиска и до итогового ответа.
                 if job["cancel"].is_set():
                     raise qwen_client.InferenceCancelled()
-                messages = [{"role": "system", "content": SYSTEM}]
-                messages.extend({"role": m.role, "content": (m.content if len(m.content) <= 1500 else m.content[:1000]+"…"+m.content[-500:])} for m in body.history[-4:])
-                messages.append({"role": "user", "content": "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question})
+                stage("answer", "Формируем ответ по найденным данным", sourceCount=len(data["sources"]))
+                # Сведения об объектах уже проверены при поиске; полный перечень не нужен для ответа.
+                data["objectCount"] = len(data.get("objects", []))
+                data["objects"] = [{"id": o["id"], "name": o["name"]} for o in data.get("objects", [])] if data["objectCount"] <= 3 else []
                 if data.get("page"):
                     data["page"]["text"] = data["page"]["text"][:3000]
-                    messages[-1]["content"] = "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question
-                # Сохраняем итоги; сокращаем только детальные строки, с явной отметкой.
-                budget = (config.assistantContextTokens - cfg.maxTokens) * 1.5
-                while len(json.dumps(messages, ensure_ascii=False)) > budget:
-                    candidates = [s["data"] for s in data["sources"] if s["scope"] == "search" and len(s["data"]["rows"]) > 1]
-                    if not candidates:
+                history = [{"role": m.role, "content": (m.content if len(m.content) <= 1500 else m.content[:1000]+"…"+m.content[-500:])} for m in body.history[-4:]]
+                messages = []
+                def rebuild():
+                    messages[:] = [{"role": "system", "content": SYSTEM}, *history, {"role": "user", "content": "Данные сервиса (JSON):\n" + encoded({**data, "sources": [{k: v for k, v in source.items() if k not in {"url", "feature", "projectName"}} for source in data["sources"]]}) + "\nВопрос: " + body.question}]
+                def shrink_answer():
+                    if data.get("page") and data["page"].get("text"):
+                        data["page"]["text"] = ""
+                    elif data.get("page") and data["page"].get("filters"):
+                        data["page"]["filters"] = ""
+                    elif trim_history(history):
+                        pass
+                    else:
+                        candidates = []
+                        def details(value):
+                            if isinstance(value, dict):
+                                if isinstance(value.get("rows"), list) and len(value["rows"]) > 1:
+                                    candidates.append((value, "rows"))
+                                for child in value.values():
+                                    details(child)
+                            elif isinstance(value, list):
+                                for child in value:
+                                    details(child)
                         for source in data["sources"]:
-                            if source["scope"] != "search":
+                            details(source["data"])
+                            if isinstance(source["data"], list) and len(source["data"]) > 1:
+                                candidates.append((source, "data"))
+                        if not candidates:
+                            for source in data["sources"]:
                                 block = source["data"]
-                                candidates.extend(n for n in [block.get("progress"), block.get("critical"), block] if isinstance(n, dict) and isinstance(n.get("rows"), list) and len(n["rows"]) > 1)
-                    if not candidates:
-                        raise HTTPException(422, "Данные превышают выбранный размер контекста модели. Сузьте вопрос или увеличьте контекст в настройках ИИ.")
-                    largest = max(candidates, key=lambda d: len(json.dumps(d, ensure_ascii=False)))
-                    largest["rows"] = largest["rows"][:max(1, len(largest["rows"])//2)]
-                    largest["returnedRows"] = len(largest["rows"]); largest["truncated"] = True
-                    messages[-1]["content"] = "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question
+                                if isinstance(block, dict) and block.get("conclusions"):
+                                    block.pop("conclusions")
+                                    block["omittedFields"] = ["conclusions"]
+                                    rebuild()
+                                    return True
+                            return False
+                        largest, key = max(candidates, key=lambda item: len(encoded(item[0][item[1]])))
+                        largest[key] = largest[key][:max(1, len(largest[key])//2)]
+                        largest["returnedRows"] = len(largest[key])
+                        largest["truncated"] = True
+                    rebuild()
+                    return True
+                rebuild()
                 schema = {"type": "object", "properties": {"answer": {"type": "string"}, "sourceIds": {"type": "array", "items": {"type": "string"}}}, "required": ["answer", "sourceIds"], "additionalProperties": False}
-                value = qwen_client.chat(cfg, runtime.settings(), messages, schema, "construction_assistant", progress=progress, cancel=job["cancel"].is_set, context_tokens=config.assistantContextTokens)
+                value = dialogue.call(messages, schema, "construction_assistant", shrink_answer)
+                stage("validate", "Проверяем ответ и ссылки на источники")
             if not isinstance(value.get("answer"), str) or not value["answer"].strip() or len(value["answer"]) > 20000:
                 raise qwen_client.InferenceError("Модель вернула пустой или слишком длинный ответ")
             refs = value.get("sourceIds")
@@ -288,17 +331,22 @@ def start_request(body, user, context_override=None):
                 if source["id"] in source_params:
                     path, fragment = source["url"].split("#", 1)
                     source["url"] = f"{path}&assistant_request={identifier}&assistant_source={source['id']}#{fragment}"
+            stage("done", "Ответ готов")
             job.update(answer=value["answer"], sources=[{k: s[k] for k in ("id", "title", "objectName", "url", "scope")} for s in data["sources"] if s["id"] in refs], state="done")
             if data["sources"] and not refs:
                 job["warnings"].append("Модель не указала источники ответа. Сверьте утверждения с отчётами.")
         except qwen_client.InferenceCancelled:
+            stage("cancelled", "Запрос остановлен")
             job.update(state="cancelled", error="Запрос остановлен")
         except (HTTPException, qwen_client.InferenceError, ValueError) as error:
+            stage("failed", "Не удалось завершить этот этап")
             job.update(state="failed", error=str(error.detail if isinstance(error, HTTPException) else error)[:1000])
         except Exception:
             log.exception("assistant: запрос не выполнен")
+            stage("failed", "Обработка завершилась ошибкой")
             job.update(state="failed", error="Не удалось подготовить ответ. Повторите позже.")
         finally:
+            job["finished"] = time.time()
             if job["cancel"].is_set():
                 job.update(state="cancelled", error="Запрос остановлен")
     threading.Thread(target=work, name="construction-assistant", daemon=True).start()

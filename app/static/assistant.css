@@ -33,3 +33,13 @@
 [data-assistant].ai-evidence::backdrop{background:#0005}
 [data-assistant].ai-evidence table{border-collapse:collapse;font-size:12px;margin:12px 0}
 [data-assistant].ai-evidence th,[data-assistant].ai-evidence td{border:1px solid var(--line,#dbe4ee);padding:6px;text-align:left;overflow-wrap:anywhere;max-width:280px}
+
+[data-assistant] .ai-progress{margin:0;padding:8px 10px;list-style:none;background:var(--surface,#f5f7fa);border-radius:8px;font-size:12px;max-height:140px;overflow:auto}
+[data-assistant] .ai-progress li{padding:2px 0;overflow-wrap:anywhere}
+[data-assistant] .ai-step-done{color:var(--muted,#61768a)}
+[data-assistant] .ai-step-done::before{content:"✓ ";}
+[data-assistant] .ai-step-current{font-weight:600}
+[data-assistant] .ai-step-current::before{content:"› ";}
+
+[data-assistant] .ai-step-failed::before{content:"! ";}
+[data-assistant] .ai-step-retry::before{content:"↻ ";}

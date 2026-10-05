@@ -39,6 +39,7 @@ export function mountAssistant({getContext}) {
       <div class="ai-suggestions"><button type="button" data-question="Что изменилось за последнюю неделю?">Что изменилось?</button><button type="button" data-question="Где есть отставание от плана и что это подтверждает?">Отставание</button><button type="button" data-question="Какие позиции не обеспечены контрактами?">Дефицит</button></div>
       <label class="ai-question-label">Вопрос<textarea name="question" maxlength="4000" rows="3" required placeholder="Например: сколько смонтировали по всем проектам за сентябрь?"></textarea></label>
       <div class="ai-actions"><button type="submit" class="ai-send" title="Задать вопрос локальному помощнику">Отправить</button><button type="button" data-ai-stop hidden>Остановить</button><button type="button" data-ai-clear>Новый диалог</button></div>
+      <ol class="ai-progress" id="ai-progress" hidden aria-label="Этапы обработки"></ol>
       <p class="ai-status" id="ai-status" role="status"></p></form>
     </section>`;
   document.body.append(host);
@@ -56,7 +57,18 @@ export function mountAssistant({getContext}) {
       const parent=host.closest("dialog[open]")||document.body;parent.append(box);box.showModal();
     } catch(error) {say(error.message);}
   }
+  const steps=$("#ai-progress");
   const say=t=>{status.textContent=t;};
+  function showProgress(result) {
+    const p=result.progress;if(!p)return;
+    steps.hidden=false;steps.replaceChildren();
+    for(const step of [...(p.steps||[]),p]){
+      const li=document.createElement("li");li.textContent=step.label;li.className=step===p?"ai-step-current":`ai-step-${step.state||"done"}`;steps.append(li);
+    }
+    steps.scrollTop=steps.scrollHeight;
+    const state={connecting:"Соединяемся с сервером модели",waiting_first_token:"Ждём первые данные от модели",generating:"Получаем данные от модели"}[p.modelState]||"";
+    say([`${Math.floor(result.elapsedSeconds||0)} с`,state,p.chars?`получено ${p.chars} знаков`:""].filter(Boolean).join(" · "));
+  }
   function controls() { for(const e of form.elements) if(e.name!=="question")e.disabled=busy;$("[data-ai-stop]").disabled=false;$("[data-ai-stop]").hidden=!busy;$(".ai-send").hidden=busy; }
   function append(role,text,result) {
     const item=document.createElement("article");item.className=`ai-message ai-message-${role}`;
@@ -70,7 +82,7 @@ export function mountAssistant({getContext}) {
     messages.append(item);messages.scrollTop=messages.scrollHeight;
   }
   async function stop() { const id=requestId;if(id){try{await aiRequest(`/assistant/requests/${id}/cancel`,{});}catch(e){say(e.message);}} }
-  function reset(note="") { for(const dialog of evidenceDialogs)dialog.close();history=[];messages.replaceChildren();say(note); }
+  function reset(note="") { for(const dialog of evidenceDialogs)dialog.close();history=[];messages.replaceChildren();steps.hidden=true;steps.replaceChildren();say(note); }
   function syncContext() {
     const ctx=getContext();
     const selection=JSON.stringify([ctx.page?.filters,ctx.page?.selectedIds,ctx.page?.elementIds?.length,ctx.page?.elementIds?.reduce((h,id)=>(h*31+id)|0,0)]);
@@ -98,18 +110,20 @@ export function mountAssistant({getContext}) {
     e.preventDefault();if(busy)return;if(!form.reportValidity())return;
     const ctx=syncContext(),question=form.elements.question.value.trim();if(!question)return;
     const body={question,objectId:ctx.objectId||null,projectId:ctx.projectId||null,page:ctx.page||{},history:history.slice(-8)};
-    const my=++generation;busy=true;controls();append("user",question);say("Ищем данные в системе и готовим ответ…");
+    const my=++generation;busy=true;controls();append("user",question);steps.hidden=true;steps.replaceChildren();say("Отправляем вопрос…");
     try{
       let result=await aiRequest("/assistant/requests",body);const id=result.id;
       if(my!==generation){void aiRequest(`/assistant/requests/${id}/cancel`,{}).catch(()=>{});return;}
       requestId=id;
+      if(form.elements.question.value.trim()===question)form.elements.question.value="";
       while(result.state==="running"){
+        showProgress(result);
         await new Promise(resolve=>setTimeout(resolve,1500));if(my!==generation)return;
         result=await aiRequest(`/assistant/requests/${id}`);
       }
       if(my!==generation)return;
-      if(result.state!=="done")throw new Error(result.error||"Запрос остановлен");
-      append("assistant",result.answer,result);history.push({role:"user",content:question.slice(0,6000)},{role:"assistant",content:(result.answer.slice(0,5400)+`\nПериод ответа: ${result.period.from} → ${result.period.to}. Область ответа: ${result.area||"доступные данные сервиса"}`).slice(0,6000)});history=history.slice(-8);if(form.elements.question.value.trim()===question)form.elements.question.value="";say("");
+      if(result.state!=="done"){showProgress(result);throw new Error(result.error||"Запрос остановлен");}
+      append("assistant",result.answer,result);history.push({role:"user",content:question.slice(0,6000)},{role:"assistant",content:(result.answer.slice(0,5400)+`\nПериод ответа: ${result.period.from} → ${result.period.to}. Область ответа: ${result.area||"доступные данные сервиса"}`).slice(0,6000)});history=history.slice(-8);steps.hidden=true;say("");
     }catch(error){if(my===generation)say(error.message);}
     finally{if(my===generation){busy=false;requestId=null;controls();}}
   });

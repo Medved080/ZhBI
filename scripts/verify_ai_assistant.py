@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 work = Path(tempfile.mkdtemp(prefix="zhbi-assistant-"))
+print("Test workspace:", work)
 source = ROOT / "data/zhbi.anon.db"
 dest = work / "work.db"
 a = sqlite3.connect(source); b = sqlite3.connect(dest); a.backup(b); a.close(); b.close()
@@ -37,11 +38,25 @@ class Inference(BaseHTTPRequestHandler):
     def do_POST(self):
         data=json.loads(self.rfile.read(int(self.headers["Content-Length"])));calls.append(data)
         text=data["messages"][-1]["content"]
+        if "overflow-regression" in text:
+            openai="format" not in data
+            failure=len(text)>2500
+            http_error=failure and "-http" in text
+            self.send_response(400 if http_error else 200);self.send_header("Content-Type","application/json" if http_error else "text/event-stream" if openai else "application/x-ndjson");self.end_headers()
+            if failure:
+                obj={"error":{"message":'request (15581 tokens) exceeds the available context size (8192 tokens), n_prompt_tokens:15581, n_ctx:8192'}}
+            elif openai:
+                obj={"choices":[{"delta":{"content":'{"answer":"OK","sourceIds":[]}'},"finish_reason":"stop"}]}
+            else:
+                obj={"message":{"content":'{"answer":"OK","sourceIds":[]}'},"done":True}
+            prefix="data: " if openai and not http_error else ""
+            self.wfile.write((prefix+json.dumps(obj)+"\n\n").encode());return
         if "datasets" in data["format"]["properties"]:
             seed=json.loads(text)
             value={"datasets":["elements"],"scope":seed["scope"],"objectIds":[seed["page"]["objectId"]] if seed["page"]["objectId"] and "всем" not in seed["question"] else [],"startExclusive":seed["startExclusive"],"endInclusive":seed["endInclusive"],"periodLabel":"Выбранный период","needReports":True}
             for marker,group in [("__contracts__","contracts"),("__calc__","calculator"),("__works__","works")]:
                 if marker in seed["question"]:value["datasets"]=[group];value["needReports"]=False
+            if "Сколько ригелей на первом этаже" in seed["question"] or "__large_rows__" in seed["question"]:value["needReports"]=False
             if "__page_scope__" in seed["question"]:value["scope"]="page"
             if "__bad_scope__" in seed["question"]:value["objectIds"]=[999999]
         elif "queries" in data["format"]["properties"]:
@@ -51,6 +66,9 @@ class Inference(BaseHTTPRequestHandler):
             for marker,table in [("__contracts__","contract_lines"),("__calc__","calc_products"),("__works__","block_works")]:
                 if marker in question:sql=f"SELECT COUNT(*) AS count FROM {table}"
             if "__repair__" in question and len(data["messages"])==2:sql="SELECT missing_column FROM elements"
+            if "Сколько ригелей на первом этаже" in question:
+                sql="SELECT COUNT(*) AS count FROM elements WHERE is_current=1 AND element_type='Ригель' AND floor=1"
+            if "__large_rows__" in question:sql="SELECT id, comment FROM elements ORDER BY id"
             value={"queries":[{"title":"Найденные показатели","sql":sql}] if len(data["messages"])==2 or "__repair__" in question else [],"needsMore":False}
         else:
             context=json.loads(text.split("Данные сервиса (JSON):\n",1)[1].split("\nВопрос:",1)[0])
@@ -127,6 +145,20 @@ def await_result(client,identifier):
         time.sleep(.05)
     raise AssertionError("тайм-аут задания")
 
+from app.assistant_llm import Dialogue
+for provider,marker in [("ollama","overflow-regression"),("openai","overflow-regression-sse"),("openai","overflow-regression-http")]:
+    cfg=ConnectionConfig(provider=provider,model="test-dialog",baseUrl=f"http://127.0.0.1:{server.server_port}",maxTokens=4096)
+    retry_steps=[]
+    dialogue=Dialogue(cfg,65536,lambda:False,lambda info:None,lambda *args,**kwargs:retry_steps.append(args))
+    retry_messages=[{"role":"user","content":marker+" " + "данные "*1000}]
+    def shrink_retry():
+        if len(retry_messages[0]["content"])<=100:return False
+        retry_messages[0]["content"]=retry_messages[0]["content"][:len(retry_messages[0]["content"])//2]
+        return True
+    answer=dialogue.call(retry_messages,{"type":"object","properties":{"answer":{"type":"string"},"sourceIds":{"type":"array","items":{"type":"string"}}},"required":["answer","sourceIds"]},"test_retry",shrink_retry)
+    check(answer["answer"]=="OK" and retry_steps[0][0]=="compact","ошибка 15581/8192 приводит к успешному повтору: "+marker)
+calls.clear()
+
 with TestClient(app) as admin:
     login(admin,"admin")
     user=TestClient(app);login(user,"user4")
@@ -161,7 +193,9 @@ with TestClient(app) as admin:
         try:collect_context(Ask.model_validate(bad),adminrow);raise AssertionError("чужое изделие прошло")
         except Exception as e:check(getattr(e,"status_code",None)==403,"чужие id не входят в контекст")
     r=admin.post("/assistant/requests",json=body);check(r.status_code==202,"асинхронный вопрос")
-    result=await_result(admin,r.json()["id"]).json();check(result["state"]=="done","ответ локального HTTP API")
+    result=await_result(admin,r.json()["id"]).json();check(result["state"]=="done","ответ локального HTTP API: "+str(result))
+    check({"route","snapshot","plan","query","answer","validate"}.issubset({x["phase"] for x in result["progress"]["steps"]}), "подробные этапы и проверка ответа")
+    check(result["elapsedSeconds"]>=0,"длительность обработки")
     check(result["sources"] and result["capturedAt"] and result["period"],"источники и даты ответа")
     source=next(s for s in result["sources"] if s["id"].endswith("-dynamics"))
     path="/assistant/requests/"+result["id"]+"/sources/"+source["id"]
@@ -184,6 +218,18 @@ with TestClient(app) as admin:
     all_rows=admin.get(all_ref["url"]).json()["rows"]
     c=get_connection();all_expected=sum(build_dynamics_report(c,None,"2026-10-05",[x[0] for x in c.execute("SELECT id FROM elements WHERE object_id=? AND is_current=1",(o[0],))],o[0])["montage"]["cumulative"]["fact"]-build_dynamics_report(c,None,"2026-09-05",[x[0] for x in c.execute("SELECT id FROM elements WHERE object_id=? AND is_current=1",(o[0],))],o[0])["montage"]["cumulative"]["fact"] for o in c.execute("SELECT id FROM objects WHERE kind='zhbi'"));c.close()
     check(all_rows[0]["installed"]==all_expected,"итог по всем проектам совпадает со штатными отчётами")
+    r=admin.post("/assistant/requests",json={**body,"scope":"auto","question":"Сколько ригелей на первом этаже"})
+    beams=await_result(admin,r.json()["id"]).json();check(beams["state"]=="done", "вопрос о ригелях без переполнения")
+    beam_source=next(s for s in beams["sources"] if s["scope"]=="search")
+    c=get_connection();beam_count=c.execute("SELECT COUNT(*) FROM elements WHERE object_id=? AND is_current=1 AND element_type='Ригель' AND floor=1",(oid,)).fetchone()[0];c.close()
+    check(admin.get(beam_source["url"]).json()["rows"]==[{"count":beam_count}],"ригели первого этажа: точный счётчик, проверяемый источник")
+    large_body={**body,"scope":"auto","question":"__large_rows__ по всем проектам","page":{"title":"Страница","text":"Контекст страницы. "*500},"history":[{"role":"user","content":"Описание. "*500},{"role":"assistant","content":"Предыдущий ответ. "*300}]}
+    r=admin.post("/assistant/requests",json=large_body)
+    large=await_result(admin,r.json()["id"]).json();check(large["state"]=="done","большой экран, история и список помещаются в контекст")
+    large_source=next(s for s in large["sources"] if s["scope"]=="search")
+    check(admin.get(large_source["url"]).json()["returnedRows"]==200,"в источнике сохранены все 200 строк несмотря на сокращение запроса к модели")
+    for payload in calls:
+        check(payload["options"]["num_ctx"]<=8192 and sum(len(m["content"]) for m in payload["messages"])/1.4+payload["options"]["num_predict"]+512+len(json.dumps(payload["format"],ensure_ascii=False,separators=(",",":")))/1.4<=8193, "каждый этап соблюдает бюджет включая ответ и схему")
     r=admin.post("/assistant/requests",json={**body,"question":"__bad_scope__"});bad_scope=await_result(admin,r.json()["id"]).json()
     check(bad_scope["state"]=="failed" and "разрешённой области" in bad_scope["error"],"модель не расширяет доступ по ID")
     for marker,table in [("__contracts__","contract_lines"),("__calc__","calc_products"),("__works__","block_works"),("__repair__","period_facts")]:
@@ -225,7 +271,7 @@ with TestClient(app) as admin:
     no_object=collect_context(Ask(question="Что на странице?",scope="page"),adminrow)
     check(no_object["objects"]==[] and no_object["sources"]==[],"страница без объекта не подменяется всеми проектами")
     check(calls[-1]["model"]=="test-dialog","помощник использует отдельную модель")
-    check(calls[-1]["options"]["num_ctx"]==65536,"размер контекста передан Ollama")
+    check(calls[-1]["options"]["num_ctx"]==8192,"безопасный контекст передан Ollama")
     check(user.get("/assistant/requests/"+result["id"]).status_code==404,"чужое задание закрыто")
     check(admin.post("/assistant/requests",json={**body,"dateFrom":"2026-10-06"}).status_code==422,"обратный период отклоняется")
     check(admin.post("/assistant/requests",json={**body,"history":[{"role":"system","content":"x"}]}).status_code==422,"system-инструкции из клиента отклоняются")
@@ -237,6 +283,8 @@ with TestClient(app) as admin:
     check(invalid["state"]=="failed" and "неизвестный источник" in invalid["error"],"выдуманные ссылки модели отклоняются")
     r=admin.post("/assistant/requests",json={**body,"question":"__hold__"})
     check(hold_received.wait(5),"долгий запрос дошёл до модели")
+    waiting=admin.get("/assistant/requests/"+r.json()["id"]).json()
+    check(waiting["state"]=="running" and waiting["progress"]["phase"]=="route" and waiting["progress"]["modelState"]=="connecting","статус ожидания модели доступен во время обработки")
     check(admin.post("/assistant/requests",json=body).status_code==409,"два запроса одного пользователя не запускаются")
     check(admin.post("/assistant/requests/"+r.json()["id"]+"/cancel",json={}).status_code==200,"отмена принята")
     hold_release.set()
