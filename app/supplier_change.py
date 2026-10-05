@@ -32,6 +32,14 @@
   `prev_element_id` возвращается прежнему изделию, строка без него (запись
   СОЗДАНА проведением) удаляется.
 
+- `date_rebalance` — «Балансировка поставки» (2026-10-05, протокол «Развитие WEB 4Q26», A4): одинаковые изделия ОДНОЙ
+  марки на ОДНОМ контракте (= у одного поставщика) получают плановые даты поставки заново: изделия сортируются по
+  требуемой дате (начало СМР последней актуализации), согласованные плановые даты поставщика — по возрастанию, и
+  i-му изделию достаётся i-я дата — а если можно обойтись несколькими обменами «просроченное ↔ с запасом», то делаются
+  только они (см. `_rebalance_allocate`). Набор дат поставщика не меняется, переставляются только даты между изделиями.
+  Контракт, статус и история не трогаются. Раздел прав тот же, что у обмена привязками (`doc_link_swap`): отдельный
+  раздел ради одной операции над датами завёл бы лишнюю строку в матрице ролей; решение пользователя пересмотреть можно.
+
 Правила «Замены поставщика» (интерфейс их только показывает, держит сервер):
 
 1. **Поставленное на площадку не переносится.** Порог — «Отгружен» и выше
@@ -89,12 +97,15 @@ STATUS_TITLES = {s.value: STATUS_LABELS_RU[s] for s in STATUS_ORDER}
 
 KIND_SUPPLIER = "supplier_change"
 KIND_SWAP = "link_swap"
-KIND_TITLES = {KIND_SUPPLIER: "Замена поставщика", KIND_SWAP: "Обмен привязками"}
+KIND_REBALANCE = "date_rebalance"
+KIND_TITLES = {KIND_SUPPLIER: "Замена поставщика", KIND_SWAP: "Обмен привязками",
+               KIND_REBALANCE: "Балансировка поставки"}
 
 # Раздел прав у каждого вида свой (2026-08-14): администратор может доверить
 # кому-то замену поставщика, не открывая обмен привязками, и наоборот.
-KIND_FEATURES = {KIND_SUPPLIER: "doc_supplier_change", KIND_SWAP: "doc_link_swap"}
-DOC_FEATURES = tuple(KIND_FEATURES.values())
+KIND_FEATURES = {KIND_SUPPLIER: "doc_supplier_change", KIND_SWAP: "doc_link_swap",
+                 KIND_REBALANCE: "doc_link_swap"}
+DOC_FEATURES = tuple(dict.fromkeys(KIND_FEATURES.values()))
 
 
 def _раздел(kind: str) -> str:
@@ -498,6 +509,180 @@ def mark_contracts(
         conn.close()
 
 
+# ------------------------------------------------- балансировка поставки (A4)
+
+def _rebalance_allocate(rows: list, need: dict) -> list:
+    """Раскладка плановых дат внутри марки: как можно меньше перестановок, но без хуже, чем «по очереди требуемых дат».
+
+    Два варианта, из которых берётся лучший:
+
+    1. **Минимум обменов** (так делают руками): просроченное изделие (плановая позже требуемой) меняется датами с изделием,
+       у которого дата раньше и которое после обмена тоже в срок. Обмены затрагивают только участников, остальные даты
+       согласованного с поставщиком графика остаются как есть.
+    2. **Полная очередь**: изделия по возрастанию требуемой даты получают согласованные даты по возрастанию. Это
+       оптимум по просрочке, но переставляет почти весь набор.
+
+    Выбирается первый, если он не хуже второго по (числу просроченных, максимальной просрочке). Изделия без требуемой
+    даты в очереди идут в конец и обмениваются только как «донор» ранней даты — срочность у них не определена.
+    Результат детерминирован; повторный расчёт по уже сбалансированному набору ничего не меняет.
+    """
+    from datetime import date
+
+    def days(plan, req):
+        if not plan or not req:
+            return None
+        return (date.fromisoformat(str(plan)[:10]) - date.fromisoformat(str(req)[:10])).days
+
+    старые = {r["id"]: str(r["planned_delivery_date"])[:10] for r in rows}
+
+    def качество(план):
+        просрочки = [d for i, d in ((i, days(план[i], need.get(i))) for i in план) if d is not None and d > 0]
+        return (len(просрочки), max(просрочки, default=0))
+
+    # --- вариант 2: полная очередь
+    очередь = sorted(rows, key=lambda r: (need.get(r["id"]) is None, need.get(r["id"]) or "", старые[r["id"]], r["id"]))
+    даты = sorted(старые.values())
+    полный = {r["id"]: д for r, д in zip(очередь, даты)}
+
+    # --- вариант 1: минимум обменов
+    план = dict(старые)
+    просроченные = sorted((i for i in план if (days(план[i], need.get(i)) or 0) > 0),
+                          key=lambda i: (-(days(план[i], need.get(i)) or 0), i))
+    for i in просроченные:
+        ni = need[i]
+        лучший = None
+        for j, pj in план.items():
+            if j == i or pj >= план[i] or pj > ni:
+                continue        # донор: дата раньше, и просроченному она подходит
+            nj = need.get(j)
+            if nj is not None and план[i] > nj:
+                continue        # после обмена донор сам бы опоздал
+            запас = 10 ** 6 if nj is None else (date.fromisoformat(nj) - date.fromisoformat(план[i])).days
+            ключ = (запас, j)   # самый «тугой» подходящий донор — запас остальных не тратим
+            if лучший is None or ключ < лучший[0]:
+                лучший = (ключ, j)
+        if лучший:
+            j = лучший[1]
+            план[i], план[j] = план[j], план[i]
+    итог = план if качество(план) <= качество(полный) else полный
+
+    out = []
+    for r in sorted(rows, key=lambda r: (need.get(r["id"]) is None, need.get(r["id"]) or "", старые[r["id"]], r["id"])):
+        req = need.get(r["id"])
+        out.append({"element_id": r["id"], "address": r["address"], "floor": r["floor"],
+                    "status": r["current_status"], "need_date": req,
+                    "plan_old": старые[r["id"]], "plan_new": итог[r["id"]],
+                    "delay_old": days(старые[r["id"]], req), "delay_new": days(итог[r["id"]], req)})
+    return out
+
+
+def _rebalance_eligible(e, contract_id: int, mark: str) -> Optional[str]:
+    """Почему изделие нельзя балансировать (None — можно)."""
+    if e is None or not e["is_current"]:
+        return "изделия нет в актуальном чертеже объекта"
+    if e["contract_id"] != contract_id:
+        return "изделие стоит не на контракте документа"
+    if mark and (e["mark"] or "").strip().lower() != mark.strip().lower():
+        return f"марка изделия не совпадает с маркой документа «{mark}»"
+    if e["current_status"] in BLOCKED_STATUSES:
+        return "изделие уже отгружено — его дата поставки не переставляется"
+    if not e["planned_delivery_date"]:
+        return "у изделия нет плановой даты поставки"
+    return None
+
+
+def _rebalance_plan(conn, object_id: int, contract_id: int, mark: str, element_ids=None) -> dict:
+    """Предпросмотр: подходящие изделия контракта и марки и их новые даты + сводка «было → стало»."""
+    from app.schedule_versions import forecast_dates
+
+    rows = [r for r in conn.execute(
+        "SELECT id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, is_current, "
+        "planned_delivery_date FROM elements WHERE object_id = ? AND is_current = 1 AND contract_id = ? "
+        "AND LOWER(TRIM(COALESCE(mark, ''))) = LOWER(TRIM(?))", (object_id, contract_id, mark)).fetchall()
+        if _rebalance_eligible(r, contract_id, mark) is None]
+    if element_ids is not None:
+        wanted = set(element_ids)
+        rows = [r for r in rows if r["id"] in wanted]
+    прогноз = forecast_dates(conn, object_id)
+    need = {r["id"]: (прогноз[r["id"]][0] if r["id"] in прогноз and not прогноз[r["id"]][2] else None) for r in rows}
+    items = _rebalance_allocate(rows, need)
+    items.sort(key=lambda i: (i["need_date"] is None, i["need_date"] or "", i["element_id"]))
+
+    def late(key):
+        return [i[key] for i in items if i[key] is not None and i[key] > 0]
+    return {"items": items, "summary": {
+        "count": len(items), "changed": sum(1 for i in items if i["plan_old"] != i["plan_new"]),
+        "late_before": len(late("delay_old")), "late_after": len(late("delay_new")),
+        "max_delay_before": max(late("delay_old"), default=0), "max_delay_after": max(late("delay_new"), default=0),
+        "without_need": sum(1 for i in items if i["need_date"] is None)}}
+
+
+@router.get("/rebalance-preview")
+def rebalance_preview(object_id: int = Query(...), contract_id: int = Query(...), mark: str = Query(...),
+                      doc_id: Optional[int] = Query(None),
+                      user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write"))):
+    """Что даст балансировка поставки марки на контракте — без записи (форма документа и проверка перед проведением).
+
+    Без `doc_id` — по всем подходящим изделиям контракта и марки. С `doc_id` — только по составу сохранённого документа
+    (список id в адресной строке не гоняем: изделий бывают тысячи)."""
+    conn = get_connection()
+    try:
+        assert_object_any_feature(conn, user, object_id, DOC_FEATURES, "write")
+        _assert_contract_of_object(conn, contract_id, object_id, "контракта")
+        element_ids = None
+        if doc_id is not None:
+            doc = conn.execute("SELECT object_id, kind FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
+            if doc is None or doc["object_id"] != object_id or doc["kind"] != KIND_REBALANCE:
+                raise HTTPException(status_code=404, detail="Документ не найден")
+            element_ids = [r["element_id"] for r in conn.execute(
+                "SELECT element_id FROM supplier_change_items WHERE doc_id = ?", (doc_id,))]
+        return _rebalance_plan(conn, object_id, contract_id, mark, element_ids)
+    finally:
+        conn.close()
+
+
+def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
+    """Проведение балансировки: снимок «что было» → пересчёт раскладки по ТЕКУЩИМ данным → запись плановых дат.
+
+    Раскладка считается заново при проведении, а не берётся из черновика: между сохранением и проведением могли
+    измениться требуемые даты (новая актуализация) и состав. Пересчёт по тем же изделиям документа даёт ровно то, что
+    человек увидел бы в предпросмотре сейчас."""
+    from app.schedule_versions import forecast_dates
+
+    contract_id, марка = doc["from_contract_id"], (doc["mark"] or "").strip()
+    elements, проблемы = [], []
+    for it in items:
+        e = conn.execute(
+            "SELECT id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, "
+            "is_current, planned_delivery_date FROM elements WHERE id = ?", (it["element_id"],)).fetchone()
+        причина = _rebalance_eligible(e, contract_id, марка) if e is not None and e["object_id"] == doc["object_id"] \
+            else "изделия нет в актуальном чертеже объекта"
+        if причина:
+            проблемы.append(f"№{it['element_id']}" + (f" {e['mark']} · {e['address'] or ''}".rstrip(" ·") if e else "")
+                            + f": {причина}")
+        else:
+            elements.append(e)
+    if проблемы:
+        raise HTTPException(status_code=409, detail="Провести нельзя:\n" + "\n".join(проблемы[:20]))
+    прогноз = forecast_dates(conn, doc["object_id"])
+    need = {e["id"]: (прогноз[e["id"]][0] if e["id"] in прогноз and not прогноз[e["id"]][2] else None) for e in elements}
+    раскладка = {i["element_id"]: i for i in _rebalance_allocate(elements, need)}
+    by_item = {it["element_id"]: it for it in items}
+    изменено = 0
+    for e in elements:
+        r = раскладка[e["id"]]
+        conn.execute(
+            "UPDATE supplier_change_items SET status_at_move = ?, prev_contract_id = ?, prev_planned_delivery_date = ?, "
+            "element_type = ?, mark = ? WHERE id = ?",
+            (e["current_status"], e["contract_id"], e["planned_delivery_date"], e["element_type"], e["mark"],
+             by_item[e["id"]]["id"]))
+        if r["plan_new"] != str(e["planned_delivery_date"])[:10]:
+            conn.execute("UPDATE elements SET planned_delivery_date = ?, updated_at = datetime('now') WHERE id = ?",
+                         (r["plan_new"], e["id"]))
+            изменено += 1
+    return {"elements": len(elements), "moved": изменено}
+
+
 def _next_number(conn, object_id: int) -> str:
     """Следующий номер документа в пределах объекта. Считается по МАКСИМУМУ
     из уже выданных чисто числовых номеров, а не по количеству записей:
@@ -534,7 +719,8 @@ def _doc_items(conn, doc_id: int) -> list:
     rows = conn.execute(
         """
         SELECT i.*, e.address AS address, e.current_status AS current_status,
-               e.contract_id AS contract_id_now, e.mark AS mark_now, e.floor AS floor
+               e.contract_id AS contract_id_now, e.mark AS mark_now, e.floor AS floor,
+               e.planned_delivery_date AS plan_now
         FROM supplier_change_items i
         LEFT JOIN elements e ON e.id = i.element_id
         WHERE i.doc_id = ? ORDER BY i.pair_no, i.side, i.id
@@ -548,6 +734,8 @@ def _doc_items(conn, doc_id: int) -> list:
             "status_at_move": r["status_at_move"], "address": r["address"],
             "floor": r["floor"], "current_status": r["current_status"],
             "contract_id_now": r["contract_id_now"],
+            # Балансировка: «было» (снято при проведении) и «стало» (дата изделия сейчас).
+            "prev_plan": r["prev_planned_delivery_date"], "plan_now": r["plan_now"],
         }
         for r in rows
     ]
@@ -630,7 +818,7 @@ def _save_items(conn, doc_id: int, kind: str, object_id: int, body: SupplierChan
     списком, и вычислять разницу между старым и новым набором ради того же
     результата незачем."""
     conn.execute("DELETE FROM supplier_change_items WHERE doc_id = ?", (doc_id,))
-    if kind == KIND_SUPPLIER:
+    if kind in (KIND_SUPPLIER, KIND_REBALANCE):
         ids = list(dict.fromkeys(body.element_ids))
         elements = _load_elements(conn, ids, object_id)
         for element_id in ids:
@@ -669,15 +857,20 @@ def _save_items(conn, doc_id: int, kind: str, object_id: int, body: SupplierChan
 def _validate_head(conn, body: SupplierChangeIn) -> None:
     if body.kind not in KIND_TITLES:
         raise HTTPException(status_code=400, detail=f"Неизвестный вид операции «{body.kind}»")
-    if body.from_contract_id == body.to_contract_id:
+    if body.kind == KIND_REBALANCE:
+        # Один контракт: в шапке он хранится дважды (обе колонки обязательны), чтобы не менять схему.
+        if body.from_contract_id != body.to_contract_id:
+            raise HTTPException(status_code=400, detail="Балансировка выполняется внутри одного контракта")
+    elif body.from_contract_id == body.to_contract_id:
         raise HTTPException(status_code=400, detail="Стороны операции совпадают — выберите разные контракты")
-    роли = ("«текущий»", "«новый»") if body.kind == KIND_SUPPLIER else ("стороны 1", "стороны 2")
+    роли = (("«текущий»", "«новый»") if body.kind == KIND_SUPPLIER
+            else ("контракта", "контракта") if body.kind == KIND_REBALANCE else ("стороны 1", "стороны 2"))
     _assert_contract_of_object(conn, body.from_contract_id, body.object_id, роли[0])
     _assert_contract_of_object(conn, body.to_contract_id, body.object_id, роли[1])
     if not (body.doc_date or "").strip():
         raise HTTPException(status_code=400, detail="Не указана дата документа")
-    if body.kind == KIND_SWAP and not (body.mark or "").strip():
-        raise HTTPException(status_code=400, detail="Не выбрана марка обмена")
+    if body.kind in (KIND_SWAP, KIND_REBALANCE) and not (body.mark or "").strip():
+        raise HTTPException(status_code=400, detail="Не выбрана марка")
     if body.kind == KIND_SUPPLIER:
         архивный = conn.execute(
             "SELECT is_archived FROM contracts WHERE id = ?", (body.to_contract_id,)
@@ -1030,6 +1223,8 @@ def post_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_us
         try:
             if doc["kind"] == KIND_SWAP:
                 итог = _post_link_swap(conn, doc, [dict(i) for i in items], автор, user["id"])
+            elif doc["kind"] == KIND_REBALANCE:
+                итог = _post_rebalance(conn, doc, [dict(i) for i in items], автор, user["id"])
             else:
                 итог = _post_supplier_change(conn, doc, [dict(i) for i in items], автор, user["id"])
             contract_guard.assert_no_regression(
@@ -1141,7 +1336,7 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
                     "UPDATE elements SET contract_id = ?, updated_at = datetime('now') WHERE id = ?",
                     (прежний, it["element_id"]),
                 )
-                if doc["kind"] == KIND_SWAP:
+                if doc["kind"] in (KIND_SWAP, KIND_REBALANCE):
                     conn.execute(
                         "UPDATE elements SET planned_delivery_date = ? WHERE id = ?",
                         (it["prev_planned_delivery_date"], it["element_id"]),

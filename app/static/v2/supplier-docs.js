@@ -29,8 +29,10 @@ const ruDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ""
 const ruMoment = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : ruDate(v); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const STATUS = { planned: "Запланирован", contracting: "Контрактация", in_production: "В производстве", shipped: "Отгружен", delivered: "Доставлен", installed: "Смонтирован", accepted: "Принят" };
-const KIND_TITLE = { supplier_change: "Замена поставщика", link_swap: "Обмен привязками" };
-const KIND_FEATURE = { supplier_change: "doc_supplier_change", link_swap: "doc_link_swap" };
+const KIND_TITLE = { supplier_change: "Замена поставщика", link_swap: "Обмен привязками", date_rebalance: "Балансировка поставки" };
+// Балансировка поставки (2026-10-05, A4) — тот же раздел прав, что у обмена привязками: сервер (app/supplier_change.py KIND_FEATURES).
+const KIND_FEATURE = { supplier_change: "doc_supplier_change", link_swap: "doc_link_swap", date_rebalance: "doc_link_swap" };
+const single = (kind) => kind === "supplier_change" || kind === "date_rebalance";   // состав — один список изделий (chosen), а не две стороны
 const isStale = (err) => err instanceof ApiError && err.status === 409 && err.rawDetail && typeof err.rawDetail === "object" && err.rawDetail.conflict === "stale_version";
 
 // ---------------------------------------------------------------- подбор изделий на мини-схеме (перенос из V1 scd-picker-svg)
@@ -68,7 +70,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   const can = (kind) => !!rights?.system_admin || (rights?.features || {})[KIND_FEATURE[kind]] === "write";
   // Просмотр: «Чтение» или «Изменение» (изменение включает просмотр, app/features.py)
   const canRead = (kind) => !!rights?.system_admin || ["read", "write"].includes((rights?.features || {})[KIND_FEATURE[kind]]);
-  const canAny = can("supplier_change") || can("link_swap");
+  const canAny = can("supplier_change") || can("link_swap") || can("date_rebalance");
   // Документ только для просмотра: проведён (его состав не правит никто) или изменять документы этого вида человеку не дано
   const readOnly = (x) => !x || x.status === "posted" || !can(x.kind);
 
@@ -119,12 +121,13 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       cand: null, candError: "", candLoading: false,       // ответ /candidates
       sideA: [], sideB: [],             // обмен: массивы изделий (порядок = пары)
       marks: [], marksError: "", sideBCounts: new Map(), sideBError: "",
+      rb: null, rbError: "", rbLoading: false,             // балансировка: ответ /rebalance-preview
       picker: null,                     // {side, all, floor, sel:Set, error, loading}
       posted: null, saved: null, error: "" };
   }
   function fingerprint(x) {
-    return JSON.stringify([x.number.trim(), x.date, x.reason.trim(), x.comment.trim(), String(x.from), String(x.to), x.kind === "link_swap" ? x.mark : "",
-      x.kind === "supplier_change" ? [...x.chosen.keys()].sort((a, b) => a - b) : [x.sideA.map((e) => e.id), x.sideB.map((e) => e.id)]]);
+    return JSON.stringify([x.number.trim(), x.date, x.reason.trim(), x.comment.trim(), String(x.from), String(x.to), x.kind !== "supplier_change" ? x.mark : "",
+      single(x.kind) ? [...x.chosen.keys()].sort((a, b) => a - b) : [x.sideA.map((e) => e.id), x.sideB.map((e) => e.id)]]);
   }
   const isDirty = () => S.view === "doc" && !!f() && !readOnly(f()) && fingerprint(f()) !== f().saved;
   function fromDoc(d) {
@@ -132,7 +135,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     Object.assign(x, { id: d.id, status: d.status, version: d.version, number: d.number, date: d.doc_date, reason: d.reason || "", comment: d.comment || "",
       from: String(d.from_contract_id), to: String(d.to_contract_id), mark: d.mark || "", posted: d.status === "posted" ? { by: d.posted_by, at: d.posted_at } : null, head: d });
     const info = (i) => ({ id: i.element_id, type: i.element_type, mark: i.mark, address: i.address, floor: i.floor, status: i.current_status });
-    if (d.kind === "supplier_change") for (const i of d.items) x.chosen.set(i.element_id, info(i));
+    x.items = d.items;
+    if (single(d.kind)) for (const i of d.items) x.chosen.set(i.element_id, info(i));
     else { x.sideA = d.items.filter((i) => i.side === 1).map(info); x.sideB = d.items.filter((i) => i.side === 2).map(info); }
     x.saved = fingerprint(x);
     return x;
@@ -169,7 +173,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   // Данные, зависящие от выбора контрактов: кандидаты (замена) или марки/стороны (обмен)
   async function loadFormData(initial) {
     const x = f(); if (!x || readOnly(x)) return;
-    if (x.kind === "supplier_change") await loadCandidates(); else await loadMarks(initial);
+    if (x.kind === "supplier_change") await loadCandidates(); else await loadMarks(initial);   // у балансировки loadMarks дочитывает предпросмотр
   }
   async function loadCandidates() {
     const x = f(); x.cand = null; x.candError = "";
@@ -187,7 +191,23 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     try { x.marks = (await api.get(`/supplier-changes/contract-marks?object_id=${objectId}&contract_id=${x.from}`)).marks; }
     catch (err) { x.marksError = err?.detail || "Не удалось загрузить марки контракта"; }
     if (f() !== x) return;
-    if (x.mark) await loadSideB(); else paint();
+    if (x.mark) await (x.kind === "date_rebalance" ? loadRebalance(initial) : loadSideB()); else paint();
+  }
+  // Балансировка: предпросмотр «было → стало». Состав НОВОГО документа — все подходящие изделия контракта и марки; у сохранённого
+  // черновика при первом открытии — его собственный состав (doc_id), чтобы не подменять то, что человек сохранил.
+  async function loadRebalance(initial) {
+    const x = f(); x.rb = null; x.rbError = "";
+    if (!x.from || !x.mark) { paint(); return; }
+    x.rbLoading = true; paint();
+    try {
+      const own = initial && x.id && x.head && String(x.head.from_contract_id) === String(x.from) && x.head.mark === x.mark;
+      const r = await api.get(`/supplier-changes/rebalance-preview?object_id=${objectId}&contract_id=${x.from}&mark=${encodeURIComponent(x.mark)}${own ? `&doc_id=${x.id}` : ""}`);
+      if (f() === x) {
+        x.rb = r;
+        if (!own) { x.chosen.clear(); for (const i of r.items) x.chosen.set(i.element_id, { id: i.element_id, mark: x.mark, address: i.address, floor: i.floor, status: i.status }); }
+      }
+    } catch (err) { if (f() === x) x.rbError = err?.detail || "Не удалось рассчитать балансировку"; }
+    if (f() === x) { x.rbLoading = false; paint(); }
   }
   async function loadSideB() {
     const x = f(); x.sideBCounts = new Map(); x.sideBError = "";
@@ -203,13 +223,15 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function bodyFor(x) {
     const b = { object_id: objectId, kind: x.kind, number: x.number.trim() || null, doc_date: x.date, from_contract_id: Number(x.from), to_contract_id: Number(x.to),
       reason: x.reason.trim() || null, comment: x.comment.trim() || null };
-    if (x.kind === "supplier_change") b.element_ids = [...x.chosen.keys()];
+    if (x.kind === "date_rebalance") { b.element_ids = [...x.chosen.keys()]; b.mark = x.mark; b.to_contract_id = Number(x.from); }
+    else if (x.kind === "supplier_change") b.element_ids = [...x.chosen.keys()];
     else { b.mark = x.mark; b.side_a = x.sideA.map((e) => e.id); b.side_b = x.sideB.map((e) => e.id); }
     if (x.id && x.version) b.expected_version = x.version;
     return b;
   }
   function validate(x) {
     if (!x.date) return "Укажите дату документа";
+    if (x.kind === "date_rebalance") { if (!x.from) return "Выберите контракт"; if (!x.mark) return "Выберите марку"; return x.chosen.size ? "" : "Нет изделий для балансировки"; }
     if (!x.from || !x.to) return x.kind === "link_swap" ? "Выберите контракты обеих сторон" : "Выберите текущий и новый контракты";
     if (x.from === x.to) return "Контракты совпадают — выберите разные";
     if (x.kind === "link_swap" && !x.mark) return "Выберите марку обмена";
@@ -262,6 +284,12 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   // Что изменится при проведении / отмене — читается с сервера непосредственно перед подтверждением
   async function postPreview(x, undo) {
     const d = x.head;
+    if (x.kind === "date_rebalance") {
+      const c = contractById(x.from), sm = x.rb?.summary;
+      return undo
+        ? `Отменить проведение балансировки № ${x.number}?\nИзделиям (${x.chosen.size} шт.) вернутся плановые даты поставки, какими они были до документа. Контракт, статус и история не менялись.`
+        : `Провести балансировку поставки № ${x.number}?\nМарка «${x.mark}», контракт «${c ? contractLabel(c) : "—"}», изделий: ${x.chosen.size}.\nНабор согласованных плановых дат поставщика не меняется: даты лишь переходят между изделиями этой марки так, чтобы убрать просрочку (меняются только даты изделий-участников обмена).${sm ? `\nПросрочка (плановая позже требуемой) по расчёту сейчас: изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.; даты изменятся у ${sm.changed} из ${sm.count}.` : ""}\nПроведение пересчитывает раскладку по данным на момент проведения. Отмена — кнопкой «Отменить проведение».`;
+    }
     if (x.kind === "link_swap") {
       const pairs = Math.min(x.sideA.length, x.sideB.length);
       const a = contractById(x.from), b = contractById(x.to);
@@ -302,7 +330,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     try {
       const d = await api.post(path, x.version ? { expected_version: x.version } : {});
       S.f = fromDoc(d);
-      S.message = undo ? `Проведение отменено: ${d.elements ?? ""} изд. возвращены в состояние до документа. Документ снова черновик.` : `Документ № ${d.number} проведён: ${d.moved ?? d.pairs ?? ""} ${d.pairs != null ? "пар" : "изд."} перенесено. Отмена — кнопкой «Отменить проведение».`;
+      S.message = undo ? `Проведение отменено: ${d.elements ?? ""} изд. возвращены в состояние до документа (плановые даты — как были). Документ снова черновик.` : `Документ № ${d.number} проведён: ${d.moved ?? d.pairs ?? ""} ${d.pairs != null ? "пар" : "изд."} ${x.kind === "date_rebalance" ? "получили новую плановую дату" : "перенесено"}. Отмена — кнопкой «Отменить проведение».`;
       S.busy = false; paint(); loadFormDataSoon();
     } catch (err) {
       S.busy = false;
@@ -453,10 +481,11 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     return `<div class="v2-bar"><h3>Документы объекта</h3><div class="v2-inline">
         ${can("supplier_change") ? `<button type="button" class="v2-btn v2-primary" data-a="new-supplier_change" ${S.busy ? "disabled" : ""}>Новая замена поставщика</button>` : ""}
         ${can("link_swap") ? `<button type="button" class="v2-btn v2-primary" data-a="new-link_swap" ${S.busy ? "disabled" : ""}>Новый обмен привязками</button>` : ""}
+        ${can("date_rebalance") ? `<button type="button" class="v2-btn v2-primary" data-a="new-date_rebalance" ${S.busy ? "disabled" : ""}>Новая балансировка поставки</button>` : ""}
       </div></div>
       ${S.listNote ? `<p class="v2-ok" role="status">${esc(S.listNote)}</p>` : ""}
       ${S.list.error ? `<p class="v2-auth-error" role="alert">${esc(S.list.error)}</p>` : ""}
-      <p class="v2-muted">«Замена поставщика» переводит непоставленные изделия одного контракта на другой; «Обмен привязками» меняет местами изделия одной марки между двумя контрактами. Документ — черновик, пока его не проведут.</p>
+      <p class="v2-muted">«Замена поставщика» переводит непоставленные изделия одного контракта на другой; «Обмен привязками» меняет местами изделия одной марки между двумя контрактами; «Балансировка поставки» заново раздаёт согласованные плановые даты одного поставщика изделиям одной марки по очерёдности требуемых дат. Документ — черновик, пока его не проведут.</p>
       ${canAny ? "" : `<p class="v2-note" data-readonly-note>Только просмотр: на этом объекте у вас нет права изменять документы контрактации — создание, правка, подбор, проведение и отмена проведения недоступны.</p>`}
       ${rows.length ? `<table class="v2-table"><thead><tr><th>№</th><th>Дата</th><th>Вид</th><th>Состояние</th><th>Марка</th><th>Из контракта</th><th>В контракт</th><th>Изделий</th><th>Создал</th></tr></thead><tbody>
         ${rows.map((d) => `<tr><td><button type="button" class="v2-link" data-open="${d.id}">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.kind_title)}</td><td>${esc(d.status_title)}</td><td>${esc(d.mark || "—")}</td><td>${esc(d.from_contract_name)}</td><td>${esc(d.to_contract_name)}</td><td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов пока нет.</p>`}`;
@@ -507,12 +536,34 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <p class="${equal ? "v2-muted" : "v2-auth-error"}">${equal ? `Пар к обмену: ${pairs}` : `Сторона 1: ${x.sideA.length} шт., сторона 2: ${x.sideB.length} шт.${x.sideA.length || x.sideB.length ? " — количества не совпадают, провести нельзя" : ""}`}</p>`;
   }
 
+  function rebalanceHtml(x, ro) {
+    if (x.status === "posted" || ro) {
+      const items = x.items || [];
+      return `<h4>Изделия документа (${items.length})</h4>${items.length ? `<div style="max-height:420px;overflow:auto"><table class="v2-table"><thead><tr><th>Адрес</th><th>Этаж</th><th>Статус сейчас</th><th>Плановая дата было</th><th>Плановая дата сейчас</th></tr></thead><tbody>${items.map((i) => `<tr><td>${esc(i.address || "№" + i.element_id)}</td><td>${esc(i.floor ?? "—")}</td><td>${esc(STATUS[i.current_status] || i.current_status || "—")}</td><td>${i.prev_plan ? ruDate(i.prev_plan) : "—"}</td><td>${ruDate(i.plan_now)}</td></tr>`).join("")}</tbody></table></div>` : ""}${x.status === "posted" ? "" : `<p class="v2-muted">Колонка «было» заполняется при проведении.</p>`}`;
+    }
+    if (!x.from) return `<p class="v2-muted">Выберите контракт (поставщика) и марку — ниже появится, как поменяются плановые даты.</p>`;
+    if (!x.mark) return `<p class="v2-muted">Выберите марку.</p>`;
+    if (x.rbLoading) return `<p class="v2-muted">Расчёт…</p>`;
+    if (x.rbError) return `<p class="v2-auth-error" role="alert">${esc(x.rbError)} <button type="button" class="v2-btn" data-a="reload-rb">Повторить</button></p>`;
+    if (!x.rb) return "";
+    const sm = x.rb.summary, items = x.rb.items;
+    if (!items.length) return `<p class="v2-note">Подходящих изделий нет: нужны изделия этой марки на контракте, ещё не отгруженные и с плановой датой поставки.</p>`;
+    const dl = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
+    const onlyChanged = x.rbAll !== true, shown = onlyChanged ? items.filter((i) => i.plan_old !== i.plan_new) : items;
+    return `<h4>Что изменится</h4>
+      <p class="v2-muted">Изделий: ${sm.count}, у ${sm.changed} изменится плановая дата. Просрочка (плановая позже требуемой): изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они идут в конец очереди.` : ""}</p>
+      <label class="v2-role-check"><input type="checkbox" data-a="rb-only" ${onlyChanged ? "checked" : ""}><span>Показывать только изделия, у которых меняется дата (${sm.changed} из ${sm.count})</span></label>
+      <div style="max-height:420px;overflow:auto"><table class="v2-table"><thead><tr><th>Адрес</th><th>Этаж</th><th>Требуемая дата</th><th>Плановая было</th><th>Плановая стало</th><th>Откл., дн. было</th><th>Откл., дн. стало</th></tr></thead><tbody>
+      ${shown.map((i) => `<tr ${i.plan_old !== i.plan_new ? 'style="font-weight:600"' : ""}><td>${esc(i.address || "№" + i.element_id)}</td><td>${esc(i.floor ?? "—")}</td><td>${i.need_date ? ruDate(i.need_date) : "—"}</td><td>${ruDate(i.plan_old)}</td><td>${ruDate(i.plan_new)}</td><td>${dl(i.delay_old)}</td><td>${dl(i.delay_new)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+
   function docHtml() {
     const x = f(); if (!x) return "";
     const posted = x.status === "posted";
     const viewOnly = !can(x.kind);       // нет права изменять документы этого вида — только просмотр
     const ro = posted || viewOnly;
     const swap = x.kind === "link_swap";
+    const rb = x.kind === "date_rebalance";
     const dis = ro || S.busy ? "disabled" : "";
     const onlyB = swap ? new Set([...x.sideBCounts.keys()]) : null;
     // Только просмотр: выбор контракта и марки показывается одной строкой — тем, что записано в документе (контракты объекта
@@ -532,13 +583,13 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <div class="v2-fields" style="max-width:none">
         <label class="v2-field">Дата документа<input type="date" data-f="date" value="${esc(x.date)}" ${dis}></label>
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
-        <label class="v2-field">${swap ? "Контракт стороны 1" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}>${fromOpts}</select></label>
-        ${swap ? `<label class="v2-field">Марка обмена<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
-        <label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>
+        <label class="v2-field">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}>${fromOpts}</select></label>
+        ${swap || rb ? `<label class="v2-field">${rb ? "Марка" : "Марка обмена"}<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
+        ${rb ? "" : `<label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>`}
         <label class="v2-field v2-span">Причина<input data-f="reason" value="${esc(x.reason)}" ${dis} maxlength="300"></label>
         <label class="v2-field v2-span">Комментарий<input data-f="comment" value="${esc(x.comment)}" ${dis} maxlength="600"></label>
       </div>
-      <div style="margin-top:16px">${swap ? swapHtml(x, ro) : positionsHtml(x, ro)}</div>
+      <div style="margin-top:16px">${swap ? swapHtml(x, ro) : rb ? rebalanceHtml(x, ro) : positionsHtml(x, ro)}</div>
       ${x.error ? `<p class="v2-auth-error" role="alert" style="margin-top:12px">${esc(x.error)}</p>` : ""}
       ${S.message ? `<p class="v2-ok" role="status" style="margin-top:12px">${esc(S.message)}</p>` : ""}`;
   }
@@ -550,7 +601,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const b = (label, act, primary, extra = "") => `<button type="button" class="v2-btn ${primary ? "v2-primary" : ""}" data-a="${act}" ${busy || extra ? "disabled" : ""}>${label}</button>`;
     if (x.status === "posted") return b("Отменить проведение", "unpost", false);
     const swapPairsOk = x.kind !== "link_swap" || (x.sideA.length === x.sideB.length && x.sideA.length > 0);
-    const supplierOk = x.kind !== "supplier_change" || x.chosen.size > 0;
+    const supplierOk = !single(x.kind) || x.chosen.size > 0;
     return [x.id ? b("Удалить черновик", "delete", false) : "", b(busy ? "Сохранение…" : "Сохранить", "save", true, dirty ? "" : "1"),
       x.id ? b("Провести", "post", false, dirty || !swapPairsOk || !supplierOk ? "1" : "") : ""].join("");
   }
@@ -576,6 +627,11 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       const k = el.dataset.f;
       if (k === "date" || k === "number" || k === "reason" || k === "comment") { x[k] = el.value; x.error = ""; paintFoot(); return; }
       x[k] = el.value; x.error = ""; S.message = "";
+      if (x.kind === "date_rebalance" && (k === "from" || k === "mark")) {
+        x.chosen.clear(); x.rb = null; x.picker = null;
+        if (k === "from") { x.mark = ""; await loadMarks(false); } else await loadRebalance(false);
+        paint(); return;
+      }
       if (k === "from") {
         if (x.kind === "supplier_change") { x.chosen.clear(); await loadCandidates(); }
         else { x.mark = ""; x.to = ""; x.sideA = []; x.sideB = []; x.picker = null; await loadMarks(false); }
@@ -615,7 +671,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function onAction(a, d) {
     const x = f();
     if (a === "reload-list") { S.list.error = ""; loadList().then(paint); return; }
-    if (a === "new-supplier_change" || a === "new-link_swap") { newDoc(a.slice(4)); return; }
+    if (a === "new-supplier_change" || a === "new-link_swap" || a === "new-date_rebalance") { newDoc(a.slice(4)); return; }
     if (a === "back") { backToList(false); return; }
     if (!x) return;
     // Документ вида, который изменять не дано: кнопок записи и подбора нет в разметке, но и прочие пути к ним закрыты здесь
@@ -625,6 +681,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     else if (a === "unpost") postOrUnpost(true);
     else if (a === "delete") deleteDraft();
     else if (a === "reload-cand") loadCandidates();
+    else if (a === "reload-rb") loadRebalance(false);
+    else if (a === "rb-only") { x.rbAll = !x.rbAll; paint(); }
     else if (a === "toggle-pos") { x.openPos = x.openPos || new Set(); const i = Number(d.pi); if (x.openPos.has(i)) x.openPos.delete(i); else x.openPos.add(i); paint(); }
     else if (a === "pick") openPicker(d.side);
     else if (a === "pk-cancel") { x.picker = null; paint(); }

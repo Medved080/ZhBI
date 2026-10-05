@@ -112,17 +112,20 @@ export function contractingDeleteBodyProblem(b) {
 
 // POST /supplier-changes, PATCH /supplier-changes/{id}: документ «Замена поставщика» (element_ids) и «Обмен привязками» (side_a/side_b)
 const SC_KEYS = ["object_id", "kind", "number", "doc_date", "from_contract_id", "to_contract_id", "mark", "reason", "comment", "element_ids", "side_a", "side_b", "expected_version"];
-const idList = (v) => Array.isArray(v) && v.length <= 2000 && v.every(isId) && new Set(v).size === v.length;
+const idList = (v, max = 2000) => Array.isArray(v) && v.length <= max && v.every(isId) && new Set(v).size === v.length;
 export function supplierDocBodyProblem(b) {
   if (!isObj(b) || !onlyKeys(b, SC_KEYS)) return "лишние поля";
   if (!isId(b.object_id)) return "не указан объект";
-  if (b.kind !== "supplier_change" && b.kind !== "link_swap") return "неизвестный вид документа";
+  if (b.kind !== "supplier_change" && b.kind !== "link_swap" && b.kind !== "date_rebalance") return "неизвестный вид документа";
   if (!isIsoDate(b.doc_date)) return "не указана дата документа";
   if (!isId(b.from_contract_id) || !isId(b.to_contract_id)) return "не выбраны контракты";
-  if (b.from_contract_id === b.to_contract_id) return "контракты совпадают";
+  // Балансировка поставки (A4): контракт один, в шапке он хранится в обеих колонках.
+  if (b.kind === "date_rebalance" ? b.from_contract_id !== b.to_contract_id : b.from_contract_id === b.to_contract_id) return b.kind === "date_rebalance" ? "балансировка идёт внутри одного контракта" : "контракты совпадают";
   for (const k of ["number", "mark", "reason", "comment"]) if (k in b && !isNullableStr(b[k])) return `поле ${k} не строка`;
-  for (const k of ["element_ids", "side_a", "side_b"]) if (k in b && !idList(b[k])) return `список ${k} неверен`;
-  if (b.kind === "supplier_change" && ((b.side_a || []).length || (b.side_b || []).length)) return "у замены поставщика нет сторон обмена";
+  // Балансировка берёт ВСЕ подходящие изделия марки на контракте — их бывают тысячи, потолок выше, чем у подбора вручную.
+  for (const k of ["element_ids", "side_a", "side_b"]) if (k in b && !idList(b[k], b.kind === "date_rebalance" ? 20000 : 2000)) return `список ${k} неверен`;
+  if (b.kind !== "link_swap" && ((b.side_a || []).length || (b.side_b || []).length)) return "у этого документа нет сторон обмена";
+  if (b.kind === "date_rebalance" && !isNameStr(b.mark)) return "не выбрана марка";
   if (b.kind === "link_swap") {
     if ((b.element_ids || []).length) return "у обмена привязками нет списка замены";
     if (!isNameStr(b.mark)) return "не выбрана марка обмена";
