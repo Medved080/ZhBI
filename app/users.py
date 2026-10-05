@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
-from app import activity, impersonation, ldap_auth
+from app import activity, impersonation, ldap_auth, team_access
 from app.access import is_system_admin, require_service_feature, role_keys
 from app.auth import (
     SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, create_session,
@@ -166,6 +166,7 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service
              "must_change_password": int(body.must_change_password
                                          and body.auth_method == "local")},
         )
+        team_access.sync_all(conn)   # новая учётная запись могла совпасть с человеком из проектной команды (B2)
         conn.commit()
         row = conn.execute(
             "SELECT * FROM users WHERE domain_login = ?", (body.domain_login,)
@@ -259,6 +260,7 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
                 conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
             activity.log("user_auth_method", user=admin, entity_type="user",
                          entity_id=user_id, old_value=было, new_value=body.auth_method)
+        team_access.sync_all(conn)   # ФИО учётной записи могло измениться — сопоставление с командой пересчитывается (B2)
         conn.commit()
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         activity.log("user_update", user=admin, entity_type="user", entity_id=user_id,
@@ -949,12 +951,20 @@ def replace_access(user_id: int, body: AccessGrantsIn,
                         status_code=400, detail="Объект не принадлежит выбранному проекту")
         было = conn.execute(
             "SELECT COUNT(*) AS n FROM user_access WHERE user_id = ?", (user_id,)).fetchone()["n"]
-        conn.execute("DELETE FROM user_access WHERE user_id = ?", (user_id,))
+        # Гранты, выданные по проектной команде (B2), ручная замена не трогает: они снимаются только снятием с роли в команде.
+        # Присланные вместе с ними (форма показывает все гранты) вставляются «или игнорировать» — копией они не становятся.
+        по_команде = team_access.derived_grant_ids(conn, user_id)
+        if по_команде:
+            conn.execute(f"DELETE FROM user_access WHERE user_id = ? AND id NOT IN ({','.join('?' * len(по_команде))})",
+                         [user_id, *по_команде])
+        else:
+            conn.execute("DELETE FROM user_access WHERE user_id = ?", (user_id,))
         for грант in body.grants:
             conn.execute(
-                "INSERT INTO user_access (user_id, project_id, object_id, role) VALUES (?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO user_access (user_id, project_id, object_id, role) VALUES (?, ?, ?, ?)",
                 (user_id, грант.project_id, грант.object_id, грант.role),
             )
+        team_access.sync_all(conn)
         conn.commit()
     finally:
         conn.close()

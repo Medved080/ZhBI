@@ -33,7 +33,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import activity
+from app import activity, team_access
 from app.access import require_service_feature
 from app.auth import get_current_user
 from app.db import begin_write, get_connection
@@ -204,6 +204,7 @@ def rename_individual(individual_id: int, body: CatalogEntryIn,
             "UPDATE individuals SET name = ?, updated_at = datetime('now') WHERE id = ?",
             (name, individual_id),
         )
+        team_access.sync_all(conn)   # от написания ФИО зависит сопоставление с учётной записью (B2)
         conn.commit()
     finally:
         conn.close()

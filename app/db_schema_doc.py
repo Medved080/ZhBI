@@ -69,6 +69,19 @@ TABLES = [
     ("individual_id", "INTEGER", "FK", "физлицо → individuals.id (RESTRICT; при удалении физлица записи переводятся на замену, app/dict_delete.py)"),
     ("updated_at", "TEXT", "", "момент последнего назначения"),
 ]),
+("team_role_access", "team_role_access — Какие системные роли получает роль проектной команды", C_REF, S_REF, [
+    ("team_role_key", "TEXT", "PK", "роль команды (smu_director или ключ из app/object_team.py)"),
+    ("role_key", "TEXT", "PK", "системная роль → object_roles.key (CASCADE); пары (роль команды, системная роль) уникальны; по умолчанию таблица пуста"),
+]),
+("individual_user_links", "individual_user_links — Явная привязка физлица к учётной записи", C_REF, S_REF, [
+    ("individual_id", "INTEGER", "PK", "физлицо → individuals.id (CASCADE)"),
+    ("user_id", "INTEGER", "FK", "учётная запись → users.id (CASCADE); NULL — «не сопоставлять» (автосопоставление по ФИО отключено)"),
+]),
+("team_access_grants", "team_access_grants — Гранты, выданные по проектной команде", C_REF, S_REF, [
+    ("grant_id", "INTEGER", "PK", "грант → user_access.id (CASCADE); без записи здесь грант считается выданным вручную"),
+    ("team_role_key", "TEXT", "PK", "роль команды, по которой выдан грант (грант держится, пока есть хотя бы одно основание)"),
+    ("object_id", "INTEGER", "FK", "объект, на котором выдан грант → objects.id (CASCADE)"),
+]),
 ("objects", "objects — Объект (здание)", C_HIER, S_HIER, [
     ("id", "INTEGER", "PK", "идентификатор объекта; единица показа схемы"),
     ("name", "TEXT", "U", "название объекта (уникально; ключ переноса настроек)"),
@@ -1012,6 +1025,11 @@ FKS = [
     ("objects", "responsible_id", "individuals", "id", "SET NULL"),
     ("object_team_members", "object_id", "objects", "id", "CASCADE"),
     ("object_team_members", "individual_id", "individuals", "id", "RESTRICT"),
+    ("team_role_access", "role_key", "object_roles", "key", "CASCADE"),
+    ("individual_user_links", "individual_id", "individuals", "id", "CASCADE"),
+    ("individual_user_links", "user_id", "users", "id", "CASCADE"),
+    ("team_access_grants", "grant_id", "user_access", "id", "CASCADE"),
+    ("team_access_grants", "object_id", "objects", "id", "CASCADE"),
     ("user_access", "user_id", "users", "id", "CASCADE"),
     ("user_access", "project_id", "projects", "id", "CASCADE"),
     ("user_access", "object_id", "objects", "id", "CASCADE"),

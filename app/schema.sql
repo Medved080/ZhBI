@@ -1676,3 +1676,25 @@ CREATE TABLE IF NOT EXISTS object_team_members (
     UNIQUE (object_id, role_key)
 );
 CREATE INDEX IF NOT EXISTS idx_object_team_individual ON object_team_members (individual_id);
+
+-- Права по проектной команде (2026-10-05, B2, app/team_access.py).
+-- «Роль команды → системные роли»: что выдавать человеку, назначенному на роль в команде объекта. Пусто по умолчанию.
+CREATE TABLE IF NOT EXISTS team_role_access (
+    team_role_key TEXT NOT NULL,
+    role_key TEXT NOT NULL REFERENCES object_roles (key) ON DELETE CASCADE ON UPDATE CASCADE,
+    PRIMARY KEY (team_role_key, role_key)
+);
+-- Явная привязка физлица к учётной записи; user_id NULL — «не сопоставлять». Без записи действует автосопоставление по ФИО.
+CREATE TABLE IF NOT EXISTS individual_user_links (
+    individual_id INTEGER PRIMARY KEY REFERENCES individuals (id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users (id) ON DELETE CASCADE
+);
+-- Какие гранты user_access выданы по команде и из-за какой роли (грант без записи здесь — выдан вручную).
+CREATE TABLE IF NOT EXISTS team_access_grants (
+    grant_id INTEGER NOT NULL REFERENCES user_access (id) ON DELETE CASCADE,
+    team_role_key TEXT NOT NULL,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    PRIMARY KEY (grant_id, team_role_key)
+);
+CREATE INDEX IF NOT EXISTS idx_team_access_grants_object ON team_access_grants (object_id);
+

@@ -690,5 +690,7 @@ def apply_changes(conn, selections: list, admin) -> dict:
         if затронут:
             updated += 1
 
+    from app import team_access
+    team_access.sync_all(conn)   # директора СМУ и команды из файла дают права по команде (B2)
     conn.commit()
     return {"created": created, "updated": updated, "skipped": skipped}

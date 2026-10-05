@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import activity
+from app import activity, team_access
 from app.access import (is_system_admin, object_role_keys, object_role_sources, require_service_feature, role_keys, role_labels)
 from app.auth import MIN_PASSWORD_LENGTH, get_current_user
 from app.db import begin_write, get_connection
@@ -266,6 +266,7 @@ def access_bulk(body: BulkIn, admin: sqlite3.Row = Depends(require_service_featu
                     conn.execute("DELETE FROM user_access WHERE user_id = ?", (r["user_id"],))
                     for (pid, oid, role) in r["_new"]:
                         conn.execute("INSERT INTO user_access (user_id, project_id, object_id, role) VALUES (?, ?, ?, ?)", (r["user_id"], pid, oid, role))
+            team_access.sync_all(conn)   # групповая замена стёрла и выданное по команде — возвращаем (B2)
             conn.commit()
             for r in report:
                 if r["role_to"]:

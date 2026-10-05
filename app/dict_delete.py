@@ -788,6 +788,8 @@ def _individual_repoint(conn, row, target):
         "UPDATE object_team_members SET individual_id = ?, updated_at = datetime('now') WHERE individual_id = ?",
         (target["id"], row["id"]),
     ).rowcount
+    from app import team_access
+    team_access.sync_all(conn)   # другой человек в роли — другие права (B2)
     return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный),
                       ("Проектные команды объектов", команда)])
 

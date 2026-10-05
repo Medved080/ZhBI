@@ -59,7 +59,8 @@ from urllib.parse import quote
 from pydantic import BaseModel
 
 from app import activity
-from app import object_team
+from app import object_team, team_access
+from app.team_access import router as team_access_router
 from app import error_log
 from app.activity_actions import (
     CATEGORY_DENIED, CATEGORY_ERROR, CATEGORY_ORDER, CATEGORY_TITLES,
@@ -464,6 +465,7 @@ app.include_router(project_map_router)
 app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(supplier_change_router)
+app.include_router(team_access_router)
 app.include_router(schedule_versions_router)
 app.include_router(schedule_calc_router)
 app.include_router(counterparties_router)
@@ -5230,6 +5232,7 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
         )
         new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
         object_team.write_team(conn, new_id, {k: v for k, v in правки_команды.items() if v is not None})
+        team_access.sync_all(conn, [new_id])   # директор СМУ нового объекта тоже даёт права по команде (B2)
         conn.commit()
     finally:
         conn.close()
@@ -5314,6 +5317,8 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
         изменения_команды = object_team.write_team(conn, object_id, правки_команды) if правки_команды else []
         if изменения_команды and not записать:
             conn.execute("UPDATE objects SET updated_at = datetime('now') WHERE id = ?", (object_id,))
+        if any(колонка == "smu_director_id" for колонка, _ in записать):
+            team_access.sync_all(conn, [object_id])   # «Директор СМУ» — роль команды (B2)
         if записать or изменения_команды:
             conn.commit()
         for роль, было_имя, стало_имя in изменения_команды:

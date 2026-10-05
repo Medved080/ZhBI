@@ -7,6 +7,7 @@ import { api, ApiError, getImpersonationToken, setImpersonationToken } from "./a
 import { showInfoDialog } from "./dialogs.js";
 import { renderLogin, renderChangePassword } from "./login.js";
 import { mountUsersAccess } from "./users-access.js";
+import { mountTeamAccess } from "./team-access.js";
 import { mountProjectsObjects } from "./projects-objects.js";
 import { mountCounterparties } from "./counterparties.js";
 import { keepFocus } from "./focus.js";
@@ -183,6 +184,7 @@ const MFR_SCREENS = {
 
 const MODULES = {
   "users-access": (el, ctx) => mountUsersAccess(el, ctx),
+  "team-access": (el, ctx) => mountTeamAccess(el, ctx),
   "projects-objects": (el, ctx) => mountProjectsObjects(el, ctx),
   "counterparties": (el, ctx) => mountCounterparties(el, ctx),
 };
@@ -233,6 +235,7 @@ async function renderShell(user, permissions) {
   const roleList = permissions.roles || [];
   const moduleAvailable = {
     "users-access": canReadUsers || canReadRoles,
+    "team-access": canReadUsers,   // права по проектной команде (B2): тот же раздел, что у пользователей
     "projects-objects": canOpenProjects,
     "counterparties": canOpenCounterparties,
   };

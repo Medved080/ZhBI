@@ -83,4 +83,8 @@ def write_team(conn, object_id: int, edit: dict) -> list:
                 "ON CONFLICT (object_id, role_key) DO UPDATE SET individual_id = excluded.individual_id, "
                 "updated_at = datetime('now')", (object_id, role, value))
         changed.append((role, names.get(before), names.get(value)))
+    if changed:
+        # Назначение на роль меняет и права (B2): пересчёт — в той же транзакции, что и сама запись команды.
+        from app import team_access
+        team_access.sync_all(conn, [object_id])
     return changed
