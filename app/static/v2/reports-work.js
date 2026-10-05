@@ -124,7 +124,7 @@ function dynamicsReport(data, state, ctx) {
   return `<div class="rw-dyn-head"><h3 class="v2-report-h">Ежедневный отчёт за ${esc(dateRu(data.report_date))}</h3>
       <div class="v2-muted">${esc(data.subtitle || "")}</div><div><strong>${esc(card.title || "— объект не заполнен —")}</strong></div></div>
     <p class="v2-muted rw-center">${card.notes_effective_date ? `События, задачи и вопросы — редакция от ${esc(dateRu(card.notes_effective_date))}` : "События, задачи и вопросы на эту дату не заполнены"}</p>
-    ${warns.length ? `<div class="v2-callout v2-callout-bad" role="alert">Внимание: ${esc(warns.join("; "))}. Кривая плана неполная.</div>` : ""}
+    ${warns.length ? `<div class="v2-callout v2-callout-bad" role="alert">Внимание: ${esc(warns.join("; "))}. Остальные учтены в последний день плана.</div>` : ""}
     ${forecastCoverageHtml(data)}
     ${data.forecast_version_id ? "" : `<p class="v2-muted">Кривой прогноза нет: по объекту не загружен ни один актуализированный график. Загрузить — «Обмен данными → Импорт графика MS Project», вид «Актуализированный»; посчитать самой системой — «Документы → График СМР → Расчёт».</p>`}
     <div class="rw-dyn-boxes">${dynList("events", "Ключевые события", card.key_events, canEdit)}${dynList("tasks", "Ключевые задачи", card.key_tasks, canEdit)}</div>

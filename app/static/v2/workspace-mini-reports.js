@@ -170,7 +170,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
       <button type="button" class="link-btn" data-mini-range-reset ${range.from || range.to ? "" : "hidden"}>весь проект</button></div>
       <div class="side-chart">${windowed.weeks.length ? buildDynamicsChartSvg(windowed, 280, 150, { compact: true }) : `<div class="hint-text">В выбранном периоде нет ни одной недели</div>`}</div>
       ${dynamicsChartLegendHtml(windowed)}
-      ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${esc(warns.join("; "))}) — кривая плана неполная.</div>` : ""}
+      ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${esc(warns.join("; "))}) — остальные учтены в последний день плана.</div>` : ""}
       ${dynBlock("Монтаж ЖБИ", d.montage, d.report_date)}${dynBlock("Поставка ЖБИ", d.delivery, d.report_date)}
       <div class="side-dyn-notes">${noteBox("Ключевые события", d.card?.key_events)}${noteBox("Ключевые задачи", d.card?.key_tasks)}${noteBox("Открытые вопросы", d.card?.open_questions)}</div>`;
   }

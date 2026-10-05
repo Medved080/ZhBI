@@ -21977,7 +21977,7 @@ function renderDynamicsReport(data) {
         ? `События, задачи и вопросы — редакция от ${formatDateRu(card.notes_effective_date)}`
         : "События, задачи и вопросы на эту дату не заполнены"}
     </div>
-    ${warns.length ? `<div class="dyn-warn">Внимание: ${escapeHtml(warns.join("; "))}. Кривая плана неполная.</div>` : ""}
+    ${warns.length ? `<div class="dyn-warn">Внимание: ${escapeHtml(warns.join("; "))}. Остальные учтены в последний день плана.</div>` : ""}
     ${forecastCoverageHtml(data)}
     ${data.forecast_version_id ? "" : `<div class="hint-text" style="text-align:center; margin-bottom:6px">
       Кривой прогноза нет: по объекту не загружен ни один актуализированный график.
@@ -23570,7 +23570,7 @@ function renderSideDynamicsReport() {
       ? buildDynamicsChartSvg(windowed, 280, 150, { compact: true })
       : '<div class="hint-text">В выбранном периоде нет ни одной недели</div>'}</div>
     ${sideChartLegendHtml(windowed)}
-    ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${escapeHtml(warns.join("; "))}) — кривая плана неполная.</div>` : ""}
+    ${warns.length ? `<div class="side-dyn-warn">План задан не у всех изделий (${escapeHtml(warns.join("; "))}) — остальные учтены в последний день плана.</div>` : ""}
     ${sideDynBlock("Монтаж ЖБИ", data.montage, data.report_date)}
     ${sideDynBlock("Поставка ЖБИ", data.delivery, data.report_date)}
     <div class="side-dyn-notes">

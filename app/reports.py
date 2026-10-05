@@ -616,6 +616,14 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
             weeks.append(неделя)
     weeks = sorted(set(weeks))
 
+    # Изделия БЕЗ плановой даты в кривую плана входят в последний день плана (2026-10-05, решение пользователя: к концу
+    # директивного графика все изделия должны быть получены и смонтированы). Таблицы «план/факт/отклонение» этого не
+    # делают — там по-прежнему только изделия с датой, а предупреждение о неполноте остаётся.
+    for key, rows in (("plan_smr", plan_smr), ("plan_delivery", plan_delivery)):
+        без_даты = total - sum(r["n"] for r in rows if r["d"])
+        if без_даты > 0 and series_raw[key]:
+            series_raw[key].append((max(w for w, _ in series_raw[key]), без_даты))
+
     series = {k: _cumulative(v, weeks) for k, v in series_raw.items()}
 
     # Кривые ФАКТА обрываются на отчётной дате (живой запрос 2026-07-30):
@@ -1114,7 +1122,7 @@ def build_dynamics_report_pdf(report: dict) -> bytes:
         story.append(Spacer(1, 3 * mm))
         story.append(Paragraph(
             f"Внимание: план СМР задан у {cov['smr']} изделий из {cov['total']}, "
-            f"план поставки — у {cov['delivery']}. Кривая плана неполная.",
+            f"план поставки — у {cov['delivery']}. Остальные учтены в последний день плана.",
             ParagraphStyle("w", parent=note, textColor=colors.HexColor("#C0392B"))))
 
     doc.build(story)
