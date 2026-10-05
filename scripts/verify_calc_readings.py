@@ -314,5 +314,68 @@ check(prices_log and all(c["label"] and c["after"] != "" for c in prices_log[0][
 check(checks_log and checks_log[0]["summary"].startswith("Отмечены проверенными: 1") and checks_log[0]["changes"][0]["after"] == "проверено", "массовая отметка проверки — одной записью со списком изделий")
 check(all(e["at"] for e in norms_log + prices_log + checks_log), "у всех записей есть время")
 
+# 14. обмен с Excel: шаблон → заполнение → проверка → применение → повторная загрузка без изменений; ошибки не применяются
+import io as _io
+from openpyxl import load_workbook as _load
+from app.calc.excel_exchange import apply_plan, build_template, parse_workbook, S_PRICES, S_GROUPS, S_TYPES, S_PRODUCTS, S_VERIFY
+
+with transaction(settings.database_path) as conn:
+    current = get_prices(conn); params = current["parameters"]; zeroed = list(params["materials"])[:3]
+    update_prices(conn, PricesSave(expectedVersion=current["version"], concrete=params["concrete"], labour=params["labour"]["rate"],
+                                   materials={k: ("0" if k in zeroed else m["rate"]) for k, m in params["materials"].items()}), "тест")      # три материала без цены — пробелы для шаблона
+with transaction(settings.database_path) as conn:
+    template = build_template(conn)
+wb = _load(_io.BytesIO(template))
+check({S_PRICES, S_GROUPS, S_TYPES, S_PRODUCTS, S_VERIFY, "Инструкция"} <= set(wb.sheetnames), "в шаблоне есть все листы: %s" % ", ".join(wb.sheetnames))
+wp = wb[S_PRICES]
+price_rows = [r for r in range(2, wp.max_row + 1) if str(wp.cell(r, 1).value).startswith("m:")]
+check(price_rows and all(wp.cell(r, 5).value in (0, 0.0, None) for r in price_rows), "в листе цен материалы без цены (%d)" % len(price_rows))
+counts = [wp.cell(r, 4).value or 0 for r in price_rows]
+check(counts == sorted(counts, reverse=True), "материалы идут по убыванию числа изделий")
+check(wb[S_VERIFY].max_row - 1 > 900, "в листе проверки все изделия (%d)" % (wb[S_VERIFY].max_row - 1))
+# заполнение
+first = price_rows[0]; wp.cell(first, 6).value = 1234.5
+material_code = wp.cell(first, 1).value[2:]
+wg = wb[S_GROUPS]; group_name = wg.cell(2, 1).value
+wg.cell(2, 3).value = "7,5"; wg.cell(2, 5).value = 40; wg.cell(2, 6).value = "да"
+wt = wb[S_TYPES]; type_name = wt.cell(2, 1).value if wt.max_row >= 2 else None
+if type_name: wt.cell(2, 3).value = "в 35"
+wv = wb[S_VERIFY]; v_ids = [wv.cell(2, 1).value, wv.cell(3, 1).value]
+wv.cell(2, 5).value = "да"; wv.cell(2, 6).value = "по листу"; wv.cell(3, 5).value = "да"
+wpr = wb[S_PRODUCTS]; prod_id = wpr.cell(2, 1).value if wpr.max_row >= 2 and wpr.cell(2, 1).value and len(str(wpr.cell(2, 1).value)) > 20 else None
+if prod_id: wpr.cell(2, 6).value = "3,21"
+buffer = _io.BytesIO(); wb.save(buffer); filled = buffer.getvalue()
+with transaction(settings.database_path) as conn:
+    plan = parse_workbook(conn, filled)
+check(not plan["errors"], "заполненный файл без ошибок %s" % plan["errors"][:2])
+labels = " | ".join(c["label"] for c in plan["changes"])
+check("1234,5" in " ".join(c["after"] for c in plan["changes"]) and group_name in labels and (not type_name or type_name in labels), "проверка показывает, что изменится (%d изменений)" % len(plan["changes"]))
+with transaction(settings.database_path) as conn:
+    plan = parse_workbook(conn, filled)
+    applied = apply_plan(conn, plan, "тест")
+    p_now = get_prices(conn)["parameters"]; n_now = get_norms(conn)["parameters"]
+    vcount = conn.execute("SELECT COUNT(*) FROM product_verifications WHERE product_id IN (?,?)", v_ids).fetchone()[0]
+    note = conn.execute("SELECT note FROM product_verifications WHERE product_id=?", (v_ids[0],)).fetchone()[0]
+    prod = conn.execute("SELECT volume,manual_fields FROM products WHERE id=?", (prod_id,)).fetchone() if prod_id else None
+check(abs(float(p_now["materials"][material_code]["rate"]) - 1234.5) < 1e-6, "цена материала применена (новая версия расценок %s)" % applied.get("prices"))
+check(n_now["groups"][group_name]["hoursPerM3"] == "7.5" and n_now["groups"][group_name]["steelKgPerM3"] == "40" and n_now["groups"][group_name]["confirmed"], "нормы группы применены и подтверждены")
+check(not type_name or n_now["classByType"].get(type_name) == "В35", "класс по типу применён как В35 (запись «в 35» нормализована)")
+check(vcount == 2 and note == "по листу", "отметки проверки применены вместе с примечанием")
+check(not prod_id or (prod["volume"] == "3.21" and "volume" in prod["manual_fields"]), "объём изделия применён и помечен ручным")
+with transaction(settings.database_path) as conn:
+    again = parse_workbook(conn, filled)
+    log = entries(conn, 20)
+check(not again["errors"] and not again["changes"], "повторная загрузка того же файла ничего не меняет (%d изменений)" % len(again["changes"]))
+check(any(e["kind"] == "prices" for e in log) and any(e["kind"] == "norms" for e in log), "загрузка попала в историю версий")
+# ошибки: не число, неизвестный код, неизвестная группа — ничего не применяется
+wb2 = _load(_io.BytesIO(template)); w2 = wb2[S_PRICES]; w2.cell(price_rows[1], 6).value = "abc"; w2.cell(price_rows[2], 6).value = 55; wb2[S_GROUPS].cell(2, 1).value = "Несуществующая группа"; wb2[S_GROUPS].cell(2, 3).value = 5
+b2 = _io.BytesIO(); wb2.save(b2)
+with transaction(settings.database_path) as conn:
+    bad = parse_workbook(conn, b2.getvalue())
+check(len(bad["errors"]) >= 2 and any("F%d" % price_rows[1] in e for e in bad["errors"]), "ошибки указывают ячейку: %s" % bad["errors"][:2])
+with transaction(settings.database_path) as conn:
+    junk = parse_workbook(conn, b"not an excel file")
+check(junk["errors"], "файл не Excel отклонён")
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

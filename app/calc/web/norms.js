@@ -45,7 +45,7 @@
   panel.innerHTML=`<div class="pc-norms-heading"><div class="pc-context">Настройки сервиса · расценки v${prices.version} · профиль v${prices.profile.version} · нормы v${norms.version}</div><h2>Расценки и нормы</h2>
   <p>Все цены — без НДС. Изменение расценок, процентов или норм сразу пересчитывает стоимость во всех изделиях. Ручные правки в карточке изделия (корректировки строк расчёта, объём, труд и материалы, заданные вручную) при этом не меняются.</p>
   <p class="pc-norms-warning">${esc(np.limitation)}</p></div>
-  <nav class="pc-settings-tabs" aria-label="Настройки расчёта"><button type="button" data-settings-section="prices">Цены</button><button type="button" data-settings-section="norms">Нормы</button><button type="button" data-settings-section="profile">Начисления</button><button type="button" data-settings-section="history">История</button></nav><form id="pc-norms-form"><fieldset ${writer?'':'disabled'}>
+  <nav class="pc-settings-tabs" aria-label="Настройки расчёта"><button type="button" data-settings-section="prices">Цены</button><button type="button" data-settings-section="norms">Нормы</button><button type="button" data-settings-section="profile">Начисления</button><button type="button" data-settings-section="excel">Excel</button><button type="button" data-settings-section="history">История</button></nav><form id="pc-norms-form"><fieldset ${writer?'':'disabled'}>
   <section data-settings-panel="prices"><h3>Бетон и труд</h3><div class="pc-norms-table"><table id="pc-base-table"><thead><tr><th>Позиция</th><th>Ед.</th><th title="Сколько изделий считаются по этому классу бетона">Изделий</th><th>Цена, ₽ без НДС</th></tr></thead><tbody>
    <tr><td>Бетон: класс не указан или без своей цены</td><td>₽/м³</td><td>${classUse['Не указан']?n(classUse['Не указан']):'—'}</td><td>${money('c:default',pp.concrete.default)}</td></tr>
    ${classes.map(c=>`<tr><td>Бетон ${esc(c)}</td><td>₽/м³</td><td>${classUse[c]?n(classUse[c]):'—'}</td><td>${money('c:'+c,pp.concrete[c])}</td></tr>`).join('')}
@@ -58,7 +58,14 @@
    <tr><td>Труд на 1 м³ производственного бетона</td><td>${plain('hoursPerM3',np.hoursPerM3,0,1000)}</td><td>чел·ч на м³</td></tr></tbody></table></div>
   <div class="pc-norms-table"><table><thead><tr><th>Ресурс</th><th>Ед.</th><th>По проекту, сумма</th><th>В Excel, сумма</th><th>Коэффициент расхода</th></tr></thead><tbody>${Object.entries(np.resources).map(([k,r])=>`<tr><td>${esc(r.name)}</td><td>${esc(r.unit)}</td><td>${n(r.projectTotal)}</td><td>${n(r.productionTotal)}</td><td>${plain('f:'+k,r.factor,1,10)}</td></tr>`).join('')}</tbody></table></div>
   ${groupsSection(np)}${typesSection(np)}
-  </section></fieldset><div class="pc-norms-actions"><button type="submit" ${writer?'':'disabled'}>Сохранить расценки и нормы</button><span id="pc-norms-status" class="pc-context" role="status" aria-live="polite"></span></div></form><section data-settings-panel="history" hidden><h3>История изменений</h3><p class="pc-context">Каждое сохранение расценок, начислений и норм и каждая отметка проверки — отдельная запись: кто, когда и что изменено (было → стало). Прежние значения не теряются.</p><div id="pc-sh-list" class="pc-sh-list"></div></section>
+  </section></fieldset><div class="pc-norms-actions"><button type="submit" ${writer?'':'disabled'}>Сохранить расценки и нормы</button><span id="pc-norms-status" class="pc-context" role="status" aria-live="polite"></span></div></form><section data-settings-panel="history" hidden><h3>История изменений</h3><p class="pc-context">Каждое сохранение расценок, начислений и норм и каждая отметка проверки — отдельная запись: кто, когда и что изменено (было → стало). Прежние значения не теряются.</p><div id="pc-sh-list" class="pc-sh-list"></div></section><section data-settings-panel="excel" hidden><h3>Заполнение из Excel</h3>
+  <ol class="pc-excel-steps"><li><strong>Скачайте шаблон.</strong> В нём все недостающие параметры: цены материалов без цены, нормы групп, класс бетона по типам, объём и класс там, где их нет, отметки проверки.</li>
+   <li><strong>Заполните жёлтые ячейки</strong> (пустая ячейка — без изменений) и сохраните файл. Листы и заголовки менять нельзя.</li>
+   <li><strong>Загрузите файл и нажмите «Проверить»:</strong> система покажет, что изменится, и укажет ошибки с адресом ячейки. «Применить» доступно, когда ошибок нет; применяется всё сразу новой версией, записи появятся во вкладке «История».</li></ol>
+  <div class="pc-excel-actions"><a class="pc-excel-download" href="/calc/api/settings-template.xlsx" download>Скачать шаблон XLSX</a>
+   <label class="pc-excel-file">Файл XLSX<input type="file" id="pc-excel-file" accept=".xlsx"></label>
+   <button type="button" data-excel="check">Проверить файл</button><button type="button" data-excel="apply" disabled>Применить изменения</button></div>
+  <div id="pc-excel-result" class="pc-excel-result" role="status" aria-live="polite"></div></section>
   <details><summary>Основание норм и методика</summary><h3>Основание норм</h3><table class="pc-norms-basis"><thead><tr><th>Изделие</th><th>Бетон по проекту, м³</th><th>Бетон в Excel, м³</th><th>Труд в Excel, чел·ч</th><th>Труд / м³</th></tr></thead><tbody>${np.basis.map(b=>`<tr><td>${esc(b.name)}</td><td>${n(b.projectVolume)}</td><td>${n(b.productionVolume)}</td><td>${n(b.hours)}</td><td>${n(b.hoursPerM3)}</td></tr>`).join('')}</tbody></table>
   <p class="pc-context">Нормы и расценки хранятся в базе с историей изменений. Бетон округляется до 0,01 м³, нормируемая сталь — вверх до 0,001 т. Материал без цены считается по нулю — стоимость такого изделия занижена, пока цена не задана. Неподтверждённый объём не участвует в оценке труда.</p></details>`;
   window.CalcZhBIUI?.bindSettings(panel);
@@ -87,10 +94,12 @@
   const host=panel.querySelector('#pc-sh-list');if(!host)return;host.textContent='Загружаю историю…';
   try{host.innerHTML=historyHtml(await api.request('/calc/api/history/settings'+(historyKind?'?kind='+historyKind:'')));}catch(e){host.textContent=e.message;}
  }
+ panel.addEventListener('change',event=>{if(event.target.id==='pc-excel-file'){excelFile=event.target.files[0]||null;excelState=excelFile?{message:'Выбран файл: '+excelFile.name+'. Нажмите «Проверить файл».'}:null;excelRefresh();}});
  panel.addEventListener('click',event=>{
   const b=event.target.closest('button');if(!b)return;
-  if(b.dataset.settingsSection!==undefined){const bar=panel.querySelector('.pc-norms-actions');if(bar)bar.hidden=b.dataset.settingsSection==='history';if(b.dataset.settingsSection==='history')void loadHistory();return;}      // в истории сохранять нечего
+  if(b.dataset.settingsSection!==undefined){const bar=panel.querySelector('.pc-norms-actions');if(bar)bar.hidden=['history','excel'].includes(b.dataset.settingsSection);if(b.dataset.settingsSection==='history')void loadHistory();return;}      // в истории сохранять нечего
   if(b.dataset.historyKind!==undefined){historyKind=b.dataset.historyKind;void loadHistory();return;}
+  if(b.dataset.excel){void excelRun(b.dataset.excel==='apply');return;}
   const action=b.dataset.bulk;if(!action)return;
   if(action==='fill'){
    const values=[...panel.querySelectorAll('[data-bulk-field]')].filter(el=>el.value!=='');if(!values.length){bulkStatus('Введите значение хотя бы в одно поле «Массово для всех групп».');return;}
@@ -111,6 +120,36 @@
    bulkStatus('Цена '+price+' ₽ поставлена показанным материалам: '+rows.length+'. Нажмите «Сохранить расценки и нормы» — появится новая версия расценок.');
   }
  });
+
+ // Заполнение из Excel: шаблон со всеми недостающими параметрами → заполнение → проверка («что изменится», ошибки по ячейкам) → применение одной транзакцией
+ let excelFile=null,excelState=null;
+ function excelHtml(){
+  const s=excelState;if(!s)return '';
+  if(s.message&&!s.errors?.length&&!s.changes)return `<p class="pc-excel-msg">${esc(s.message)}</p>`;
+  const errors=s.errors?.length?`<div class="pc-excel-errors" role="alert"><strong>Ошибки (${s.errors.length}) — ничего не применено:</strong><ul>${s.errors.slice(0,60).map(e=>`<li>${esc(e)}</li>`).join('')}</ul>${s.errors.length>60?`<p>и ещё ${s.errors.length-60}</p>`:''}</div>`:'';
+  const sm=s.summary||{},parts=[['prices','цен'],['groups','норм групп'],['classes','классов по типам'],['products','изделий'],['verified','отметок проверки'],['unverified','снятий отметки']].filter(([k])=>sm[k]).map(([k,w])=>sm[k]+' '+w).join(', ');
+  const head=s.applied?`<p class="pc-excel-msg"><strong>Применено.</strong> ${esc(parts||'изменения')}. Стоимость изделий пересчитана; записи — во вкладке «История».</p>`:s.changesTotal?`<p><strong>Будет изменено:</strong> ${esc(parts||s.changesTotal+' значений')} (всего значений: ${s.changesTotal}).</p>`:(s.errors?.length?'':'<p class="pc-excel-msg">В файле нет изменений относительно текущих значений.</p>');
+  const rows=(s.changes||[]).map(c=>`<tr><td>${esc(c.sheet)}</td><td>${esc(c.label)}</td><td>${esc(c.before)}</td><td>${esc(c.after)}</td></tr>`).join('');
+  return errors+head+(rows?`<div class="pc-norms-table"><table class="pc-sh-table"><thead><tr><th>Лист</th><th>Что</th><th>Было</th><th>Стало</th></tr></thead><tbody>${rows}</tbody></table></div>${s.changesTotal>s.changes.length?`<p class="pc-context">Показаны первые ${s.changes.length} из ${s.changesTotal}.</p>`:''}`:'');
+ }
+ function excelRefresh(){
+  const host=panel.querySelector('#pc-excel-result');if(host)host.innerHTML=excelHtml();
+  const apply=panel.querySelector('[data-excel="apply"]');if(apply)apply.disabled=!(excelState&&!excelState.applied&&excelState.changesTotal&&!excelState.errors?.length);
+ }
+ async function excelRun(applyNow){
+  if(!excelFile){excelState={message:'Сначала выберите файл XLSX.'};excelRefresh();return;}
+  const form=new FormData();form.append('file',excelFile);
+  excelState={message:applyNow?'Применяю…':'Проверяю файл…'};excelRefresh();
+  try{
+   const result=await api.request('/calc/api/settings-import?apply='+(applyNow?'true':'false'),{method:'POST',body:form});
+   excelState=result;excelRefresh();
+   if(applyNow&&result.applied){
+    [prices,norms,readiness]=await Promise.all([api.request('/calc/api/prices'),api.request('/calc/api/norms'),api.request('/calc/api/readiness').catch(()=>null)]);
+    await window.CalcZhBIWorkspace.refresh();const keep=excelState;render();excelState=keep;excelRefresh();
+    panel.querySelector('[data-settings-section="excel"]')?.click();
+   }
+  }catch(e){excelState={errors:[e.message]};excelRefresh();}
+ }
  async function save(){
   const form=panel.querySelector('form');if(!form.reportValidity())return;
   const status=panel.querySelector('#pc-norms-status'),buttons=[...form.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);status.textContent='Сохранение…';delete status.dataset.error;

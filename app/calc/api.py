@@ -359,6 +359,34 @@ def build_router(settings):
             row = conn.execute("SELECT actor_id,verified_at,note FROM product_verifications WHERE product_id=?", (str(product_id),)).fetchone()
             return {"verification": {"actorId": row["actor_id"], "verifiedAt": row["verified_at"], "note": row["note"]} if row else None}
 
+    @router.get('/api/settings-template.xlsx')
+    def settings_template(user=Depends(auth.current_user)):
+        """Книга Excel со всеми недостающими параметрами (цены, нормы групп, классы по типам, объём и класс изделий, проверка) для заполнения и загрузки обратно."""
+        from datetime import datetime
+        from .excel_exchange import build_template
+        conn = connect(settings.database_path)
+        try:
+            conn.execute("BEGIN")
+            data = build_template(conn)
+        finally:
+            conn.close()
+        name = "calculator-fill-%s.xlsx" % datetime.now().strftime("%Y%m%d-%H%M")
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
+    @router.post('/api/settings-import')
+    async def settings_import(file: UploadFile = File(...), apply: bool = Query(False), user=Depends(auth.writer)):
+        """Загрузка заполненной книги: apply=false — только проверка (что изменится и какие ошибки), apply=true — применить всё или ничего одной транзакцией."""
+        from .excel_exchange import apply_plan, parse_workbook
+        data = await file.read()
+        if len(data) > 15 * 1024 * 1024:
+            raise HTTPException(413, "Файл больше 15 МБ")
+        with transaction(settings.database_path) as conn:
+            plan = parse_workbook(conn, data)
+            applied = None
+            if apply and not plan["errors"] and plan["changes"]:
+                applied = apply_plan(conn, plan, user["id"])
+        return {"errors": plan["errors"], "warnings": plan["warnings"], "changes": plan["changes"][:400], "changesTotal": len(plan["changes"]), "summary": plan["summary"], "applied": applied}
+
     @router.post('/api/products/verification/bulk')
     def verify_products(body: BulkVerificationBody, user=Depends(auth.writer)):
         """Массовая отметка «проверено человеком» (выбранные изделия): одна запись в истории на всю пачку, отметки каждого изделия — в product_verifications."""

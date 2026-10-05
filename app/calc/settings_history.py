@@ -5,10 +5,10 @@
 import json
 from decimal import Decimal, InvalidOperation
 
-ACTIONS = ("norms.updated", "prices.updated", "profile.updated", "products.verified.bulk", "product.verified", "product.unverified")
+ACTIONS = ("norms.updated", "prices.updated", "profile.updated", "products.verified.bulk", "product.verified", "product.unverified", "products.imported")
 KIND = {"norms.updated": "norms", "prices.updated": "prices", "profile.updated": "profile",
-        "products.verified.bulk": "verification", "product.verified": "verification", "product.unverified": "verification"}
-KIND_TITLE = {"norms": "Нормы", "prices": "Расценки", "profile": "Начисления и НДС", "verification": "Проверка изделий"}
+        "products.verified.bulk": "verification", "product.verified": "verification", "product.unverified": "verification", "products.imported": "products"}
+KIND_TITLE = {"norms": "Нормы", "prices": "Расценки", "profile": "Начисления и НДС", "verification": "Проверка изделий", "products": "Данные изделий"}
 PROFILE_LABELS = {"socialPercent": "Страховые взносы, % от оплаты труда", "energyPercent": "Энергоуслуги, % от материалов", "overheadPercent": "Общепроизводственные, % от материалов",
                   "adminPercent": "Административные, % от материалов", "commercialPercent": "Коммерческие, % от материалов", "profitPercent": "Маржа (прибыль), %",
                   "deliveryPercent": "Доставка, % от материалов", "vatPercent": "НДС, %"}
@@ -84,6 +84,15 @@ def entries(conn, limit=150, kind=None):
             entry["changes"] = _price_changes(detail, names)
         elif row["action"] == "profile.updated":
             entry["changes"] = [{"label": PROFILE_LABELS.get(c["item"], c["item"]), "before": _show(c["before"]), "after": _show(c["after"])} for c in detail.get("changes") or []]
+        elif row["action"] == "products.imported":
+            items = detail.get("items") or []
+            entry["summary"] = "Загрузка из Excel: изменено изделий — %d" % len(items)
+            for item in items[:60]:
+                for field, title in (("volume", "объём, м³"), ("concrete_class", "класс бетона")):
+                    if field in item["update"]:
+                        entry["changes"].append({"label": "%s: %s" % (item["name"], title), "before": _show((item.get("before") or {}).get(field)), "after": _show(item["update"][field])})
+            if len(items) > 60:
+                entry["changes"].append({"label": "и ещё %d изд." % (len(items) - 60), "before": "", "after": ""})
         elif row["action"] == "products.verified.bulk":
             ids = detail.get("ids") or []
             for pid in ids[:60]:
