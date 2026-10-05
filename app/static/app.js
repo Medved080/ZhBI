@@ -16598,6 +16598,101 @@ document.getElementById("menu-roles").addEventListener("click", async () => {
   }
 });
 
+// ---------- права по проектной команде (2026-10-05, B2; бэкенд — app/team_access.py, экран V2 — v2/team-access.js) ----------
+const teamAccessBackdrop = document.getElementById("team-access-backdrop");
+const TEAM_ACCESS_HOW = { link: "привязано вручную", auto: "найдено автоматически", ambiguous: "несколько кандидатов — права не выданы",
+  missing: "учётной записи не найдено", none: "не сопоставлять" };
+let teamAccessData = null, teamAccessDraft = null;
+
+function teamAccessDirty() {
+  if (!teamAccessData || !teamAccessDraft) return false;
+  return teamAccessData.team_roles.some((r) =>
+    [...teamAccessDraft[r.key]].sort().join() !== [...(teamAccessData.mapping[r.key] || [])].sort().join());
+}
+
+function renderTeamAccess() {
+  const d = teamAccessData, ед = escapeHtml, пишет = can("users", "write");
+  const body = document.getElementById("team-access-body");
+  const карта = `<h4>Соответствие ролей</h4>
+    <table class="scd-pos-table"><thead><tr><th>Роль в команде</th>${d.system_roles.map((r) => `<th>${ед(r.name)}</th>`).join("")}</tr></thead><tbody>
+    ${d.team_roles.map((t) => `<tr><td>${ед(t.label)}</td>${d.system_roles.map((r) =>
+      `<td style="text-align:center"><input type="checkbox" data-map="${ед(t.key)}|${ед(r.key)}"${teamAccessDraft[t.key].has(r.key) ? " checked" : ""}${пишет ? "" : " disabled"}></td>`).join("")}</tr>`).join("")}
+    </tbody></table>`;
+  const люди = d.people.length ? `<h4 style="margin-top:18px">Люди команд и учётные записи</h4>
+    <div class="hint-text">Автоматически человек сопоставляется с учётной записью только при единственном совпадении по фамилии и инициалам;
+      иначе права не выдаются — выберите учётную запись вручную.</div>
+    <table class="scd-pos-table"><thead><tr><th>Человек</th><th>Роли на объектах</th><th>Учётная запись</th><th>Прав по команде</th></tr></thead><tbody>
+    ${d.people.map((p) => {
+      const a = p.account, режим = a.how === "link" ? `u:${a.user_id}` : a.how === "none" ? "none" : "auto";
+      const оп = (v, т) => `<option value="${ед(v)}"${режим === v ? " selected" : ""}>${ед(т)}</option>`;
+      return `<tr><td>${ед(p.name)}</td>
+        <td>${p.assignments.map((x) => `${ед(x.object_name)}: <b>${ед(x.team_role_label)}</b>`).join("<br>")}</td>
+        <td>${a.user_name ? ед(a.user_name) : "—"} <span class="hint-text">(${ед(TEAM_ACCESS_HOW[a.how] || a.how)})</span>
+          ${пишет ? `<br><select data-link="${p.individual_id}">${оп("auto", "— автоматически по ФИО —")}${оп("none", "— не сопоставлять —")}
+            ${d.users.map((u) => оп(`u:${u.id}`, `${u.name} (${u.login})`)).join("")}</select>` : ""}</td>
+        <td style="text-align:center">${p.team_grants}</td></tr>`;
+    }).join("")}</tbody></table>`
+    : '<div class="hint-text" style="margin-top:14px">В проектных командах пока никого нет: назначьте людей в «Проекты и объекты» или загрузите «Справочник ОС WEB».</div>';
+  body.innerHTML = карта + люди;
+  document.getElementById("team-access-save").style.display = пишет ? "" : "none";
+  document.getElementById("team-access-save").disabled = !teamAccessDirty();
+  body.querySelectorAll("[data-map]").forEach((el) => el.addEventListener("change", () => {
+    const [t, r] = el.dataset.map.split("|");
+    if (el.checked) teamAccessDraft[t].add(r); else teamAccessDraft[t].delete(r);
+    document.getElementById("team-access-save").disabled = !teamAccessDirty();
+    document.getElementById("team-access-status").textContent = teamAccessDirty() ? "Есть несохранённые изменения" : "";
+  }));
+  body.querySelectorAll("[data-link]").forEach((sel) => sel.addEventListener("change", async () => {
+    const v = sel.value, ошибка = document.getElementById("team-access-error");
+    ошибка.textContent = "";
+    try {
+      const r = await api(`/team-access/links/${sel.dataset.link}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(v === "auto" ? { mode: "auto" } : v === "none" ? { mode: "none" } : { mode: "user", user_id: Number(v.slice(2)) }),
+      });
+      await loadTeamAccess();
+      document.getElementById("team-access-status").textContent = `Привязка сохранена. Выдано прав: ${r.granted}, снято: ${r.revoked}.`;
+    } catch (e) { ошибка.textContent = e.message; }
+  }));
+}
+
+async function loadTeamAccess() {
+  teamAccessData = await api("/team-access");
+  teamAccessDraft = Object.fromEntries(teamAccessData.team_roles.map((r) => [r.key, new Set(teamAccessData.mapping[r.key] || [])]));
+  document.getElementById("team-access-status").textContent = "";
+  renderTeamAccess();
+}
+
+document.getElementById("menu-team-access").addEventListener("click", async () => {
+  document.getElementById("team-access-error").textContent = "";
+  try {
+    await loadTeamAccess();
+    teamAccessBackdrop.classList.add("open");
+  } catch (e) {
+    showToast("Не удалось открыть права по команде: " + e.message, "warning");
+  }
+});
+document.getElementById("team-access-close").addEventListener("click", () => {
+  if (teamAccessDirty() && !confirm("В соответствии ролей есть несохранённые изменения. Закрыть без сохранения?")) return;
+  teamAccessBackdrop.classList.remove("open");
+});
+document.getElementById("team-access-save").addEventListener("click", async () => {
+  if (!confirm("Сохранить соответствие? Права по проектной команде будут выданы и сняты сразу, у всех объектов.")) return;
+  const кнопка = document.getElementById("team-access-save"), ошибка = document.getElementById("team-access-error");
+  кнопка.disabled = true; ошибка.textContent = "";
+  try {
+    const r = await api("/team-access/mapping", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mapping: Object.fromEntries(Object.entries(teamAccessDraft).map(([t, set]) => [t, [...set]])) }),
+    });
+    await loadTeamAccess();
+    document.getElementById("team-access-status").textContent = `Соответствие сохранено. Выдано прав: ${r.granted}, снято: ${r.revoked}.`;
+  } catch (e) {
+    ошибка.textContent = e.message;
+    кнопка.disabled = !teamAccessDirty();
+  }
+});
+
 document.getElementById("menu-access-matrix").addEventListener("click", async () => {
   try {
     await openAccessMatrix();

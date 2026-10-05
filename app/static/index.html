@@ -5450,6 +5450,8 @@
                  экрана «Пользователи и доступ» — пункт меню оставлен
                  отдельным ярлыком-прыжком сразу на неё. -->
             <button id="menu-roles" data-feature="roles" data-feature-kind="read">Настройка ролей</button>
+            <!-- Права по проектной команде (2026-10-05, B2): какие роли получает роль команды объекта и чьи это учётные записи. -->
+            <button id="menu-team-access" data-feature="users" data-feature-kind="read">Права по проектной команде</button>
             <!-- Отдельным пунктом (живой запрос 2026-08-03): «кто сейчас в
                  системе» — вопрос обо всём сервисе, а не о конкретном
                  человеке, и искать его в карточке пользователя незачем. -->
@@ -7322,6 +7324,26 @@
      уровни доступа в иерархии: «Все проекты», проект, его объекты.
      На пересечении — выданная роль. Первая колонка закреплена: колонок
      столько же, сколько объектов в системе, и таблица заведомо шире экрана. -->
+<div class="modal-backdrop" id="team-access-backdrop">
+  <div class="modal wide modal-sticky" id="team-access-modal">
+    <div class="modal-sticky-head">
+      <h2>Права по проектной команде</h2>
+      <p class="hint-text">Назначили человека на роль в команде объекта — ему на этом объекте открываются рабочие места,
+        положенные такой роли. Роли и разделы задаются в «Правах пользователей»; здесь — какая роль команды какие системные
+        роли даёт. По умолчанию ничего не выдаётся; сохранение выдаёт и снимает права сразу.</p>
+    </div>
+    <div class="modal-sticky-scroll"><div id="team-access-body"></div></div>
+    <div class="modal-sticky-foot">
+      <div class="error-text" id="team-access-error"></div>
+      <div class="actions">
+        <span class="hint-text" id="team-access-status"></span>
+        <button class="btn btn-secondary" id="team-access-close">Закрыть</button>
+        <button class="btn btn-primary" id="team-access-save">Сохранить соответствие</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="access-matrix-backdrop">
   <div class="modal wide modal-sticky" id="access-matrix-modal">
     <div class="modal-sticky-head">
