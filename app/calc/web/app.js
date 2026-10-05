@@ -92,7 +92,7 @@ function matchesProductName(product, query){
   document.getElementById('pc-conflict-dialog').close();conflictId=null;
  });
  q('#pc-current-user').textContent=user.displayName+(user.local?'':' · '+({admin:'администратор',editor:'редактор',viewer:'просмотр'}[user.role]));q('#pc-logout').hidden=user.local||Boolean(window.frameElement?.dataset?.calcEmbed);q('#pc-logout').addEventListener('click',()=>void flushSaves().then(()=>api.logout()).catch(error=>saveStatus(error.message,true)));
- if(!writeable){q('#pc-edit-product').hidden=true;q('#pc-verify-product').hidden=true;q('#pc-add').hidden=true;q('#pc-clear').hidden=true;}
+ if(!writeable){q('#pc-edit-product').hidden=true;q('#pc-verify-product').hidden=true;q('#pc-verify-selected').hidden=true;q('#pc-add').hidden=true;q('#pc-clear').hidden=true;}
  window.addEventListener('beforeunload',event=>{if(jobs.size){event.preventDefault();event.returnValue='';}});
  const albumNames={doc01:'Колонны · нижние',doc02:'Колонны · средние, ч. 1',doc03:'Колонны · средние, ч. 2',doc04:'Колонны · верхние',doc05:'Колонны · АБК',doc06:'Ригели · 6.9',doc07:'Ригели · 6.6',doc08:'Ригели · 4.6.5 / 4.4.5',doc09:'Ригели · АБК',doc10:'Плиты · корпус',doc11:'Плиты · АБК',doc12:'Подъёмники',doc13:'Шахты лифтов',doc14:'Лестничные балки',doc15:'Цокольные панели'};
  const albumOptions=[...new Map(products.filter(p=>p.documentModel?.source.id).map(p=>[p.documentModel.source.id,{family:p.documentModel.family,title:p.documentModel.source.title}])).entries()];
@@ -175,6 +175,7 @@ function matchesProductName(product, query){
   q('#pc-selected-count').textContent='Выбрано: '+state.selected.length;
   q('#pc-export').disabled=state.selected.length===0||state.exporting;
   q('#pc-export').textContent='XLSX · '+state.selected.length;
+  {const vb=q('#pc-verify-selected');vb.disabled=state.selected.length===0;vb.textContent='Проверено · '+state.selected.length;}
   q('#pc-export-one').disabled=state.exporting;
   root.dataset.batch=String(state.batch);
   q('.pc-select-all').hidden=!state.batch;
@@ -314,6 +315,7 @@ function matchesProductName(product, query){
   if(b.id==='pc-export-one')void exportSelected(true);
   if(b.id==='pc-edit-product'||b.id==='pc-edit-calculation')openProductForm(state.product);
   if(b.id==='pc-verify-product')void toggleVerification();
+  if(b.id==='pc-verify-selected')void verifySelected();
   if(b.id==='pc-product-issues-link'){q('[data-view="issues"]').click();}
   if(b.id==='pc-model-results-open')void openModelResults();
   if(b.dataset.resultProduct){q('#pc-model-results-dialog').close();window.CalcZhBIWorkspace.select(b.dataset.resultProduct,'model');}
@@ -341,6 +343,14 @@ function matchesProductName(product, query){
   const auto=field('hasGeometry').checked&&field('volumeFromGeometry').checked;
   field('volume').readOnly=auto;
   if(auto){const volume=['length','width','height'].map(name=>Number(field(name).value)).reduce((a,b)=>a*b,1);if(Number.isFinite(volume)&&volume>0)field('volume').value=Number(volume.toFixed(9));}
+ }
+ async function verifySelected(){
+  // массовая отметка «проверено по чертежу» у выбранных изделий: одна запись в истории («Цены и нормы» → «История»), отметку каждого изделия можно снять
+  const picked=state.selected.map(i=>products[i]).filter(Boolean);if(!picked.length)return;
+  if(!window.confirm('Отметить изделий: '+picked.length+' как проверенные по чертежу? Запись о действии сохранится в истории.'))return;
+  try{const result=await api.request('/calc/api/products/verification/bulk',{method:'POST',body:JSON.stringify({ids:picked.map(p=>p.id),verified:true})});
+   picked.forEach(p=>{p.verification=result.verification;});render();saveStatus('Отмечено проверенными: '+result.count,false);}
+  catch(error){saveStatus(error.message,true);}
  }
  async function toggleVerification(){
   const p=products[state.product];

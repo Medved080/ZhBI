@@ -299,5 +299,20 @@ put(1.11); dm.refresh(); first = dm.catalog()[target]["projectVolume"]
 put(2.22); dm.refresh(); second = dm.catalog()[target]["projectVolume"]
 check(first == 1.11 and second == 2.22, "замена файла чтений видна без перезапуска (%s → %s)" % (first, second))
 
+# 13. история настроек: версии норм, цен и массовая отметка проверки читаются из журнала
+from app.calc.database import audit
+from app.calc.settings_history import entries
+
+with transaction(settings.database_path) as conn:
+    audit(conn, "тест", "products.verified.bulk", "products", {"ids": [victim], "verified": True, "note": "сверка", "count": 1})
+    norms_log = entries(conn, 50, "norms")
+    prices_log = entries(conn, 50, "prices")
+    checks_log = entries(conn, 50, "verification")
+labels = " ".join(c["label"] for e in norms_log for c in e["changes"])
+check(any(e["version"] for e in norms_log) and "Ригели" in labels and "подтверждено технологом" in labels, "в истории норм видны группа, поле и версия (%d записей)" % len(norms_log))
+check(prices_log and all(c["label"] and c["after"] != "" for c in prices_log[0]["changes"]) and prices_log[0]["changes"][0]["label"], "в истории расценок есть подписи материалов и значения «было → стало» (%d записей)" % len(prices_log))
+check(checks_log and checks_log[0]["summary"].startswith("Отмечены проверенными: 1") and checks_log[0]["changes"][0]["after"] == "проверено", "массовая отметка проверки — одной записью со списком изделий")
+check(all(e["at"] for e in norms_log + prices_log + checks_log), "у всех записей есть время")
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

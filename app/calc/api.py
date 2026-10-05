@@ -33,6 +33,12 @@ class VerificationBody(StrictModel):
     note: str | None = None
 
 
+class BulkVerificationBody(StrictModel):
+    ids: list[UUID]
+    verified: bool = True
+    note: str | None = None
+
+
 class RecoveryRetry(StrictModel):
     stage: Literal['continue','reading','assembly'] = 'continue'
 
@@ -352,6 +358,41 @@ def build_router(settings):
                 audit(conn, user["id"], "product.unverified", str(product_id), {})
             row = conn.execute("SELECT actor_id,verified_at,note FROM product_verifications WHERE product_id=?", (str(product_id),)).fetchone()
             return {"verification": {"actorId": row["actor_id"], "verifiedAt": row["verified_at"], "note": row["note"]} if row else None}
+
+    @router.post('/api/products/verification/bulk')
+    def verify_products(body: BulkVerificationBody, user=Depends(auth.writer)):
+        """Массовая отметка «проверено человеком» (выбранные изделия): одна запись в истории на всю пачку, отметки каждого изделия — в product_verifications."""
+        if not body.ids or len(body.ids) > 3000:
+            raise HTTPException(422, "Выберите от 1 до 3000 изделий")
+        note = (body.note or "").strip()[:500] or None
+        ids = [str(i) for i in dict.fromkeys(body.ids)]
+        with transaction(settings.database_path) as conn:
+            known = {r[0] for r in conn.execute("SELECT id FROM products WHERE id IN (%s)" % ",".join("?" * len(ids)), ids).fetchall()}
+            ids = [i for i in ids if i in known]
+            if not ids:
+                raise HTTPException(404, "Изделия не найдены")
+            stamp = now()
+            for pid in ids:
+                if body.verified:
+                    conn.execute("INSERT OR REPLACE INTO product_verifications VALUES(?,?,?,?)", (pid, user["id"], stamp, note))
+                else:
+                    conn.execute("DELETE FROM product_verifications WHERE product_id=?", (pid,))
+            audit(conn, user["id"], "products.verified.bulk", "products", {"ids": ids, "verified": body.verified, "note": note, "count": len(ids)})
+            verification = {"actorId": user["id"], "verifiedAt": stamp, "note": note} if body.verified else None
+            return {"count": len(ids), "ids": ids, "verification": verification}
+
+    @router.get('/api/history/settings')
+    def settings_history(kind: str | None = Query(None), limit: int = Query(150, ge=1, le=500), user=Depends(auth.current_user)):
+        """История изменений настроек: расценки, начисления, нормы, проверка изделий — из журнала аудита, новые первыми."""
+        from .settings_history import entries, with_names, KIND_TITLE
+        if kind is not None and kind not in KIND_TITLE:
+            raise HTTPException(422, "Неизвестный вид истории")
+        conn = connect(settings.database_path)
+        try:
+            conn.execute("BEGIN")
+            return {"entries": with_names(entries(conn, limit, kind)), "kinds": KIND_TITLE}
+        finally:
+            conn.close()
 
     @router.get('/api/norms')
     def norms(user=Depends(auth.current_user)):

@@ -587,3 +587,22 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-verification{margin-top:10px;display:grid;gap:4px}#precast-concept .pc-verification button{justify-self:start}
 #precast-concept #pc-norms-panel :is(#pc-base-table,#pc-general-norms,#pc-profile-table) td:first-child{min-width:300px}
 #precast-concept #pc-norms-panel #pc-groups-table td label{display:inline-flex;flex-direction:row;align-items:center;gap:6px;white-space:nowrap}
+/* массовые панели и история настроек («Цены и нормы») */
+#precast-concept #pc-norms-form input[type=checkbox]{width:auto;min-width:16px;height:16px;padding:0;flex:none}
+#precast-concept .pc-bulk{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;padding:10px 12px;border:1px solid var(--pc-line);border-radius:8px;background:var(--pc-sidebar);margin:8px 0;font-size:12px}
+#precast-concept .pc-bulk label{display:flex;flex-direction:column;gap:4px}
+#precast-concept #pc-norms-panel .pc-bulk input{width:9em}
+#precast-concept .pc-bulk-title{font-weight:600;align-self:center}
+#precast-concept .pc-bulk-inline{display:inline-flex;margin:0;padding:4px 8px}
+#precast-concept .pc-sh-filter{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+#precast-concept .pc-sh-filter button[aria-pressed="true"]{background:var(--sel);color:var(--pc-accent);border-color:var(--pc-accent)}
+#precast-concept .pc-sh-item{border:1px solid var(--pc-line);border-radius:8px;padding:10px 12px;margin:8px 0;max-width:900px}
+#precast-concept .pc-sh-head{display:flex;gap:14px;flex-wrap:wrap;align-items:baseline;margin-bottom:6px}
+#precast-concept .pc-sh-item p{margin:2px 0 6px}
+#precast-concept #pc-norms-panel .pc-sh-table td:nth-child(n+2){text-align:right}
+#precast-concept .pc-sh-more>summary{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border:1px solid var(--pc-accent);border-radius:7px;color:var(--pc-accent);font-weight:600;font-size:12px;cursor:pointer;list-style:none;user-select:none}
+#precast-concept .pc-sh-more>summary::-webkit-details-marker{display:none}
+#precast-concept .pc-sh-more>summary::before{content:"▸"}
+#precast-concept .pc-sh-more[open]>summary::before{content:"▾"}
+#precast-concept .pc-sh-more>summary:hover{background:var(--sel)}
+#precast-concept .pc-sh-more[open]>summary{margin-bottom:8px}
