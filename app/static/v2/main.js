@@ -616,7 +616,7 @@ async function renderShell(user, permissions) {
       // Карта — тоже полноэкранная площадка со своей верхней строкой (ws-top), той же компактной шапке
       // сервиса, что и у рабочих мест: иначе на 1366×768 верхняя строка карты и шапка сервиса вместе не
       // оставляли бы карте достаточно высоты без прокрутки всей страницы.
-      root.classList.toggle("v2-ws-mode", !!target && (target.impl === "workspace" || target.impl === "map-screen" || target.impl === "calc-embed"));
+      root.classList.toggle("v2-ws-mode", !!target && (target.impl === "workspace" || target.impl === "map-screen" || target.impl === "calc-embed" || target.impl === "module:object-home"));
       currentKey = key;
       switchCtx.ws = target?.ws && target.impl === "workspace" ? target.ws : null;
       const wanted = key === "home" ? "#/" : `#/${key}`;

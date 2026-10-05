@@ -749,30 +749,43 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
   .loading-inline { display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 12px; }
-  #object-home { position: absolute; inset: 0; z-index: 30; overflow: auto; background: var(--color-bg, #fff); padding: 16px 24px 24px;
-    box-sizing: border-box; }
+  #object-home { position: absolute; inset: 0; z-index: 30; overflow: hidden; background: var(--color-bg, #fff); padding: 10px 16px 14px;
+    box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; container-type: size; }
   #object-home[hidden] { display: none; }
-  .ohv-head { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
-  .ohv-avatar { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid var(--color-border); }
-  .ohv-titles { flex: 1 1 280px; min-width: 0; }
-  .ohv-crumb { color: var(--color-text-muted); font-size: 13px; }
-  .ohv-title { margin: 2px 0 6px; font-size: 24px; line-height: 1.2; }
-  .ohv-sub { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--color-text-muted); font-size: 13px; }
-  .ohv-chip { padding: 2px 10px; border-radius: 999px; background: var(--color-surface-2); font-weight: 600; color: var(--color-text); }
-  .ohv-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  .ohv-grid { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 16px; align-items: stretch; }
-  .ohv-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .ohv-card { border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); padding: 12px 16px; }
-  .ohv-card h4 { margin: 0 0 8px; font-size: 14px; }
-  .ohv-dl { margin: 0; display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 5px 14px; font-size: 13px; }
+  /* Страница равна рабочей области и не прокручивается: три колонки (реквизиты, команда и учёт, карта) делят её по высоте;
+     узкая область (рядом правая панель) — две колонки, карта справа. */
+  .ohv-head { flex: none; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .ohv-avatar { width: 52px; height: 52px; object-fit: cover; border-radius: 8px; border: 1px solid var(--color-border); }
+  .ohv-titles { flex: 1 1 260px; min-width: 0; }
+  .ohv-crumb { color: var(--color-text-muted); font-size: 12px; }
+  .ohv-title { margin: 0 0 3px; font-size: 20px; line-height: 1.15; }
+  .ohv-sub { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; color: var(--color-text-muted); font-size: 12px; }
+  .ohv-chip { padding: 1px 9px; border-radius: 999px; background: var(--color-surface-2); font-weight: 600; color: var(--color-text); }
+  .ohv-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ohv-grid { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(230px, 1fr) minmax(210px, 1fr) minmax(280px, 1.6fr); gap: 12px; }
+  .ohv-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow: auto; }
+  .ohv-card { border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); padding: 9px 13px; }
+  .ohv-card h4 { margin: 0 0 6px; font-size: 13px; }
+  .ohv-dl { margin: 0; display: grid; grid-template-columns: minmax(92px, max-content) 1fr; gap: 3px 12px; font-size: 12px; }
   .ohv-dl dt { color: var(--color-text-muted); }
   .ohv-dl dd { margin: 0; overflow-wrap: anywhere; }
-  .ohv-mapbox { display: flex; flex-direction: column; border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden;
-    min-height: 380px; background: var(--color-surface); }
-  .ohv-map { flex: 1 1 auto; min-height: 380px; height: clamp(380px, calc(100vh - 250px), 1000px); }
-  .ohv-mapcap { padding: 7px 12px; font-size: 12px; color: var(--color-text-muted); border-top: 1px solid var(--color-border); }
-  .ohv-nomap { margin: auto; max-width: 400px; padding: 24px; text-align: center; }
-  @media (max-width: 900px) { .ohv-grid { grid-template-columns: 1fr; } }
+  .ohv-mapbox { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--color-border);
+    border-radius: var(--radius); overflow: hidden; background: var(--color-surface); }
+  .ohv-map { flex: 1 1 0; min-height: 0; }
+  .ohv-mapcap { flex: none; padding: 5px 12px; font-size: 12px; color: var(--color-text-muted); border-top: 1px solid var(--color-border); }
+  .ohv-nomap { margin: auto; max-width: 400px; padding: 20px; text-align: center; }
+  @container (max-width: 980px) {
+    .ohv-grid { grid-template-columns: minmax(240px, 42%) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .ohv-grid > .ohv-col:nth-child(1) { grid-column: 1; grid-row: 1; overflow: visible; }
+    .ohv-grid > .ohv-col:nth-child(2) { grid-column: 1; grid-row: 2; }
+    .ohv-grid > .ohv-mapbox { grid-column: 2; grid-row: 1 / span 2; }
+    /* в узкой области левая колонка вмещает все карточки — отступы теснее, чтобы обойтись без прокрутки */
+    .ohv-grid, .ohv-col { gap: 8px; }
+    .ohv-card { padding: 6px 11px; }
+    .ohv-card h4 { margin-bottom: 4px; }
+    .ohv-dl { gap: 2px 10px; }
+    .ohv-dl dd { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }   /* длинные адрес и описание — в две строки */
+  }
   .stage-loading {
     position: absolute; inset: 0; z-index: 15;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;

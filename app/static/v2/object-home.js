@@ -30,7 +30,7 @@ const safeUrl = (u) => { try { const x = new URL(String(u)); return x.protocol =
 
 export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
   let dead = false, pin = null;
-  el.className = "v2-page";
+  el.className = "v2-page v2-app";   // без собственной прокрутки: страница по высоте равна рабочей области
   el.innerHTML = `<div class="oh-page"><p class="v2-muted">Загрузка…</p></div>`;
   const page = el.querySelector(".oh-page");
 
@@ -53,15 +53,17 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
         <div class="oh-actions">${links}<button type="button" class="v2-btn" data-go="projects-objects">Изменить реквизиты</button></div>
       </div>
       <div class="oh-grid">
-        <div class="oh-side">
+        <div class="oh-col">
           <section class="oh-card"><h3>Реквизиты</h3><dl class="oh-dl">
             ${row("Проект", esc(o.project_name))}${row("Статус", esc(STATUS[o.status] || o.status))}${row("Тип учёта", esc(KIND[o.kind] || o.kind))}
             ${row("Адрес", esc(o.address))}${row("Координаты", coords ? `${esc(o.lat)}, ${esc(o.lon)}` : "")}
             ${row("СМУ", esc(o.smu_name))}${row("Директор СМУ", esc(o.smu_director_name))}${row("Ответственный (ДП/РП)", esc(o.responsible_name))}
             ${row("Старт СМР", esc(ruDate(o.smr_start_reported)))}${media ? row("Фото и видео", `<a href="${esc(media)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
             ${row("Описание", esc(o.description))}</dl></section>
+        </div>
+        <div class="oh-col">
           <section class="oh-card"><h3>Проектная команда</h3>${team ? `<dl class="oh-dl">${team}</dl>` : `<p class="v2-muted">Команда не заполнена — укажите её в «Проекты и объекты».</p>`}</section>
-          ${o.kind === "mfr" ? "" : `<section class="oh-card"><h3>Учёт</h3><dl class="oh-dl">
+          ${o.kind === "mfr" ? "" : `<section class="oh-card oh-card-uchet"><h3>Учёт</h3><dl class="oh-dl">
             ${row("Элементов на схеме", String(o.elements_current ?? 0))}${row("Чертёж", esc(o.current_source_file))}</dl>
             ${!o.current_source_file ? `<p class="v2-muted">Чертёж ещё не загружен — схемы пока нет.</p>` : ""}</section>`}
         </div>

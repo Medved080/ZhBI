@@ -7552,7 +7552,7 @@ async function openObjectHome(objectId) {
       </div>
     </div>
     <div class="ohv-grid">
-      <div class="ohv-side">
+      <div class="ohv-col">
         <section class="ohv-card"><h4>Реквизиты</h4><dl class="ohv-dl">
           ${строка("Проект", e(o.project_name))}${строка("Статус", e(OBJECT_STATUS_RU[o.status] || o.status))}${строка("Тип учёта", e(OBJECT_KIND_RU[o.kind] || o.kind))}
           ${строка("Адрес", e(o.address))}${строка("Координаты", есть ? `${e(o.lat)}, ${e(o.lon)}` : "")}
@@ -7560,6 +7560,8 @@ async function openObjectHome(objectId) {
           ${строка("Старт СМР", o.smr_start_reported ? formatDateRu(o.smr_start_reported) : "")}
           ${медиа ? строка("Фото и видео", `<a href="${escapeHtml(медиа)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
           ${строка("Описание", e(o.description))}</dl></section>
+      </div>
+      <div class="ohv-col">
         <section class="ohv-card"><h4>Проектная команда</h4>${команда
           ? `<dl class="ohv-dl">${команда}</dl>` : '<div class="hint-text">Команда не заполнена — укажите её в «Проекты и объекты».</div>'}</section>
         ${o.kind === "mfr" ? "" : `<section class="ohv-card"><h4>Учёт</h4><dl class="ohv-dl">
