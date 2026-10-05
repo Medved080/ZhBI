@@ -7534,6 +7534,9 @@ async function openObjectHome(objectId) {
     ? "" : `<dt>${escapeHtml(подпись)}</dt><dd>${значение}</dd>`;
   const e = (v) => escapeHtml(String(v ?? ""));
   const есть = o.lat != null && o.lon != null;
+  // «Тип учёта» — только когда он что-то значит: у МФР он ставится осознанно, у ЖБИ по умолчанию стоит у любого объекта (objects.kind
+  // DEFAULT 'zhbi'), и без загруженного чертежа подпись «ЖБИ по чертежу» вводила бы в заблуждение.
+  const типУчёта = o.kind === "mfr" || (o.kind === "zhbi" && o.current_source_file) ? (OBJECT_KIND_RU[o.kind] || o.kind) : "";
   const команда = OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] ? e(o.team[ключ].name) : "")).join("");
   const медиа = safeHttpUrl(o.media_url);
   const закрыть = o.kind === "mfr" ? "Открыть модель МФР" : "Открыть схему";
@@ -7543,7 +7546,7 @@ async function openObjectHome(objectId) {
         <div class="ohv-crumb">${e(o.project_name)}</div>
         <h2 class="ohv-title">${e(o.name)}</h2>
         <div class="ohv-sub"><span class="ohv-chip">${e(OBJECT_STATUS_RU[o.status] || o.status)}</span>
-          <span>${e(OBJECT_KIND_RU[o.kind] || o.kind)}</span>${o.address ? `<span>${e(o.address)}</span>` : ""}</div>
+          ${типУчёта ? `<span>${e(типУчёта)}</span>` : ""}${o.address ? `<span>${e(o.address)}</span>` : ""}</div>
       </div>
       <div class="ohv-actions">
         <button type="button" class="btn btn-primary" id="ohv-open">${закрыть}</button>
@@ -7557,7 +7560,7 @@ async function openObjectHome(objectId) {
             data-fallback="/static/object-photo-placeholder.webp">
         </figure>
         <section class="ohv-card"><h4>Реквизиты</h4><dl class="ohv-dl">
-          ${строка("Проект", e(o.project_name))}${строка("Статус", e(OBJECT_STATUS_RU[o.status] || o.status))}${строка("Тип учёта", e(OBJECT_KIND_RU[o.kind] || o.kind))}
+          ${строка("Проект", e(o.project_name))}${строка("Статус", e(OBJECT_STATUS_RU[o.status] || o.status))}${строка("Тип учёта", e(типУчёта))}
           ${строка("Адрес", e(o.address))}${строка("Координаты", есть ? `${e(o.lat)}, ${e(o.lon)}` : "")}
           ${строка("СМУ", e(o.smu_name))}${строка("Директор СМУ", e(o.smu_director_name))}${строка("Ответственный (ДП/РП)", e(o.responsible_name))}
           ${строка("Старт СМР", o.smr_start_reported ? formatDateRu(o.smr_start_reported) : "")}

@@ -38,6 +38,9 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
 
   function paint(o) {
     const coords = o.lat != null && o.lon != null;
+    // «Тип учёта» показываем, только когда он что-то значит: у МФР он ставится осознанно, а у ЖБИ по умолчанию стоит у ЛЮБОГО объекта
+    // (колонка objects.kind NOT NULL DEFAULT 'zhbi'), поэтому без загруженного чертежа подпись «ЖБИ по чертежу» вводила бы в заблуждение.
+    const kindText = o.kind === "mfr" || (o.kind === "zhbi" && o.current_source_file) ? (KIND[o.kind] || o.kind) : "";
     const team = TEAM.map(([k, label]) => row(label, o.team?.[k]?.name ? esc(o.team[k].name) : "")).join("");
     const media = safeUrl(o.media_url);
     const links = LINKS.filter(([key]) => isAllowed?.(key)).map(([key, label]) => `<button type="button" class="v2-btn v2-primary" data-go="${esc(key)}">${esc(label)}</button>`).join("");
@@ -47,7 +50,7 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
           <div class="oh-crumb">${esc(o.project_name || "")}</div>
           <h2 class="oh-title">${esc(o.name)}</h2>
           <div class="oh-sub"><span class="oh-chip oh-chip-${esc(o.status)}">${esc(STATUS[o.status] || o.status)}</span>
-            <span>${esc(KIND[o.kind] || o.kind)}</span>${o.address ? `<span>${esc(o.address)}</span>` : ""}</div>
+            ${kindText ? `<span>${esc(kindText)}</span>` : ""}${o.address ? `<span>${esc(o.address)}</span>` : ""}</div>
         </div>
         <div class="oh-actions">${links}<button type="button" class="v2-btn" data-go="projects-objects">Изменить реквизиты</button></div>
       </div>
@@ -58,7 +61,7 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
               data-fallback="/static/object-photo-placeholder.webp">
           </figure>
           <section class="oh-card"><h3>Реквизиты</h3><dl class="oh-dl">
-            ${row("Проект", esc(o.project_name))}${row("Статус", esc(STATUS[o.status] || o.status))}${row("Тип учёта", esc(KIND[o.kind] || o.kind))}
+            ${row("Проект", esc(o.project_name))}${row("Статус", esc(STATUS[o.status] || o.status))}${row("Тип учёта", esc(kindText))}
             ${row("Адрес", esc(o.address))}${row("Координаты", coords ? `${esc(o.lat)}, ${esc(o.lon)}` : "")}
             ${row("СМУ", esc(o.smu_name))}${row("Директор СМУ", esc(o.smu_director_name))}${row("Ответственный (ДП/РП)", esc(o.responsible_name))}
             ${row("Старт СМР", esc(ruDate(o.smr_start_reported)))}${media ? row("Фото и видео", `<a href="${esc(media)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
