@@ -234,6 +234,9 @@ function shellPrefsBodyProblem(b) {
 // Проверка «на настоящем backend» — сокращённо в `proof`; полные записи — в `screens.json` (`checks`) и `Docs/v2-limited-release.md`.
 export const POLICY = [
   // ---- разрешено ----
+  { id: "ai.config", screen: "ai-integration", action: "Общее подключение к локальному ИИ", method: "PUT", path: re("/ai/config"), onlyKeys: ["connection", "assistantModel", "assistantEnabled", "assistantContextTokens", "expectedRevision"], risk: "настройки сервиса", allowed: true, proof: "Проверка на копии: права, конфликт версии и чтение настройки калькулятором" },
+  { id: "ai.models", screen: "ai-integration", action: "Получить список локальных моделей", method: "POST", path: re("/ai/models"), risk: "чтение", allowed: true, proof: "Тот же локальный клиент без перенаправлений" },
+  { id: "ai.probe", screen: "ai-integration", action: "Проверить чтение изображения", method: "POST", path: re("/ai/drawing-test"), onlyKeys: [], risk: "проверка подключения", allowed: true, proof: "Существующая проверка изображения с общей блокировкой GPU" },
   { id: "auth.login", screen: "(вход)", action: "Вход в V2 тем же логином и паролем, что в V1", method: "POST", path: re("/login"), risk: "аутентификация, данные не меняет", allowed: true, proof: "тот же эндпоинт, что у V1 (пароль вводит человек)" },
   { id: "appearance.theme", screen: "appearance", action: "Смена личной цветовой гаммы", method: "PATCH", path: re(`/users/\\d+/ui-theme`), risk: "личная (общая для V1 и V2 у этого пользователя)", allowed: true, proof: "живая проверка: запись → SQL → возврат" },
   { id: "label-color.set", screen: "label-color", action: "Личный цвет подписей марок (сброс — null)", method: "PATCH", path: re(`/users/\\d+/label-color`), risk: "личная (V1 и V2)", allowed: true, proof: "живая проверка: запись → SQL → сброс" },

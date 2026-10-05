@@ -37,6 +37,9 @@ from shapely.strtree import STRtree
 
 from app.auth import SECURE_COOKIES, audit_display_name, format_display_name, get_current_user
 from app.auth import router as auth_router
+if CALC_AVAILABLE:
+    from app.ai_integration import router as ai_router
+    from app.assistant import router as assistant_router
 from app.attachments import ATTACHMENTS_DIR, AVATAR_MIME
 from app.attachments import attachment_row
 from app.attachments import counts_for as attachment_counts
@@ -429,6 +432,9 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
 app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
+if CALC_AVAILABLE:
+    app.include_router(ai_router)
+    app.include_router(assistant_router)
 app.include_router(crane_zone_versions_router)
 from app.allocation import router as allocation_router, state_router as allocation_state_router  # noqa: E402
 app.include_router(allocation_router)

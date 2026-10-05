@@ -41,7 +41,10 @@ def publication_lock(settings):
 def sha(value): return hashlib.sha256(dumps(value).encode()).hexdigest()
 
 
-def configuration(conn):
+def configuration(conn, settings=None):
+    if settings is not None and settings.shared_ai:
+        from app.ai_integration import read_config
+        return read_config().connection
     row=conn.execute('SELECT config_json FROM recovery_settings WHERE id=1').fetchone()
     return ConnectionConfig.model_validate_json(row[0]) if row else ConnectionConfig()
 
@@ -53,7 +56,7 @@ def config_fingerprint(config):
 def get_configuration(settings):
     conn=connect(settings.database_path)
     try:
-        config=configuration(conn)
+        config=configuration(conn,settings)
         row=conn.execute("SELECT value FROM application_meta WHERE key='recovery_probe'").fetchone()
         probe=json.loads(row[0]) if row else None
         if probe and probe.get('configSha')!=config_fingerprint(config): probe=None
@@ -63,6 +66,8 @@ def get_configuration(settings):
 
 
 def save_configuration(settings,config,actor):
+    if settings.shared_ai:
+        raise HTTPException(409, "Настройки подключения перенесены в «Администрирование → Интеграция с ИИ»")
     try: qwen_client.validate_endpoint(config,settings)
     except ValueError as error: raise HTTPException(422,str(error))
     with transaction(settings.database_path) as conn:
@@ -73,7 +78,7 @@ def save_configuration(settings,config,actor):
 
 def test_connection(settings,transport=None):
     conn=connect(settings.database_path)
-    try: config=configuration(conn)
+    try: config=configuration(conn,settings)
     finally: conn.close()
     token=str(uuid4())
     with transaction(settings.database_path) as conn:
@@ -97,7 +102,7 @@ def start_probe(settings,transport=None):
     """Проверка подключения идёт в фоне: большая модель может грузиться в память дольше минуты, а прокси (nginx, 60 с) оборвал бы
     обычный запрос — человек видел «Ошибка сервера», а GPU оставался занятым до конца тайм-аута."""
     conn=connect(settings.database_path)
-    try: config=configuration(conn)
+    try: config=configuration(conn,settings)
     finally: conn.close()
     with _PROBE_LOCK:
         if _PROBE_STATE.get('state')=='running' and time.time()-_PROBE_STATE['startedAt']<_PROBE_STATE['timeout']+90:
@@ -125,9 +130,9 @@ def probe_state():
 def claim_gpu(conn,token,timeout,kind='job'):
     row=conn.execute("SELECT value FROM application_meta WHERE key='recovery_gpu_lease'").fetchone()
     current=json.loads(row[0]) if row else {}
-    # Блокировку проверки подключения можно перехватить: она не защищает ничего ценного, а зависшая проверка
-    # (прокси оборвал запрос, модель долго загружалась) иначе держала бы GPU до конца тайм-аута.
-    if current.get('expires',0)>time.time() and current.get('kind')!='probe': return False
+    # Чтение чертежей, проверка изображения и диалог делят один GPU.
+    # Активную проверку нельзя перехватывать: она тоже загружает модель.
+    if current.get('expires',0)>time.time(): return False
     conn.execute("INSERT INTO application_meta VALUES('recovery_gpu_lease',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(dumps({'token':token,'kind':kind,'startedAt':now(),'expires':time.time()+timeout+60}),))
     return True
 
@@ -148,7 +153,7 @@ def create_batch(settings,body,actor):
         if prior:
             if prior['request_hash']!=fingerprint or prior['actor_id']!=actor: raise HTTPException(409,'Идентификатор запуска уже использован для другого задания')
             return {'id':prior['id'],'replayed':True}
-        config=configuration(conn)
+        config=configuration(conn,settings)
         probe=conn.execute("SELECT value FROM application_meta WHERE key='recovery_probe'").fetchone()
         if not config.model.strip() or not probe or json.loads(probe[0]).get('configSha')!=config_fingerprint(config):
             raise HTTPException(422,'Сохраните подключение и выполните успешный тест чтения изображения')

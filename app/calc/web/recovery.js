@@ -2,20 +2,9 @@
  const api=window.CalcZhBIAPI,escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const dialog=document.createElement('dialog');dialog.id='pc-recovery-dialog';dialog.setAttribute('aria-labelledby','pc-recovery-title');
  dialog.innerHTML=`<div class="pc-recovery-heading"><div><h2 id="pc-recovery-title">Обработка изделий · локальный Qwen</h2><p>Результаты сохраняются отдельно до подключения частичной модели.</p></div><button type="button" data-recovery-close aria-label="Закрыть обработку">×</button></div>
+ <button type="button" data-recovery-assistant>ИИ-помощник</button>
  <div id="pc-recovery-status" role="status" aria-live="polite"></div><div class="pc-recovery-layout">
- <aside><details id="pc-recovery-connection" open><summary>Подключение к серверу</summary><form id="pc-recovery-config">
- <label>API<select name="provider"><option value="openai">OpenAI-совместимый (vLLM, LM Studio)</option><option value="ollama">Ollama</option></select></label>
- <label>Адрес API<input name="baseUrl" type="url" required maxlength="500" placeholder="LM Studio: http://192.168.87.220:1234/v1 · Ollama: http://192.168.1.10:11434"></label>
- <label>Название модели<select id="pc-recovery-model-select" hidden aria-label="Модель с сервера нейросети"></select><input name="model" list="pc-recovery-models" required maxlength="200" placeholder="Название установленного Qwen"><datalist id="pc-recovery-models"></datalist></label><div class="pc-context" id="pc-recovery-models-note" role="status"></div>
- <div class="pc-recovery-actions"><button type="button" id="pc-recovery-list-models">Обновить список моделей</button></div>
- <details><summary>Параметры обработки</summary>
- <label>Ожидание ответа, секунд<input name="timeoutSeconds" type="number" min="10" max="600" required></label>
- <label>Лимит ответа, токенов<input name="maxTokens" type="number" min="512" max="16384" required></label>
- <label>Сторона изображения, пикселей<input name="imageSide" type="number" min="768" max="2000" required></label>
- <label>Листов на изделие, максимум<input name="maxPages" type="number" min="1" max="60" required></label>
- <label>Попыток исправления<input name="repairAttempts" type="number" min="0" max="2" required></label>
- <label class="pc-recovery-check"><input name="useTiles" type="checkbox"> Читать увеличенные фрагменты</label></details>
- <div class="pc-recovery-actions"><button type="submit">Сохранить</button><button type="button" id="pc-recovery-test">Проверить изображение</button></div></form><p id="pc-recovery-probe"></p></details>
+ <aside><section><h3>Подключение к ИИ</h3><p>Сервер и модель чтения чертежей задаются в основных настройках сервиса.</p><a href="/v2#/ai-integration" target="_top">Администрирование → Интеграция с ИИ</a><p id="pc-recovery-probe"></p></section>
  <section><h3>Новая партия</h3><label>Изделия<select id="pc-recovery-scope"><option value="active">Текущее изделие</option><option value="selected">Выбранные флажками</option><option value="visible">Показанные в списке</option><option value="remaining">Все без полной модели</option></select></label>
  <p id="pc-recovery-selection"></p><label id="pc-recovery-extra-label">Дополнительные физические PDF-страницы<input id="pc-recovery-extra" placeholder="Например: 12, 13, 18" inputmode="numeric"></label>
  <p class="pc-recovery-muted">Связанные виды, детали и спецификации включаются автоматически. Дополнительные страницы относятся к альбому текущего изделия.</p>
@@ -24,19 +13,16 @@
  <div id="pc-recovery-running" class="pc-recovery-running" role="status" aria-live="polite" hidden></div><div id="pc-recovery-jobs"></div><div class="pc-recovery-actions"><button type="button" id="pc-recovery-prev">←</button><span id="pc-recovery-page"></span><button type="button" id="pc-recovery-next">→</button></div>
  <section id="pc-recovery-detail" hidden></section></section></div>`;
  document.getElementById('precast-concept').append(dialog);
- const q=s=>dialog.querySelector(s),form=q('#pc-recovery-config');let lastJob=null,timer=null,detailTimer=null,detailState=null,autoOpened=false,batch='',offset=0,total=0,detailId=null,connection=null,refreshing=false,pendingLaunch=null;
+ const q=s=>dialog.querySelector(s);let lastJob=null,timer=null,detailTimer=null,detailState=null,autoOpened=false,batch='',offset=0,total=0,detailId=null,connection=null,refreshing=false,pendingLaunch=null;
+ q('[data-recovery-assistant]').addEventListener('click',()=>window.parent.dispatchEvent(new Event('zhbi:assistant-open')));
  const states={queued:'В очереди',running:'Обработка',review:'На просмотре',failed:'Ошибка',cancelled:'Отменено',published:'Подключена частично'};
  function stageLabel(stage){if(stage.startsWith('reading:')){const [,source,page]=stage.split(':');return 'Чтение · '+source+' · PDF '+page.slice(1);}if(stage.startsWith('repair:'))return 'Исправление · попытка '+stage.split(':')[1];return {prepare:'Подготовка листов',reading:'Чтение листов',assembly:'Сборка',checking:'Численная проверка',review:'Просмотр результата',published:'Подключена'}[stage]||stage;}
  function status(text,kind='info'){const host=q('#pc-recovery-status'),value=kind===true?'error':kind===false?'info':kind;host.textContent=text;host.dataset.kind=value;host.dataset.error=String(value==='error');}
  function selection(){return window.CalcZhBIRecoveryUI?.selection(q('#pc-recovery-scope').value)||[];}
  function updateSelection(){const selected=selection();q('#pc-recovery-selection').textContent=selected.length===1?selected[0].name:`Изделий: ${selected.length}`;q('#pc-recovery-extra-label').hidden=q('#pc-recovery-scope').value!=='active';q('#pc-recovery-start').disabled=!selected.length||api.user?.role==='viewer'||!connection?.probe?.ok;}
- function configPayload(){const result={};for(const name of ['provider','baseUrl','model'])result[name]=form.elements[name].value.trim();for(const name of ['timeoutSeconds','maxTokens','imageSide','maxPages','repairAttempts'])result[name]=Number(form.elements[name].value);result.useTiles=form.elements.useTiles.checked;return result;}
  async function loadConfig(){
-  connection=await api.request('/calc/api/recovery/config');for(const [key,value] of Object.entries(connection.config)){if(form.elements[key]){if(key==='useTiles')form.elements[key].checked=value;else form.elements[key].value=value;}}
-  const admin=api.user?.role==='admin';for(const el of form.elements)el.disabled=!admin;
-  if(admin)scheduleModels();
-  q('#pc-recovery-test').disabled=!admin;
-  q('#pc-recovery-probe').textContent=connection.probe?.ok?'Изображения и JSON проверены · '+connection.probe.model:'Перед запуском нужен успешный тест чтения изображения.';
+  connection=await api.request('/calc/api/recovery/config');
+  q('#pc-recovery-probe').textContent=(connection.config.model?'Модель: '+connection.config.model+'. ':'')+(connection.probe?.ok?'Изображения и JSON проверены.':'Перед запуском нужен успешный тест чтения изображения в настройках сервиса.');
   updateSelection();
   q('#pc-recovery-worker').textContent=connection.workerEnabled?'Фоновая очередь включена · один запрос к GPU за раз.':'Встроенная очередь отключена. Запустите обработчик на сервере.';
  }
@@ -162,47 +148,6 @@
  async function act(button,operation){button.disabled=true;try{await operation();}catch(error){status(error.message,true);}finally{if(button.isConnected)button.disabled=false;}}
  document.getElementById('pc-recovery-open').addEventListener('click',async()=>{if(!window.CalcZhBIRecoveryUI)return;dialog.showModal();status('');updateSelection();try{await loadConfig();await refresh();}catch(error){status(error.message,true);}clearInterval(timer);autoOpened=false;timer=setInterval(()=>{if(dialog.open&&!document.hidden)void refresh().catch(error=>status(error.message,true));},2000);});
  dialog.addEventListener('close',()=>{clearInterval(timer);timer=null;clearTimeout(detailTimer);});
- form.addEventListener('submit',event=>{event.preventDefault();void act(form.querySelector('[type=submit]'),async()=>{await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});await loadConfig();status('Подключение сохранено. Проверьте чтение изображения.');});});
- // Список моделей подгружается сам: при открытии формы, смене типа API и адреса. Сервер нейросети может быть виден только backend,
- // поэтому запрос идёт через сервер. Не получили список — остаётся ручной ввод названия.
- const modelSelect=q('#pc-recovery-model-select'),modelNote=q('#pc-recovery-models-note');let modelsTimer=0,modelsSerial=0;
- function showModels(models){
-  const usable=models.filter(m=>m.vision||!/embed/i.test(m.id)).sort((x,y)=>Number(!!y.vision)-Number(!!x.vision)||x.id.localeCompare(y.id));
-  const current=form.elements.model.value.trim();
-  q('#pc-recovery-models').replaceChildren(...usable.map(m=>{const o=document.createElement('option');o.value=m.id;return o;}));
-  const options=usable.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=m.id+(m.vision?' · с изображениями':m.vision===false?'':'');return o;});
-  const manual=document.createElement('option');manual.value='';manual.textContent='— выберите модель —';
-  const typed=document.createElement('option');typed.value='__manual__';typed.textContent='Ввести название вручную…';
-  modelSelect.replaceChildren(manual,...options,typed);
-  modelSelect.value=usable.some(m=>m.id===current)?current:'';
-  modelSelect.hidden=false;form.elements.model.hidden=true;
-  const vision=usable.filter(m=>m.vision);
-  modelNote.textContent='Моделей на сервере: '+usable.length+(vision.length?' (с изображениями: '+vision.length+'). Для чертежей нужна модель с изображениями.':'.');
- }
- function showManualModel(note){modelSelect.hidden=true;form.elements.model.hidden=false;modelNote.textContent=note||'';}
- async function refreshModels({manual=false}={}){
-  if(api.user?.role!=='admin'||!form.elements.baseUrl.value.trim()||!form.elements.baseUrl.validity.valid){return;}
-  const serial=++modelsSerial;modelNote.textContent='Запрашиваю список моделей у сервера нейросети…';
-  try{const result=await api.request('/calc/api/recovery/models',{method:'POST',body:JSON.stringify(configPayload())});if(serial!==modelsSerial)return;showModels(result.models);if(manual)status('Список моделей обновлён.');}
-  catch(error){if(serial!==modelsSerial)return;showManualModel('Список моделей не получен ('+error.message+'). Введите название модели вручную.');}
- }
- function scheduleModels(){clearTimeout(modelsTimer);modelsTimer=setTimeout(()=>void refreshModels(),700);}
- modelSelect.addEventListener('change',()=>{if(modelSelect.value==='__manual__'){showManualModel('');form.elements.model.focus();return;}form.elements.model.value=modelSelect.value;});
- form.elements.baseUrl.addEventListener('change',scheduleModels);form.elements.provider.addEventListener('change',scheduleModels);
- q('#pc-recovery-list-models').addEventListener('click',event=>void act(event.currentTarget,()=>refreshModels({manual:true})));
- q('#pc-recovery-test').addEventListener('click',event=>void act(event.currentTarget,async()=>{
-  if(!form.reportValidity())return;
-  await api.request('/calc/api/recovery/config',{method:'PUT',body:JSON.stringify(configPayload())});
-  // Проверка идёт в фоне на сервере (крупная модель грузится в память долго, прокси оборвал бы обычный запрос): здесь опрос состояния.
-  status('Проверка запущена…','busy');
-  let state=await api.request('/calc/api/recovery/connection-test',{method:'POST'});
-  while(state.state==='running'&&dialog.open){
-   status(`Идёт проверка модели «${state.model}»: ${state.elapsedSeconds} с из ${state.timeout} с. Крупная модель может загружаться в память сервера нейросети — это нормально, ждите.`,'busy');
-   await new Promise(resolve=>setTimeout(resolve,1500));state=await api.request('/calc/api/recovery/connection-test');
-  }
-  if(state.state==='done'){await loadConfig();status('✓ Проверка пройдена. '+state.result.note,'ok');}
-  else if(state.state==='failed')status('✗ Проверка не пройдена: '+state.error,'error');
- }));
  q('#pc-recovery-scope').addEventListener('change',updateSelection);
  q('#pc-recovery-start').addEventListener('click',event=>void act(event.currentTarget,async()=>{
   const ids=selection().map(p=>p.id);let pages=[];const text=q('#pc-recovery-extra').value.trim();

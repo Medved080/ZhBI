@@ -703,6 +703,7 @@ if (loginPasswordToggle) {
 }
 
 function showLoginScreen() {
+  window.dispatchEvent(new Event("zhbi:assistant-logout"));
   document.getElementById("login-screen").classList.remove("hidden");
   document.getElementById("app-root").classList.add("hidden");
   loadLoginUsers();
@@ -826,6 +827,7 @@ function canEditContracting() {
 }
 
 async function applyRolePermissions() {
+  window.dispatchEvent(new Event("zhbi:assistant-ready"));
   const системнаяРоль = state.currentUser.role;
   await loadPermissions();
   // Смена пароля — самообслуживание, но у доменного пользователя пароля
@@ -37010,4 +37012,17 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
   } finally {
     btn.disabled = false;
   }
+});
+
+// Контекст общего помощника: те же объекты и отбор, которые показывает сцена.
+window.ZhbiAssistantContext = () => {
+  const current = currentObject();
+  return {userId:state.currentUser?.id,objectId:state.objectId,projectId:current?.project.id,
+    projects:state.projects.map(p=>({id:p.id,name:p.name})),label:current?.object.name,
+    page:{elementIds:state.elements.filter(passesPlacementFilters).map(e=>e.id),
+      selectedIds:[...new Set([...state.multiSelectedIds,...(state.selectedId?[state.selectedId]:[])])].slice(0,100)}};
+};
+
+document.getElementById("menu-ai-settings").addEventListener("click", () => {
+  const url=new URL("/v2",location.origin);if(state.objectId)url.searchParams.set("object_id",String(state.objectId));url.hash="/ai-integration";location.assign(url);
 });

@@ -35,6 +35,8 @@ function matchesProductName(product, query){
  const linkedId=new URLSearchParams(location.hash.slice(1)).get('product')||window.frameElement?.dataset?.calcProduct,linkedIndex=linkedId?products.findIndex(p=>p.id===linkedId):-1;
  window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('product');if(id)window.CalcZhBIWorkspace?.select(id,'calculation');});
  const state={product:linkedIndex>=0?linkedIndex:active>=0?active:0,overrides:workspace.products.map(entry=>entry.overrides),extra:workspace.products.map(entry=>entry.extra),selected:[...new Set(selected)],exporting:false,batch:Boolean(saved?.batch),showConcrete:true,showSteel:true,opacity:30,search:linkedIndex<0&&typeof saved?.search==='string'?saved.search:'',filter:linkedIndex<0&&typeof saved?.filter==='string'?saved.filter:'',grouping:['album','type','none'].includes(saved?.grouping)?saved.grouping:'album',openGroups:new Set(Array.isArray(saved?.openGroups)?saved.openGroups:[]),searchClosedGroups:new Set()};
+ window.CalcZhBIAssistantContext=()=>({userId:user.id,title:"Калькулятор ЖБИ",label:"Калькулятор · "+(products[state.product]?.name||""),
+  page:{text:JSON.stringify({project:workspace.project.name,product:products[state.product],section:root.dataset.section}).slice(0,12000)}});
  let recoveryPreview=null;
  window.CalcZhBIRecoveryUI={
   selection(scope){

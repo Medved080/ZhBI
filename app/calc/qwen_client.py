@@ -183,7 +183,7 @@ def _read_stream(request,config,progress,cancel=None):
     return {'done_reason':finish,'message':{'content':''.join(content)},'usage':usage,'stats':stats}
 
 
-def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None, cancel=None):
+def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None, cancel=None, context_tokens=None):
     validate_endpoint(config,settings,resolve=transport is None)
     if config.provider=='openai':
         url=api_base(config)+'/chat/completions'
@@ -200,6 +200,7 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
         url=api_base(config)+'/api/chat'
         body={'model':config.model,'messages':messages,'stream':transport is None,'format':schema,
               'options':{'temperature':0,'num_predict':config.maxTokens}}
+    if context_tokens is not None and config.provider=='ollama': body['options']['num_ctx']=context_tokens
     headers={'Content-Type':'application/json'}
     if settings.qwen_api_key: headers['Authorization']='Bearer '+settings.qwen_api_key
     if transport:

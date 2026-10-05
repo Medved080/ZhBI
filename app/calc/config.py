@@ -16,6 +16,7 @@ class Settings:
     max_body_mb: int = 100
     session_hours: int = 8
     recovery_worker_enabled: bool = True
+    shared_ai: bool = False
     qwen_api_key: str = ""
     qwen_allowed_hosts: tuple[str, ...] = ()
     recovery_assets_dir: Path | None = None
@@ -35,6 +36,7 @@ class Settings:
             max_upload_mb=int(os.getenv("ZHBI_CALC_MAX_UPLOAD_MB", "50")),
             max_body_mb=int(os.getenv("ZHBI_MAX_UPLOAD_MB", "200")),
             recovery_worker_enabled=on,
+            shared_ai=True,
             qwen_api_key=os.getenv("CALCZHB_QWEN_API_KEY", ""),
             qwen_allowed_hosts=tuple(h.strip().lower() for h in os.getenv("CALCZHB_QWEN_ALLOWED_HOSTS", "").split(",") if h.strip()),
         )

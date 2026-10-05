@@ -272,7 +272,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     // в отчёте. Снимок для ДРУГОГО объекта не подходит (filterSnapshotFor сверяет objectId) — тогда фильтр просто
     // не применяется, как если бы галочка была снята (см. предупреждение рядом с галочкой, paintReport).
     if (sec.schemeFilter && s.filterOn) {
-      const snap = filterSnapshotFor(objectId);
+      const snap = s.sourceFilter || filterSnapshotFor(objectId);
       if (snap) body.element_ids = snap.elementIds;
     }
     return body;
@@ -466,7 +466,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     // объект и когда — состояние не протекает скрыто, а снимок для чужого объекта не подставляется никогда.
     let filterBar = "";
     if (sec.schemeFilter) {
-      const desc = describeFilterSnapshot(objectId);
+      const desc = s.sourceFilter ? {available:true,text:`Отбор из ответа помощника: ${s.sourceFilter.elementIds.length} изделий · ${fmtDateTime(s.sourceFilter.capturedAt)}`} : describeFilterSnapshot(objectId);
       // Показанное состояние галочки — s.filterOn (память выбора на ЭТОМ объекте) И доступность снимка разом:
       // отмеченная, но недоступная галочка читалась бы как «фильтр применён», а он не применяется НИКОГДА, если
       // снимок относится к другому объекту (см. reportBody выше) — s.filterOn при этом не сбрасываем, чтобы
@@ -619,6 +619,31 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     } else if (st[i].status === "ok") paint();
   });
   refreshBtn.addEventListener("click", () => load(active));
-  load(0);
-  return { hasUnsavedChanges: () => !!editor?.dirty(), guardLeave: async () => (editor ? editor.guard() : true), destroy() { dead = true; clearTimeout(searchTimer); editor?.destroy(); } };
+  async function loadInitial() {
+    const query=new URLSearchParams(location.search);
+    const request=query.get("assistant_request"), sourceId=query.get("assistant_source");
+    const keys={"report-dynamics":["dynamics"],"report-analytics":["analytics","analytics-contracts"],"report-block-schedule":["block-schedule"]}[screen.id]||[];
+    if(request&&sourceId&&keys.some(key=>sourceId.endsWith("-"+key))){
+      try{
+        const source=await api.get(`/assistant/requests/${encodeURIComponent(request)}/sources/${encodeURIComponent(sourceId)}`);
+        if(dead)return;
+        if(source.objectId===objectId&&source.reportId===screen.id){
+          sections.forEach((sec,i)=>{if(sec.kind!=="report")return;
+            const {element_ids:ids,...params}=source.params;
+            Object.assign(st[i].params,params);
+            if(sec.schemeFilter&&Array.isArray(ids)){st[i].sourceFilter={elementIds:ids,capturedAt:source.capturedAt};st[i].filterOn=true;}
+          });
+        }
+      }catch(e){if(dead)return;await showInfoDialog("Контекст ответа помощника\n\n"+errorText(e)+". Отчёт откроется с обычными параметрами.");}
+    }
+    if(!dead)load(0);
+  }
+  void loadInitial();
+  return { getAssistantContext: () => {
+    const sec=sections[active], s=st[active];
+    if(sec.kind!=="report"||s.status!=="ok")return {};
+    const b=reportBody(sec,s);
+    return {elementIds:b.element_ids??null,planSource:b.plan_source==="current"?"current":"baseline",
+      filters:JSON.stringify(b).slice(0,3000)};
+  }, hasUnsavedChanges: () => !!editor?.dirty(), guardLeave: async () => (editor ? editor.guard() : true), destroy() { dead = true; clearTimeout(searchTimer); editor?.destroy(); } };
 }

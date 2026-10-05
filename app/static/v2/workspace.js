@@ -58,6 +58,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
   let timeoutId = null;
   const queue = [];
   let sc = null;               // последний снимок сцены из кадра
+  let assistantIds = null;
   let filters = null;          // модель фильтров
   let notice = "";             // последнее сообщение движка
   let tab = ws === "picker" ? "pick" : "props";
@@ -171,6 +172,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     } else if (m.evt === "filtered-ids" && Array.isArray(m.ids)) {
       // sc.loaded — сцена ДЕЙСТВИТЕЛЬНО показывает данные (не «идёт загрузка»): тот же счётчик total, что видит
       // человек на панели, а не промежуточный ноль.
+      if (sc?.loaded) assistantIds = m.ids;
       if (sc?.loaded) writeFilterSnapshot({ objectId: curObject, ws, elementIds: m.ids, shown: sc.shown, total: sc.total, excluded: sc.excluded, capturedAt: Date.now() });
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
       pk = m.model;
@@ -998,6 +1000,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
 
   return {
     // Введённое в форме смены статуса, но не отправленное — несохранённое; идущий запрос уйти не даёт (шлюз оболочки блокирует переходы)
+    getAssistantContext: () => ({ elementIds: assistantIds,
+      selectedIds: sc?.loaded ? [...new Set([...(sc.multiIds || []), ...(sc.selectedId ? [sc.selectedId] : [])])].slice(0,100) : [],
+      filters: JSON.stringify({ view:sc?.view,shown:sc?.shown,total:sc?.total,excluded:sc?.excluded }).slice(0,3000) }),
     hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved(),
     guardLeave: async () => {
       if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
@@ -1007,7 +1012,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
-      curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      assistantIds = null; curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },

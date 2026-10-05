@@ -2,6 +2,7 @@
 // (реестр `screens.json`, Docs/v2-interface-coverage.md). Перенесены целиком «Пользователи и доступ», «Проекты и
 // объекты» и «Контрагенты»; остальные экраны показывают состав формы V1 и открывают её в текущем интерфейсе
 // с контекстом объекта (screen-view.js), пока их операции не подключены.
+import { mountAssistant, pageSnapshot } from "../assistant.js";
 import { api, ApiError, getImpersonationToken, setImpersonationToken } from "./api.js";
 import { showInfoDialog } from "./dialogs.js";
 import { renderLogin, renderChangePassword } from "./login.js";
@@ -246,7 +247,10 @@ async function renderShell(user, permissions) {
   // Переход из V1 («Новый интерфейс — экспериментальный») несёт текущий объект: `/v2?object_id=N`. Параметр разовый —
   // стирается из адреса; объект берётся только из списка доступных пользователю (как и остальные источники выбора).
   const fromV1 = Number(new URLSearchParams(location.search).get("object_id")) || null;
-  if (fromV1) { try { history.replaceState(null, "", location.pathname + location.hash); } catch (e) { /* адрес не критичен */ } }
+  if (fromV1) { try {
+    const query=new URLSearchParams(location.search);query.delete("object_id");
+    history.replaceState(null,"",location.pathname+(query.size?"?"+query.toString():"")+location.hash);
+  } catch (e) { /* адрес не критичен */ } }
   const pick = (id) => activeObjects.find((o) => o.id === id);
   let objectId = (pick(fromV1) || pick(remembered) || pick(tree.last_object_id) || activeObjects.find((o) => o.elements > 0) || activeObjects[0] || {}).id ?? null;
   switchCtx.objectId = objectId;
@@ -429,6 +433,21 @@ async function renderShell(user, permissions) {
   const side = document.getElementById("v2-side");
 
   let currentKey = null;
+  mountAssistant({ getContext: () => {
+    const obj = activeObjects.find(o => o.id === objectId) || tree.projects.flatMap(p => p.objects || []).find(o => o.id === objectId);
+    const project = tree.projects.find(p => (p.objects || []).some(o => o.id === objectId));
+    const screen = screenOf(currentKey);
+    let extra = activeModule?.getAssistantContext?.() || {};
+    const calcFrame = content.querySelector("iframe[data-calc-embed]");
+    if (calcFrame) { try {
+      const framePage=calcFrame.contentWindow.CalcZhBIAssistantContext?.().page || {};
+      const snapshot=pageSnapshot(calcFrame.contentDocument.querySelector("dialog[open]")||calcFrame.contentDocument.getElementById("precast-concept"));
+      extra={...extra,...framePage,...snapshot,text:(snapshot.text+"\n"+(framePage.text||"")).slice(0,12000)};
+    } catch {} }
+    return { userId:user.id, objectId:calcFrame?null:objectId, projectId:calcFrame?null:project?.id, projects: tree.projects.map(p => ({id:p.id,name:p.name})),
+      label: `${screen?.title || "Начало"}${!calcFrame&&obj ? " · " + obj.name : ""}`,
+      page: { title: screen?.title || "Начало", ...pageSnapshot(content), ...extra } };
+  }});
 
   // ---- выбор объекта в шапке: кнопка + окно выбора (shell-object-picker.js). Текст кнопки — статус-точка и
   // «Проект · Объект», полное название — в title (длинные названия не должны раздувать шапку).
