@@ -105,9 +105,17 @@ html{scrollbar-gutter:auto}
 #precast-concept .pc-home-actions{display:grid;gap:0}
 #precast-concept .pc-home-action{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 0;border-bottom:1px solid var(--pc-line)}
 #precast-concept .pc-home-action p{margin:3px 0;font-size:12px;color:var(--pc-muted)}
-#precast-concept .pc-home-detail{border-bottom:1px solid var(--pc-line);padding-bottom:8px}
-#precast-concept .pc-home-detail>summary{padding:10px 0;font-weight:500}
-#precast-concept .pc-home-detail>.pc-home-block{border:0;padding:4px 0 16px;border-radius:0}
+#precast-concept .pc-home-detail{flex:none;border:1px solid var(--pc-line);border-radius:10px;background:var(--pc-bg);overflow:hidden}
+#precast-concept .pc-home-detail>summary{display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;list-style:none;background:var(--pc-sidebar);font-weight:600;font-size:14px;user-select:none}
+#precast-concept .pc-home-detail>summary::-webkit-details-marker{display:none}
+#precast-concept .pc-home-detail>summary:hover{background:var(--sel)}
+#precast-concept .pc-home-detail>summary:focus-visible{outline:2px solid var(--pc-accent);outline-offset:-2px}
+#precast-concept .pc-home-detail[open]>summary{border-bottom:1px solid var(--pc-line)}
+#precast-concept .pc-home-chevron{flex:none;width:7px;height:7px;border-right:2px solid var(--pc-accent);border-bottom:2px solid var(--pc-accent);transform:rotate(-45deg);margin:0 4px 0 2px;transition:transform .15s}
+#precast-concept .pc-home-detail[open]>summary .pc-home-chevron{transform:rotate(45deg)}
+#precast-concept .pc-home-detail-meta{margin-left:auto;font-weight:400;font-size:12px;color:var(--pc-muted);text-align:right}
+#precast-concept .pc-home-detail>.pc-home-block,#precast-concept .pc-home-detail>.pc-home-owners{border:0;padding:14px;border-radius:0}
+#precast-concept .pc-home-detail>.pc-home-block+.pc-home-block{border-top:1px solid var(--pc-line)}
 #precast-concept .pc-settings-tabs{display:flex;gap:6px;padding:12px 0 16px}
 #precast-concept .pc-settings-tabs button[aria-pressed="true"]{background:var(--sel);color:var(--pc-accent);border-color:var(--pc-accent)}
 #pc-reset-dialog{width:min(480px,calc(100vw - 30px));background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}

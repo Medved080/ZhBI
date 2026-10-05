@@ -6,7 +6,7 @@
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const num=n=>new Intl.NumberFormat('ru-RU').format(n),pct=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}).format(n);
  const share=(n,total)=>total?100*n/total:0;
- let data=null,loading=false;
+ let data=null,loading=false,openState=[];      // openState — какие сворачиваемые разделы раскрыты (переживает «Обновить»)
  const OWNER={'чтение листов':'разработка','вы':'вы','технолог':'технолог','проверка':'проверка'};
  const CELLS=[['volume','Объём'],['concreteClass','Класс'],['rebar','Арматура'],['embedded','Закладные, трубы, петли'],['prices','Цены'],['norms','Нормы'],['verified','Проверено'],['ready','Готово']];
 
@@ -76,10 +76,16 @@
   return `<section class="pc-home-block"><h3>3D-модели</h3><p>С арматурой: <b>${num(withRebar)}</b> из ${num(d.total)} (полных ${num(m.complete||0)}, частичных ${num(m.partial||0)}). 3D не входит в условия готовности калькуляции: стоимость от неё не зависит.</p></section>`;
  }
 
+ // Сворачиваемый раздел: явный блок с рамкой, шапкой-кнопкой и шевроном (раньше — просто строка текста)
+ function section(title,meta,body){return `<details class="pc-home-detail"><summary><span class="pc-home-chevron" aria-hidden="true"></span><span class="pc-home-detail-title">${esc(title)}</span><span class="pc-home-detail-meta">${esc(meta)}</span></summary>${body}</details>`;}
  function render(){
   const d=data;
   panel.innerHTML=`<header class="pc-home-header"><div><div class="pc-context">Калькулятор ЖБИ</div><h2>Готовность калькуляций</h2></div><div class="pc-home-tools"><span class="pc-context" id="pc-home-stamp">Данные на ${new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}</span><button type="button" id="pc-home-refresh">Обновить</button><button type="button" id="pc-home-products">К изделиям →</button></div></header>
-   ${hero(d)}${model3d(d)}<details class="pc-home-detail"><summary>Что мешает завершить расчёты</summary>${owners(d)}${gaps(d)}</details><details class="pc-home-detail"><summary>Условия готовности и группы изделий</summary>${funnel(d)}${families(d)}</details><details class="pc-home-detail"><summary>Расценки и источники данных</summary>${prices(d)}${origin(d)}</details>`;
+   ${hero(d)}${model3d(d)}
+   ${section('Что мешает завершить расчёты','по исполнителям · самые большие пробелы',owners(d)+gaps(d))}
+   ${section('Условия готовности и группы изделий',d.funnel.length+' условий · '+d.families.length+' групп',funnel(d)+families(d))}
+   ${section('Расценки и источники данных','без цены: '+num(d.prices.unpriced)+' из '+num(d.prices.materials)+' материалов',prices(d)+origin(d))}`;
+  openState.forEach((value,index)=>{const el=panel.querySelectorAll('details.pc-home-detail')[index];if(el)el.open=value;});      // «Обновить» не схлопывает раскрытое
  }
 
  async function load(){
@@ -90,6 +96,7 @@
   finally{loading=false;}
  }
 
+ panel.addEventListener('toggle',event=>{if(event.target.matches?.('details.pc-home-detail'))openState=[...panel.querySelectorAll('details.pc-home-detail')].map(el=>el.open);},true);
  panel.addEventListener('click',event=>{
   const b=event.target.closest('button');if(!b)return;
   if(b.id==='pc-home-refresh'){data=null;load();}
