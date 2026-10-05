@@ -308,8 +308,15 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-prices-bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:8px 0}
 #precast-concept .pc-prices-bar input[type=search]{min-width:280px;padding:7px 8px;font:inherit;border:1px solid var(--pc-line);border-radius:5px;background:var(--pc-bg);color:var(--pc-ink)}
 #precast-concept #pc-prices-table tbody tr[hidden]{display:none}
-#precast-concept .pc-norms-table table{min-width:760px;font-size:12px;table-layout:fixed}
-#precast-concept .pc-norms-table th:first-child{width:27%}
+/* таблицы «Цены и нормы»: ширина столбцов по данным, а не на весь экран; поля ввода — по смыслу значения */
+#precast-concept #pc-norms-panel table{width:max-content;min-width:0;max-width:100%;table-layout:auto;font-size:12px}
+#precast-concept #pc-norms-panel :is(th,td){padding:6px 14px;text-align:left;white-space:nowrap}
+#precast-concept #pc-norms-panel td:first-child{white-space:normal;min-width:170px}
+#precast-concept #pc-norms-panel table input:not([type=checkbox]){width:9em}
+#precast-concept #pc-norms-panel :is(#pc-groups-table,#pc-types-table) :is(th,td):nth-child(2){text-align:right}
+#precast-concept #pc-norms-panel #pc-prices-table :is(th,td):nth-child(3){text-align:right}
+#precast-concept #pc-norms-panel #pc-types-table input{width:6em}
+#precast-concept .pc-norms-fields{grid-template-columns:repeat(4,minmax(150px,230px))}
 #precast-concept .pc-norms-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 #precast-concept .pc-norms-actions button{font-size:13px;cursor:pointer}
 #precast-concept .pc-norms-actions button:first-child{background:var(--pc-accent);color:white}
@@ -578,3 +585,5 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-home-table{min-width:0}
 #precast-concept .pc-edit-product{margin-top:10px;align-self:flex-start}
 #precast-concept .pc-verification{margin-top:10px;display:grid;gap:4px}#precast-concept .pc-verification button{justify-self:start}
+#precast-concept #pc-norms-panel :is(#pc-base-table,#pc-general-norms,#pc-profile-table) td:first-child{min-width:300px}
+#precast-concept #pc-norms-panel #pc-groups-table td label{display:inline-flex;flex-direction:row;align-items:center;gap:6px;white-space:nowrap}
