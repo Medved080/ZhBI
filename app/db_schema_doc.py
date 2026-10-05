@@ -62,6 +62,13 @@ TABLES = [
     ("created_at", "TEXT", "", "создан"),
     ("updated_at", "TEXT", "", "изменён"),
 ]),
+("object_team_members", "object_team_members — Проектная команда объекта (роль → физлицо)", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор записи"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("role_key", "TEXT", "U", "роль в команде (dir_project, head_project, pm_office, estimate, pto, supply, site_chief, gip — app/object_team.py); пара (объект, роль) уникальна"),
+    ("individual_id", "INTEGER", "FK", "физлицо → individuals.id (RESTRICT; при удалении физлица записи переводятся на замену, app/dict_delete.py)"),
+    ("updated_at", "TEXT", "", "момент последнего назначения"),
+]),
 ("objects", "objects — Объект (здание)", C_HIER, S_HIER, [
     ("id", "INTEGER", "PK", "идентификатор объекта; единица показа схемы"),
     ("name", "TEXT", "U", "название объекта (уникально; ключ переноса настроек)"),
@@ -1003,6 +1010,8 @@ FKS = [
     ("objects", "smu_id", "smu_catalog", "id", "SET NULL"),
     ("objects", "smu_director_id", "individuals", "id", "SET NULL"),
     ("objects", "responsible_id", "individuals", "id", "SET NULL"),
+    ("object_team_members", "object_id", "objects", "id", "CASCADE"),
+    ("object_team_members", "individual_id", "individuals", "id", "RESTRICT"),
     ("user_access", "user_id", "users", "id", "CASCADE"),
     ("user_access", "project_id", "projects", "id", "CASCADE"),
     ("user_access", "object_id", "objects", "id", "CASCADE"),

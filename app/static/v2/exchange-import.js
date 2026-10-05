@@ -219,6 +219,10 @@ const restoreCfg = () => ({
 const OBJECTS_FIELD_LABELS = {
   address: "Адрес", address_region: "Регион (по адресу)", smu_id: "СМУ", smu_director_id: "Директор СМУ", responsible_id: "Ответственный (ДП/РП)",
   status: "Статус", lat: "Широта", lon: "Долгота", media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР", postal_code: "Почтовый индекс",
+  // «Справочник ОС WEB» (2026-10-05, B1): проект и проектная команда (те же роли, что TEAM_ROLES в app/object_team.py)
+  project: "Проект", project_id: "Проект", team_dir_project: "Директор проекта", team_head_project: "Руководитель проекта",
+  team_pm_office: "Проектный офис", team_estimate: "Сметный отдел", team_pto: "ПТО", team_supply: "Снабжение",
+  team_site_chief: "Нач. участка", team_gip: "ГИП",
 };
 const OBJECTS_HIDDEN = new Set(["address_code", "address_source", "address_parts"]);
 const CATALOG_STATUS = { active: "В работе", perspective: "Перспективный", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
@@ -235,7 +239,7 @@ function mountObjectsImport(el, ctx) {
   el.className = "v2-page";
   el.innerHTML = pageFrame({
     screen, groupTitle, summary: null,
-    body: `<p class="v2-muted">Файл реестра заказчика (лист «Объекты на карте»): строка — один объект, сопоставление по <b>наименованию</b>. Новое наименование заведёт объект (и проект с тем же названием — «один объект = один проект»); совпавшее с уже внесённым — покажет расхождения.
+    body: `<p class="v2-muted">Файл реестра заказчика («Объекты на карте» или «Справочник ОС WEB»): строка — один объект, сопоставление по <b>наименованию</b> (колонка «Наименование ОС» или «Объект»; колонки «Проект» и проектной команды — в «Справочнике ОС WEB»). Новое наименование заведёт объект (и проект с тем же названием — «один объект = один проект»); совпавшее с уже внесённым — покажет расхождения.
         Ничего не применяется, пока вы не отметите нужное флажками и не нажмёте «Применить отмеченное». Ссылка на фото/видео сохраняется текстом — сервер её не скачивает.</p>
       <form id="ex-form" autocomplete="off" novalidate>
         <label class="v2-wire-field v2-field-wide"><span>Файл .xlsx (лист «Объекты на карте»)</span><input type="file" id="ex-file" accept=".xlsx"></label>
@@ -256,7 +260,7 @@ function mountObjectsImport(el, ctx) {
     if (!analysis || !analysis.changes.length) { box.innerHTML = ""; $("#ex-summary").textContent = ""; $("#ex-applybar").hidden = true; return; }
     const rows = analysis.changes.map((c, i) => ({
       i, cells: c.kind === "create"
-        ? [`<b>+ ${esc(c.key)}</b>`, "Новый объект и проект", "—", esc(objFieldsSummary(c.fields))]
+        ? [`<b>+ ${esc(c.key)}</b>`, "Новый объект и проект", "—", esc(objFieldsSummary({ ...(c.project ? { project: c.project } : {}), ...c.fields, ...Object.fromEntries(Object.entries(c.team || {}).map(([k, v]) => ["team_" + k, v])) }))]
         : [esc(c.key), esc(c.field_label), esc(objValue(c.field, c.was)), esc(objValue(c.field, c.now))],
     }));
     box.innerHTML = changesTableHtml({ head: ["Объект", "Поле", "Было", "Станет"], rows, checkedSet: checked });

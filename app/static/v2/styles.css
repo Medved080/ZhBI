@@ -914,6 +914,12 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-msg { pointer-events: auto; max-width: 440px; padding: 16px 20px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 2px 10px rgb(0 0 0 / .15); text-align: center; }
 .ws-msg p { margin: 6px 0 12px; color: var(--muted); }
 .ws-msg-bad { border-color: var(--bad); }
+.ws-msg-card { max-width: 560px; max-height: 100%; overflow: auto; text-align: left; }
+.ws-msg-card > strong, .ws-msg-card > p { display: block; text-align: center; }
+.ws-objcard { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+.ws-objcard h4 { margin: 8px 0 4px; font-size: 13px; }
+.ws-objcard .ws-dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; }
+.ws-objcard .ws-dl dd { margin: 0; }
 .ws-msg-load { pointer-events: none; color: var(--muted); padding: 8px 14px; }
 .ws-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; vertical-align: -2px; animation: ws-spin .8s linear infinite; }
 @keyframes ws-spin { to { transform: rotate(360deg); } }

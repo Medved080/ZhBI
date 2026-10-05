@@ -77,6 +77,11 @@ function geocodeQueryFromAddress(addr) {
   return запрос;
 }
 
+// Роли проектной команды объекта (2026-10-05, B1) — ТОТ ЖЕ список и порядок, что TEAM_ROLES в app/object_team.py.
+// «Директор СМУ» сюда не входит: он стоит в «Реквизитах заказчика» рядом с СМУ (колонка objects.smu_director_id).
+const TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
+  ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
+const teamDraftOf = (rec) => Object.fromEntries(TEAM_ROLES.map(([k]) => ["team_" + k, rec?.team?.[k]?.id ?? ""]));
 const STATUS_LABELS = {
   perspective: "Перспективный", active: "В работе", suspended: "Приостановлен",
   completed: "Завершён", archived: "Архивный",
@@ -274,10 +279,10 @@ export function mountProjectsObjects(container, ctx) {
         ? { name: rec.name, status: rec.status || "active", project_id: rec.project_id,
             kind: rec.kind || "zhbi", description: rec.description || "",
             smu_id: rec.smu_id ?? "", smu_director_id: rec.smu_director_id ?? "", responsible_id: rec.responsible_id ?? "",
-            smr_start_reported: rec.smr_start_reported || "", media_url: rec.media_url || "", ...addressFieldsOf(rec) }
+            smr_start_reported: rec.smr_start_reported || "", media_url: rec.media_url || "", ...teamDraftOf(rec), ...addressFieldsOf(rec) }
         : { name: "", status: "active", project_id: state.newObjectProjectId || (state.projects[0]?.id ?? ""),
             kind: "zhbi", description: "", smu_id: "", smu_director_id: "", responsible_id: "",
-            smr_start_reported: "", media_url: "", ...addressFieldsOf(null) };
+            smr_start_reported: "", media_url: "", ...teamDraftOf(null), ...addressFieldsOf(null) };
     }
     // У уже сохранённой записи с координатами автопозиционирование по адресу
     // не трогает точку — вдруг она уточнена руками именно там, где нужно
@@ -403,6 +408,7 @@ export function mountProjectsObjects(container, ctx) {
         smu_director_id: snapshot.smu_director_id === "" ? null : Number(snapshot.smu_director_id),
         responsible_id: snapshot.responsible_id === "" ? null : Number(snapshot.responsible_id),
         smr_start_reported: snapshot.smr_start_reported || null, media_url: snapshot.media_url.trim() || null,
+        team: Object.fromEntries(TEAM_ROLES.map(([k]) => [k, snapshot["team_" + k] === "" || snapshot["team_" + k] == null ? null : Number(snapshot["team_" + k])])),
       });
     }
     const path = type === "project" ? "/projects" : "/objects";
@@ -569,6 +575,11 @@ export function mountProjectsObjects(container, ctx) {
         ${fieldRow("Старт СМР", `<input id="pf-smr-start" type="date" value="${escapeHtml(d.smr_start_reported)}">`)}
         <label class="v2-field v2-span">Ссылка на фото/видео<input id="pf-media" value="${escapeHtml(d.media_url)}" placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"></label>
       </div>` : ""}
+      ${type === "object" ? `
+      <div class="v2-group">Проектная команда</div>
+      <div class="v2-fields">
+        ${TEAM_ROLES.map(([k, label]) => fieldRow(label, refSelect("pf-team-" + k, state.individualsList, d["team_" + k], false, "— не назначен —"))).join("")}
+      </div>` : ""}
       <div class="v2-group">Адрес и координаты</div>
       <div id="po-address"></div>
       <div class="v2-coords-row">
@@ -590,7 +601,8 @@ export function mountProjectsObjects(container, ctx) {
     const FIELD_KEYS = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
       "pf-smu": "smu_id", "pf-smu-director": "smu_director_id", "pf-responsible": "responsible_id",
       "pf-smr-start": "smr_start_reported", "pf-media": "media_url", "pf-description": "description",
-      "pf-lat": "lat", "pf-lon": "lon" };
+      "pf-lat": "lat", "pf-lon": "lon",
+      ...Object.fromEntries(TEAM_ROLES.map(([k]) => ["pf-team-" + k, "team_" + k])) };
     const syncDraftField = (elm) => { const key = FIELD_KEYS[elm.id]; if (key) state.draft[key] = elm.value; };
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", () => { syncDraftField(elm); markDirty(); }));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => syncDraftField(elm)));

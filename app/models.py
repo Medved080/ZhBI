@@ -458,6 +458,8 @@ class ObjectOut(AddressFields):
     # Дата начала СМР из того же реестра, строкой ГГГГ-ММ-ДД. Не путать со
     # сводкой в форме — та считается по датам элементов и хранится не здесь.
     smr_start_reported: Optional[str] = None
+    # Проектная команда (2026-10-05, B1): {ключ роли: {"id", "name"}}; пустая роль — ключа нет (app/object_team.py).
+    team: dict = {}
     # Есть ли превью — а не сама картинка: дерево справочника рисует
     # миниатюру запросом `GET /objects/{id}/avatar`, только когда флаг
     # истинный, вместо того чтобы бить по этому эндпоинту на каждую строку
@@ -487,6 +489,8 @@ class ObjectPatchIn(AddressFields):
     responsible_id: Optional[int] = None
     media_url: Optional[str] = None
     smr_start_reported: Optional[str] = None
+    # Проектная команда: {ключ роли: id физлица | null}; меняются только присланные роли, null снимает назначение.
+    team: Optional[dict] = None
     # V2: отпечаток, который форма видела при открытии (ObjectOut.version). Не передан — проверки нет (V1).
     expected_version: Optional[str] = None
 

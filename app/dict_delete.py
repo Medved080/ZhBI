@@ -754,7 +754,11 @@ def _individual_refs(conn, row):
     ответственный = conn.execute(
         "SELECT COUNT(*) AS n FROM objects WHERE responsible_id = ?", (row["id"],)
     ).fetchone()["n"]
-    return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный)])
+    команда = conn.execute(
+        "SELECT COUNT(*) AS n FROM object_team_members WHERE individual_id = ?", (row["id"],)
+    ).fetchone()["n"]
+    return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный),
+                      ("Проектные команды объектов", команда)])
 
 
 def _individual_candidates(conn, row, parent_target):
@@ -774,7 +778,18 @@ def _individual_repoint(conn, row, target):
         "UPDATE objects SET responsible_id = ?, updated_at = datetime('now') WHERE responsible_id = ?",
         (target["id"], row["id"]),
     ).rowcount
-    return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный)])
+    # Замена на человека, который уже занимает ЭТУ роль на том же объекте, не должна упасть на уникальном ключе:
+    # такая запись просто удаляется (роль остаётся за тем, кто стоит), остальные переводятся.
+    conn.execute(
+        "DELETE FROM object_team_members WHERE individual_id = ? AND EXISTS (SELECT 1 FROM object_team_members t "
+        "WHERE t.object_id = object_team_members.object_id AND t.role_key = object_team_members.role_key "
+        "AND t.individual_id = ?)", (row["id"], target["id"]))
+    команда = conn.execute(
+        "UPDATE object_team_members SET individual_id = ?, updated_at = datetime('now') WHERE individual_id = ?",
+        (target["id"], row["id"]),
+    ).rowcount
+    return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный),
+                      ("Проектные команды объектов", команда)])
 
 
 def _individual_delete(conn, row):
@@ -811,6 +826,7 @@ KINDS = {
         "fk_handled": {
             "objects.smu_director_id": "перевод на замену",
             "objects.responsible_id": "перевод на замену",
+            "object_team_members.individual_id": "перевод на замену",
         },
     },
     "subtype": {

@@ -73,6 +73,7 @@ from openpyxl import load_workbook
 
 from app import activity
 from app.kladr import region_from_address, resolve_free_text_address
+from app.object_team import ROLE_LABELS, TEAM_ROLES, validate_team_edit, write_team
 from app.reference_catalogs import find_or_create_individual, find_or_create_smu
 
 # --------------------------------------------------------------- колонки
@@ -83,8 +84,11 @@ from app.reference_catalogs import find_or_create_individual, find_or_create_smu
 # нечитаемым.
 _COLUMN_LABELS = [
     ("name", "Наименование ОС"),
+    ("name", "Объект"),                    # «Справочник ОС WEB» (2026-10-05): проект и объект — двумя колонками
+    ("project", "Проект"),
     ("address", "Адрес"),
     ("smu", "СМУ"),
+    ("smu", "Отв. подразделение"),         # в новом файле подразделение называется так
     ("smu_director", "Директор СМУ"),
     ("responsible", "ДП / РП"),
     ("status_raw", "Статус ОС"),
@@ -92,7 +96,14 @@ _COLUMN_LABELS = [
     ("lon", "Долгота"),
     ("media_url", "Фото/Видео"),
     ("smr_start_reported", "Старт СМР"),
+] + [("team_" + key, label) for key, label in TEAM_ROLES] + [
+    ("team_site_chief", "Нач.участка"),    # в файле без пробела после точки
 ]
+
+
+def _norm_label(value) -> str:
+    """Подпись колонки для сопоставления: без регистра и пробелов («Нач.участка» = «Нач. участка»)."""
+    return "".join(str(value).split()).lower() if value is not None else ""
 
 KEY_COLUMN = "name"
 
@@ -105,6 +116,7 @@ FIELD_LABELS = {
     "smu_director_id": "Директор СМУ",
     "responsible_id": "Ответственный (ДП/РП)",
     "status": "Статус",
+    "project_id": "Проект",
     "lat": "Широта",
     "lon": "Долгота",
     "media_url": "Ссылка на фото/видео",
@@ -115,6 +127,7 @@ FIELD_LABELS = {
 # клиентского JSON и попадает в `SET {поле} = ...` — тот же класс риска, что
 # у element_bulk_edit.apply_changes (см. его докстрок про белый список),
 # закрывается тем же способом: только то, что реально есть в этом перечне.
+FIELD_LABELS.update({"team_" + key: label for key, label in TEAM_ROLES})   # назначения проектной команды (по роли)
 _UPDATE_FIELDS = frozenset(FIELD_LABELS)
 
 # Поля бандла "address_link" (см. _build_update) — своя, более узкая
@@ -223,24 +236,30 @@ def _read_sheet(file_bytes: bytes) -> list:
     except Exception:
         raise ObjectsImportError("Файл повреждён или не является корректным .xlsx")
     ws = wb.active
-    rows = ws.iter_rows(values_only=True)
-    try:
-        header = next(rows)
-    except StopIteration:
+    all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
         raise ObjectsImportError("Пустой файл")
 
-    label_to_key = {label: key for key, label in _COLUMN_LABELS}
-    index = {}
-    for i, cell in enumerate(header):
-        key = label_to_key.get(str(cell).strip() if cell is not None else "")
-        if key:
-            index[key] = i
-    if KEY_COLUMN not in index:
+    label_to_key = {_norm_label(label): key for key, label in _COLUMN_LABELS}
+    # Строка заголовков — первая из пяти верхних, где есть колонка-ключ. В «Справочнике ОС WEB» над заголовками стоит строка
+    # групп («Реквизиты ОС в WEB», «Адрес и координаты», «Проектная команда»), её пропускаем; в прежнем файле заголовки в
+    # первой строке.
+    header_at, index = None, {}
+    for h, header in enumerate(all_rows[:5]):
+        found = {}
+        for i, cell in enumerate(header):
+            key = label_to_key.get(_norm_label(cell))
+            if key and key not in found:
+                found[key] = i
+        if KEY_COLUMN in found:
+            header_at, index = h, found
+            break
+    if header_at is None:
         raise ObjectsImportError(
-            "В файле нет колонки «Наименование ОС» — без неё строки не с чем сопоставить.")
+            "В файле нет колонки «Наименование ОС» (или «Объект») — без неё строки не с чем сопоставить.")
 
     out = []
-    for n, raw in enumerate(rows, start=2):
+    for n, raw in enumerate(all_rows[header_at + 1:], start=header_at + 2):
         if all(v is None or (isinstance(v, str) and not v.strip()) for v in raw):
             continue
         out.append((n, {key: (raw[i] if i < len(raw) else None) for key, i in index.items()}))
@@ -332,6 +351,19 @@ def _build_create(conn, line_no: int, name: str, values: dict) -> tuple:
     if media_url is not None:
         fields["media_url"] = media_url
 
+    # Проектная команда: роль → имя физлица (не найденное будет создано в справочнике при применении).
+    команда = {}
+    for роль, _ in TEAM_ROLES:
+        имя = _clean_text(values.get("team_" + роль))
+        if имя is None:
+            continue
+        команда[роль] = имя
+        if not _reference_exists(conn, "individuals", имя):
+            warnings.append({"line": line_no, "name": name,
+                             "reason": "%s «%s» не найден(о) в справочнике физлиц — будет создан(о)"
+                                       % (ROLE_LABELS[роль], имя)})
+    проект = _clean_text(values.get("project"))
+
     статус, предупреждение = _parse_status(values.get("status_raw"))
     if предупреждение:
         warnings.append({"line": line_no, "name": name, "reason": предупреждение + " — принят «В работе»"})
@@ -354,7 +386,7 @@ def _build_create(conn, line_no: int, name: str, values: dict) -> tuple:
     return {
         "kind": "create", "key": name, "object_id": None, "line": line_no,
         "field": "name", "field_label": "Новый объект", "was": None, "now": name,
-        "fields": fields,
+        "fields": fields, "project": проект, "team": команда,
     }, warnings
 
 
@@ -436,6 +468,32 @@ def _build_update(conn, row, line_no: int, values: dict) -> tuple:
         старый_url = row["media_url"] if "media_url" in row.keys() else None
         if media_url != старый_url:
             changes.append(describe("media_url", старый_url, media_url))
+
+    # Проект: имя из файла против текущего проекта объекта. Перенос в другой проект — отдельным флажком (значение — ИМЯ:
+    # нет такого проекта — применение заведёт его, как для нового объекта).
+    проект = _clean_text(values.get("project"))
+    if проект is not None:
+        текущий = conn.execute("SELECT name FROM projects WHERE id = ?", (row["project_id"],)).fetchone() \
+            if "project_id" in row.keys() and row["project_id"] is not None else None
+        старое_имя = текущий["name"] if текущий else None
+        if " ".join(проект.split()).lower() != " ".join((старое_имя or "").split()).lower():
+            changes.append(describe("project_id", старое_имя, проект))
+
+    # Проектная команда: по роли, пустая ячейка — «файл не знает», а не «снять».
+    текущая_команда = {r["role_key"]: r["name"] for r in conn.execute(
+        "SELECT t.role_key, i.name FROM object_team_members t JOIN individuals i ON i.id = t.individual_id "
+        "WHERE t.object_id = ?", (row["id"],))}
+    for роль, _ in TEAM_ROLES:
+        новое = _clean_text(values.get("team_" + роль))
+        if новое is None:
+            continue
+        старое = текущая_команда.get(роль)
+        if " ".join(новое.split()).lower() != " ".join((старое or "").split()).lower():
+            changes.append(describe("team_" + роль, старое, новое))
+            if not _reference_exists(conn, "individuals", новое):
+                warnings.append({"line": line_no, "name": name,
+                                 "reason": "%s «%s» не найден(о) в справочнике физлиц — будет создан(о)"
+                                           % (ROLE_LABELS[роль], новое)})
 
     статус, предупреждение = _parse_status(values.get("status_raw"))
     if предупреждение:
@@ -527,7 +585,10 @@ def apply_changes(conn, selections: list, admin) -> dict:
                 fields["smu_director_id"] = find_or_create_individual(conn, fields["smu_director_id"])
             if "responsible_id" in fields:
                 fields["responsible_id"] = find_or_create_individual(conn, fields["responsible_id"])
-            project_id = _find_or_create_project(conn, admin, name, fields.get("address"))
+            # Проект — из колонки «Проект» файла; нет колонки или пусто — под тем же названием, что объект («один объект =
+            # один проект»).
+            project_id = _find_or_create_project(conn, admin, (creates[0].get("project") or "").strip() or name,
+                                                 fields.get("address"))
             колонки = ["name", "project_id", "status", "kind"] + list(fields.keys())
             значения = [name, project_id, статус, "zhbi"] + list(fields.values())
             conn.execute(
@@ -536,10 +597,15 @@ def apply_changes(conn, selections: list, admin) -> dict:
                 значения,
             )
             new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
+            команда = creates[0].get("team") or {}
+            if команда:
+                # Роль и имя из клиентского JSON: роль проверяется по реестру, имя резолвится тем же find_or_create_individual.
+                validate_team_edit(conn, {r: None for r in команда})
+                write_team(conn, new_id, {r: find_or_create_individual(conn, имя) for r, имя in команда.items()})
             created += 1
             activity.log("object_import", user=admin, entity_type="object", entity_id=new_id,
                          old_value=None, new_value="создан импортом: %s" % name,
-                         details={"source": "xlsx", "fields": {**fields, "status": статус}})
+                         details={"source": "xlsx", "fields": {**fields, "status": статус}, "team": команда or None})
             continue
 
         if not updates and not address_links:
@@ -581,11 +647,18 @@ def apply_changes(conn, selections: list, admin) -> dict:
                 row = conn.execute("SELECT * FROM objects WHERE id = ?", (row["id"],)).fetchone()
 
         if updates:
-            записать, описание = [], {}
+            записать, описание, команда_правки = [], {}, {}
             for sel in updates:
                 field = sel["field"]
                 new = sel.get("now")
-                if field == "status":
+                if field.startswith("team_"):
+                    # Назначение проектной команды — не колонка objects, пишется отдельно (object_team_members).
+                    команда_правки[field[len("team_"):]] = find_or_create_individual(conn, new)
+                    описание[field] = (sel.get("was"), new)
+                    continue
+                if field == "project_id":
+                    new = _find_or_create_project(conn, admin, (new or "").strip(), row["address"])
+                elif field == "status":
                     new = _valid_status(new)
                 elif field in ("lat", "lon") and new is not None:
                     new = round(float(new), 6)
@@ -595,11 +668,17 @@ def apply_changes(conn, selections: list, admin) -> dict:
                     new = find_or_create_individual(conn, new)
                 записать.append((field, new))
                 описание[field] = (sel.get("was"), new)
-            conn.execute(
-                "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
-                    ", ".join("%s = ?" % f for f, _ in записать)),
-                [v for _, v in записать] + [row["id"]],
-            )
+            if записать:
+                conn.execute(
+                    "UPDATE objects SET %s, updated_at = datetime('now') WHERE id = ?" % (
+                        ", ".join("%s = ?" % f for f, _ in записать)),
+                    [v for _, v in записать] + [row["id"]],
+                )
+            if команда_правки:
+                validate_team_edit(conn, команда_правки)
+                write_team(conn, row["id"], команда_правки)
+                if not записать:
+                    conn.execute("UPDATE objects SET updated_at = datetime('now') WHERE id = ?", (row["id"],))
             затронут = True
             activity.log(
                 "object_import", user=admin, entity_type="object", entity_id=row["id"],

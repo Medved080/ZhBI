@@ -59,6 +59,7 @@ from urllib.parse import quote
 from pydantic import BaseModel
 
 from app import activity
+from app import object_team
 from app import error_log
 from app.activity_actions import (
     CATEGORY_DENIED, CATEGORY_ERROR, CATEGORY_ORDER, CATEGORY_TITLES,
@@ -4773,6 +4774,11 @@ _OBJECT_VERSION_COLS = ("name", "status", "project_id", "kind", "description", "
                         "media_url", "smr_start_reported") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
 
 
+def _object_version(row, team) -> str:
+    """Версия записи объекта: реквизиты + состав проектной команды (чужая правка команды тоже делает форму устаревшей)."""
+    return hashlib.sha1((_row_version(row, _OBJECT_VERSION_COLS) + object_team.team_signature(team)).encode("utf-8")).hexdigest()[:16]
+
+
 def _row_version(row, columns) -> str:
     import hashlib
     ключи = row.keys()
@@ -5079,6 +5085,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
         projects = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM projects")}
         смус = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM smu_catalog")}
         физлица = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM individuals")}
+        команды = object_team.teams_by_object(conn)
         # Раньше отдавались ВСЕ объекты всем вошедшим — это и был готовый
         # «каталог целей» для перебора id в /plan-data и отчётах: имена,
         # адреса, счётчики и имена файлов чертежей (аудит безопасности
@@ -5146,7 +5153,8 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
                 avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
-                version=_row_version(row, _OBJECT_VERSION_COLS),
+                team=команды.get(row["id"], {}),
+                version=_object_version(row, команды.get(row["id"])),
                 **_адрес_из_строки(row),
             ))
         return result
@@ -5181,6 +5189,7 @@ class ObjectCreateIn(AddressFields):
     responsible_id: Optional[int] = None
     media_url: Optional[str] = None
     smr_start_reported: Optional[str] = None
+    team: Optional[dict] = None   # проектная команда {ключ роли: id физлица | null}, см. app/object_team.py
 
 
 @app.post("/objects", response_model=ObjectOut)
@@ -5206,6 +5215,7 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
             raise HTTPException(status_code=404, detail="Проект не найден")
         if conn.execute("SELECT 1 FROM objects WHERE name = ?", (name,)).fetchone():
             raise HTTPException(status_code=409, detail="Объект с таким наименованием уже есть")
+        правки_команды = object_team.validate_team_edit(conn, body.team) if body.team else {}
         колонки = ["name", "description", "project_id", "kind", "status"]
         значения = [name, body.description, body.project_id,
                     _valid_kind(body.kind), _valid_status(body.status)]
@@ -5218,8 +5228,9 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
                 ", ".join(колонки), ", ".join("?" * len(колонки))),
             значения,
         )
-        conn.commit()
         new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
+        object_team.write_team(conn, new_id, {k: v for k, v in правки_команды.items() if v is not None})
+        conn.commit()
     finally:
         conn.close()
     activity.log("object_create", user=admin, entity_type="object", entity_id=new_id, new_value=name)
@@ -5242,7 +5253,8 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
         row = conn.execute("SELECT * FROM objects WHERE id = ?", (object_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Объект не найден")
-        if body.expected_version is not None and body.expected_version != _row_version(row, _OBJECT_VERSION_COLS):
+        команда_сейчас = object_team.teams_by_object(conn, [object_id]).get(object_id)
+        if body.expected_version is not None and body.expected_version != _object_version(row, команда_сейчас):
             raise HTTPException(status_code=409, detail="Объект уже изменил кто-то другой, пока форма была открыта. "
                                                         "Ничего не сохранено — обновите данные и повторите правку.")
 
@@ -5291,6 +5303,7 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
 
         записать.extend(_реквизитные_правки(body))
         записать.extend(_справочные_правки(conn, body))
+        правки_команды = object_team.validate_team_edit(conn, body.team) if body.team else {}
 
         if записать:
             conn.execute(
@@ -5298,7 +5311,14 @@ def update_object(object_id: int, body: ObjectPatchIn, admin: sqlite3.Row = Depe
                     ", ".join("%s = ?" % колонка for колонка, _ in записать)),
                 [значение for _, значение in записать] + [object_id],
             )
+        изменения_команды = object_team.write_team(conn, object_id, правки_команды) if правки_команды else []
+        if изменения_команды and not записать:
+            conn.execute("UPDATE objects SET updated_at = datetime('now') WHERE id = ?", (object_id,))
+        if записать or изменения_команды:
             conn.commit()
+        for роль, было_имя, стало_имя in изменения_команды:
+            события.append(("object_team", f"{object_team.ROLE_LABELS[роль]}: {было_имя or '—'}",
+                            f"{object_team.ROLE_LABELS[роль]}: {стало_имя or '—'}"))
     finally:
         conn.close()
     for код, было, стало in события:

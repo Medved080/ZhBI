@@ -329,15 +329,41 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, ws = "mo
     for (const b of el.querySelectorAll("#ws-modes button")) b.setAttribute("aria-pressed", String(sc?.view === b.dataset.view));
   }
 
+  // Карточка объекта на месте пустой схемы (2026-10-05, протокол «Развитие WEB 4Q26», B1): у объекта без чертежа/модели экран
+  // был пустым с одной строкой «нет чертежа». Теперь рядом — паспорт: проект, статус, адрес, СМУ и проектная команда из
+  // справочника «Проекты и объекты» (читается тем же `GET /objects`, что и справочник; без аналитики — только реквизиты).
+  const OBJ_STATUS = { perspective: "Перспективный", active: "В работе", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
+  const OBJ_TEAM = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
+    ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];   // как TEAM_ROLES в app/object_team.py
+  let objCard = null, objCardFor = null;
+  async function ensureObjectCard() {
+    if (objCardFor === curObject) return;
+    const target = curObject; objCardFor = target; objCard = null;
+    try { const list = await api.get("/objects"); if (!dead && objCardFor === target) objCard = list.find((o) => o.id === target) || null; } catch (e) { /* без карточки остаётся прежнее сообщение */ }
+    if (!dead && objCardFor === target) paintOverlay();
+  }
+  function objectCardHtml() {
+    const o = objCard; if (!o) return "";
+    const row = (k, v) => (v === null || v === undefined || v === "" ? "" : `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`);
+    const coords = o.lat != null && o.lon != null ? `${o.lat}, ${o.lon}` : "";
+    const team = OBJ_TEAM.map(([k, t]) => row(t, o.team?.[k]?.name)).join("");
+    return `<div class="ws-objcard"><h4>Карточка объекта</h4><dl class="ws-dl">
+      ${row("Проект", o.project_name)}${row("Объект", o.name)}${row("Статус", OBJ_STATUS[o.status] || o.status)}
+      ${row("Адрес", o.address)}${row("Координаты", coords)}${row("СМУ", o.smu_name)}${row("Директор СМУ", o.smu_director_name)}
+      ${row("Ответственный (ДП/РП)", o.responsible_name)}${row("Старт СМР", o.smr_start_reported)}</dl>
+      ${team ? `<h4>Проектная команда</h4><dl class="ws-dl">${team}</dl>` : `<p class="v2-muted">Проектная команда не заполнена — «Проекты и объекты».</p>`}</div>`;
+  }
+
   function paintOverlay() {
     const o = $("#ws-overlay");
     let html = "";
     if (sc?.error) {
       html = `<div class="ws-msg ws-msg-bad" role="alert"><strong>Схему не удалось показать.</strong><p>${esc(sc.error)}</p><button type="button" class="v2-btn v2-primary" data-act="retry">Повторить</button></div>`;
     } else if (sc && sc.loaded && !sc.loading && sc.hasDrawing === false) {
+      ensureObjectCard();
       html = mfr
-        ? `<div class="ws-msg"><strong>У объекта нет загруженной модели.</strong><p>Загрузите выгрузку Revit в разделе «Обмен данными» текущего интерфейса.</p></div>`
-        : `<div class="ws-msg"><strong>У объекта нет загруженного чертежа.</strong><p>Схему показать нечем: загрузите чертёж в разделе «Обмен данными» текущего интерфейса.</p></div>`;
+        ? `<div class="ws-msg ws-msg-card"><strong>У объекта нет загруженной модели.</strong><p>Загрузите выгрузку Revit в разделе «Обмен данными» текущего интерфейса.</p>${objectCardHtml()}</div>`
+        : `<div class="ws-msg ws-msg-card"><strong>У объекта нет загруженного чертежа.</strong><p>Схему показать нечем: загрузите чертёж в разделе «Обмен данными» текущего интерфейса.</p>${objectCardHtml()}</div>`;
     } else if (sc && sc.loaded && !sc.loading && sc.total === 0 && !(mfr && sc.mfr?.blocks)) {
       html = mfr
         ? `<div class="ws-msg"><strong>По выбранному отбору элементов нет.</strong><p>${sc.mfr?.filtersActive ? "Снимите часть фильтров на вкладке «Фильтры»." : "Модель загружена, но элементов в ней нет."}</p>${sc.mfr?.filtersActive ? `<button type="button" class="v2-btn v2-primary" data-act="reset-filters">Сбросить отбор</button>` : ""}</div>`

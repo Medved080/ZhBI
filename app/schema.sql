@@ -1664,3 +1664,15 @@ CREATE TABLE IF NOT EXISTS chess_flat_batches (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (object_id, idempotency_key)
 );
+
+-- Проектная команда объекта (2026-10-05, протокол «Развитие WEB 4Q26», B1): роль → физлицо. Директор СМУ остаётся колонкой
+-- objects.smu_director_id; здесь — остальные роли (app/object_team.py). Одна запись на пару (объект, роль).
+CREATE TABLE IF NOT EXISTS object_team_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    role_key TEXT NOT NULL,
+    individual_id INTEGER NOT NULL REFERENCES individuals (id) ON DELETE RESTRICT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (object_id, role_key)
+);
+CREATE INDEX IF NOT EXISTS idx_object_team_individual ON object_team_members (individual_id);
