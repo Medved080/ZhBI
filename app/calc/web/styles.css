@@ -637,3 +637,25 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #pc-sync-dialog details[open]>summary{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
 #pc-sync-dialog details[open]>summary::before{transform:rotate(45deg)}
 #pc-sync-dialog details>summary:hover{background:color-mix(in srgb,var(--accent) 16%,var(--surface))}
+/* кнопки по ролям (buttons.js): во всех разделах и окнах — явные элементы, а не «текст в рамочке» */
+:is(#precast-concept,dialog) button[data-role]{font-weight:600;border:2px solid var(--accent);border-radius:7px;box-shadow:0 1px 2px color-mix(in srgb,var(--ink) 16%,transparent);cursor:pointer;transition:background .12s,border-color .12s,color .12s,filter .12s}
+:is(#precast-concept,dialog) button[data-role=neutral]{border-color:color-mix(in srgb,var(--ink) 38%,var(--line));color:var(--ink);background:var(--bg)}
+:is(#precast-concept,dialog) button[data-role=accent]{border-color:var(--accent);color:var(--accent);background:var(--bg)}
+:is(#precast-concept,dialog) button[data-role=primary]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+:is(#precast-concept,dialog) button[data-role=danger]{border-color:var(--bad);color:var(--bad);background:var(--bg)}
+:is(#precast-concept,dialog) button[data-role=neutral]:hover:not(:disabled),:is(#precast-concept,dialog) button[data-role=accent]:hover:not(:disabled){border-color:var(--accent);color:var(--accent);background:var(--sel)}
+:is(#precast-concept,dialog) button[data-role=primary]:hover:not(:disabled){background:var(--accent);color:var(--accent-ink);filter:brightness(1.12)}
+:is(#precast-concept,dialog) button[data-role=danger]:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 12%,var(--bg));border-color:var(--bad);color:var(--bad)}
+:is(#precast-concept,dialog) button[data-role]:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:1px}
+:is(#precast-concept,dialog) button[data-role]:disabled{opacity:.5;cursor:not-allowed;border-style:dashed;box-shadow:none}
+:is(#precast-concept,dialog) button[data-role]:active:not(:disabled){transform:translateY(1px)}
+:is(#precast-concept,dialog) summary[data-role=disclosure]{display:flex;align-items:center;gap:10px;padding:9px 14px;border:2px solid color-mix(in srgb,var(--ink) 30%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--accent) 7%,var(--surface));font-weight:600;cursor:pointer;list-style:none;user-select:none}
+:is(#precast-concept,dialog) summary[data-role=disclosure]::-webkit-details-marker{display:none}
+:is(#precast-concept,dialog) summary[data-role=disclosure]::before{content:"";flex:none;width:7px;height:7px;border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);transform:rotate(-45deg);transition:transform .15s}
+:is(#precast-concept,dialog) details[open]>summary[data-role=disclosure]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
+:is(#precast-concept,dialog) details[open]>summary[data-role=disclosure]::before{transform:rotate(45deg)}
+:is(#precast-concept,dialog) summary[data-role=disclosure]:hover{background:color-mix(in srgb,var(--accent) 16%,var(--surface))}
+#precast-concept summary[data-role=menu]{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:2px solid color-mix(in srgb,var(--ink) 38%,var(--line));border-radius:7px;background:var(--bg);font-weight:600;cursor:pointer;list-style:none;box-shadow:0 1px 2px color-mix(in srgb,var(--ink) 16%,transparent)}
+#precast-concept summary[data-role=menu]::-webkit-details-marker{display:none}
+#precast-concept summary[data-role=menu]:hover{border-color:var(--accent);color:var(--accent);background:var(--sel)}
+#precast-concept details[open]>summary[data-role=menu]{border-color:var(--accent);color:var(--accent)}

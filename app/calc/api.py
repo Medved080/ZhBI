@@ -50,7 +50,7 @@ def recovery_admin(request: Request):
 
 
 
-WEB_FILES = ["workspace-ui.js", "workspace.css", "app.js", "recovery.js", "money-format.js", "api-client.js", "project-files.js", "history.js", "export-xlsx.js", "viewer-3d.js", "drawing-geometry.js", "solid-geometry.js", "edge-dimensions.js", "norms.js", "project-report.js", "source-sheets.js", "commercial-reference.js", "sketch-geometry.js", "styles.css", "theme.css", "sync-panel.js", "collisions.js", "home.js", "tooltips.js"]
+WEB_FILES = ["workspace-ui.js", "workspace.css", "app.js", "recovery.js", "money-format.js", "api-client.js", "project-files.js", "history.js", "export-xlsx.js", "viewer-3d.js", "drawing-geometry.js", "solid-geometry.js", "edge-dimensions.js", "norms.js", "project-report.js", "source-sheets.js", "commercial-reference.js", "sketch-geometry.js", "styles.css", "theme.css", "sync-panel.js", "collisions.js", "home.js", "tooltips.js", "buttons.js"]
 
 
 def file_metadata(row):
