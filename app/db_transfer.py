@@ -447,6 +447,30 @@ def stage_archive(data: bytes, user_name: Optional[str] = None) -> dict:
 # ==================== ЗАМЕНА ====================
 
 
+def _swap_uploads(новые: Path, куда_старые: Path) -> Optional[Path]:
+    """Заменить СОДЕРЖИМОЕ каталога вложений, а не сам каталог.
+
+    Раньше каталог `uploads/` целиком переносился командой `shutil.move`. В Docker он — точка монтирования тома
+    (`/opt/zhbi/uploads:/app/uploads`, docker-compose.yml), а точку монтирования переименовать нельзя («Device or resource
+    busy»): `shutil.move` тогда копирует дерево, стирает содержимое оригинала и падает на удалении самого каталога. Итог
+    (2026-10-05, «фасады не перенеслись при полном переносе базы с develop на prod»): база уже заменена, прежние вложения
+    лежат в `data/backups/uploads_<время>`, а новые не легли — строки `attachments` и `object_external_models` есть, файлов
+    нет. Поэтому здесь переносятся ДЕТИ каталога: так работает и на обычной папке, и на смонтированном томе.
+
+    Возвращает каталог, куда отъехали прежние вложения (None — прежнего каталога не было или он был пуст)."""
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    старые = list(UPLOADS_DIR.iterdir())
+    отъехали = None
+    if старые:
+        куда_старые.mkdir(parents=True, exist_ok=True)
+        for child in старые:
+            shutil.move(str(child), str(куда_старые / child.name))
+        отъехали = куда_старые
+    for child in list(новые.iterdir()):
+        shutil.move(str(child), str(UPLOADS_DIR / child.name))
+    return отъехали
+
+
 def apply_archive(token: str, confirm: str,
                   user_name: Optional[str] = None,
                   user_id: Optional[int] = None) -> dict:
@@ -512,10 +536,7 @@ def apply_archive(token: str, confirm: str,
         отъехали = None
         if uploads_new.exists():
             backups.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            if UPLOADS_DIR.exists():
-                отъехали = backups.BACKUP_DIR / f"uploads_{_stamp()}"
-                shutil.move(str(UPLOADS_DIR), str(отъехали))
-            shutil.move(str(uploads_new), str(UPLOADS_DIR))
+            отъехали = _swap_uploads(uploads_new, backups.BACKUP_DIR / f"uploads_{_stamp()}")
 
     # Архив из очереди убираем: он уже применён, а лежит он копией всей
     # базы. Повторная замена тем же файлом — это заново его загрузить.
