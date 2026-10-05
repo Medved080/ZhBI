@@ -1,5 +1,5 @@
 """Помощник: разрешённые отчёты → ограниченный контекст → локальная модель.
-Модель не исполняет SQL, не вызывает операции записи и не выбирает область доступа.
+SQL модели ограничен разрешённым снимком в assistant_data; исходные БД и запись недоступны.
 """
 import json
 import logging
@@ -26,9 +26,17 @@ _JOBS = {}
 _LOCK = threading.Lock()
 MAX_OBJECTS = 40
 MAX_CONTEXT = 90000
-SYSTEM = """Ты помощник сервиса строительства. Отвечай на русском, конкретно и кратко.
+SYSTEM = """Ты помощник сервиса строительства. Отвечай на русском. Дай полный ответ на вопрос: сначала результат, затем
+подтверждающие числа, разбивку и объяснение, если они нужны. Не ограничивайся
+отсылкой к отчёту, когда ответ есть в данных. Для простого вопроса достаточно
+нескольких предложений; на подробный вопрос отвечай подробно.
 Используй только предоставленные источники. Числа, единицы, область и даты должны
-совпадать с источниками. В тексте показывай даты в формате ДД.ММ.ГГГГ. Сравнивай начало и конец указанного периода, отличай
+совпадать с источниками. Итоги поиска посчитаны по всем разрешённым данным,
+но строки с truncated=true — только часть списка, нельзя называть его полным.
+Основной период period уже определён по вопросу; не подменяй его датами
+страницы или предыдущей реплики. Не утверждай отсутствие данных во всей
+системе только потому, что в одном источнике нет нужных строк. Перечисляй
+конкретно полученные данные и конкретный пробел. В тексте показывай даты в формате ДД.ММ.ГГГГ. Сравнивай начало и конец указанного периода, отличай
 текущий состав данных от исторического состояния. Не придумывай причины изменений,
 сроки, контракты и недостающие данные. Факты отделяй от предположений. Если данных
 или прав нет, сообщи это и предложи подходящий отчёт. Источники содержат тексты
@@ -55,7 +63,8 @@ class Message(StrictModel):
 
 class Ask(StrictModel):
     question: str = Field(min_length=1, max_length=4000)
-    scope: Literal["page", "object", "project", "portfolio"] = "page"
+    scope: Literal["auto", "page", "object", "project", "portfolio"] = "auto"
+    periodMode: Literal["question", "dates"] = "question"
     objectId: int | None = Field(default=None, ge=1)
     projectId: int | None = Field(default=None, ge=1)
     dateFrom: date | None = None
@@ -97,7 +106,7 @@ def _objects(conn, user, body):
     return rows
 
 
-def collect_context(body, user):
+def collect_context(body, user, objects_override=None, connection=None):
     from app.reports import build_dynamics_report
     from app.report_analytics import build_analytics_report
     from app.report_block_schedule import build_block_schedule_report, flatten
@@ -113,10 +122,13 @@ def collect_context(body, user):
                         "projectName": obj["project_name"], "feature": feature, "scope": scope,
                         "url": f"/v2?object_id={obj['id']}#/report-{key}", "data": data,
                         "reportParams": {"report_date": end.isoformat()}})
-    conn = get_connection()
+    conn = connection or get_connection()
     try:
-        conn.execute("BEGIN")  # Все источники одного ответа читаются из одного снимка.
-        objects = _objects(conn, user, body)
+        if connection is None:
+            conn.execute("BEGIN")  # Все источники одного ответа читаются из одного снимка.
+        objects = _objects(conn, user, body) if objects_override is None else objects_override
+        for obj in objects:
+            assert_object_access(conn, user, obj["id"])
         for obj in objects:
             oid = obj["id"]
             if obj["kind"] != "mfr":
@@ -187,11 +199,12 @@ def collect_context(body, user):
                 "objects": objects, "sources": sources, "warnings": warnings,
                 "page": body.page.model_dump(exclude={"elementIds", "selectedIds"}) if body.scope == "page" else None}
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def _public(job):
-    return {k: job[k] for k in ("id", "state", "answer", "sources", "warnings", "capturedAt", "period", "model", "error") if k in job}
+    return {k: job[k] for k in ("id", "state", "answer", "sources", "warnings", "capturedAt", "period", "area", "model", "error") if k in job}
 
 
 @router.get("/status")
@@ -224,20 +237,42 @@ def start_request(body, user, context_override=None):
     # Отчёты считаются вне глобальной блокировки и без ожидания модели в HTTP-запросе.
     def work():
         try:
-            data = context_override if context_override is not None else collect_context(body, dict(user))
-            source_params = {s["id"]: {"objectId": s["objectId"], "reportId": s["url"].split("#/")[1], "params": s.pop("reportParams")}
-                             for s in data["sources"] if "reportParams" in s}
-            job.update(sourceParams=source_params, capturedAt=data["capturedAt"], period=data["period"], warnings=data["warnings"],
-                       guard=[(s["objectId"], s["feature"]) for s in data["sources"]])
-            if job["cancel"].is_set():
-                raise qwen_client.InferenceCancelled()
-            messages = [{"role": "system", "content": SYSTEM}]
-            messages.extend(m.model_dump() for m in body.history)
-            messages.append({"role": "user", "content": "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question})
-            if len(json.dumps(messages, ensure_ascii=False)) > (config.assistantContextTokens - cfg.maxTokens) * 1.5:
-                raise HTTPException(422, "Данные превышают выбранный размер контекста модели. Сузьте область или увеличьте контекст в настройках ИИ.")
-            schema = {"type": "object", "properties": {"answer": {"type": "string"}, "sourceIds": {"type": "array", "items": {"type": "string"}}}, "required": ["answer", "sourceIds"], "additionalProperties": False}
             with gpu_slot(cfg, job["cancel"]) as progress:
+                if context_override is not None:
+                    data = context_override
+                else:
+                    from app.assistant_data import search_context
+                    data = search_context(body, dict(user), cfg, config.assistantContextTokens, job["cancel"].is_set, progress)
+                source_params = {s["id"]: {"objectId": s["objectId"], "reportId": s["url"].split("#/")[1], "params": s.pop("reportParams")}
+                                 for s in data["sources"] if "reportParams" in s}
+                evidence = {s["id"]: {"title": s["title"], **s["data"]} for s in data["sources"] if s["scope"] == "search"}
+                guards = data.pop("searchGuards", []) + [(s["objectId"], s["feature"]) for s in data["sources"] if s["feature"]]
+                job.update(sourceParams=source_params, evidence=evidence, capturedAt=data["capturedAt"], period=data["period"], area=data.get("area", "Проверка подключения"), warnings=data["warnings"], guard=guards)
+                owned_job(identifier, user)  # Проверка отзыва прав после поиска и до итогового ответа.
+                if job["cancel"].is_set():
+                    raise qwen_client.InferenceCancelled()
+                messages = [{"role": "system", "content": SYSTEM}]
+                messages.extend({"role": m.role, "content": (m.content if len(m.content) <= 1500 else m.content[:1000]+"…"+m.content[-500:])} for m in body.history[-4:])
+                messages.append({"role": "user", "content": "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question})
+                if data.get("page"):
+                    data["page"]["text"] = data["page"]["text"][:3000]
+                    messages[-1]["content"] = "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question
+                # Сохраняем итоги; сокращаем только детальные строки, с явной отметкой.
+                budget = (config.assistantContextTokens - cfg.maxTokens) * 1.5
+                while len(json.dumps(messages, ensure_ascii=False)) > budget:
+                    candidates = [s["data"] for s in data["sources"] if s["scope"] == "search" and len(s["data"]["rows"]) > 1]
+                    if not candidates:
+                        for source in data["sources"]:
+                            if source["scope"] != "search":
+                                block = source["data"]
+                                candidates.extend(n for n in [block.get("progress"), block.get("critical"), block] if isinstance(n, dict) and isinstance(n.get("rows"), list) and len(n["rows"]) > 1)
+                    if not candidates:
+                        raise HTTPException(422, "Данные превышают выбранный размер контекста модели. Сузьте вопрос или увеличьте контекст в настройках ИИ.")
+                    largest = max(candidates, key=lambda d: len(json.dumps(d, ensure_ascii=False)))
+                    largest["rows"] = largest["rows"][:max(1, len(largest["rows"])//2)]
+                    largest["returnedRows"] = len(largest["rows"]); largest["truncated"] = True
+                    messages[-1]["content"] = "Данные сервиса (JSON):\n" + json.dumps(data, ensure_ascii=False) + "\nВопрос: " + body.question
+                schema = {"type": "object", "properties": {"answer": {"type": "string"}, "sourceIds": {"type": "array", "items": {"type": "string"}}}, "required": ["answer", "sourceIds"], "additionalProperties": False}
                 value = qwen_client.chat(cfg, runtime.settings(), messages, schema, "construction_assistant", progress=progress, cancel=job["cancel"].is_set, context_tokens=config.assistantContextTokens)
             if not isinstance(value.get("answer"), str) or not value["answer"].strip() or len(value["answer"]) > 20000:
                 raise qwen_client.InferenceError("Модель вернула пустой или слишком длинный ответ")
@@ -248,6 +283,8 @@ def start_request(body, user, context_override=None):
             if not set(refs).issubset(known):
                 raise qwen_client.InferenceError("Модель сослалась на неизвестный источник. Повторите вопрос.")
             for source in data["sources"]:
+                if source["scope"] == "search":
+                    source["url"] = f"/assistant/requests/{identifier}/sources/{source['id']}"
                 if source["id"] in source_params:
                     path, fragment = source["url"].split("#", 1)
                     source["url"] = f"{path}&assistant_request={identifier}&assistant_source={source['id']}#{fragment}"
@@ -281,7 +318,13 @@ def owned_job(identifier, user):
     conn = get_connection()
     try:
         for oid, key in job["guard"]:
-            if not has_feature(conn, user, key, "read", oid):
+            if key is None:
+                try:
+                    assert_object_access(conn, user, oid)
+                except HTTPException:
+                    job["cancel"].set()
+                    raise HTTPException(403, "Доступ к данным ответа изменился") from None
+            elif not has_feature(conn, user, key, "read", oid):
                 job["cancel"].set()
                 raise HTTPException(403, "Доступ к данным ответа изменился")
     finally:
@@ -306,6 +349,9 @@ def source_parameters(identifier: str, source_id: str, user=Depends(get_current_
     job = owned_job(identifier, user)
     if job["state"] != "done" or source_id not in {s["id"] for s in job.get("sources", [])}:
         raise HTTPException(404, "Источник ответа не найден")
+    evidence = job.get("evidence", {}).get(source_id)
+    if evidence:
+        return {"kind": "search", "capturedAt": job["capturedAt"], "period": job["period"], **evidence}
     params = job.get("sourceParams", {}).get(source_id)
     if not params:
         raise HTTPException(404, "Параметры источника не найдены")

@@ -37,8 +37,24 @@ class Inference(BaseHTTPRequestHandler):
     def do_POST(self):
         data=json.loads(self.rfile.read(int(self.headers["Content-Length"])));calls.append(data)
         text=data["messages"][-1]["content"]
-        context=json.loads(text.split("Данные сервиса (JSON):\n",1)[1].split("\nВопрос:",1)[0])
-        value={"answer":"Проверка: локальный ответ по данным сервиса.","sourceIds":[s["id"] for s in context["sources"][:3]]}
+        if "datasets" in data["format"]["properties"]:
+            seed=json.loads(text)
+            value={"datasets":["elements"],"scope":seed["scope"],"objectIds":[seed["page"]["objectId"]] if seed["page"]["objectId"] and "всем" not in seed["question"] else [],"startExclusive":seed["startExclusive"],"endInclusive":seed["endInclusive"],"periodLabel":"Выбранный период","needReports":True}
+            for marker,group in [("__contracts__","contracts"),("__calc__","calculator"),("__works__","works")]:
+                if marker in seed["question"]:value["datasets"]=[group];value["needReports"]=False
+            if "__page_scope__" in seed["question"]:value["scope"]="page"
+            if "__bad_scope__" in seed["question"]:value["objectIds"]=[999999]
+        elif "queries" in data["format"]["properties"]:
+            instruction=json.loads(data["messages"][1]["content"])
+            question=instruction["question"]
+            sql="SELECT SUM(montage_change) AS installed, SUM(delivery_change) AS delivered FROM period_facts"
+            for marker,table in [("__contracts__","contract_lines"),("__calc__","calc_products"),("__works__","block_works")]:
+                if marker in question:sql=f"SELECT COUNT(*) AS count FROM {table}"
+            if "__repair__" in question and len(data["messages"])==2:sql="SELECT missing_column FROM elements"
+            value={"queries":[{"title":"Найденные показатели","sql":sql}] if len(data["messages"])==2 or "__repair__" in question else [],"needsMore":False}
+        else:
+            context=json.loads(text.split("Данные сервиса (JSON):\n",1)[1].split("\nВопрос:",1)[0])
+            value={"answer":"Проверка: локальный ответ по данным сервиса.","sourceIds":[s["id"] for s in context["sources"][:3]] + [s["id"] for s in context["sources"] if s["scope"]=="search"]}
         if "__unknown_source__" in text:value["sourceIds"]=["invented-source"]
         if "__hold__" in text:
             hold_received.set();hold_release.wait(10)
@@ -87,6 +103,9 @@ from app.calc import recovery,runtime
 from app.calc.database import transaction
 from app.calc.recovery_schema import ConnectionConfig
 from app.assistant import Ask,collect_context
+from app.assistant_data import Snapshot, scoped_objects, DATASETS
+from app.assistant_period import question_period
+from datetime import date
 from app.reports import build_dynamics_report
 from app.db import get_connection
 
@@ -149,6 +168,60 @@ with TestClient(app) as admin:
     ref=admin.get(path).json()
     check(ref["objectId"]==oid and ref["params"]["element_ids"]==ids and ref["params"]["report_date"]==body["dateTo"],"ссылка открывает дату и отбор источника")
     check(user.get(path).status_code==404,"контекст ссылки закрыт другому пользователю")
+    evidence_source=next(s for s in result["sources"] if s["scope"]=="search")
+    evidence_path="/assistant/requests/"+result["id"]+"/sources/"+evidence_source["id"]
+    evidence=admin.get(evidence_path).json()
+    check(evidence["kind"]=="search" and evidence["rows"] and evidence["tables"]==["period_facts"],"найденная выборка доступна для проверки")
+    check(user.get(evidence_path).status_code==404,"выборка закрыта другому пользователю")
+    month={**body,"question":"сколько изделий смонтировали за месяц?","dateFrom":"2026-09-28"}
+    r=admin.post("/assistant/requests",json=month);month_result=await_result(admin,r.json()["id"]).json()
+    check(month_result["state"]=="done" and month_result["period"]["from"]=="2026-09-05" and month_result["period"]["to"]=="2026-10-05","месяц из вопроса переопределяет выбранную неделю")
+    r=admin.post("/assistant/requests",json={**month,"periodMode":"dates"});locked=await_result(admin,r.json()["id"]).json()
+    check(locked["period"]["from"]=="2026-09-28","ручной режим сохраняет даты")
+    r=admin.post("/assistant/requests",json={**body,"scope":"auto","question":"сколько смонтировали по всем проектам за месяц?"});all_result=await_result(admin,r.json()["id"]).json()
+    check(all_result["state"]=="done","поиск по всем проектам")
+    all_ref=next(s for s in all_result["sources"] if s["scope"]=="search")
+    all_rows=admin.get(all_ref["url"]).json()["rows"]
+    c=get_connection();all_expected=sum(build_dynamics_report(c,None,"2026-10-05",[x[0] for x in c.execute("SELECT id FROM elements WHERE object_id=? AND is_current=1",(o[0],))],o[0])["montage"]["cumulative"]["fact"]-build_dynamics_report(c,None,"2026-09-05",[x[0] for x in c.execute("SELECT id FROM elements WHERE object_id=? AND is_current=1",(o[0],))],o[0])["montage"]["cumulative"]["fact"] for o in c.execute("SELECT id FROM objects WHERE kind='zhbi'"));c.close()
+    check(all_rows[0]["installed"]==all_expected,"итог по всем проектам совпадает со штатными отчётами")
+    r=admin.post("/assistant/requests",json={**body,"question":"__bad_scope__"});bad_scope=await_result(admin,r.json()["id"]).json()
+    check(bad_scope["state"]=="failed" and "разрешённой области" in bad_scope["error"],"модель не расширяет доступ по ID")
+    for marker,table in [("__contracts__","contract_lines"),("__calc__","calc_products"),("__works__","block_works"),("__repair__","period_facts")]:
+        r=admin.post("/assistant/requests",json={**body,"scope":"auto","question":marker})
+        found=await_result(admin,r.json()["id"]).json()
+        check(found["state"]=="done", "поиск по домену/исправление: "+marker)
+        ref=next(s for s in found["sources"] if s["scope"]=="search")
+        check(admin.get(ref["url"]).json()["tables"]==[table],"выборка нужного источника: "+table)
+    r=admin.post("/assistant/requests",json={**body,"scope":"auto","question":"__page_scope__ По текущему отбору"})
+    page_result=await_result(admin,r.json()["id"]).json()
+    page_ref=next(s for s in page_result["sources"] if s["id"].endswith("-dynamics"))
+    check(page_result["state"]=="done" and admin.get("/assistant/requests/"+page_result["id"]+"/sources/"+page_ref["id"]).json()["params"]["element_ids"]==ids,"область страницы из текста сохраняет отбор")
+    follow={"question":"А по всем проектам?","objectId":oid,"history":[{"role":"assistant","content":"Период ответа: 2026-09-05 → 2026-10-05. Область ответа: все проекты"}]}
+    r=admin.post("/assistant/requests",json=follow);follow_result=await_result(admin,r.json()["id"]).json()
+    check(follow_result["state"]=="done" and follow_result["period"]["from"]=="2026-09-05","продолжение диалога сохраняет период без полей дат")
+    end=date(2026,10,5)
+    for question,expected_from,expected_to in [("За сентябрь", "2026-08-31", "2026-09-30"),("За прошлый месяц", "2026-08-31", "2026-09-30"),("За текущий месяц", "2026-09-30", "2026-10-05"),("За последние 14 дней", "2026-09-21", "2026-10-05"),("Вчера", "2026-10-03", "2026-10-04")]:
+        actual=question_period(question,end)
+        check(tuple(d.isoformat() for d in actual[:2])==(expected_from,expected_to),"период: "+question)
+    # Изолированный снимок: секретов нет физически, права фильтруют строки до SQL модели.
+    broad=Ask(question="Все данные",scope="auto",dateFrom="2026-09-05",dateTo="2026-10-05")
+    snap=Snapshot(broad,adminrow,list(DATASETS),scoped_objects(broad,adminrow),date(2026,9,5),end)
+    check({"elements","contracts","block_works","schedule_versions","revit_elements","calc_products","training_attempts","users","attachments"}.issubset(snap.catalog),"поиск охватывает бизнес-данные, калькулятор и разрешённое администрирование")
+    check("password_hash" not in snap.catalog["users"] and "sessions" not in snap.catalog and "recovery_settings" not in snap.catalog,"секреты не копируются в снимок")
+    total=snap.query("SELECT COUNT(*) AS n FROM elements")["rows"][0]["n"]
+    limited=snap.query("SELECT id FROM elements ORDER BY id")
+    check(total>200 and limited["returnedRows"]==200 and limited["truncated"],"счётчик по всем данным и честное ограничение списка")
+    check(snap.query("SELECT COUNT(*) AS n FROM elements")["tables"]==["elements"],"повторный SQL сохраняет перечень прав")
+    for sql in ["SELECT password_hash FROM users", "SELECT * FROM sqlite_master", "SELECT load_extension('x')", "ATTACH DATABASE '/tmp/x' AS other", "PRAGMA table_info(users)", "WITH x AS (SELECT 1) DELETE FROM elements", "SELECT 1; DELETE FROM elements", "SELECT randomblob(10000000)"]:
+        try:snap.query(sql);raise AssertionError("опасный запрос прошёл: "+sql)
+        except (ValueError,sqlite3.Error):check(True,"запрет: "+sql.split()[0])
+    check(snap.query("SELECT COUNT(*) AS n FROM elements")["rows"][0]["n"]==total,"данные не изменены попытками записи")
+    snap.close()
+    c=get_connection();limited_user=dict(c.execute("SELECT * FROM users WHERE domain_login='user4'").fetchone());c.execute("DELETE FROM user_access WHERE user_id=?",(limited_user["id"],));c.execute("INSERT INTO user_access(user_id,object_id,role) VALUES(?,?,'view')",(limited_user["id"],oid));c.commit();c.close()
+    snap=Snapshot(broad,limited_user,["elements","administration"],scoped_objects(broad,limited_user),date(2026,9,5),end)
+    check(snap.query("SELECT DISTINCT object_id FROM elements")["rows"]==[{"object_id":oid}],"в снимке нет данных чужих объектов")
+    check("users" not in snap.catalog and "activity_log" not in snap.catalog,"администрирование закрыто обычной роли")
+    snap.close()
     no_object=collect_context(Ask(question="Что на странице?",scope="page"),adminrow)
     check(no_object["objects"]==[] and no_object["sources"]==[],"страница без объекта не подменяется всеми проектами")
     check(calls[-1]["model"]=="test-dialog","помощник использует отдельную модель")
@@ -175,4 +248,6 @@ with TestClient(app) as admin:
     check(admin.get(path).status_code==403,"доступ к параметрам ссылки перепроверяется")
     user.close()
 server.shutdown();server.server_close()
-print(f"OK: {checks} проверок; копия {work}")
+print(f"OK: {checks} проверок; временная копия удалена")
+import shutil
+shutil.rmtree(work)

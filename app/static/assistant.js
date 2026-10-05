@@ -1,6 +1,6 @@
 // Общий помощник V1/V2/Калькулятора. История живёт в памяти этой вкладки.
+const columnLabel = key => ({installed:"Смонтировано, шт.",delivered:"Поставлено, шт.",montage_change:"Монтаж за период, шт.",delivery_change:"Поставка за период, шт.",name:"Наименование",mark:"Марка",element_type:"Тип изделия",floor:"Этаж",quantity:"Количество",count:"Количество записей",current_status:"Статус",object_id:"Объект (ID)",id:"ID"}[key] || key);
 const displayDate = value => String(value || "").split("-").reverse().join(".");
-const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 export async function aiRequest(path, body, method = body === undefined ? "GET" : "POST") {
   const headers = {"Content-Type":"application/json"};
   try { const token = sessionStorage.getItem("zhbi_impersonate"); if (token) headers["X-Impersonate-Token"] = token; } catch {}
@@ -34,19 +34,28 @@ export function mountAssistant({getContext}) {
     <section id="ai-panel" class="ai-panel" aria-label="ИИ-помощник" hidden>
       <header class="ai-heading"><div><strong>Помощник по строительству</strong><small>Локальная модель · данные сервиса</small></div><button type="button" data-ai-close aria-label="Свернуть помощника">×</button></header>
       <div class="ai-context" id="ai-context"></div>
-      <form id="ai-form"><div class="ai-controls"><label>Область<select name="scope"><option value="page">Текущая страница</option><option value="object">Текущий объект</option><option value="project">Проект</option><option value="portfolio">Все доступные проекты</option></select></label><label id="ai-project-label" hidden>Проект<select name="project"></select></label></div>
-      <div class="ai-controls"><label>Сравнить с<input name="from" type="date" required></label><label>На дату<input name="to" type="date" required></label></div>
+      <form id="ai-form">
       <div class="ai-messages" id="ai-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
-      <div class="ai-suggestions"><button type="button" data-question="Что изменилось за выбранный период?">Что изменилось?</button><button type="button" data-question="Где есть отставание от плана и что это подтверждает?">Отставание</button><button type="button" data-question="Какие позиции не обеспечены контрактами?">Дефицит</button></div>
-      <label class="ai-question-label">Вопрос<textarea name="question" maxlength="4000" rows="3" required placeholder="Например: как изменились поставка и монтаж по проекту?"></textarea></label>
+      <div class="ai-suggestions"><button type="button" data-question="Что изменилось за последнюю неделю?">Что изменилось?</button><button type="button" data-question="Где есть отставание от плана и что это подтверждает?">Отставание</button><button type="button" data-question="Какие позиции не обеспечены контрактами?">Дефицит</button></div>
+      <label class="ai-question-label">Вопрос<textarea name="question" maxlength="4000" rows="3" required placeholder="Например: сколько смонтировали по всем проектам за сентябрь?"></textarea></label>
       <div class="ai-actions"><button type="submit" class="ai-send" title="Задать вопрос локальному помощнику">Отправить</button><button type="button" data-ai-stop hidden>Остановить</button><button type="button" data-ai-clear>Новый диалог</button></div>
       <p class="ai-status" id="ai-status" role="status"></p></form>
     </section>`;
   document.body.append(host);
   const $=s=>host.querySelector(s), form=$("#ai-form"), panel=$("#ai-panel"), launch=$(".ai-launch"), messages=$("#ai-messages"), status=$("#ai-status");
   let history=[], busy=false, requestId=null, generation=0, contextKey="", contextTimer;
-  const iso=d=>new Intl.DateTimeFormat("sv-SE",{timeZone:"Europe/Moscow",year:"numeric",month:"2-digit",day:"2-digit"}).format(d);
-  const now=new Date();form.elements.to.value=iso(now);form.elements.from.value=iso(new Date(now.getTime()-7*86400000));
+  const evidenceDialogs=new Set();
+  async function showEvidence(source) {
+    try {
+      const data=await aiRequest(source.url);
+      const box=document.createElement("dialog");box.dataset.assistant="evidence";box.className="ai-evidence";
+      const title=document.createElement("strong");title.textContent=data.title;box.append(title);
+      const note=document.createElement("p");note.textContent=`Получено строк: ${data.returnedRows}${data.truncated?" · показана часть списка":""}. Данные на ${new Date(data.capturedAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})} МСК.`;box.append(note);
+      if(data.rows?.length){const table=document.createElement("table"),head=document.createElement("tr"),cols=Object.keys(data.rows[0]);for(const col of cols){const cell=document.createElement("th");cell.textContent=columnLabel(col);head.append(cell);}table.append(head);for(const row of data.rows){const tr=document.createElement("tr");for(const col of cols){const td=document.createElement("td");td.textContent=String(row[col]??"—");tr.append(td);}table.append(tr);}box.append(table);}else{const empty=document.createElement("p");empty.textContent="Подходящих строк в этой выборке нет.";box.append(empty);}
+      const close=document.createElement("button");close.type="button";close.textContent="Закрыть";close.addEventListener("click",()=>box.close());box.append(close);box.addEventListener("close",()=>{evidenceDialogs.delete(box);box.remove();},{once:true});evidenceDialogs.add(box);
+      const parent=host.closest("dialog[open]")||document.body;parent.append(box);box.showModal();
+    } catch(error) {say(error.message);}
+  }
   const say=t=>{status.textContent=t;};
   function controls() { for(const e of form.elements) if(e.name!=="question")e.disabled=busy;$("[data-ai-stop]").disabled=false;$("[data-ai-stop]").hidden=!busy;$(".ai-send").hidden=busy; }
   function append(role,text,result) {
@@ -54,27 +63,21 @@ export function mountAssistant({getContext}) {
     const name=document.createElement("strong");name.textContent=role==="user"?"Вы":"Помощник";
     const body=document.createElement("div");body.className="ai-answer";body.textContent=text;item.append(name,body);
     if(result){
-      const stamp=document.createElement("small");stamp.textContent=`Данные: ${new Date(result.capturedAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})} МСК · ${displayDate(result.period.from)} → ${displayDate(result.period.to)} · ${result.model}`;item.append(stamp);
-      for(const source of result.sources||[]){const a=document.createElement("a");a.textContent=`${source.title} · ${source.objectName}${source.scope==="page-filter"?" · отбор страницы":""}`;a.href=source.url;item.append(a);}
+      const stamp=document.createElement("small");stamp.textContent=`Данные: ${new Date(result.capturedAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})} МСК${result.area?` · ${result.area}`:""} · ${displayDate(result.period.from)} → ${displayDate(result.period.to)}${result.period.label?` · ${result.period.label}`:""} · ${result.model}`;item.append(stamp);
+      for(const source of result.sources||[]){const a=document.createElement("a");a.textContent=`${source.title} · ${source.objectName}${source.scope==="page-filter"?" · отбор страницы":""}`;a.href=source.url;if(source.scope==="search")a.addEventListener("click",e=>{e.preventDefault();void showEvidence(source);});item.append(a);}
       for(const warning of result.warnings||[]){const p=document.createElement("small");p.className="ai-warning";p.textContent=warning;item.append(p);}
     }
     messages.append(item);messages.scrollTop=messages.scrollHeight;
   }
   async function stop() { const id=requestId;if(id){try{await aiRequest(`/assistant/requests/${id}/cancel`,{});}catch(e){say(e.message);}} }
-  function reset(note="") { history=[];messages.replaceChildren();say(note); }
+  function reset(note="") { for(const dialog of evidenceDialogs)dialog.close();history=[];messages.replaceChildren();say(note); }
   function syncContext() {
-    const ctx=getContext(), projects=ctx.projects||[], selected=form.elements.project.value;
-    form.elements.scope.querySelector('[value="object"]').disabled=!ctx.objectId;
-    form.elements.scope.querySelector('[value="project"]').disabled=!projects.length;
-    if((form.elements.scope.value==="object"&&!ctx.objectId)||(form.elements.scope.value==="project"&&!projects.length))form.elements.scope.value="page";
+    const ctx=getContext();
     const selection=JSON.stringify([ctx.page?.filters,ctx.page?.selectedIds,ctx.page?.elementIds?.length,ctx.page?.elementIds?.reduce((h,id)=>(h*31+id)|0,0)]);
-    const key=JSON.stringify([ctx.userId,ctx.objectId,ctx.page?.title,form.elements.scope.value,selected,form.elements.from.value,form.elements.to.value,selection]);
-    if(contextKey&&key!==contextKey){generation++;void stop();busy=false;requestId=null;controls();reset("Область или период изменились — начат новый диалог.");}
+    const key=JSON.stringify([ctx.userId,ctx.objectId,ctx.page?.title,selection]);
+    if(contextKey&&key!==contextKey){generation++;void stop();busy=false;requestId=null;controls();reset("Страница или отбор изменились — начат новый диалог.");}
     contextKey=key;
     $("#ai-context").textContent=ctx.label||ctx.page?.title||"Текущая страница";
-    $("#ai-project-label").hidden=form.elements.scope.value!=="project";
-    const signature=JSON.stringify(projects.map(p=>[p.id,p.name]));
-    if(form.elements.project.dataset.signature!==signature){form.elements.project.innerHTML=projects.map(p=>`<option value="${Number(p.id)}">${esc(p.name)}</option>`).join("");form.elements.project.dataset.signature=signature;form.elements.project.value=selected||String(ctx.projectId||projects[0]?.id||"");contextKey=JSON.stringify([ctx.userId,ctx.objectId,ctx.page?.title,form.elements.scope.value,form.elements.project.value,form.elements.from.value,form.elements.to.value,selection]);}
     return ctx;
   }
   function close() {clearInterval(contextTimer);contextTimer=null;panel.hidden=true;launch.hidden=false;launch.setAttribute("aria-expanded","false");launch.focus();}
@@ -88,16 +91,14 @@ export function mountAssistant({getContext}) {
   window.addEventListener("zhbi:assistant-open",open);
   $("[data-ai-close]").addEventListener("click",close);
   panel.addEventListener("keydown",e=>{if(e.key==="Escape"){e.preventDefault();close();}if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();form.requestSubmit();}});
-  for(const name of ["scope","project","from","to"])form.elements[name].addEventListener("change",syncContext);
   $("[data-ai-stop]").addEventListener("click",async()=>{await stop();say("Останавливаем запрос…");});
   $("[data-ai-clear]").addEventListener("click",()=>reset());
   host.querySelectorAll("[data-question]").forEach(b=>b.addEventListener("click",()=>{form.elements.question.value=b.dataset.question;form.elements.question.focus();}));
   form.addEventListener("submit",async e=>{
     e.preventDefault();if(busy)return;if(!form.reportValidity())return;
     const ctx=syncContext(),question=form.elements.question.value.trim();if(!question)return;
-    if(form.elements.from.value>form.elements.to.value){say("Начало периода позже окончания.");return;}
-    const body={question,scope:form.elements.scope.value,objectId:ctx.objectId||null,projectId:Number(form.elements.project.value)||ctx.projectId||null,dateFrom:form.elements.from.value,dateTo:form.elements.to.value,page:ctx.page||{},history:history.slice(-8)};
-    const my=++generation;busy=true;controls();append("user",question);say("Подготавливаем данные и ждём локальную модель…");
+    const body={question,objectId:ctx.objectId||null,projectId:ctx.projectId||null,page:ctx.page||{},history:history.slice(-8)};
+    const my=++generation;busy=true;controls();append("user",question);say("Ищем данные в системе и готовим ответ…");
     try{
       let result=await aiRequest("/assistant/requests",body);const id=result.id;
       if(my!==generation){void aiRequest(`/assistant/requests/${id}/cancel`,{}).catch(()=>{});return;}
@@ -108,11 +109,11 @@ export function mountAssistant({getContext}) {
       }
       if(my!==generation)return;
       if(result.state!=="done")throw new Error(result.error||"Запрос остановлен");
-      append("assistant",result.answer,result);history.push({role:"user",content:question.slice(0,6000)},{role:"assistant",content:result.answer.slice(0,6000)});history=history.slice(-8);if(form.elements.question.value.trim()===question)form.elements.question.value="";say("");
+      append("assistant",result.answer,result);history.push({role:"user",content:question.slice(0,6000)},{role:"assistant",content:(result.answer.slice(0,5400)+`\nПериод ответа: ${result.period.from} → ${result.period.to}. Область ответа: ${result.area||"доступные данные сервиса"}`).slice(0,6000)});history=history.slice(-8);if(form.elements.question.value.trim()===question)form.elements.question.value="";say("");
     }catch(error){if(my===generation)say(error.message);}
     finally{if(my===generation){busy=false;requestId=null;controls();}}
   });
-  return {destroy(){generation++;void stop();clearInterval(contextTimer);window.removeEventListener("zhbi:assistant-open",open);host.remove();}};
+  return {destroy(){for(const dialog of evidenceDialogs)dialog.close();generation++;void stop();clearInterval(contextTimer);window.removeEventListener("zhbi:assistant-open",open);host.remove();}};
 }
 // V2 монтирует помощника из оболочки после входа. Вложенные сцены используют кнопку родителя.
 if(!document.getElementById("v2-root") && window.parent===window){
@@ -124,7 +125,7 @@ if(!document.getElementById("v2-root") && window.parent===window){
       if(version!==bootGeneration||instance)return;
       instance=mountAssistant({getContext:()=>{
     const ctx=window.ZhbiAssistantContext?.()||window.CalcZhBIAssistantContext?.()||{};
-    const visible=[...document.querySelectorAll("dialog[open], .backdrop")].filter(e=>e.getClientRects().length).at(-1);
+    const visible=[...document.querySelectorAll("dialog[open], .backdrop")].filter(e=>e.getClientRects().length&&!e.matches("[data-assistant]")).at(-1);
     const body=visible||document.getElementById("precast-concept")||document.getElementById("app-root")||document.querySelector("main")||document.body;
     const snapshot=pageSnapshot(body);
     const page={title:ctx.title||document.title,...snapshot,...ctx.page};
