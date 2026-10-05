@@ -94,7 +94,7 @@ def looping(text):
     return text[-4000:].count(tail)>=4
 
 
-def _read_stream(request,config,progress,cancel=None):
+def _read_stream(request,config,progress,cancel=None,reasoning_guard=True):
     """Чтение ответа по мере поступления (SSE у OpenAI-совместимых API, NDJSON у Ollama). Тайм-аут сокета действует на КАЖДОЕ ожидание данных:
     это тайм-аут простоя (в том числе до первого токена), а не предел общей длительности ответа. Общий предел — 30 минут."""
     import http.client,threading
@@ -117,7 +117,7 @@ def _read_stream(request,config,progress,cancel=None):
                 return
             time.sleep(0.4)
     if cancel: threading.Thread(target=watcher,name='qwen-cancel-watch',daemon=True).start()
-    started=time.time();info={'state':'connecting','elapsed':0.0,'sinceLast':0.0,'deltas':0,'reasoningDeltas':0,'chars':0}
+    started=time.time();info={'state':'connecting','elapsed':0.0,'sinceLast':0.0,'deltas':0,'reasoningDeltas':0,'reasoningChars':0,'chars':0}
     last_emit=[0.0]
     def emit(force=False,**fields):
         now_=time.time();info.update(fields);info['elapsed']=now_-started
@@ -162,13 +162,13 @@ def _read_stream(request,config,progress,cancel=None):
             if text:
                 content.append(text);tail=(tail+text)[-4200:]
                 if info['deltas']%40==39 and looping(tail): raise InferenceTruncated('Модель зациклилась: выдаёт одно и то же. Ответ прерван',''.join(content),info['deltas'],info['reasoningDeltas'],True)
-            if thought and info['deltas']==0 and info['reasoningDeltas']+1>0.75*config.maxTokens: raise InferenceTruncated(f'Модель только рассуждает: {info["reasoningDeltas"]+1} фрагментов рассуждения и ни одного знака ответа за {time.time()-started:.0f} с — режим рассуждений съедает лимит. Запрос прерван','',0,info['reasoningDeltas']+1,False,True)
-            fields={'state':'generating','chars':info['chars']+len(text)}
+            if reasoning_guard and thought and info['deltas']==0 and info['reasoningDeltas']+1>0.75*config.maxTokens: raise InferenceTruncated(f'Модель только рассуждает: {info["reasoningDeltas"]+1} фрагментов рассуждения и ни одного знака ответа за {time.time()-started:.0f} с — режим рассуждений съедает лимит. Запрос прерван','',0,info['reasoningDeltas']+1,False,True)
+            fields={'state':'reasoning' if not reasoning_guard and thought and not text else 'generating','chars':info['chars']+len(text),'reasoningChars':info['reasoningChars']+len(thought)}
             if text: fields['deltas']=info['deltas']+1
             if thought: fields['reasoningDeltas']=info['reasoningDeltas']+1
             if usage and usage.get('completion_tokens'): fields['tokens']=usage['completion_tokens']
-            emit(info['state']!='generating',**fields)
-            if info['chars']>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
+            emit(info['state']!=fields['state'],**fields)
+            if info['chars']+info['reasoningChars']>8*1048576: raise InferenceError('Ответ Qwen превышает допустимый размер')
     except (OSError,ValueError,AttributeError,http.client.HTTPException) as error:
         if state['cancelled']: raise InferenceCancelled('Запрос прерван: задание остановлено (пауза или отмена)') from None
         raise
@@ -183,7 +183,7 @@ def _read_stream(request,config,progress,cancel=None):
     return {'done_reason':finish,'message':{'content':''.join(content)},'usage':usage,'stats':stats}
 
 
-def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None, cancel=None, context_tokens=None):
+def chat(config, settings, messages, schema, name='recovery', transport=None, progress=None, cancel=None, context_tokens=None, disable_thinking=False, reasoning_guard=True):
     validate_endpoint(config,settings,resolve=transport is None)
     if config.provider=='openai':
         url=api_base(config)+'/chat/completions'
@@ -195,11 +195,13 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
         body={'model':config.model,'messages':converted,'temperature':0,'max_tokens':config.maxTokens,
               'response_format':{'type':'json_schema','json_schema':{'name':name,'schema':schema}}}
         if transport is None: body.update(stream=True,stream_options={'include_usage':True})
-        if 'qwen' in config.model.lower(): body['chat_template_kwargs']={'enable_thinking':False}   # у части серверов (vLLM и др.) отключает рассуждение гибридных моделей Qwen3
+        if disable_thinking: body['reasoning_effort']='none'
+        if disable_thinking or 'qwen' in config.model.lower(): body['chat_template_kwargs']={'enable_thinking':False}   # у части серверов (vLLM и др.) отключает рассуждение гибридных моделей Qwen3
     else:
         url=api_base(config)+'/api/chat'
         body={'model':config.model,'messages':messages,'stream':transport is None,'format':schema,
               'options':{'temperature':0,'num_predict':config.maxTokens}}
+    if disable_thinking and config.provider=='ollama': body['think']=False
     if context_tokens is not None and config.provider=='ollama': body['options']['num_ctx']=context_tokens
     headers={'Content-Type':'application/json'}
     if settings.qwen_api_key: headers['Authorization']='Bearer '+settings.qwen_api_key
@@ -207,16 +209,25 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
         response=transport(url,body,headers,config.timeoutSeconds)
     else:
         try:
-            try:
-                response=_read_stream(Request(url,data=dumps(body).encode(),headers=headers,method='POST'),config,progress,cancel)
-            except HTTPError as first:
-                if first.code!=400 or 'chat_template_kwargs' not in body: raise
-                body.pop('chat_template_kwargs')   # сервер не принял параметр шаблона — повторяем без него
-                response=_read_stream(Request(url,data=dumps(body).encode(),headers=headers,method='POST'),config,progress,cancel)
-        except HTTPError as error:
-            try: snippet=error.read(600).decode('utf-8','replace').strip()
-            except OSError: snippet=''
-            raise InferenceError(diagnose(config,settings,url,error.code,snippet)) from None
+            for compatibility_attempt in range(3):
+                try:
+                    response=_read_stream(Request(url,data=dumps(body).encode(),headers=headers,method='POST'),config,progress,cancel,reasoning_guard)
+                    break
+                except HTTPError as error:
+                    try: snippet=error.read(600).decode('utf-8','replace').strip()
+                    except OSError: snippet=''
+                    # Сохраняем совместимость существующего клиента чтения чертежей.
+                    if not disable_thinking and error.code==400 and 'chat_template_kwargs' in body and compatibility_attempt<2:
+                        body.pop('chat_template_kwargs')
+                        continue
+                    detail=snippet.lower()
+                    unsupported=any(word in detail for word in ('unknown','unsupported','not support','invalid','unexpected','extra inputs','not allowed'))
+                    keys=[key for key in ('reasoning_effort','chat_template_kwargs','think') if key in body and key in detail]
+                    # Ошибка контекста/схемы не отменяет управление рассуждением.
+                    if error.code in {400,422} and unsupported and keys and compatibility_attempt<2:
+                        for key in keys: body.pop(key)
+                        continue
+                    raise InferenceError(diagnose(config,settings,url,error.code,snippet)) from None
         except InferenceError: raise
         except (URLError,TimeoutError,OSError) as error:
             reason=str(getattr(error,'reason',error))[:160]
@@ -232,12 +243,12 @@ def chat(config, settings, messages, schema, name='recovery', transport=None, pr
             choice=response['choices'][0]
             if choice.get('finish_reason')=='length':
                 st=response.get('stats') or {}
-                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов (получено ~{st.get("deltas","?")} токенов ответа'+(f', рассуждение {st["reasoningDeltas"]}' if st.get('reasoningDeltas') else '')+')',choice.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0),False,bool(st.get('reasoningDeltas')) and not st.get('deltas'))
+                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов (получено {st.get("deltas","?")} фрагментов ответа'+(f', рассуждение {st["reasoningDeltas"]}' if st.get('reasoningDeltas') else '')+')',choice.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0),False,bool(st.get('reasoningDeltas')) and not st.get('deltas'))
             content=choice['message']['content']
         else:
             if response.get('done_reason')=='length':
                 st=response.get('stats') or {}
-                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов',response.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0))
+                raise InferenceTruncated(f'Ответ Qwen обрезан лимитом {config.maxTokens} токенов',response.get('message',{}).get('content') or '',st.get('deltas',0),st.get('reasoningDeltas',0),False,bool(st.get('reasoningDeltas')) and not st.get('deltas'))
             content=response['message']['content']
         content=re.sub(r'^```(?:json)?\s*|\s*```$','',content.strip())
         value=json.loads(content,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('Non-finite number')))

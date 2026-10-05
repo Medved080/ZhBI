@@ -66,8 +66,8 @@ export function mountAssistant({getContext}) {
       const li=document.createElement("li");li.textContent=step.label;li.className=step===p?"ai-step-current":`ai-step-${step.state||"done"}`;steps.append(li);
     }
     steps.scrollTop=steps.scrollHeight;
-    const state={connecting:"Соединяемся с сервером модели",waiting_first_token:"Ждём первые данные от модели",generating:"Получаем данные от модели"}[p.modelState]||"";
-    say([`${Math.floor(result.elapsedSeconds||0)} с`,state,p.chars?`получено ${p.chars} знаков`:""].filter(Boolean).join(" · "));
+    const state={connecting:"Соединяемся с сервером модели",waiting_first_token:"Ждём первые данные от модели",reasoning:"Модель рассуждает; результат ещё не получен",generating:"Получаем данные от модели"}[p.modelState]||"";
+    say([`${Math.floor(result.elapsedSeconds||0)} с`,state,p.chars?`получено ${p.chars} знаков`:p.reasoningChars?`рассуждение: ${p.reasoningChars} знаков`:""].filter(Boolean).join(" · "));
   }
   function controls() { for(const e of form.elements) if(e.name!=="question")e.disabled=busy;$("[data-ai-stop]").disabled=false;$("[data-ai-stop]").hidden=!busy;$(".ai-send").hidden=busy; }
   function append(role,text,result) {

@@ -28,6 +28,18 @@ def question_period(question, end):
         return last.replace(day=1)-timedelta(days=1), last, "Предыдущий календарный месяц"
     if re.search(r"(?:этот|текущий) год|начала года", text):
         return date(end.year-1, 12, 31), end, "С начала года"
+    # «С 20 сентября» включает сам день; верхнюю дату без явного конца сохраняем.
+    if not re.search(r"\b(?:по|до)\s+\d", text):
+        for month, pattern in enumerate(MONTHS, 1):
+            match = re.search(r"\bс\s+(\d{1,2})\s+("+pattern+r"\w*)\s*(20\d{2})?", text)
+            if match:
+                day = int(match[1])
+                year = int(match[3]) if match[3] else end.year - int((month, day) > (end.month, end.day))
+                try:
+                    first = date(year, month, day)
+                except ValueError:
+                    return None
+                return first-timedelta(days=1), end, f"С {first.strftime('%d.%m.%Y')}"
     for month, pattern in enumerate(MONTHS, 1):
         match = re.search(r"за\s+(?:весь\s+)?("+pattern+r"\w*)\s*(20\d{2})?", text)
         if match:

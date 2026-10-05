@@ -28,7 +28,7 @@ _LOCK = threading.Lock()
 MAX_OBJECTS = 40
 MAX_CONTEXT = 90000
 SYSTEM = """Ты помощник сервиса строительства. Отвечай на русском. Дай полный ответ на вопрос: сначала результат, затем
-подтверждающие числа, разбивку и объяснение, если они нужны. Не ограничивайся
+подтверждающие числа, разбивку и объяснение, если они нужны. Технические ID источников (search-1 и т.п.) не включай в текст; используй понятные названия, а ссылки перечисли в sourceIds. Не ограничивайся
 отсылкой к отчёту, когда ответ есть в данных. Для простого вопроса достаточно
 нескольких предложений; на подробный вопрос отвечай подробно.
 Используй только предоставленные источники. Числа, единицы, область и даты должны
@@ -243,7 +243,7 @@ def start_request(body, user, context_override=None):
         previous = job["progress"]
         steps = previous["steps"]
         if previous["phase"] != phase:
-            steps = (steps + [{"phase": previous["phase"], "label": previous["label"], "state": "failed" if phase in {"failed", "cancelled"} else "retry" if phase == "compact" else "done"}])[-10:]
+            steps = (steps + [{"phase": previous["phase"], "label": previous["label"], "state": "failed" if phase in {"failed", "cancelled"} else "retry" if phase in {"compact", "reasoning_retry"} else "done"}])[-10:]
         job["progress"] = {"phase": phase, "label": label, "steps": steps, **fields}
     def work():
         try:
@@ -251,7 +251,7 @@ def start_request(body, user, context_override=None):
             with gpu_slot(cfg, job["cancel"]) as lease_progress:
                 def progress(info):
                     lease_progress(info)
-                    job["progress"] = {**job["progress"], "modelState": info.get("state"), "chars": info.get("chars", 0), "modelElapsedSeconds": round(info.get("elapsed", 0), 1)}
+                    job["progress"] = {**job["progress"], "modelState": info.get("state"), "chars": info.get("chars", 0), "reasoningChars": info.get("reasoningChars", 0), "modelElapsedSeconds": round(info.get("elapsed", 0), 1)}
                 dialogue = Dialogue(cfg, config.assistantContextTokens, job["cancel"].is_set, progress, stage)
                 if context_override is not None:
                     data = context_override

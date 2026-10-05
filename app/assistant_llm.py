@@ -17,20 +17,34 @@ class Dialogue:
         self.factor = 1.4
 
     def call(self, messages, schema, name, shrink, max_tokens=None):
+        thinking_retry = False
         for attempt in range(3):
-            output = min(max_tokens or self.cfg.maxTokens, max(512, self.context // 3))
+            base_output = min(max_tokens or self.cfg.maxTokens, max(512, self.context // 3))
+            output = min(self.cfg.maxTokens, 4096, self.context // 2) if thinking_retry else base_output
             budget = self.context - output - 512 - len(encoded(schema)) / self.factor
             while sum(len(m["content"]) for m in messages) / self.factor > budget:
                 if self.cancel():
                     raise qwen_client.InferenceCancelled()
                 if not shrink():
+                    # Сохраняем обязательные данные поиска; резерв повторного ответа
+                    # может быть меньше 4096, но должен превышать исходный.
+                    available = int(self.context - 512 - len(encoded(schema))/self.factor - sum(len(m["content"]) for m in messages)/self.factor)
+                    if thinking_retry and available > base_output:
+                        output = min(output, available)
+                        break
                     raise qwen_client.InferenceError("Вопрос и необходимые данные не помещаются в контекст модели. Разделите вопрос на несколько частей.")
             try:
                 return qwen_client.chat(self.cfg.model_copy(update={"maxTokens": output}), runtime.settings(), messages, schema, name,
-                                        progress=self.progress, cancel=self.cancel, context_tokens=self.context)
+                                        progress=self.progress, cancel=self.cancel, context_tokens=self.context, disable_thinking=True, reasoning_guard=False)
             except qwen_client.InferenceError as error:
                 if isinstance(error, qwen_client.InferenceCancelled):
                     raise
+                if isinstance(error, qwen_client.InferenceTruncated) and error.thinking:
+                    if thinking_retry or attempt == 2 or min(self.cfg.maxTokens, 4096, self.context // 2) <= output:
+                        raise qwen_client.InferenceError("Модель потратила лимит на рассуждения и не вернула результат при запросе отключить рассуждения. Сервер не отключил Thinking по запросу сервиса — отключите этот режим в настройках загруженной модели на сервере ИИ.") from None
+                    thinking_retry = True
+                    self.stage("reasoning_retry", "Повторяем запрос с большим резервом для результата")
+                    continue
                 text = str(error)
                 limit = re.search(r'(?:n_ctx[\s\"\'\\:]+|available context size\s*\(|context (?:size|length)\s*[:=]\s*)(\d+)', text)
                 tokens = re.search(r'(?:n_prompt_tokens[\s\"\'\\:]+|request\s*\()(\d+)', text)

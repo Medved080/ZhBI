@@ -30,6 +30,8 @@ conn.execute("UPDATE users SET password_hash=?,password_salt=?,must_change_passw
 calls = []
 hold_received = threading.Event()
 hold_release = threading.Event()
+reason_received = threading.Event()
+reason_release = threading.Event()
 class Inference(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self):
@@ -38,6 +40,28 @@ class Inference(BaseHTTPRequestHandler):
     def do_POST(self):
         data=json.loads(self.rfile.read(int(self.headers["Content-Length"])));calls.append(data)
         text=data["messages"][-1]["content"]
+        if "reasoning-regression" in text:
+            openai="format" not in data
+            if "-legacy400" in text and "chat_template_kwargs" in data:
+                self.send_response(400);self.send_header("Content-Type","application/json");self.end_headers();self.wfile.write(b'{"error":"Compatibility request rejected"}');return
+            if "-unsupported" in text:
+                key=next((k for k in ("reasoning_effort","chat_template_kwargs","think") if k in data),None)
+                if key:
+                    self.send_response(400);self.send_header("Content-Type","application/json");self.end_headers();self.wfile.write(json.dumps({"error":"Unsupported parameter "+key}).encode());return
+            limit=data.get("max_tokens") or data.get("options",{}).get("num_predict")
+            exhausted="-retry" in text and limit<3000 or "-always" in text
+            self.send_response(200);self.send_header("Content-Type","text/event-stream" if openai else "application/x-ndjson");self.end_headers()
+            try:
+                for _ in range(0 if "-legacy400" in text else 2000):
+                    obj={"choices":[{"delta":{"reasoning_content":"x"}}]} if openai else {"message":{"thinking":"x"},"done":False}
+                    self.wfile.write((("data: " if openai else "")+json.dumps(obj)+"\n\n").encode())
+                if openai:
+                    obj={"choices":[{"delta":{"content":"" if exhausted else '{"answer":"OK","sourceIds":[]}'},"finish_reason":"length" if exhausted else "stop"}]}
+                else:
+                    obj={"message":{"content":"" if exhausted else '{"answer":"OK","sourceIds":[]}'},"done":True,"done_reason":"length" if exhausted else "stop"}
+                self.wfile.write((("data: " if openai else "")+json.dumps(obj)+"\n\n").encode())
+            except (BrokenPipeError,ConnectionResetError):pass
+            return
         if "overflow-regression" in text:
             openai="format" not in data
             failure=len(text)>2500
@@ -56,7 +80,7 @@ class Inference(BaseHTTPRequestHandler):
             value={"datasets":["elements"],"scope":seed["scope"],"objectIds":[seed["page"]["objectId"]] if seed["page"]["objectId"] and "всем" not in seed["question"] else [],"startExclusive":seed["startExclusive"],"endInclusive":seed["endInclusive"],"periodLabel":"Выбранный период","needReports":True}
             for marker,group in [("__contracts__","contracts"),("__calc__","calculator"),("__works__","works")]:
                 if marker in seed["question"]:value["datasets"]=[group];value["needReports"]=False
-            if "Сколько ригелей на первом этаже" in seed["question"] or "__large_rows__" in seed["question"]:value["needReports"]=False
+            if "Сколько ригелей на первом этаже" in seed["question"] or "__large_rows__" in seed["question"] or "из них смонтировали" in seed["question"]:value["needReports"]=False
             if "__page_scope__" in seed["question"]:value["scope"]="page"
             if "__bad_scope__" in seed["question"]:value["objectIds"]=[999999]
         elif "queries" in data["format"]["properties"]:
@@ -68,6 +92,9 @@ class Inference(BaseHTTPRequestHandler):
             if "__repair__" in question and len(data["messages"])==2:sql="SELECT missing_column FROM elements"
             if "Сколько ригелей на первом этаже" in question:
                 sql="SELECT COUNT(*) AS count FROM elements WHERE is_current=1 AND element_type='Ригель' AND floor=1"
+            if "из них смонтировали" in question:
+                assert any("ригелей на первом этаже" in m["content"] for m in instruction["history"])
+                sql=f"SELECT COUNT(*) AS installed FROM elements e WHERE e.is_current=1 AND e.element_type='Ригель' AND e.floor=1 AND e.current_status IN ('installed','accepted') AND (SELECT date(MIN(h.changed_at)) FROM status_history h WHERE h.element_id=e.id AND h.status IN ('installed','accepted')) > '{instruction['period']['from']}' AND (SELECT date(MIN(h.changed_at)) FROM status_history h WHERE h.element_id=e.id AND h.status IN ('installed','accepted')) <= '{instruction['period']['to']}'"
             if "__large_rows__" in question:sql="SELECT id, comment FROM elements ORDER BY id"
             value={"queries":[{"title":"Найденные показатели","sql":sql}] if len(data["messages"])==2 or "__repair__" in question else [],"needsMore":False}
         else:
@@ -77,7 +104,13 @@ class Inference(BaseHTTPRequestHandler):
         if "__hold__" in text:
             hold_received.set();hold_release.wait(10)
         self.send_response(200);self.send_header("Content-Type","application/x-ndjson");self.end_headers()
-        self.wfile.write((json.dumps({"message":{"content":json.dumps(value,ensure_ascii=False)},"done":True})+"\n").encode())
+        if "queries" in data["format"]["properties"] and "__planner_thinking_retry__" in text and data["options"]["num_predict"]<=2048:
+            for _ in range(2000):self.wfile.write((json.dumps({"message":{"thinking":"x"},"done":False})+"\n").encode())
+            self.wfile.write((json.dumps({"message":{"content":""},"done":True,"done_reason":"length"})+"\n").encode());return
+        if "__reasoning_hold__" in text:
+            self.wfile.write((json.dumps({"message":{"thinking":"x"},"done":False})+"\n").encode());self.wfile.flush();reason_received.set();reason_release.wait(10)
+        try:self.wfile.write((json.dumps({"message":{"content":json.dumps(value,ensure_ascii=False)},"done":True})+"\n").encode())
+        except (BrokenPipeError,ConnectionResetError):pass
 server=ThreadingHTTPServer(("127.0.0.1",0),Inference)
 threading.Thread(target=server.serve_forever,daemon=True).start()
 import http.cookiejar
@@ -157,6 +190,39 @@ for provider,marker in [("ollama","overflow-regression"),("openai","overflow-reg
         return True
     answer=dialogue.call(retry_messages,{"type":"object","properties":{"answer":{"type":"string"},"sourceIds":{"type":"array","items":{"type":"string"}}},"required":["answer","sourceIds"]},"test_retry",shrink_retry)
     check(answer["answer"]=="OK" and retry_steps[0][0]=="compact","ошибка 15581/8192 приводит к успешному повтору: "+marker)
+from app.calc import qwen_client
+reasoning_schema={"type":"object","properties":{"answer":{"type":"string"},"sourceIds":{"type":"array","items":{"type":"string"}}},"required":["answer","sourceIds"]}
+for provider in ("ollama","openai"):
+    cfg=ConnectionConfig(provider=provider,model="google/gemma-4-31b-qat",baseUrl=f"http://127.0.0.1:{server.server_port}",maxTokens=4096)
+    for marker in ("reasoning-regression", "reasoning-regression-retry", "reasoning-regression-unsupported"):
+        info=[];steps=[];start_calls=len(calls)
+        dialogue=Dialogue(cfg,8192,lambda:False,info.append,lambda *args,**kwargs:steps.append(args))
+        value=dialogue.call([{"role":"user","content":marker}],reasoning_schema,"test_reasoning",lambda:False,max_tokens=2048)
+        check(value["answer"]=="OK","Gemma: более 1537 фрагментов и полноценный JSON: "+provider+marker)
+        check(any(p["state"]=="reasoning" and p["chars"]==0 for p in info),"поток рассуждения имеет отдельный статус")
+        first=calls[start_calls]
+        check(first.get("think") is False if provider=="ollama" else first["reasoning_effort"]=="none" and first["chat_template_kwargs"]["enable_thinking"] is False,"параметры отключения для диалоговой Gemma")
+        if "-retry" in marker:
+            last=calls[-1];output=last.get("max_tokens") or last["options"]["num_predict"]
+            check(len(calls)-start_calls==2 and output==4096 and steps[0][0]=="reasoning_retry","один повтор с резервом результата в пределах 8K")
+    steps=[];start_calls=len(calls)
+    dialogue=Dialogue(cfg,8192,lambda:False,lambda info:None,lambda *args,**kwargs:steps.append(args))
+    try:
+        dialogue.call([{"role":"user","content":"reasoning-regression-always"}],reasoning_schema,"test_reasoning",lambda:False,max_tokens=2048)
+        raise AssertionError("бесконечное рассуждение прошло")
+    except qwen_client.InferenceError as error:
+        check(len(calls)-start_calls==2 and "Thinking" in str(error),"повтор ограничен и объясняет настройку сервера")
+    # Защитный режим существующего чтения чертежей остаётся прежним.
+    start_calls=len(calls)
+    try:
+        qwen_client.chat(cfg.model_copy(update={"maxTokens":2048}),runtime.settings(),[{"role":"user","content":"reasoning-regression"}],reasoning_schema)
+        raise AssertionError("старый защитный режим чтения потерян")
+    except qwen_client.InferenceTruncated as error:
+        check(error.thinking and calls[start_calls].get("think") is None and "reasoning_effort" not in calls[start_calls],"старый клиент чертежей сохраняет защиту и параметры")
+legacy_start=len(calls)
+legacy_cfg=ConnectionConfig(provider="openai",model="Qwen-test",baseUrl=f"http://127.0.0.1:{server.server_port}",maxTokens=2048)
+value=qwen_client.chat(legacy_cfg,runtime.settings(),[{"role":"user","content":"reasoning-regression-legacy400"}],reasoning_schema)
+check(value["answer"]=="OK" and len(calls)-legacy_start==2 and "chat_template_kwargs" not in calls[-1],"старый HTTP400 fallback чтения чертежей сохранён")
 calls.clear()
 
 with TestClient(app) as admin:
@@ -223,6 +289,15 @@ with TestClient(app) as admin:
     beam_source=next(s for s in beams["sources"] if s["scope"]=="search")
     c=get_connection();beam_count=c.execute("SELECT COUNT(*) FROM elements WHERE object_id=? AND is_current=1 AND element_type='Ригель' AND floor=1",(oid,)).fetchone()[0];c.close()
     check(admin.get(beam_source["url"]).json()["rows"]==[{"count":beam_count}],"ригели первого этажа: точный счётчик, проверяемый источник")
+    followup_body={**body,"scope":"auto","question":"Сколько из них смонтировали с 20 сентября?","history":[{"role":"user","content":"Сколько ригелей на первом этаже"},{"role":"assistant","content":f"На первом этаже {beam_count} ригелей. Период ответа: 2026-09-28 → 2026-10-05."}]}
+    r=admin.post("/assistant/requests",json=followup_body)
+    followup=await_result(admin,r.json()["id"]).json();check(followup["state"]=="done" and followup["period"]["from"]=="2026-09-19","продолжение диалога: 20 сентября включается")
+    found_source=next(s for s in followup["sources"] if s["scope"]=="search")
+    c=get_connection();beam_ids=[r[0] for r in c.execute("SELECT id FROM elements WHERE object_id=? AND is_current=1 AND element_type='Ригель' AND floor=1",(oid,))];expected_beams=build_dynamics_report(c,None,"2026-10-05",beam_ids,oid)["montage"]["cumulative"]["fact"]-build_dynamics_report(c,None,"2026-09-19",beam_ids,oid)["montage"]["cumulative"]["fact"];c.close()
+    check(admin.get(found_source["url"]).json()["rows"]==[{"installed":expected_beams}],"монтаж именно обсуждавшихся ригелей совпадает со штатным отчётом")
+    r=admin.post("/assistant/requests",json={**followup_body,"question":followup_body["question"]+" __planner_thinking_retry__"})
+    planning_retry=await_result(admin,r.json()["id"]).json()
+    check(planning_retry["state"]=="done" and any(x["phase"]=="reasoning_retry" for x in planning_retry["progress"]["steps"]),"полный диалог: повтор подготовки SELECT с сохранением истории и схемы в 8K")
     large_body={**body,"scope":"auto","question":"__large_rows__ по всем проектам","page":{"title":"Страница","text":"Контекст страницы. "*500},"history":[{"role":"user","content":"Описание. "*500},{"role":"assistant","content":"Предыдущий ответ. "*300}]}
     r=admin.post("/assistant/requests",json=large_body)
     large=await_result(admin,r.json()["id"]).json();check(large["state"]=="done","большой экран, история и список помещаются в контекст")
@@ -289,6 +364,15 @@ with TestClient(app) as admin:
     check(admin.post("/assistant/requests/"+r.json()["id"]+"/cancel",json={}).status_code==200,"отмена принята")
     hold_release.set()
     check(await_result(admin,r.json()["id"]).json()["state"]=="cancelled","отменённый ответ не выдаётся")
+    r=admin.post("/assistant/requests",json={**body,"question":"__reasoning_hold__"})
+    check(reason_received.wait(5),"поток рассуждения дошёл до модели")
+    for _ in range(100):
+        live=admin.get("/assistant/requests/"+r.json()["id"]).json()
+        if live["progress"].get("modelState")=="reasoning":break
+        time.sleep(.02)
+    check(live["state"]=="running" and live["progress"]["modelState"]=="reasoning" and live["progress"]["reasoningChars"]==1 and live["progress"]["chars"]==0,"API показывает ожидание результата при рассуждении, без его текста")
+    admin.post("/assistant/requests/"+r.json()["id"]+"/cancel",json={});reason_release.set()
+    check(await_result(admin,r.json()["id"]).json()["state"]=="cancelled","рассуждающая модель прерывается пользователем")
     # Смена прав между вопросом и чтением ответа не должна раскрывать старый контекст.
     c=get_connection();c.execute("UPDATE users SET role='view' WHERE domain_login='admin'");c.execute("DELETE FROM user_access WHERE user_id=?",(adminrow["id"],));c.commit();c.close()
     check(admin.get("/assistant/requests/"+probe.json()["id"]).status_code==200,"тест без данных доступен владельцу")
