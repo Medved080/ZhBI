@@ -74,7 +74,7 @@ def readiness(conn):
             "concreteClass": "чтение листа" if "класс" in applied else "каталог поставщика",
             "rebar": "оценка по нормативу" if "steelEstimate" in ids else "чтение листа" if "арматура" in applied else "каталог поставщика",
         }
-        if doc and _unset(doc.get("concreteClass")):
+        if doc and doc.get("family") and doc.get("alias") and _unset(doc.get("concreteClass")):      # изделия вне каталога (две колонны из Excel) в таблицу типов не входят
             entry = types_without_class[type_key(doc)]; entry["count"] += 1; entry["family"] = family
         products.append({"family": family, "checks": checks, "origin": origin})
         classes[(concrete_class or "Не указан") if not _unset(concrete_class) else "Не указан"] += 1

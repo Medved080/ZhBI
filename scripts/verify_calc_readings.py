@@ -285,5 +285,19 @@ with transaction(settings.database_path) as conn:
     sources = readiness(conn)["origin"]["rebar"]
 check(sources.get("оценка по нормативу", 0) > 0, "на главной оценка по нормативу видна в источниках арматуры (%s)" % sources)
 
+# 12. файл чтений заменили на лету (положили вручную, не пакетом): каталог в памяти обновляется без перезапуска
+live = Path(tempfile.mkdtemp(prefix="calc-refresh-"))
+for item in Path(assets).iterdir():
+    if item.name != SOURCE_FILE:
+        (live / item.name).symlink_to(item)
+target = next(k for k, v in base.items() if v.get("family") == "Колонны" and not v.get("projectVolume"))
+def put(volume):
+    (live / SOURCE_FILE).write_text(json.dumps({target: {"sheet": {"doc": 1, "page": 1}, "method": "vector_ocr", "confirmed": False, "volume": volume, "rebar": {}}}, ensure_ascii=False))
+    os.utime(live / SOURCE_FILE, (volume * 1000, volume * 1000))      # время изменения гарантированно разное
+dm.ASSETS = live; dm.catalog.cache_clear(); dm._seen = None
+put(1.11); dm.refresh(); first = dm.catalog()[target]["projectVolume"]
+put(2.22); dm.refresh(); second = dm.catalog()[target]["projectVolume"]
+check(first == 1.11 and second == 2.22, "замена файла чтений видна без перезапуска (%s → %s)" % (first, second))
+
 print("\nПровалов: %d" % len(FAILS))
 sys.exit(1 if FAILS else 0)

@@ -14,6 +14,24 @@ def configure_recovery_assets(directory):
     RECOVERY_ASSETS = Path(directory)
 
 
+SOURCE_FILES = ("promka-models.json", "promka-register.json", "promka-sketches.json", "promka-solid-models.json", "promka-solid-supplies.json", "promka-readings.json")
+_seen = None
+
+
+def refresh():
+    """Каталог держится в памяти процесса; если файл каталога или чтений заменили (положили вручную, а не приёмом пакета, который сбрасывает кеш сам),
+    без перезапуска сервер показывал бы старое. Вызывается на каждом обращении к рабочей области: сравнивает времена изменения файлов — это дёшево."""
+    global _seen
+    import os
+    def mtime(name):
+        try: return os.stat(ASSETS / name).st_mtime_ns
+        except OSError: return 0
+    signature = tuple(mtime(name) for name in SOURCE_FILES)
+    if _seen is not None and signature != _seen:
+        catalog.cache_clear()
+    _seen = signature
+
+
 @lru_cache
 def catalog():
     base = ASSETS / "promka-models.json"

@@ -124,6 +124,8 @@ def build_router(settings):
 
     def workspace_signature(conn):
         import os as _os
+        from .document_models import refresh as refresh_catalog
+        refresh_catalog()      # файл каталога или чтений заменили — перечитать без перезапуска сервера
         def mtime(name):
             try: return _os.stat(ASSETS / name).st_mtime_ns
             except OSError: return 0
