@@ -111,7 +111,7 @@ def readiness(conn):
     return {
         "total": total, "ready": funnel[-1]["cumulative"], "percent": percent, "funnel": funnel,
         "families": sorted(families.values(), key=lambda f: -f["total"]), "gaps": gaps, "origin": {k: dict(v) for k, v in origin.items()},
-        "prices": {"materials": len(materials), "unpriced": len(unpriced), "unpricedList": unpriced[:15], "classes": class_rows,
+        "prices": {"materials": len(materials), "unpriced": len(unpriced), "unpricedList": unpriced[:15], "usage": {i: u["products"] for i, u in usage.items()}, "classes": class_rows,
                    "labourRate": float(prices["labour"]["rate"]), "pricesVersion": ctx["prices"]["version"]},
         "norms": {"families": sorted(families), "confirmed": sorted(confirmed_groups),
                   "basis": "Общая норма (труд на м³, коэффициент расхода) выведена по двум исходным колоннам; группа считается подтверждённой, когда технолог отметил её нормы в «Расценки и нормы»."},

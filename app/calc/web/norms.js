@@ -34,7 +34,8 @@
  function render(){
   const writer=api.user.role!=='viewer',pp=prices.parameters,np=norms.parameters,profile=prices.profile.parameters;
   const classes=Object.keys(pp.concrete).filter(k=>k!=='default');
-  const materials=Object.entries(pp.materials).sort((a,b)=>a[1].name.localeCompare(b[1].name,'ru'));
+  const usage=readiness?.prices?.usage||{};      // сколько изделий используют материал: материалы без цены идут первыми и по убыванию — видно, с чего начать
+  const materials=Object.entries(pp.materials).sort((a,b)=>(Number(a[1].rate)>0)-(Number(b[1].rate)>0)||(usage[b[0]]||0)-(usage[a[0]]||0)||a[1].name.localeCompare(b[1].name,'ru'));
   panel.innerHTML=`<div class="pc-norms-heading"><div class="pc-context">Настройки сервиса · расценки v${prices.version} · профиль v${prices.profile.version} · нормы v${norms.version}</div><h2>Расценки и нормы</h2>
   <p>Все цены — без НДС. Изменение расценок, процентов или норм сразу пересчитывает стоимость во всех изделиях. Ручные правки в карточке изделия (корректировки строк расчёта, объём, труд и материалы, заданные вручную) при этом не меняются.</p>
   <p class="pc-norms-warning">${esc(np.limitation)}</p></div>
@@ -44,7 +45,7 @@
    ${classes.map(c=>`<label>Бетон ${esc(c)}, ₽/м³${money('c:'+c,pp.concrete[c])}</label>`).join('')}
    <label>Труд, ₽/чел·ч${money('labour',pp.labour.rate)}</label></div>
   <h3>Материалы</h3><div class="pc-context pc-prices-bar"><input type="search" id="pc-prices-search" placeholder="Найти материал (Ø16, А500С, труба…)" aria-label="Поиск материала"><label><input type="checkbox" id="pc-prices-empty"> только без цены</label><span id="pc-prices-count"></span></div>
-  <div class="pc-norms-table"><table id="pc-prices-table"><thead><tr><th>Материал</th><th>Ед.</th><th>Цена, ₽ за ед.</th></tr></thead><tbody>${materials.map(([k,m])=>`<tr data-name="${esc(m.name.toLowerCase())}"><td>${esc(m.name)}</td><td>${esc(m.unit)}</td><td>${money('m:'+k,m.rate)}</td></tr>`).join('')}</tbody></table></div>
+  <div class="pc-norms-table"><table id="pc-prices-table"><thead><tr><th>Материал</th><th>Ед.</th><th title="Сколько изделий используют материал">Изделий</th><th>Цена, ₽ за ед.</th></tr></thead><tbody>${materials.map(([k,m])=>`<tr data-name="${esc(m.name.toLowerCase())}"><td>${esc(m.name)}</td><td>${esc(m.unit)}</td><td>${usage[k]?n(usage[k]):'—'}</td><td>${money('m:'+k,m.rate)}</td></tr>`).join('')}</tbody></table></div>
   </section><section data-settings-panel="profile"><h3>Начисления и НДС</h3><div class="pc-norms-fields">${Object.keys(LABELS).map(k=>`<label>${esc(LABELS[k])}${plain('p:'+k,profile[k],0,k==='socialPercent'||k==='profitPercent'||k==='vatPercent'?99.99:999)}</label>`).join('')}</div>
   </section><section data-settings-panel="norms"><h3>Нормы расхода и труда</h3><p class="pc-context">${esc(np.method)}</p><div class="pc-norms-fields">
    <label>Бетон: производственный / проектный расход${plain('concreteFactor',np.concreteFactor,1,3)}<small>Коэффициент ${n(np.concreteFactor)} · припуск ${n((Number(np.concreteFactor)-1)*100)}%</small></label>
