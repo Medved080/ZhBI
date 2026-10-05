@@ -8,6 +8,7 @@ import { showInfoDialog } from "./dialogs.js";
 import { renderLogin, renderChangePassword } from "./login.js";
 import { mountUsersAccess } from "./users-access.js";
 import { mountTeamAccess } from "./team-access.js";
+import { mountObjectHome } from "./object-home.js";
 import { mountProjectsObjects } from "./projects-objects.js";
 import { mountCounterparties } from "./counterparties.js";
 import { keepFocus } from "./focus.js";
@@ -185,6 +186,7 @@ const MFR_SCREENS = {
 const MODULES = {
   "users-access": (el, ctx) => mountUsersAccess(el, ctx),
   "team-access": (el, ctx) => mountTeamAccess(el, ctx),
+  "object-home": (el, ctx) => mountObjectHome(el, ctx),
   "projects-objects": (el, ctx) => mountProjectsObjects(el, ctx),
   "counterparties": (el, ctx) => mountCounterparties(el, ctx),
 };
@@ -235,11 +237,15 @@ async function renderShell(user, permissions) {
   const roleList = permissions.roles || [];
   const moduleAvailable = {
     "users-access": canReadUsers || canReadRoles,
+    "object-home": true,   // заглавная страница объекта: только чтение, доступна всем, кто видит объект
     "team-access": canReadUsers,   // права по проектной команде (B2): тот же раздел, что у пользователей
     "projects-objects": canOpenProjects,
     "counterparties": canOpenCounterparties,
   };
   const moduleCtx = { api, user, perms, canReadUsers, canReadRoles, roleList };
+  // Переходы и проверка доступности экрана для модулей, которым нужны ссылки на другие разделы (заглавная страница объекта).
+  moduleCtx.go = (k) => openSection(k);
+  moduleCtx.isAllowed = (k) => { const s = registry.byId.get(k); return !!s && allowedScreen(s); };
 
   // ---- контекст «Объект»: права считаются по показываемому объекту (как в V1, can()), поэтому при смене
   // объекта пересчитываются и доступные экраны. На сервер выбор НЕ пишется (V1 запоминает его в /me/last-object —
@@ -487,19 +493,25 @@ async function renderShell(user, permissions) {
   updateObjectButton();
   objectBtn.addEventListener("click", () => {
     if (navBusy || api.hasPendingWrites()) return;
-    openObjectPicker({ tree, objectId, prefsStore, onSelect: changeObject, triggerEl: objectBtn });
+    openObjectPicker({ tree, objectId, prefsStore, onSelect: (id) => changeObject(id, { card: true }), triggerEl: objectBtn });
   });
   legacySelect.addEventListener("change", async () => {
     const id = Number(legacySelect.value) || null;
-    const ok = await changeObject(id);
+    const ok = await changeObject(id, { card: true });
     if (!ok) legacySelect.value = objectId != null ? String(objectId) : ""; // отказ («Остаться») — вернуть прежнее значение, как раньше делал видимый select
   });
 
   // Смена объекта: тот же сторож несохранённых данных, что и у перехода между разделами (тот же activeModule).
   // Возвращает true, если объект сменился (или уже был тем же — picker закрывается и в этом случае), false —
   // отказ «Остаться»: окно выбора остаётся открытым, ничего не потеряно.
-  async function changeObject(id) {
-    if (!id || id === objectId) return true;
+  async function changeObject(id, { card = false } = {}) {
+    // card: выбор объекта человеком в переключателе — открывается заглавная страница объекта (object-home); программные
+    // переходы из экранов (switchObject в контексте модулей) остаются на прежнем экране, как раньше.
+    if (!id) return true;
+    if (id === objectId) {
+      if (card && !navBusy && !api.hasPendingWrites() && !(activeModule?.hasUnsavedChanges?.())) openSection("object-home", { force: true });
+      return true;
+    }
     if (navBusy) return false;
     if (activeModule?.hasUnsavedChanges?.()) {
       navBusy = true;
@@ -519,6 +531,7 @@ async function renderShell(user, permissions) {
     const note = document.getElementById("v2-nav-note");
     if (note) note.textContent = rightsOk ? "" : "Права объекта не удалось получить — показаны права без объекта";
     shellNav.render();
+    if (card) { openSection("object-home", { force: true, guarded: true }); return true; }
     // Экран, недоступный на новом объекте (или перерисовка каркаса с новой ссылкой в V1), обновляется.
     const cur = currentKey === "home" ? null : screenOf(currentKey);
     // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
@@ -743,7 +756,7 @@ async function renderShell(user, permissions) {
         // Рабочее место со схемой: сцена V1 в кадре только для чтения + собственные панели V2 (workspace.js).
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountWorkspace(content, {
-          screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model",
+          screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model", go: (k) => openSection(k),
         });
       } else if (target.impl === "contracts-list") {
         // Контракты: список и переход к работе с контрактом в карточке контрагента (там же создание и правка)

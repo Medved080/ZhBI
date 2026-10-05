@@ -749,14 +749,30 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
   .loading-inline { display: flex; align-items: center; gap: 8px; color: var(--color-text-muted); font-size: 12px; }
-  .stage-object-card { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); z-index: 5; width: min(560px, calc(100% - 32px));
-    max-height: calc(100% - 48px); overflow: auto; padding: 14px 18px; background: var(--color-surface); border: 1px solid var(--color-border);
-    border-radius: var(--radius); box-shadow: 0 2px 10px rgba(0,0,0,.15); }
-  .stage-object-card[hidden] { display: none; }
-  .stage-object-card h4 { margin: 10px 0 4px; font-size: 13px; }
-  .stage-object-card h4:first-child { margin-top: 0; }
-  .stage-object-card dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: 13px; }
-  .stage-object-card dd { margin: 0; }
+  #object-home { position: absolute; inset: 0; z-index: 30; overflow: auto; background: var(--color-bg, #fff); padding: 16px 24px 24px;
+    box-sizing: border-box; }
+  #object-home[hidden] { display: none; }
+  .ohv-head { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ohv-avatar { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid var(--color-border); }
+  .ohv-titles { flex: 1 1 280px; min-width: 0; }
+  .ohv-crumb { color: var(--color-text-muted); font-size: 13px; }
+  .ohv-title { margin: 2px 0 6px; font-size: 24px; line-height: 1.2; }
+  .ohv-sub { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--color-text-muted); font-size: 13px; }
+  .ohv-chip { padding: 2px 10px; border-radius: 999px; background: var(--color-surface-2); font-weight: 600; color: var(--color-text); }
+  .ohv-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ohv-grid { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+  .ohv-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .ohv-card { border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-surface); padding: 12px 16px; }
+  .ohv-card h4 { margin: 0 0 8px; font-size: 14px; }
+  .ohv-dl { margin: 0; display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 5px 14px; font-size: 13px; }
+  .ohv-dl dt { color: var(--color-text-muted); }
+  .ohv-dl dd { margin: 0; overflow-wrap: anywhere; }
+  .ohv-mapbox { display: flex; flex-direction: column; border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden;
+    min-height: 380px; background: var(--color-surface); }
+  .ohv-map { flex: 1 1 auto; min-height: 380px; height: clamp(380px, calc(100vh - 250px), 1000px); }
+  .ohv-mapcap { padding: 7px 12px; font-size: 12px; color: var(--color-text-muted); border-top: 1px solid var(--color-border); }
+  .ohv-nomap { margin: auto; max-width: 400px; padding: 24px; text-align: center; }
+  @media (max-width: 900px) { .ohv-grid { grid-template-columns: 1fr; } }
   .stage-loading {
     position: absolute; inset: 0; z-index: 15;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
@@ -5673,6 +5689,9 @@
  <div id="foreman-panel-resize" class="panel-resize-handle" style="display:none"
       title="Перетащите, чтобы изменить ширину панели"></div>
  <div id="stage-area">
+  <!-- Заглавная страница объекта (2026-10-06): при выборе объекта и у объекта без чертежа открывается поверх рабочей области —
+       паспорт слева, карта с отметкой места справа; закрывается кнопкой «Открыть схему». Строится в app.js (openObjectHome). -->
+  <div id="object-home" hidden></div>
   <!-- Полоса количественных показателей — над схемой и на всю её ширину:
        это итоги ВЫБРАННОГО СРЕЗА, а срез виден на схеме под ними. -->
   <div id="picker-metrics" style="display:none"></div>
@@ -6058,8 +6077,6 @@
       <span class="spinner spinner-lg"></span>
       <div id="stage-loading-text">Загрузка схемы…</div>
     </div>
-    <!-- Карточка объекта на месте пустой схемы (2026-10-05, B1): у объекта без чертежа — паспорт вместо пустого поля. -->
-    <div id="stage-object-card" class="stage-object-card" hidden></div>
     <div id="multi-select-panel">
       <span id="multi-select-count">Выделено: 0</span>
       <button class="btn btn-sm btn-primary" id="multi-select-status-btn">Изменить статус</button>

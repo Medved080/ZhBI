@@ -914,12 +914,6 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-msg { pointer-events: auto; max-width: 440px; padding: 16px 20px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 2px 10px rgb(0 0 0 / .15); text-align: center; }
 .ws-msg p { margin: 6px 0 12px; color: var(--muted); }
 .ws-msg-bad { border-color: var(--bad); }
-.ws-msg-card { max-width: 560px; max-height: 100%; overflow: auto; text-align: left; }
-.ws-msg-card > strong, .ws-msg-card > p { display: block; text-align: center; }
-.ws-objcard { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
-.ws-objcard h4 { margin: 8px 0 4px; font-size: 13px; }
-.ws-objcard .ws-dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; }
-.ws-objcard .ws-dl dd { margin: 0; }
 .ws-msg-load { pointer-events: none; color: var(--muted); padding: 8px 14px; }
 .ws-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; vertical-align: -2px; animation: ws-spin .8s linear infinite; }
 @keyframes ws-spin { to { transform: rotate(360deg); } }
@@ -1327,3 +1321,31 @@ button.ws-tile:hover { background: var(--surface); }
 .ws-calc-link { margin: 6px 0 2px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ws-calc-link .btn { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--accent); cursor: pointer; }
 .ws-calc-link .btn:hover { background: var(--surface); }
+
+
+/* Заглавная страница объекта (object-home.js, 2026-10-06): паспорт слева, карта справа, всё заполняет экран */
+.oh-page { padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 16px; box-sizing: border-box; min-height: 100%; }
+.oh-head { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.oh-avatar { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); }
+.oh-titles { flex: 1 1 320px; min-width: 0; }
+.oh-crumb { color: var(--muted); font-size: 13px; }
+.oh-title { margin: 2px 0 6px; font-size: 26px; line-height: 1.2; }
+.oh-sub { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--muted); font-size: 14px; }
+.oh-chip { padding: 2px 10px; border-radius: 999px; background: var(--bg-soft, #eef2f7); color: var(--fg, inherit); font-weight: 600; }
+.oh-chip-active { background: #dff3e4; color: #1d6b34; }
+.oh-chip-perspective { background: #e3e9fb; color: #2b4aa8; }
+.oh-chip-suspended { background: #fdf0d5; color: #8a5a00; }
+.oh-chip-completed { background: #e9e9ee; color: #44444f; }
+.oh-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.oh-grid { flex: 1 1 auto; display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.oh-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.oh-card { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 14px 18px; }
+.oh-card h3 { margin: 0 0 8px; font-size: 15px; }
+.oh-dl { margin: 0; display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 16px; font-size: 14px; }
+.oh-dl dt { color: var(--muted); }
+.oh-dl dd { margin: 0; overflow-wrap: anywhere; }
+.oh-mapbox { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-height: 420px; background: var(--bg); }
+.oh-map { flex: 1 1 auto; min-height: 420px; height: clamp(420px, calc(100vh - 260px), 1000px); }
+.oh-mapcap { padding: 8px 14px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+.oh-nomap { margin: auto; max-width: 420px; padding: 24px; text-align: center; }
+@media (max-width: 960px) { .oh-grid { grid-template-columns: 1fr; } }

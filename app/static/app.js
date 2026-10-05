@@ -1548,7 +1548,8 @@ function objectSwitchItemButton(проект, объект, показатьПр
   b.appendChild(счёт);
   b.addEventListener("click", () => {
     document.getElementById("object-switch").classList.remove("open");
-    switchObject(объект.id);
+    // Выбор объекта человеком открывает его заглавную страницу (2026-10-06); программные переходы (карта, отчёты) — как раньше.
+    switchObject(объект.id).then(() => openObjectHome(объект.id));
   });
   return b;
 }
@@ -5558,6 +5559,7 @@ function вспомнить(ключ) {
 
 function setWorkspace(ws) {
   if (ws === workspace) return;
+  closeObjectHome();   // заглавная страница объекта закрывается при смене рабочего места
   workspace = ws;
   запомнить(WS_KEY, ws);
   const picker = ws === "picker";
@@ -7499,41 +7501,97 @@ function setStageLoading(on, text) {
   box.style.display = on ? "" : "none";
 }
 
-// Карточка объекта на месте пустой схемы (2026-10-05, B1): у объекта без чертежа вместо пустого поля — паспорт (проект, статус,
-// адрес, СМУ, проектная команда). Прячется при любой следующей загрузке схемы.
+// Заглавная страница объекта (2026-10-06, запрос пользователя; в B1 это была маленькая карточка на пустой схеме): открывается
+// поверх рабочей области при выборе объекта в переключателе, при переходе из справочника и у объекта без чертежа. Паспорт слева
+// (реквизиты, проектная команда, показатели учёта), справа — карта с отметкой места расположения (та же мини-карта createPinMap,
+// что в форме справочника, без правки точки). Закрывается кнопкой «Открыть схему» и при смене рабочего места. Дерево проектов
+// (`/projects-tree`) несёт только навигацию, поэтому данные читаются из справочника объектов (`GET /objects`).
 const OBJECT_STATUS_RU = { perspective: "Перспективный", active: "В работе", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
-function hideObjectCard() {
-  const box = document.getElementById("stage-object-card");
-  if (box) box.hidden = true;
+const OBJECT_KIND_RU = { zhbi: "Учёт ЖБИ по чертежу", mfr: "Учёт МФР по модели" };
+let objectHomeMap = null;   // мини-карта заглавной страницы: перед пересозданием и при закрытии обязательно remove() (контекст WebGL)
+let objectHomeFor = null;
+
+function closeObjectHome() {
+  const box = document.getElementById("object-home");
+  if (objectHomeMap) { try { objectHomeMap.карта.remove(); } catch (e) { /* контекст мог быть потерян */ } objectHomeMap = null; }
+  objectHomeFor = null;
+  if (box) { box.hidden = true; box.innerHTML = ""; }
 }
-// Дерево проектов (`/projects-tree`) несёт только навигацию, без адреса и команды, поэтому паспорт читается из справочника
-// объектов (`GET /objects`, тот же ответ, что у формы «Проекты и объекты»).
-async function showObjectCard(текущий) {
-  const box = document.getElementById("stage-object-card");
-  if (!box || !текущий) return;
-  const id = текущий.object.id;
+
+async function openObjectHome(objectId) {
+  const box = document.getElementById("object-home");
+  if (!box || !objectId) return;
+  closeObjectHome();
+  objectHomeFor = objectId;
   let o;
   try {
-    o = (await api("/objects")).find((x) => x.id === id);
+    o = (await api("/objects")).find((x) => x.id === objectId);
   } catch (e) {
-    return;   // без паспорта остаётся прежнее сообщение «нет чертежа»
+    return;   // без заглавной страницы работа продолжается как раньше
   }
-  if (!o || state.objectId !== id) return;   // за время запроса сменили объект
+  if (!o || objectHomeFor !== objectId || state.objectId !== objectId) return;   // за время запроса объект сменили
   const строка = (подпись, значение) => значение === null || значение === undefined || значение === ""
-    ? "" : `<dt>${escapeHtml(подпись)}</dt><dd>${escapeHtml(String(значение))}</dd>`;
-  const координаты = o.lat != null && o.lon != null ? `${o.lat}, ${o.lon}` : "";
-  const команда = OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] && o.team[ключ].name)).join("");
-  box.innerHTML = `<h4>Карточка объекта</h4><dl>
-      ${строка("Проект", текущий.project && текущий.project.name)}${строка("Объект", o.name)}
-      ${строка("Статус", OBJECT_STATUS_RU[o.status] || o.status)}${строка("Адрес", o.address)}${строка("Координаты", координаты)}
-      ${строка("СМУ", o.smu_name)}${строка("Директор СМУ", o.smu_director_name)}${строка("Ответственный (ДП/РП)", o.responsible_name)}
-      ${строка("Старт СМР", o.smr_start_reported)}</dl>
-    ${команда ? `<h4>Проектная команда</h4><dl>${команда}</dl>` : '<div class="hint-text">Проектная команда не заполнена — «Проекты и объекты».</div>'}`;
+    ? "" : `<dt>${escapeHtml(подпись)}</dt><dd>${значение}</dd>`;
+  const e = (v) => escapeHtml(String(v ?? ""));
+  const есть = o.lat != null && o.lon != null;
+  const команда = OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] ? e(o.team[ключ].name) : "")).join("");
+  const медиа = safeHttpUrl(o.media_url);
+  const закрыть = o.kind === "mfr" ? "Открыть модель МФР" : "Открыть схему";
+  box.innerHTML = `
+    <div class="ohv-head">
+      ${o.has_avatar ? `<img class="ohv-avatar" src="/objects/${o.id}/avatar?t=${Date.now()}" alt="">` : ""}
+      <div class="ohv-titles">
+        <div class="ohv-crumb">${e(o.project_name)}</div>
+        <h2 class="ohv-title">${e(o.name)}</h2>
+        <div class="ohv-sub"><span class="ohv-chip">${e(OBJECT_STATUS_RU[o.status] || o.status)}</span>
+          <span>${e(OBJECT_KIND_RU[o.kind] || o.kind)}</span>${o.address ? `<span>${e(o.address)}</span>` : ""}</div>
+      </div>
+      <div class="ohv-actions">
+        <button type="button" class="btn btn-primary" id="ohv-open">${закрыть}</button>
+        <button type="button" class="btn btn-secondary" id="ohv-edit">Изменить реквизиты</button>
+      </div>
+    </div>
+    <div class="ohv-grid">
+      <div class="ohv-side">
+        <section class="ohv-card"><h4>Реквизиты</h4><dl class="ohv-dl">
+          ${строка("Проект", e(o.project_name))}${строка("Статус", e(OBJECT_STATUS_RU[o.status] || o.status))}${строка("Тип учёта", e(OBJECT_KIND_RU[o.kind] || o.kind))}
+          ${строка("Адрес", e(o.address))}${строка("Координаты", есть ? `${e(o.lat)}, ${e(o.lon)}` : "")}
+          ${строка("СМУ", e(o.smu_name))}${строка("Директор СМУ", e(o.smu_director_name))}${строка("Ответственный (ДП/РП)", e(o.responsible_name))}
+          ${строка("Старт СМР", o.smr_start_reported ? formatDateRu(o.smr_start_reported) : "")}
+          ${медиа ? строка("Фото и видео", `<a href="${escapeHtml(медиа)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
+          ${строка("Описание", e(o.description))}</dl></section>
+        <section class="ohv-card"><h4>Проектная команда</h4>${команда
+          ? `<dl class="ohv-dl">${команда}</dl>` : '<div class="hint-text">Команда не заполнена — укажите её в «Проекты и объекты».</div>'}</section>
+        ${o.kind === "mfr" ? "" : `<section class="ohv-card"><h4>Учёт</h4><dl class="ohv-dl">
+          ${строка("Элементов на схеме", e(o.elements_current ?? 0))}${строка("Чертёж", e(o.current_source_file))}</dl>
+          ${o.current_source_file ? "" : '<div class="hint-text">Чертёж ещё не загружен — схемы пока нет.</div>'}</section>`}
+      </div>
+      <section class="ohv-mapbox" aria-label="Расположение объекта на карте">
+        ${есть ? `<div class="ohv-map" id="ohv-map"></div><div class="ohv-mapcap">${e(o.address || o.name)} · ${e(o.lat)}, ${e(o.lon)}</div>`
+          : `<div class="ohv-nomap"><strong>Расположение не задано</strong><p class="hint-text">У объекта нет координат: укажите адрес в «Проекты и объекты» — точка определится по нему и появится на карте.</p>
+              <button type="button" class="btn btn-primary" id="ohv-edit2">Указать адрес</button></div>`}
+      </section>
+    </div>`;
   box.hidden = false;
+  box.scrollTop = 0;
+  const править = () => { closeObjectHome(); openCatalog(); };
+  document.getElementById("ohv-open").addEventListener("click", closeObjectHome);
+  document.getElementById("ohv-edit").addEventListener("click", править);
+  document.getElementById("ohv-edit2")?.addEventListener("click", править);
+  if (есть) {
+    const контейнер = document.getElementById("ohv-map");
+    try {
+      const m = await ensureMapModule();
+      const pin = await m.createPinMap(контейнер, { lat: o.lat, lon: o.lon, canEdit: false, onMove: () => {} });
+      if (objectHomeFor !== objectId || !контейнер.isConnected) { try { pin.карта.remove(); } catch (err) { /* уже закрыто */ } return; }
+      objectHomeMap = pin;
+    } catch (err) {
+      контейнер.innerHTML = `<div class="hint-text" style="padding:16px">Карта недоступна: ${e(err.message || "")}</div>`;
+    }
+  }
 }
 
 async function loadPlan(preserveView = true) {
-  hideObjectCard();
   setStageLoading(true);
   try {
     return await loadPlanInner(preserveView);
@@ -7567,7 +7625,7 @@ async function loadPlanInner(preserveView = true) {
       // адресовано и вводило в заблуждение (2026-10-05, живой репорт: всплывало при смене ЖБИ → МФР в V2, где кадр
       // с рабочим местом МФР стартует с этого вызова). Тот же признак, что в switchObject выше.
       if (!can("plan", "read")) return;
-      showObjectCard(текущий);
+      openObjectHome(текущий.object.id);   // вместо пустого поля — заглавная страница объекта
       showToast(`У объекта «${текущий.object.name}» ещё нет чертежа — загрузите его в «Обмен данными → Загрузить чертёж»`, "info");
       return;
     }
@@ -12659,6 +12717,7 @@ function renderCatalogForm() {
       catalogBackdrop.classList.remove("open");
       clearCatalogDirty();
       await switchObject(id);
+      openObjectHome(id);
     });
   }
 
