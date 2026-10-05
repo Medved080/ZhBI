@@ -12,7 +12,7 @@ function matchesProductName(product, query){
  const readJSON=key=>{try{return JSON.parse(localStorage.getItem(key));}catch{return null;}};
  let workspace,user,migrationMapping=null;
  try{
-  user=await api.ready();workspace=await api.request('/calc/api/workspace?lite=1');{const label=document.querySelector('.pc-sidebar .pc-context');if(label)label.textContent=workspace.project.name+(workspace.project.linked?'':' · не привязан к проекту ЖБИ');}
+  user=await api.ready();workspace=await api.request('/calc/api/workspace?lite=1');q('#pc-project-context').textContent=workspace.project.name+(workspace.project.linked?'':' · не привязан к проекту ЖБИ');
   const legacy=readJSON('calczhbi-workspace-v1');
   const migrationKey='calczhbi-migrated-'+workspace.installationId;
   const migrated=readJSON(migrationKey);
@@ -29,12 +29,12 @@ function matchesProductName(product, query){
  const detailLoading=new Set();
  const storageKey='calczhbi-ui-'+workspace.installationId+'-'+user.id;
  const saved=readJSON(storageKey);
- const selected=Array.isArray(saved?.selectedIds)?saved.selectedIds.map(id=>products.findIndex(p=>p.id===id)).filter(i=>i>=0):[0];
+ const selected=Array.isArray(saved?.selectedIds)?saved.selectedIds.map(id=>products.findIndex(p=>p.id===id)).filter(i=>i>=0):[];
  const active=products.findIndex(p=>p.id===saved?.activeId);
  // Глубокая ссылка из ЖБИ: /calc/#product=<id изделия> (app/calc/marks.py определяет изделие по марке элемента).
  const linkedId=new URLSearchParams(location.hash.slice(1)).get('product')||window.frameElement?.dataset?.calcProduct,linkedIndex=linkedId?products.findIndex(p=>p.id===linkedId):-1;
- window.addEventListener('hashchange',()=>location.reload());
- const state={product:linkedIndex>=0?linkedIndex:active>=0?active:0,overrides:workspace.products.map(entry=>entry.overrides),extra:workspace.products.map(entry=>entry.extra),selected:[...new Set(selected)],exporting:false,showConcrete:true,showSteel:true,opacity:30,search:'',filter:'',grouping:['album','type','none'].includes(saved?.grouping)?saved.grouping:'album',openGroups:new Set(),searchClosedGroups:new Set()};
+ window.addEventListener('hashchange',()=>{const id=new URLSearchParams(location.hash.slice(1)).get('product');if(id)window.CalcZhBIWorkspace?.select(id,'calculation');});
+ const state={product:linkedIndex>=0?linkedIndex:active>=0?active:0,overrides:workspace.products.map(entry=>entry.overrides),extra:workspace.products.map(entry=>entry.extra),selected:[...new Set(selected)],exporting:false,batch:Boolean(saved?.batch),showConcrete:true,showSteel:true,opacity:30,search:linkedIndex<0&&typeof saved?.search==='string'?saved.search:'',filter:linkedIndex<0&&typeof saved?.filter==='string'?saved.filter:'',grouping:['album','type','none'].includes(saved?.grouping)?saved.grouping:'album',openGroups:new Set(Array.isArray(saved?.openGroups)?saved.openGroups:[]),searchClosedGroups:new Set()};
  let recoveryPreview=null;
  window.CalcZhBIRecoveryUI={
   selection(scope){
@@ -56,7 +56,7 @@ function matchesProductName(product, query){
  function backupDrafts(){try{const drafts={};for(const [id,job] of jobs){const i=products.findIndex(p=>p.id===id);drafts[id]={...payload(i),expectedVersion:products[i].version||0,request:job.request||null};}localStorage.setItem(draftKey,JSON.stringify(drafts));}catch{saveStatus('Не удалось записать локальный черновик. Сохраните данные на сервере перед закрытием.',true);}}
  function pendingStatus(){if([...jobs.values()].some(j=>j.error))return;saveStatus(jobs.size?'Есть несохранённые изменения':'Сохранено на сервере');}
  function persist(){
-  try{localStorage.setItem(storageKey,JSON.stringify({activeId:products[state.product].id,selectedIds:state.selected.map(i=>products[i].id),grouping:state.grouping}));}catch{}
+  try{localStorage.setItem(storageKey,JSON.stringify({activeId:products[state.product].id,selectedIds:state.selected.map(i=>products[i].id),grouping:state.grouping,search:state.search,filter:state.filter,openGroups:[...state.openGroups],scrollTop:q('#pc-products').scrollTop,batch:state.batch,...window.CalcZhBIUI.preferences()}));}catch{}
   if(!writeable)return;
   const i=state.product,id=products[i].id,current=fingerprint(i),old=jobs.get(id);
   if(current===(old?.fingerprint||acknowledged.get(id)))return;
@@ -99,13 +99,6 @@ function matchesProductName(product, query){
  q('#pc-product-filter').innerHTML='<option value="">Все альбомы</option>'+albumOptions.map(([id,doc])=>`<option value="${escapeHTML(id)}">${escapeHTML(albumNames[id]||doc.family)}</option>`).join('');
  function visibleProducts(){return products.map((p,i)=>({p,i})).filter(({p})=>(!state.filter||(p.documentModel?.source.id||(p.documentModelId?'doc02':''))===state.filter)&&matchesProductName(p,state.search));}
  const readiness=p=>p.documentModel?.modelReadiness||{status:'missing',label:'Модель не построена',description:'Нет индивидуальной проектной модели; условная геометрия не считается полной.'};
- function renderModelProgress(){
-  const counts={complete:0,partial:0,envelope:0,missing:0};
-  for(const product of products){const status=readiness(product).status;counts[status in counts?status:'missing']++;}
-  const modeled=counts.complete+counts.partial,pending=counts.envelope+counts.missing,total=products.length;
-  const width=count=>total?100*count/total:0;
-  q('#pc-model-progress').innerHTML=`<div class="pc-progress-title">3D по всей базе</div><div class="pc-progress-counts"><div><strong>${modeled}</strong><span>с арматурой</span></div><div><strong>${pending}</strong><span>ещё без 3D</span></div></div><div class="pc-progress-track" role="img" aria-label="${modeled} из ${total} изделий имеют индивидуальную модель с арматурой"><span class="pc-progress-complete" style="width:${width(counts.complete)}%"></span><span class="pc-progress-partial" style="width:${width(counts.partial)}%"></span></div><div class="pc-progress-detail">Полных: ${counts.complete} · Частичных: ${counts.partial}</div><div class="pc-progress-note">Габариты не считаются 3D.</div><button id="pc-model-results-open" class="pc-results-open" type="button">Результаты исполнителей →</button>`;
- }
  async function openModelResults(){
   const dialog=q('#pc-model-results-dialog'),host=q('#pc-model-results-content');host.textContent='Собираю результаты…';dialog.showModal();
   try{
@@ -115,9 +108,10 @@ function matchesProductName(product, query){
  }
  q('#pc-model-results-close').addEventListener('click',()=>q('#pc-model-results-dialog').close());
  function productRow({p,i}){
-  const model=readiness(p),label=p.documentModel?.alias||p.name,details=p.name+' · '+(p.concreteClass||'В50')+' · '+(p.volume?number(p.volume)+' м³':'объём не подтверждён');
-  const symbols={complete:'✓',partial:'◐',envelope:'◇',missing:'—'};
-  return `<div class="pc-product-row"><input class="pc-export-check" type="checkbox" data-select-product="${i}" aria-label="Включить ${escapeHTML(p.name)} в выгрузку"><button class="pc-product cursor-interaction" data-product="${i}" aria-label="${escapeHTML(p.name+' · '+model.label)}" title="${escapeHTML(details)}" aria-pressed="${state.product===i}"><strong>${escapeHTML(label)}</strong><span class="pc-model-indicator" data-model-status="${model.status}" role="img" aria-label="${escapeHTML(model.label)}" title="${escapeHTML(model.label+'. '+model.description)}">${symbols[model.status]||'—'}</span></button></div>`;
+  const label=p.documentModel?.alias||p.name,details=p.name+' · '+(p.concreteClass||'класс не указан')+' · '+(p.volume?number(p.volume)+' м³':'объём не подтверждён');
+  const missingData=!p.volume||!p.concreteClass||/не указан/i.test(p.concreteClass),missingPrice=(p.documentModel?.resources||[]).some(r=>Number(r.rate)===0)||Number(p.concreteRate)===0;
+  const status=missingData?'Нет данных':missingPrice?'Нет цены':p.documentModel?.kind==='registry'?'Предварительно':'Расчёт';
+  return `<div class="pc-product-row"><input class="pc-export-check" type="checkbox" data-select-product="${i}" aria-label="Включить ${escapeHTML(p.name)} в выгрузку"><button class="pc-product cursor-interaction" data-product="${i}" aria-label="${escapeHTML(p.name+' · '+status)}" title="${escapeHTML(details)}" aria-pressed="${state.product===i}"><strong>${escapeHTML(label)}</strong><span class="pc-row-status" data-attention="${missingData||missingPrice}">${status}</span></button></div>`;
  }
  function productGroups(visible){
   const groups=new Map();
@@ -130,20 +124,38 @@ function matchesProductName(product, query){
   return [...groups.values()].sort((a,b)=>a.key.localeCompare(b.key,'ru',{numeric:true}));
  }
  function renderProducts(){
+  const list=q('#pc-products'),scroll=list.scrollTop,focused=document.activeElement;
+  const focusKey=list.contains(focused)?['data-product','data-product-group','data-select-product'].find(key=>focused.hasAttribute(key)):null;
+  const focusValue=focusKey?focused.getAttribute(focusKey):null;
   const visible=visibleProducts();
   const search=Boolean(state.search.trim());
   q('#pc-products').innerHTML=!visible.length?'<div class="pc-product-empty">Изделия не найдены</div>':state.grouping==='none'?visible.map(productRow).join(''):productGroups(visible).map((g,n)=>{
-   const open=search?!state.searchClosedGroups.has(g.key):state.openGroups.has(g.key),full=g.rows.filter(({p})=>readiness(p).status==='complete').length;
-   return `<section class="pc-product-group"><button class="pc-group-toggle" data-product-group="${escapeHTML(g.key)}" aria-expanded="${open}" aria-controls="pc-group-${n}" title="${escapeHTML(g.title+' · '+g.rows.length+' изделий'+(full?' · полных моделей: '+full:''))}"><span class="pc-group-arrow" aria-hidden="true">${open?'▾':'▸'}</span><span class="pc-group-title">${escapeHTML(g.title)}</span><span class="pc-group-count">${g.rows.length}</span></button><div class="pc-group-products" id="pc-group-${n}" ${open?'':'hidden'}>${open?g.rows.map(productRow).join(''):''}</div></section>`;
+   const open=search?!state.searchClosedGroups.has(g.key):state.openGroups.has(g.key);
+   return `<section class="pc-product-group"><button class="pc-group-toggle" data-product-group="${escapeHTML(g.key)}" aria-expanded="${open}" aria-controls="pc-group-${n}" title="${escapeHTML(g.title+' · '+g.rows.length+' изделий')}"><span class="pc-group-arrow" aria-hidden="true">${open?'▾':'▸'}</span><span class="pc-group-title">${escapeHTML(g.title)}</span><span class="pc-group-count">${g.rows.length}</span></button><div class="pc-group-products" id="pc-group-${n}" ${open?'':'hidden'}>${open?g.rows.map(productRow).join(''):''}</div></section>`;
   }).join('');
   q('#pc-product-count').textContent=(state.search||state.filter?'Найдено ':'Всего ')+visible.length+(visible.length===products.length?' изделий':' из '+products.length);
-  renderModelProgress();
+  q('#pc-search-clear').hidden=!state.search;
+  q('#pc-catalog-active').textContent=visible.some(({i})=>i===state.product)?'Открыто: '+(products[state.product].documentModel?.alias||products[state.product].name):'Изделие вне фильтра';
+  list.scrollTop=scroll;
+  if(focusKey)[...list.querySelectorAll('['+focusKey+']')].find(el=>el.getAttribute(focusKey)===focusValue)?.focus({preventScroll:true});
   updateSelection();
  }
+ q('#pc-product-search').value=state.search;
+ if(!albumOptions.some(([id])=>id===state.filter))state.filter='';
+ q('#pc-product-filter').value=state.filter;
+ if(!Array.isArray(saved?.openGroups)||linkedIndex>=0){const group=productGroups(products.map((p,i)=>({p,i}))).find(g=>g.rows.some(({i})=>i===state.product));if(group)state.openGroups.add(group.key);}
  q('#pc-product-grouping').value=state.grouping;
- q('#pc-product-grouping').addEventListener('change',e=>{state.grouping=e.target.value;state.openGroups.clear();state.searchClosedGroups.clear();renderProducts();persist();});
- q('#pc-product-search').addEventListener('input',e=>{state.search=e.target.value;state.searchClosedGroups.clear();renderProducts();});
- q('#pc-product-filter').addEventListener('change',e=>{state.filter=e.target.value;renderProducts();});
+ q('#pc-product-grouping').addEventListener('change',e=>{state.grouping=e.target.value;state.openGroups.clear();state.searchClosedGroups.clear();const activeGroup=productGroups(products.map((p,i)=>({p,i}))).find(g=>g.rows.some(({i})=>i===state.product));if(activeGroup)state.openGroups.add(activeGroup.key);renderProducts();persist();});
+ q('#pc-product-search').addEventListener('input',e=>{state.search=e.target.value;state.searchClosedGroups.clear();renderProducts();q('#pc-products').scrollTop=0;persist();});
+ q('#pc-product-filter').addEventListener('change',e=>{state.filter=e.target.value;renderProducts();q('#pc-products').scrollTop=0;persist();});
+ q('#pc-search-clear').addEventListener('click',()=>{state.search='';q('#pc-product-search').value='';state.searchClosedGroups.clear();renderProducts();persist();q('#pc-product-search').focus();});
+ q('#pc-batch-toggle').addEventListener('click',()=>{state.batch=!state.batch;updateSelection();persist();});
+ q('#pc-selection-clear').addEventListener('click',()=>{state.selected=[];updateSelection();persist();});
+ q('#pc-reveal-product').addEventListener('click',()=>{state.search='';state.filter='';q('#pc-product-search').value='';q('#pc-product-filter').value='';const g=productGroups(products.map((p,i)=>({p,i}))).find(g=>g.rows.some(({i})=>i===state.product));if(g)state.openGroups.add(g.key);renderProducts();q('[data-product="'+state.product+'"]').scrollIntoView({block:'nearest'});persist();});
+ let catalogScrollTimer;
+ q('#pc-products').addEventListener('scroll',()=>{clearTimeout(catalogScrollTimer);catalogScrollTimer=setTimeout(persist,150);});
+ window.addEventListener('calczhbi:ui-change',persist);
+ window.addEventListener('calczhbi:view',persist);
  const calculation=q('#pc-calculation'),expandCalculation=q('#pc-calculation-expand');
  function updateCalculationExpand(){const expanded=calculation.classList.contains('pc-calculation-expanded');expandCalculation.textContent=expanded?'Свернуть':'Развернуть';expandCalculation.setAttribute('aria-label',expanded?'Свернуть калькуляцию':'Развернуть калькуляцию');expandCalculation.setAttribute('aria-expanded',String(expanded));calculation.setAttribute('role',expanded?'dialog':'region');if(expanded)calculation.setAttribute('aria-modal','true');else calculation.removeAttribute('aria-modal');}
  expandCalculation.addEventListener('click',()=>{calculation.classList.toggle('pc-calculation-expanded');updateCalculationExpand();expandCalculation.focus();});
@@ -162,6 +174,13 @@ function matchesProductName(product, query){
   const visible=visibleProducts().map(x=>x.i),count=visible.filter(i=>state.selected.includes(i)).length;q('#pc-select-all').checked=visible.length>0&&count===visible.length;q('#pc-select-all').indeterminate=count>0&&count<visible.length;q('#pc-select-all').disabled=!visible.length;
   q('#pc-selected-count').textContent='Выбрано: '+state.selected.length;
   q('#pc-export').disabled=state.selected.length===0||state.exporting;
+  q('#pc-export').textContent='XLSX · '+state.selected.length;
+  q('#pc-export-one').disabled=state.exporting;
+  root.dataset.batch=String(state.batch);
+  q('.pc-select-all').hidden=!state.batch;
+  q('.pc-export-actions').hidden=!state.batch;
+  q('#pc-active-context').hidden=state.batch;
+  q('#pc-batch-toggle').setAttribute('aria-pressed',String(state.batch));
  }
  function exportStatus(message,error=false){const el=q('#pc-export-status');el.textContent=message;el.dataset.error=String(error);}
  function model(){
@@ -214,24 +233,26 @@ function matchesProductName(product, query){
  }
  function totals(){
   const {rows,bases,amounts,total}=calculate(state.product);
-  for(const row of rows){const output=q(`[data-output="${row.id}"]`);if(output)output.textContent=money(amounts[row.id]);for(const field of ['qty','rate','amount']){const input=q(`input[data-id="${row.id}"][data-field="${field}"]`);if(input)input.placeholder=field==='qty'?number(row.qty):money(field==='rate'?bases[row.id]:amounts[row.id]);}}
+  for(const row of rows){const output=q(`[data-output="${row.id}"]`);if(output)output.textContent=money(amounts[row.id]);for(const field of ['qty','rate','amount']){const input=q(`input[data-id="${row.id}"][data-field="${field}"]`);if(input){input.placeholder=field==='qty'?number(row.qty):money(field==='rate'?bases[row.id]:amounts[row.id]);input.classList.toggle('pc-manual',state.overrides[state.product][row.id]?.[field]!==undefined&&state.overrides[state.product][row.id]?.[field]!=='');}}}
   q('#pc-baseline').textContent=money(products[state.product].price)+' ₽';q('#pc-effective').textContent=money(total)+' ₽';
   const rawDiff=total-products[state.product].price;const diff=Math.abs(rawDiff)<.005?0:rawDiff;q('#pc-delta').textContent=(diff>0?'+':'')+money(diff)+' ₽';q('#pc-vat').textContent='Моя цена с НДС '+profile.vatPercent+'%: '+money(total*(1+profile.vatPercent/100))+' ₽';
  }
- async function exportSelected(){
-  if(state.exporting||state.selected.length===0)return;
-  const invalid=root.querySelector('input[data-id]:invalid');if(invalid){invalid.reportValidity();exportStatus('Исправьте значение в калькуляции.',true);return;}
-  state.exporting=true;updateSelection();q('#pc-export').textContent='Формирую книгу…';exportStatus('');
+ async function exportSelected(single=false){
+  const indices=single?[state.product]:[...state.selected];
+  const status=(message,error=false)=>{const el=q(single?'#pc-export-one-status':'#pc-export-status');el.textContent=message;el.dataset.error=String(error);};
+  if(state.exporting||indices.length===0)return;
+  const invalid=root.querySelector('input[data-id]:invalid');if(invalid){invalid.reportValidity();status('Исправьте значение в калькуляции.',true);return;}
+  state.exporting=true;updateSelection();q('#pc-export').textContent='Формирую книгу…';status('');
   try{
    await flushSaves();
-   const snapshots=await Promise.all(state.selected.map(i=>api.request('/calc/api/products/'+products[i].id+'/calculation')));
+   const snapshots=await Promise.all(indices.map(i=>api.request('/calc/api/products/'+products[i].id+'/calculation')));
    await window.CalcZhBIExport.download(snapshots);
-   exportStatus('Книга сформирована. Листов: '+snapshots.length+'.');
-  }catch(error){exportStatus(error.message||'Не удалось сформировать XLSX. Повторите выгрузку.',true);}
+   status('Книга сформирована. Листов: '+snapshots.length+'.');
+  }catch(error){status(error.message||'Не удалось сформировать XLSX. Повторите выгрузку.',true);}
   finally{state.exporting=false;q('#pc-export').textContent='Выгрузить XLSX';updateSelection();}
  }
  function render(){
-  const p=products[state.product];q('#pc-title').textContent=p.name;q('#pc-volume').textContent=number(p.volume)+' м³';q('#pc-weight').textContent=number(p.weight)+' т';q('#pc-hours').textContent=number(p.hours)+' чел·ч';
+  const p=products[state.product];q('#pc-title').textContent=p.documentModel?.alias||p.name;q('#pc-card-context').textContent=p.documentModel?.alias?p.name:'Калькуляция изделия';q('#pc-calculation-summary').innerHTML='<span>Бетон: '+(p.volume?number(p.volume)+' м³':'объём не задан')+' · '+escapeHTML(p.concreteClass||'класс не указан')+' · Труд: '+(p.hours?number(p.hours)+' чел·ч':'не задан')+'</span>'+(writeable?'<button id="pc-edit-calculation" type="button">Изменить параметры</button>':'');q('#pc-volume').textContent=number(p.volume)+' м³';q('#pc-weight').textContent=number(p.weight)+' т';q('#pc-hours').textContent=number(p.hours)+' чел·ч';
   const ready=readiness(p);q('#pc-model-readiness').textContent=ready.label;q('#pc-model-readiness').dataset.modelStatus=ready.status;q('#pc-model-readiness').title=ready.description;q('#pc-calculation-product').textContent=p.name;
   window.CalcZhBIProjectKey=p.id;window.dispatchEvent(new CustomEvent('calczhbi:product',{detail:window.CalcZhBIProjectKey}));
   renderProducts();
@@ -269,29 +290,33 @@ function matchesProductName(product, query){
    route.innerHTML=doc.stages.map(s=>`<li>${escapeHTML(s)}</li>`).join('');
   }else route.innerHTML=route.dataset.defaultRoute;
   root.querySelectorAll('[data-product]').forEach(b=>b.setAttribute('aria-pressed',Number(b.dataset.product)===state.product));
-  q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td>${number(r.qty)}</td><td>${money(r.rate)}</td><td>${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
+  q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td class="pc-baseline-cell">${number(r.qty)}</td><td class="pc-baseline-cell">${money(r.rate)}</td><td class="pc-baseline-cell">${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
   q('#pc-calculation-heading').textContent=doc?.kind==='registry'?'Предварительная калькуляция на 1 изделие':'Калькуляция на 1 изделие';
   q('#pc-volume').textContent=p.volume?number(p.volume)+' м³':'Не задан';q('#pc-hours').textContent=doc?.kind==='registry'&&!p.hours?'Не задана':number(p.hours)+' чел·ч';
   // Первая загрузка отдаёт каталог без реестра расхождений (десятки МБ): он догружается для открытого изделия.
   if(p.discrepancies===undefined&&!detailLoading.has(p.id)){detailLoading.add(p.id);api.request('/calc/api/products/'+p.id).then(entry=>{Object.assign(p,{discrepancies:entry.product.discrepancies||[],dataIssues:entry.product.dataIssues||[]});if(products[state.product]===p){window.CalcZhBIProjectReport?.renderProduct(p);window.CalcZhBICollisions?.setProduct(p);}}).catch(()=>detailLoading.delete(p.id));}
   window.CalcZhBIProjectReport?.renderProduct(p);window.CalcZhBICollisions?.setProduct(p);
-  totals();model();updateSelection();
+  totals();model();updateSelection();window.CalcZhBIUI?.updateCompare();
   if(!writeable)root.querySelectorAll('#pc-rows input').forEach(input=>{input.disabled=true;});
  }
  root.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
-  if(b.dataset.productGroup!==undefined){const key=b.dataset.productGroup,set=state.search.trim()?state.searchClosedGroups:state.openGroups;set.has(key)?set.delete(key):set.add(key);renderProducts();[...root.querySelectorAll('[data-product-group]')].find(el=>el.dataset.productGroup===key)?.focus({preventScroll:true});}
-  if(b.dataset.product){window.CalcZhBIProjectReport?.close();window.CalcZhBINorms?.close();state.product=Number(b.dataset.product);render();persist();}
-  if(b.dataset.view){const view=b.dataset.view;root.querySelectorAll('.pc-tabs [data-view]').forEach(x=>x.setAttribute('aria-pressed',x.dataset.view===view));['calculation','model','tech','issues','collisions','sources','sheets','history'].forEach(v=>q(`#pc-${v}-panel`).hidden=v!==view);window.dispatchEvent(new CustomEvent('calczhbi:view',{detail:view}));}
+  if(b.dataset.productGroup!==undefined){const key=b.dataset.productGroup,set=state.search.trim()?state.searchClosedGroups:state.openGroups;set.has(key)?set.delete(key):set.add(key);renderProducts();[...root.querySelectorAll('[data-product-group]')].find(el=>el.dataset.productGroup===key)?.focus({preventScroll:true});persist();}
+  if(b.dataset.product){window.CalcZhBIUI?.products();window.CalcZhBIProjectReport?.close();window.CalcZhBINorms?.close();state.product=Number(b.dataset.product);render();persist();}
+  if(b.dataset.view)window.CalcZhBIUI?.setView(b.dataset.view);
   if(b.dataset.detail){const el=q('#pc-detail-'+b.dataset.detail);el.hidden=!el.hidden;b.setAttribute('aria-expanded',!el.hidden);}
-  if(b.id==='pc-clear'){state.overrides[state.product]={};state.extra[state.product]=[];render();persist();}
+  if(b.id==='pc-clear'){document.getElementById('pc-reset-description').textContent=products[state.product].name;document.getElementById('pc-reset-dialog').showModal();}
   if(b.id==='pc-add'){const i=state.extra[state.product].length+1;state.extra[state.product].push({id:'extra'+i,name:'Дополнительная статья '+i,unit:'компл.',qty:1,rate:0,detail:'Пользовательская статья включена в затраты и в базу прибыли. В полном сервисе можно выбрать группу и основание.'});render();persist();}
   if(b.id==='pc-export')void exportSelected();
-  if(b.id==='pc-edit-product')openProductForm(state.product);
+  if(b.id==='pc-export-one')void exportSelected(true);
+  if(b.id==='pc-edit-product'||b.id==='pc-edit-calculation')openProductForm(state.product);
   if(b.id==='pc-product-issues-link'){q('[data-view="issues"]').click();}
   if(b.id==='pc-model-results-open')void openModelResults();
   if(b.dataset.resultProduct){q('#pc-model-results-dialog').close();window.CalcZhBIWorkspace.select(b.dataset.resultProduct,'model');}
  });
+ const resetDialog=document.getElementById('pc-reset-dialog');
+ document.getElementById('pc-reset-cancel').addEventListener('click',()=>{resetDialog.close();q('.pc-row-menu summary').focus();});
+ document.getElementById('pc-reset-confirm').addEventListener('click',()=>{state.overrides[state.product]={};state.extra[state.product]=[];render();persist();resetDialog.close();q('#pc-add').focus();});
  root.addEventListener('change',e=>{
   const el=e.target;
   if(el.dataset.selectProduct!==undefined){const index=Number(el.dataset.selectProduct);state.selected=el.checked?[...new Set([...state.selected,index])]:state.selected.filter(i=>i!==index);updateSelection();exportStatus('');persist();}
@@ -342,7 +367,7 @@ function matchesProductName(product, query){
  });
  window.CalcZhBIWorkspace={flush:flushSaves,select:(id,view='model')=>{
   const index=products.findIndex(p=>p.id===id);if(index<0)return;
-  window.CalcZhBIProjectReport?.close();window.CalcZhBINorms?.close();state.product=index;render();persist();q(`[data-view="${view}"]`)?.click();
+  window.CalcZhBIUI?.products();window.CalcZhBIProjectReport?.close();window.CalcZhBINorms?.close();state.product=index;render();persist();q(`[data-view="${view}"]`)?.click();
  },refresh:async()=>{
   const refreshed=await api.request('/calc/api/workspace?lite=1');
   detailLoading.clear();
@@ -350,7 +375,9 @@ function matchesProductName(product, query){
   render();
  }};
  q('#pc-project-report').disabled=false;
+ window.CalcZhBIUI?.init(saved||{},linkedIndex>=0);
  render();
+ if(linkedIndex<0)q('#pc-products').scrollTop=Number(saved?.scrollTop)||0;
  saveStatus('Сохранено на сервере');
  if(writeable){const drafts=readJSON(draftKey)||{};for(const [id,draft] of Object.entries(drafts)){let i=products.findIndex(p=>p.id===id);if(i<0&&draft.expectedVersion===0){i=products.length;products.push({...draft.product,version:0});state.overrides.push({});state.extra.push([]);}
   if(i<0)continue;const remote=workspace.products.find(entry=>entry.product.id===id),version=products[i].version||0;

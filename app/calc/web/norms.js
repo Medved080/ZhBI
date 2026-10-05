@@ -7,7 +7,7 @@
  const n=s=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:6}).format(Number(s));
  const LABELS={socialPercent:'Страховые взносы, % от оплаты труда',energyPercent:'Энергоуслуги, % от материалов',overheadPercent:'Общепроизводственные, % от материалов',adminPercent:'Административные, % от материалов',commercialPercent:'Коммерческие, % от материалов',profitPercent:'Маржа (прибыль), %',deliveryPercent:'Доставка, % от материалов',vatPercent:'НДС, %'};
  let prices,norms,previousView='model';
- function close(){if(panel.hidden)return;panel.hidden=true;document.querySelector('.pc-tabs').hidden=false;document.querySelector('.pc-header').hidden=false;document.getElementById('pc-'+previousView+'-panel').hidden=false;open.setAttribute('aria-pressed','false');}
+ function close(){if(panel.hidden)return;panel.hidden=true;document.querySelector('.pc-tabs').hidden=false;document.querySelector('.pc-header').hidden=false;document.getElementById('pc-'+previousView+'-panel').hidden=false;open.setAttribute('aria-pressed','false');if(window.CalcZhBIUI?.section==='norms')window.CalcZhBIUI.enter('products');}
  // Денежное поле: хранит точное значение в data-exact; если пользователь не менял показанное округлённое — уходит точное
  function money(name,value,max=1e9){const display=String(Number(Number(value).toFixed(2)));return `<input type="text" inputmode="decimal" data-money required min="0" max="${max}" name="${esc(name)}" value="${window.CalcZhBIMoney.editable(display)}" data-exact="${esc(value)}" data-default="${display}">`;}
  function plain(name,value,min,max){const display=String(Number(Number(value).toFixed(6)));return `<input type="number" required min="${min}" max="${max}" step="any" name="${esc(name)}" value="${display}" data-exact="${esc(value)}" data-default="${display}">`;}
@@ -21,21 +21,22 @@
   panel.innerHTML=`<div class="pc-norms-heading"><div class="pc-context">Настройки сервиса · расценки v${prices.version} · профиль v${prices.profile.version} · нормы v${norms.version}</div><h2>Расценки и нормы</h2>
   <p>Все цены — без НДС. Изменение расценок, процентов или норм сразу пересчитывает стоимость во всех изделиях. Ручные правки в карточке изделия (корректировки строк расчёта, объём, труд и материалы, заданные вручную) при этом не меняются.</p>
   <p class="pc-norms-warning">${esc(np.limitation)}</p></div>
-  <form id="pc-norms-form"><fieldset ${writer?'':'disabled'}>
-  <h3>Бетон и труд</h3><div class="pc-norms-fields">
+  <nav class="pc-settings-tabs" aria-label="Настройки расчёта"><button type="button" data-settings-section="prices">Цены</button><button type="button" data-settings-section="norms">Нормы</button><button type="button" data-settings-section="profile">Начисления</button></nav><form id="pc-norms-form"><fieldset ${writer?'':'disabled'}>
+  <section data-settings-panel="prices"><h3>Бетон и труд</h3><div class="pc-norms-fields">
    <label>Бетон: цена по умолчанию, ₽/м³ (класс без своей цены, «не указан»)${money('c:default',pp.concrete.default)}</label>
    ${classes.map(c=>`<label>Бетон ${esc(c)}, ₽/м³${money('c:'+c,pp.concrete[c])}</label>`).join('')}
    <label>Труд, ₽/чел·ч${money('labour',pp.labour.rate)}</label></div>
   <h3>Материалы</h3><div class="pc-context pc-prices-bar"><input type="search" id="pc-prices-search" placeholder="Найти материал (Ø16, А500С, труба…)" aria-label="Поиск материала"><label><input type="checkbox" id="pc-prices-empty"> только без цены</label><span id="pc-prices-count"></span></div>
   <div class="pc-norms-table"><table id="pc-prices-table"><thead><tr><th>Материал</th><th>Ед.</th><th>Цена, ₽ за ед.</th></tr></thead><tbody>${materials.map(([k,m])=>`<tr data-name="${esc(m.name.toLowerCase())}"><td>${esc(m.name)}</td><td>${esc(m.unit)}</td><td>${money('m:'+k,m.rate)}</td></tr>`).join('')}</tbody></table></div>
-  <h3>Начисления и НДС</h3><div class="pc-norms-fields">${Object.keys(LABELS).map(k=>`<label>${esc(LABELS[k])}${plain('p:'+k,profile[k],0,k==='socialPercent'||k==='profitPercent'||k==='vatPercent'?99.99:999)}</label>`).join('')}</div>
-  <h3>Нормы расхода и труда</h3><p class="pc-context">${esc(np.method)}</p><div class="pc-norms-fields">
+  </section><section data-settings-panel="profile"><h3>Начисления и НДС</h3><div class="pc-norms-fields">${Object.keys(LABELS).map(k=>`<label>${esc(LABELS[k])}${plain('p:'+k,profile[k],0,k==='socialPercent'||k==='profitPercent'||k==='vatPercent'?99.99:999)}</label>`).join('')}</div>
+  </section><section data-settings-panel="norms"><h3>Нормы расхода и труда</h3><p class="pc-context">${esc(np.method)}</p><div class="pc-norms-fields">
    <label>Бетон: производственный / проектный расход${plain('concreteFactor',np.concreteFactor,1,3)}<small>Коэффициент ${n(np.concreteFactor)} · припуск ${n((Number(np.concreteFactor)-1)*100)}%</small></label>
    <label>Труд на 1 м³ производственного бетона, чел·ч${plain('hoursPerM3',np.hoursPerM3,0,1000)}</label></div>
   <div class="pc-norms-table"><table><thead><tr><th>Ресурс</th><th>Ед.</th><th>По проекту, сумма</th><th>В Excel, сумма</th><th>Коэффициент расхода</th></tr></thead><tbody>${Object.entries(np.resources).map(([k,r])=>`<tr><td>${esc(r.name)}</td><td>${esc(r.unit)}</td><td>${n(r.projectTotal)}</td><td>${n(r.productionTotal)}</td><td>${plain('f:'+k,r.factor,1,10)}</td></tr>`).join('')}</tbody></table></div>
-  </fieldset><div class="pc-norms-actions"><button type="submit" ${writer?'':'disabled'}>Сохранить расценки и нормы</button><span id="pc-norms-status" class="pc-context" role="status" aria-live="polite"></span></div></form>
-  <h3>Основание норм</h3><table class="pc-norms-basis"><thead><tr><th>Изделие</th><th>Бетон по проекту, м³</th><th>Бетон в Excel, м³</th><th>Труд в Excel, чел·ч</th><th>Труд / м³</th></tr></thead><tbody>${np.basis.map(b=>`<tr><td>${esc(b.name)}</td><td>${n(b.projectVolume)}</td><td>${n(b.productionVolume)}</td><td>${n(b.hours)}</td><td>${n(b.hoursPerM3)}</td></tr>`).join('')}</tbody></table>
-  <p class="pc-context">Нормы и расценки хранятся в базе с историей изменений. Бетон округляется до 0,01 м³, нормируемая сталь — вверх до 0,001 т. Материал без цены считается по нулю — стоимость такого изделия занижена, пока цена не задана. Неподтверждённый объём не участвует в оценке труда.</p>`;
+  </section></fieldset><div class="pc-norms-actions"><button type="submit" ${writer?'':'disabled'}>Сохранить расценки и нормы</button><span id="pc-norms-status" class="pc-context" role="status" aria-live="polite"></span></div></form>
+  <details><summary>Основание норм и методика</summary><h3>Основание норм</h3><table class="pc-norms-basis"><thead><tr><th>Изделие</th><th>Бетон по проекту, м³</th><th>Бетон в Excel, м³</th><th>Труд в Excel, чел·ч</th><th>Труд / м³</th></tr></thead><tbody>${np.basis.map(b=>`<tr><td>${esc(b.name)}</td><td>${n(b.projectVolume)}</td><td>${n(b.productionVolume)}</td><td>${n(b.hours)}</td><td>${n(b.hoursPerM3)}</td></tr>`).join('')}</tbody></table>
+  <p class="pc-context">Нормы и расценки хранятся в базе с историей изменений. Бетон округляется до 0,01 м³, нормируемая сталь — вверх до 0,001 т. Материал без цены считается по нулю — стоимость такого изделия занижена, пока цена не задана. Неподтверждённый объём не участвует в оценке труда.</p></details>`;
+  window.CalcZhBIUI?.bindSettings(panel);
   const form=panel.querySelector('form'),search=panel.querySelector('#pc-prices-search'),empty=panel.querySelector('#pc-prices-empty'),count=panel.querySelector('#pc-prices-count');
   const filter=()=>{const q=search.value.trim().toLowerCase();let shown=0;for(const row of panel.querySelectorAll('#pc-prices-table tbody tr')){const input=row.querySelector('input'),zero=Number(read(input))===0,ok=(!q||row.dataset.name.includes(q))&&(!empty.checked||zero);row.hidden=!ok;shown+=ok;}count.textContent='Показано '+shown+' из '+materials.length+' · без цены: '+unpriced();};
   search.addEventListener('input',filter);empty.addEventListener('change',filter);filter();
@@ -72,7 +73,7 @@
  }
  open.addEventListener('click',async()=>{
   if(!panel.hidden){close();return;}
-  window.CalcZhBIProjectReport?.close();await api.ready();previousView=document.querySelector('.pc-tabs [data-view][aria-pressed=true]')?.dataset.view||'model';
+  window.CalcZhBIProjectReport?.close();window.CalcZhBIUI?.enter('norms');await api.ready();if(window.CalcZhBIUI?.section!=='norms')return;previousView=document.querySelector('.pc-tabs [data-view][aria-pressed=true]')?.dataset.view||'model';
   document.querySelector('.pc-tabs').hidden=true;for(const v of ['calculation','model','tech','issues','collisions','sources','sheets','history'])document.getElementById('pc-'+v+'-panel').hidden=true;
   panel.hidden=false;open.setAttribute('aria-pressed','true');panel.textContent='Загрузка расценок и норм…';
   try{[prices,norms]=await Promise.all([api.request('/calc/api/prices'),api.request('/calc/api/norms')]);render();}catch(e){panel.textContent=e.message;}

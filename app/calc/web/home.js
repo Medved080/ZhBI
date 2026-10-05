@@ -1,7 +1,7 @@
 (()=>{
  'use strict';
  // Главная страница калькулятора: готовность калькуляций по всем изделиям. Данные — GET /calc/api/readiness (app/calc/readiness.py), считаются на сервере
- // от каталога, чтений с листов и текущих расценок. Страница открывается при загрузке; выбор изделия, расценки и остальные разделы выводят с неё.
+ // от каталога, чтений с листов и текущих расценок. Готовность открывается отдельным разделом; при загрузке остаётся рабочая карточка изделия.
  const q=s=>document.querySelector(s),api=window.CalcZhBIAPI,main=q('.pc-main'),panel=q('#pc-home-panel');
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const num=n=>new Intl.NumberFormat('ru-RU').format(n),pct=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1}).format(n);
@@ -11,8 +11,8 @@
  const CELLS=[['volume','Объём'],['concreteClass','Класс'],['rebar','Арматура'],['embedded','Закладные, трубы, петли'],['prices','Цены'],['norms','Нормы'],['verified','Проверено'],['ready','Готово']];
 
  function isHome(){return main.dataset.home==='1';}
- function show(){main.dataset.home='1';q('#pc-home-open')?.setAttribute('aria-pressed','true');if(!data)load();}
- function leave(){if(!isHome())return;delete main.dataset.home;q('#pc-home-open')?.setAttribute('aria-pressed','false');}
+ function show(){window.CalcZhBINorms?.close();window.CalcZhBIProjectReport?.close();window.CalcZhBIUI?.enter('home');main.dataset.home='1';q('#pc-home-open')?.setAttribute('aria-pressed','true');if(!data)load();}
+ function leave(){if(!isHome())return;window.CalcZhBIUI?.products();delete main.dataset.home;q('#pc-home-open')?.setAttribute('aria-pressed','false');}
 
  const level=(n,total)=>n>=total&&total?'full':n>0?'part':'none';
  function bar(n,total){return `<span class="pc-home-bar" role="img" aria-label="${num(n)} из ${num(total)}"><span style="width:${share(n,total)}%"></span></span>`;}
@@ -79,7 +79,7 @@
  function render(){
   const d=data;
   panel.innerHTML=`<header class="pc-home-header"><div><div class="pc-context">Калькулятор ЖБИ</div><h2>Готовность калькуляций</h2></div><div class="pc-home-tools"><span class="pc-context" id="pc-home-stamp">Данные на ${new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}</span><button type="button" id="pc-home-refresh">Обновить</button><button type="button" id="pc-home-products">К изделиям →</button></div></header>
-   ${hero(d)}${owners(d)}${funnel(d)}${families(d)}${gaps(d)}${prices(d)}${origin(d)}${model3d(d)}`;
+   ${hero(d)}${model3d(d)}<details class="pc-home-detail"><summary>Что мешает завершить расчёты</summary>${owners(d)}${gaps(d)}</details><details class="pc-home-detail"><summary>Условия готовности и группы изделий</summary>${funnel(d)}${families(d)}</details><details class="pc-home-detail"><summary>Расценки и источники данных</summary>${prices(d)}${origin(d)}</details>`;
  }
 
  async function load(){
@@ -105,5 +105,4 @@
  document.addEventListener('click',event=>{
   if(isHome()&&event.target.closest('#pc-products .pc-product,#pc-project-report,#pc-sync-open,#pc-recovery-open,#pc-model-results-open'))leave();
  },true);
- show();
 })();

@@ -1,0 +1,125 @@
+/* Workspace layout. Existing component skins, dialogs and calculations stay in styles.css. */
+html{scrollbar-gutter:auto}
+#precast-concept [hidden]{display:none!important}
+#precast-concept .pc-shell{height:100dvh;min-height:0;grid-template-columns:300px minmax(0,1fr);grid-template-rows:46px minmax(0,1fr);border:0;border-radius:0}
+#precast-concept .pc-workspace-nav{grid-column:1/-1;display:flex;align-items:center;gap:4px;padding:0 16px;border-bottom:1px solid var(--pc-line);background:var(--pc-bg);min-width:0;z-index:5}
+#precast-concept .pc-workspace-nav .pc-brand{font-size:14px;margin:0 20px 0 0;white-space:nowrap}
+#precast-concept .pc-workspace-nav>button{height:46px;border:0;border-radius:0;background:transparent;padding:8px 12px;border-bottom:2px solid transparent;color:var(--pc-muted);white-space:nowrap;font-size:13px}
+#precast-concept .pc-workspace-nav>button[aria-current="page"]{border-bottom-color:var(--pc-accent);color:var(--pc-ink);font-weight:600;background:transparent}
+#precast-concept .pc-project-context{margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:26vw}
+#precast-concept summary{cursor:pointer;font-size:13px;padding:7px 10px;min-height:32px;list-style:none;border-radius:5px}
+#precast-concept summary::-webkit-details-marker{display:none}
+#precast-concept :is(.pc-service-menu,.pc-more-menu,.pc-row-menu){position:relative}
+#precast-concept .pc-menu-content{position:absolute;right:0;top:100%;width:max-content;max-width:min(320px,90vw);min-width:190px;background:var(--pc-bg);border:1px solid var(--pc-line);border-radius:7px;padding:5px;box-shadow:0 8px 24px #0002;z-index:20}
+#precast-concept .pc-menu-content button{display:block;width:100%;text-align:left;border:0;background:transparent;font-size:13px;padding:9px 12px}
+#precast-concept .pc-service-user{padding:10px;border-top:1px solid var(--pc-line);display:grid;gap:6px}
+#precast-concept .pc-sidebar{grid-column:1;grid-row:2;display:grid;grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr) auto;padding:0;gap:0;overflow:hidden;border-right:1px solid var(--pc-line);background:var(--pc-bg);min-width:0;min-height:0}
+#precast-concept .pc-catalog-head{padding:12px 12px 10px;border-bottom:1px solid var(--pc-line);min-width:0}
+#precast-concept .pc-catalog-title{display:flex;align-items:center;justify-content:space-between;gap:5px;margin-bottom:8px}
+#precast-concept .pc-catalog-title h3{font-weight:600;font-size:14px}
+#precast-concept .pc-catalog-title button{font-size:12px;padding:4px 7px;min-height:28px}
+#precast-concept .pc-search-row{display:flex;gap:4px;margin-bottom:8px;min-width:0}
+#precast-concept .pc-search-row input{flex:1;width:100%;min-width:0}
+#precast-concept #pc-search-clear{padding:4px 8px;min-width:30px}
+#precast-concept .pc-catalog-filters{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+#precast-concept .pc-catalog-filters button{font-size:12px;padding:5px 8px}
+#precast-concept .pc-product-search{font-size:13px;padding:7px 8px;height:34px}
+#precast-concept #pc-catalog-options-panel{padding-top:8px}
+#precast-concept #pc-product-count{margin-top:8px;font-variant-numeric:tabular-nums}
+#precast-concept .pc-select-all{margin-top:8px;font-size:12px;min-height:24px}
+#precast-concept .pc-product-list{display:flex;flex-direction:column;flex:initial;gap:2px;overflow:auto;min-height:0;padding:5px 7px;scrollbar-gutter:stable;overscroll-behavior:contain}
+#precast-concept .pc-group-toggle{min-height:32px;padding:6px 5px;font-size:12px}
+#precast-concept .pc-product-row{display:flex;align-items:center;gap:5px;min-height:32px;padding-left:3px;border-left:3px solid transparent;border-radius:5px}
+#precast-concept .pc-product-row:has(.pc-product[aria-pressed="true"]){border-left-color:var(--pc-accent);background:var(--sel)}
+#precast-concept .pc-product-row .pc-product{flex:1;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:8px;padding:5px 6px;min-height:32px;border:0;border-radius:0;background:transparent;color:var(--pc-ink);font-size:13px;min-width:0}
+#precast-concept .pc-product strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#precast-concept .pc-product .pc-row-status{font-size:11px;color:var(--pc-muted);white-space:nowrap;flex-shrink:0}
+#precast-concept .pc-product .pc-row-status[data-attention="true"]{color:light-dark(#8a560c,#efc47d)}
+#precast-concept .pc-export-check{flex-shrink:0;min-width:16px}
+#precast-concept[data-batch="false"] .pc-export-check{display:none}
+#precast-concept .pc-catalog-footer{padding:8px 10px;min-height:52px;border-top:1px solid var(--pc-line)}
+#precast-concept #pc-active-context{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:34px}
+#precast-concept #pc-catalog-active{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#precast-concept #pc-reveal-product{font-size:12px;border:0;background:transparent;color:var(--pc-accent);padding:4px 5px}
+#precast-concept .pc-export-actions{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:5px;margin:0}
+#precast-concept .pc-export-actions button{font-size:12px;padding:7px 8px}
+#precast-concept #pc-selected-count{font-size:12px;line-height:1.3}
+#precast-concept #pc-export-status{grid-column:1/-1;max-height:44px;overflow:auto}
+#precast-concept .pc-main{grid-column:2;grid-row:2;padding:16px 20px;display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:12px;min-height:0;min-width:0}
+#precast-concept:not([data-section="products"]) .pc-sidebar{display:none}
+#precast-concept:not([data-section="products"]) .pc-main{grid-column:1/-1;grid-template-rows:minmax(0,1fr);padding:20px 28px}
+#precast-concept[data-catalog-hidden="true"][data-section="products"] .pc-shell{grid-template-columns:0 minmax(0,1fr)}
+#precast-concept[data-catalog-hidden="true"][data-section="products"] .pc-sidebar{display:none}
+#precast-concept .pc-header{min-height:48px;align-items:center;gap:12px}
+#precast-concept .pc-header>div:first-child{width:auto;flex:1;min-width:0}
+#precast-concept h2{font-size:22px}
+#precast-concept .pc-header-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;max-width:60%}
+#precast-concept .pc-header-actions button{font-size:12px;min-height:32px}
+#precast-concept #pc-export-one{background:var(--pc-accent);border-color:var(--pc-accent);color:var(--accent-ink)}
+#precast-concept #pc-export-one-status:not(:empty){flex-basis:100%;text-align:right}
+#precast-concept #pc-export-one-status[data-error="true"]{color:var(--bad)}
+#precast-concept #pc-export-one-status:empty{display:none}
+#precast-concept .pc-tabs{display:flex;flex-wrap:wrap;gap:0;align-items:center;margin:0;padding:0;border-bottom:1px solid var(--pc-line);background:transparent}
+#precast-concept .pc-primary-tabs{display:flex;align-items:center;gap:2px}
+#precast-concept .pc-primary-tabs button{border-radius:0;background:transparent;border:0;border-bottom:2px solid transparent;padding:8px 11px;min-height:38px;font-size:13px;color:var(--pc-muted)}
+#precast-concept .pc-primary-tabs button[aria-selected="true"]{background:transparent;color:var(--pc-accent);border-bottom-color:var(--pc-accent);font-weight:600}
+#precast-concept .pc-more-menu{margin-left:auto}
+#precast-concept .pc-current-view{color:var(--pc-accent);font-weight:600}
+#precast-concept .pc-subtabs{flex-basis:100%;display:flex;gap:6px;padding:7px 0;border-top:1px solid var(--pc-line)}
+#precast-concept .pc-subtabs button{padding:4px 9px;font-size:12px;min-height:28px}
+#precast-concept .pc-subtabs button[aria-pressed="true"]{background:var(--sel);color:var(--pc-accent);border-color:transparent}
+#precast-concept #pc-calculation-panel:not([hidden]){display:grid;grid-template-rows:minmax(0,1fr)}
+#precast-concept .pc-calculation{display:grid;grid-template-rows:auto auto minmax(100px,1fr) auto auto;gap:10px;min-height:0}
+#precast-concept .pc-calculation-summary{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap;padding:0 0 12px;border-bottom:1px solid var(--pc-line)}
+#precast-concept .pc-calculation-summary>div{display:flex;flex-direction:column;gap:2px}
+#precast-concept .pc-calculation-summary strong{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+#precast-concept .pc-calculation-summary button{margin-left:auto;border:0;font-size:12px;padding:4px 8px}
+#precast-concept .pc-calculation-summary .pc-summary-note{flex-basis:100%;font-size:12px;color:light-dark(#8a560c,#efc47d)}
+#precast-concept .pc-table-head{flex-wrap:wrap;gap:8px}
+#precast-concept .pc-table-tools{flex-wrap:wrap;gap:12px}
+#precast-concept .pc-compare-control{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--pc-muted)}
+#precast-concept .pc-compare-control input{margin:0;accent-color:var(--pc-accent)}
+#precast-concept .pc-calculation[data-compare="false"] :is(.pc-baseline-col,.pc-baseline-cell,.pc-compare-head){display:none}
+#precast-concept .pc-calculation[data-compare="true"] .pc-compact-head{display:none}
+#precast-concept .pc-calculation[data-compare="false"] table{min-width:0;table-layout:fixed}
+#precast-concept .pc-calculation[data-compare="false"] .pc-col-article{width:34%}
+#precast-concept .pc-calculation[data-compare="false"] .pc-col-unit{width:8%}
+#precast-concept .pc-calculation[data-compare="false"] .pc-col-qty{width:16%}
+#precast-concept .pc-calculation[data-compare="false"] .pc-col-rate{width:20%}
+#precast-concept .pc-calculation[data-compare="false"] .pc-col-amount{width:22%}
+#precast-concept .pc-calculation td:nth-child(6){border-left:0}
+#precast-concept .pc-calculation[data-compare="true"] td:nth-child(6){border-left:1px solid var(--pc-line)}
+#precast-concept .pc-calculation td input.pc-manual{border-color:var(--pc-accent);background:var(--sel)}
+#precast-concept .pc-calculation :is(th,td){padding:6px 9px;font-size:13px}
+#precast-concept .pc-calculation .pc-article{color:var(--pc-ink)}
+#precast-concept .pc-calculation-footer{gap:8px 18px;grid-template-columns:minmax(0,1fr) auto}
+#precast-concept .pc-calculation-footer .pc-totals{gap:18px}
+#precast-concept .pc-totals strong{font-size:18px}
+#precast-concept .pc-row-menu .pc-menu-content{top:auto;bottom:100%;left:0;right:auto}
+#precast-concept .pc-commercial-reference{grid-template-columns:120px minmax(0,1fr) auto;padding:9px 12px;gap:12px}
+#precast-concept .pc-commercial-values strong{font-size:14px}
+#precast-concept .pc-commercial-values span{font-size:11px}
+#precast-concept :is(#pc-tech-panel,#pc-issues-panel,#pc-collisions-panel,#pc-sources-panel,#pc-sheets-panel,#pc-history-panel,#pc-norms-panel,#pc-project-report-panel){min-height:0;overflow:auto}
+#precast-concept .pc-home-hero{grid-template-columns:repeat(3,minmax(0,1fr));background:transparent;border:0;border-bottom:1px solid var(--pc-line);border-radius:0;padding:12px 0 20px}
+#precast-concept .pc-home-big strong{font-size:32px}
+#precast-concept .pc-home-actions{display:grid;gap:0}
+#precast-concept .pc-home-action{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 0;border-bottom:1px solid var(--pc-line)}
+#precast-concept .pc-home-action p{margin:3px 0;font-size:12px;color:var(--pc-muted)}
+#precast-concept .pc-home-detail{border-bottom:1px solid var(--pc-line);padding-bottom:8px}
+#precast-concept .pc-home-detail>summary{padding:10px 0;font-weight:500}
+#precast-concept .pc-home-detail>.pc-home-block{border:0;padding:4px 0 16px;border-radius:0}
+#precast-concept .pc-settings-tabs{display:flex;gap:6px;padding:12px 0 16px}
+#precast-concept .pc-settings-tabs button[aria-pressed="true"]{background:var(--sel);color:var(--pc-accent);border-color:var(--pc-accent)}
+#pc-reset-dialog{width:min(480px,calc(100vw - 30px));background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}
+#pc-reset-dialog h2{font-size:20px;margin-top:0}
+#pc-reset-dialog::backdrop{background:#0b1f3366}
+@media(min-width:1600px){#precast-concept .pc-shell{grid-template-columns:320px minmax(0,1fr)}#precast-concept .pc-main{padding:20px 28px}}
+@media(max-width:1150px){#precast-concept .pc-workspace-nav .pc-brand,#precast-concept .pc-project-context{display:none}#precast-concept .pc-service-menu{margin-left:auto}#precast-concept .pc-shell{grid-template-columns:280px minmax(0,1fr)}#precast-concept .pc-main{padding:12px 14px}#precast-concept .pc-header-actions{max-width:65%}#precast-concept .pc-calculation-footer{grid-template-columns:1fr}#precast-concept .pc-calculation-footer .pc-totals{justify-content:flex-start}#precast-concept #pc-vat{text-align:left}#precast-concept .pc-primary-tabs button{padding-inline:8px}#precast-concept .pc-calculation-summary{gap:10px 18px}}
+@media(max-width:740px){#precast-concept .pc-shell{display:flex;flex-direction:column;height:auto;min-height:100dvh;overflow:visible}#precast-concept .pc-workspace-nav{flex-wrap:wrap;min-height:46px;padding:0 5px;gap:0;position:sticky;top:0}#precast-concept .pc-workspace-nav>button{font-size:12px;padding-inline:8px;height:42px}#precast-concept .pc-service-menu summary{font-size:12px;padding:6px}#precast-concept .pc-sidebar{display:none;height:calc(100dvh - 46px);min-height:430px;border-right:0}#precast-concept[data-section="products"][data-picker-open="true"] .pc-sidebar{display:grid}#precast-concept[data-section="products"][data-picker-open="true"] .pc-main{display:none}#precast-concept .pc-main{display:grid;grid-template-rows:auto auto auto;padding:12px;gap:12px}#precast-concept:not([data-section="products"]) .pc-main{padding:16px 12px}#precast-concept .pc-header{flex-wrap:wrap}#precast-concept .pc-header>div:first-child{flex-basis:100%}#precast-concept .pc-header-actions{max-width:100%;justify-content:flex-start}#precast-concept .pc-header-actions button{font-size:12px}#precast-concept .pc-header-actions #pc-export-one-status{text-align:left}#precast-concept .pc-primary-tabs button{font-size:12px;padding-inline:7px}#precast-concept .pc-calculation{grid-template-rows:auto auto minmax(200px,400px) auto auto}#precast-concept .pc-calculation .pc-table-scroll{max-height:none}#precast-concept .pc-calculation[data-compare="false"] table{min-width:490px}#precast-concept .pc-calculation-summary{gap:10px 18px}#precast-concept .pc-calculation-summary button{margin-left:0}#precast-concept .pc-calculation .pc-table-head{margin:0}#precast-concept .pc-calculation-footer .pc-footer-actions,#precast-concept .pc-calculation-footer .pc-totals{margin:0}#precast-concept .pc-calculation-expanded{grid-template-rows:auto auto minmax(0,1fr) auto auto;padding:12px}#precast-concept .pc-home-hero{grid-template-columns:1fr;gap:14px}#precast-concept .pc-home-big{display:block}#precast-concept .pc-home-big strong{font-size:26px;margin-right:10px}#precast-concept .pc-home-action{flex-wrap:wrap;gap:8px}#precast-concept .pc-view-row{grid-template-columns:1fr;gap:12px}#precast-concept .pc-viewer{height:440px}}
+@media(pointer:coarse){#precast-concept :is(button,summary){min-height:44px}#precast-concept .pc-product-search{height:44px;font-size:16px}#precast-concept .pc-product-row .pc-product{min-height:44px}#precast-concept .pc-export-check{width:22px;height:22px}}
+
+#precast-concept .pc-calculation.pc-calculation-expanded{grid-template-rows:auto auto minmax(100px,1fr) auto auto}
+
+#precast-concept .pc-sidebar{grid-template-columns:minmax(0,1fr)}
+#precast-concept .pc-product-list{max-height:none}
+#precast-concept .pc-product-search::-webkit-search-cancel-button{display:none}

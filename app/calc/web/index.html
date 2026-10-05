@@ -8,50 +8,64 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23165d98'/%3E%3Cpath d='M9 6h14v20H9zM9 12h14M9 19h14M16 6v20' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="theme.css?v=20261004-skin-1">
   <link rel="stylesheet" href="styles.css?v=20261005-home-2">
+  <link rel="stylesheet" href="workspace.css?v=20261005-workspace-1">
   <script defer src="vendor/exceljs.min.js"></script>
   <script defer src="money-format.js?v=20261002-money-1"></script>
   <script defer src="export-xlsx.js?v=20261002-msu-template-2"></script>
   <script defer src="api-client.js?v=20261004-probe-1"></script>
+  <script defer src="workspace-ui.js?v=20261005-workspace-1"></script>
   <script defer src="project-files.js"></script>
   <script defer src="history.js?v=20261002-money-1"></script>
-  <script defer src="norms.js?v=20261005-prices-1"></script>
+  <script defer src="norms.js?v=20261005-prices-1-workspace-1"></script>
   <script defer src="source-sheets.js?v=20261004-calc-path-1"></script>
   <script defer src="commercial-reference.js?v=20261003-workspace-2"></script>
-  <script defer src="project-report.js?v=20261004-lite-1"></script>
+  <script defer src="project-report.js?v=20261004-lite-1-workspace-1"></script>
   <script defer src="collisions.js?v=20261004-collisions-4"></script>
-  <script defer src="app.js?v=20261005-readings-2"></script>
-  <script defer src="home.js?v=20261005-home-2"></script>
+  <script defer src="app.js?v=20261005-readings-2-workspace-1"></script>
+  <script defer src="home.js?v=20261005-home-2-workspace-1"></script>
   <script defer src="sync-panel.js?v=20261004-sync-3"></script>
   <script defer src="recovery.js?v=20261004-live-5"></script>
   <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js"}}</script>
   <script type="module" src="viewer-3d.js?v=20261004-collisions-3"></script>
 </head>
 <body>
-<div id="precast-concept" aria-label="Сервис калькуляции ЖБИ">
+<div id="precast-concept" data-section="products" data-batch="false" aria-label="Сервис калькуляции ЖБИ">
   <div class="pc-shell">
+    <nav class="pc-workspace-nav" aria-label="Разделы калькулятора">
+      <span class="pc-brand">Калькулятор ЖБИ</span>
+      <button id="pc-products-open" type="button" data-section="products" aria-current="page">Изделия</button>
+      <button id="pc-home-open" type="button" data-section="home" aria-pressed="false">Готовность</button>
+      <button id="pc-open-norms" type="button" data-section="norms" aria-pressed="false">Цены и нормы</button>
+      <button id="pc-project-report" type="button" data-section="reports" disabled>Отчёты</button>
+      <span id="pc-project-context" class="pc-context pc-project-context">Промышленный корпус</span>
+      <details class="pc-service-menu"><summary>Сервис ▾</summary><div class="pc-menu-content">
+        <button id="pc-recovery-open" type="button">Обработка данных</button>
+        <button id="pc-model-results-open" type="button">Результаты обработки</button>
+        <button id="pc-sync-open" type="button" hidden>Передача на серверы</button>
+        <div class="pc-context pc-service-user"><span id="pc-current-user">Подключение к серверу…</span><button id="pc-logout" type="button" hidden>К трекеру ЖБИ</button><span id="pc-migration-status" role="status"></span></div>
+      </div></details>
+    </nav>
     <aside class="pc-sidebar">
-      <div class="pc-brand">Калькулятор ЖБИ</div>
-      <button id="pc-home-open" class="pc-home-open" type="button" aria-pressed="true">Главная · готовность</button>
-      <div class="pc-context">Промышленный корпус</div>
-      <div class="pc-section-label">Изделия</div>
-      <input id="pc-product-search" class="pc-product-search" type="search" placeholder="Наименование или марка" aria-label="Поиск изделий">
-      <select id="pc-product-grouping" class="pc-product-search" aria-label="Группировка изделий"><option value="album">По альбомам</option><option value="type">По типам изделий</option><option value="none">Без группировки</option></select>
-      <select id="pc-product-filter" class="pc-product-search" aria-label="Альбом изделий"><option value="">Все альбомы</option></select>
-      <div id="pc-product-count" class="pc-context"></div>
-      <section id="pc-model-progress" class="pc-model-progress" aria-label="Обработка 3D-моделей по всей базе" aria-live="polite"></section>
-      <button id="pc-recovery-open" type="button">Обработка изделий · Qwen</button>
-      <label class="pc-select-all"><input id="pc-select-all" type="checkbox"> Выбрать найденные</label>
-      <div class="pc-model-legend"><span class="pc-model-ready" aria-hidden="true">✓</span> Полная модель</div>
+      <div class="pc-catalog-head">
+        <div class="pc-catalog-title"><h3>Изделия</h3><button id="pc-batch-toggle" type="button" aria-pressed="false">Выбрать несколько</button><button id="pc-catalog-close" type="button" hidden aria-label="Вернуться к карточке изделия">×</button></div>
+        <div class="pc-search-row"><input id="pc-product-search" class="pc-product-search" type="search" placeholder="Найти марку изделия" aria-label="Поиск изделий"><button id="pc-search-clear" type="button" hidden aria-label="Очистить поиск">×</button></div>
+        <div class="pc-catalog-filters"><select id="pc-product-filter" class="pc-product-search" aria-label="Альбом изделий"><option value="">Все альбомы</option></select><button id="pc-catalog-options" type="button" aria-expanded="false" aria-controls="pc-catalog-options-panel">Вид ▾</button></div>
+        <div id="pc-catalog-options-panel" hidden><label class="pc-context" for="pc-product-grouping">Группировка</label><select id="pc-product-grouping" class="pc-product-search" aria-label="Группировка изделий"><option value="album">По альбомам</option><option value="type">По типам изделий</option><option value="none">Без группировки</option></select></div>
+        <div id="pc-product-count" class="pc-context" role="status"></div>
+        <label class="pc-select-all" hidden><input id="pc-select-all" type="checkbox"> Выбрать найденные</label>
+      </div>
       <div id="pc-products" class="pc-product-list"></div>
-      <div class="pc-export-actions"><span id="pc-selected-count" class="pc-context">Выбрано: 1</span><button id="pc-export" class="pc-export-button cursor-interaction" type="button">Выгрузить XLSX</button><span id="pc-export-status" class="pc-context" role="status" aria-live="polite"></span></div>
-      <button id="pc-project-report" disabled class="pc-project-report-button" type="button">Отчёт по всему проекту</button>
-      <button id="pc-sync-open" class="pc-project-report-button" type="button" hidden>Передача на серверы</button>
-      <div class="pc-context pc-bottom"><span id="pc-current-user">Подключение к серверу…</span><button id="pc-logout" type="button" hidden>К трекеру ЖБИ</button><span id="pc-migration-status" role="status"></span></div>
+      <div class="pc-catalog-footer"><div id="pc-active-context"><span id="pc-catalog-active" class="pc-context"></span><button id="pc-reveal-product" type="button">Показать</button></div><div class="pc-export-actions" hidden><span id="pc-selected-count" class="pc-context">Выбрано: 0</span><button id="pc-selection-clear" type="button">Снять</button><button id="pc-export" class="pc-export-button cursor-interaction" type="button" disabled>XLSX · 0</button><span id="pc-export-status" class="pc-context" role="status" aria-live="polite"></span></div></div>
     </aside>
-    <main class="pc-main" data-home="1">
-      <section id="pc-home-panel" class="pc-home" aria-label="Готовность калькуляций" aria-live="polite"></section>
-      <header class="pc-header"><div><div class="pc-card-context"><span class="pc-context">Карточка изделия</span><span id="pc-model-readiness" class="pc-model-readiness"></span></div><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-open-norms" type="button" aria-pressed="false">Расценки и нормы</button></div></header>
-      <nav class="pc-tabs" aria-label="Разделы изделия"><button class="cursor-interaction" data-view="calculation" aria-pressed="true" aria-controls="pc-calculation-panel">Калькуляция</button><button class="cursor-interaction" data-view="model" aria-pressed="false" aria-controls="pc-model-panel">Модель и параметры</button><button class="cursor-interaction" data-view="tech" aria-pressed="false">Технология</button><button class="cursor-interaction" data-view="issues" aria-pressed="false">Расхождения и вопросы</button><button class="cursor-interaction" data-view="collisions" aria-pressed="false">Коллизии</button><button class="cursor-interaction" data-view="sources" aria-pressed="false">Файлы и основания</button><button class="cursor-interaction" data-view="sheets" aria-pressed="false">Исходные листы</button><button class="cursor-interaction" data-view="history" aria-pressed="false">История</button></nav>
+    <main class="pc-main">
+      <section id="pc-home-panel" class="pc-home" hidden aria-label="Готовность калькуляций"></section>
+      <header class="pc-header"><div><span id="pc-card-context" class="pc-context">Карточка изделия</span><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><button id="pc-catalog-open" type="button">Выбрать изделие</button><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-export-one" class="pc-export-button" type="button" disabled>XLSX изделия</button><span id="pc-export-one-status" class="pc-context" role="status" aria-live="polite"></span></div></header>
+      <div class="pc-tabs">
+        <nav class="pc-primary-tabs" role="tablist" aria-label="Разделы изделия"><button id="pc-tab-calculation" type="button" role="tab" data-view="calculation" aria-pressed="true" aria-selected="true" aria-controls="pc-calculation-panel">Калькуляция</button><button id="pc-tab-model" type="button" role="tab" data-view="model" aria-pressed="false" aria-selected="false" aria-controls="pc-model-panel" tabindex="-1">Модель</button><button id="pc-tab-documents" type="button" role="tab" data-tab-group="documents" aria-selected="false" aria-controls="pc-sheets-panel" tabindex="-1">Документы</button><button id="pc-tab-review" type="button" role="tab" data-tab-group="review" aria-selected="false" aria-controls="pc-issues-panel" tabindex="-1">Проверка</button></nav>
+        <details class="pc-more-menu"><summary>Ещё ▾</summary><div class="pc-menu-content"><button type="button" data-view="tech" aria-pressed="false" aria-controls="pc-tech-panel">Технология</button><button type="button" data-view="history" aria-pressed="false" aria-controls="pc-history-panel">История</button></div></details>
+        <nav class="pc-subtabs" aria-label="Документы изделия" data-subtabs="documents" hidden><button type="button" data-view="sheets" aria-pressed="false" aria-controls="pc-sheets-panel">Исходные листы</button><button type="button" data-view="sources" aria-pressed="false" aria-controls="pc-sources-panel">Файлы и основания</button></nav>
+        <nav class="pc-subtabs" aria-label="Проверка изделия" data-subtabs="review" hidden><button type="button" data-view="issues" aria-pressed="false" aria-controls="pc-issues-panel">Расхождения и вопросы</button><button type="button" data-view="collisions" aria-pressed="false" aria-controls="pc-collisions-panel">Коллизии</button></nav>
+      </div>
       <section id="pc-norms-panel" hidden aria-label="Расценки и нормы"></section>
       <section id="pc-project-report-panel" hidden aria-label="Отчёт по всему проекту"></section>
       <div id="pc-model-panel" hidden>
@@ -63,15 +77,16 @@
             <div id="pc-model-layers" class="pc-model-layers" aria-label="Группы армирования"></div>
             <div id="pc-model-pick" class="pc-context" role="status" aria-live="polite"></div>
           </div>
-          <div class="pc-properties"><div class="pc-section-label" id="pc-property-heading">Параметры изделия</div><dl><dt>Расход бетона</dt><dd id="pc-volume"></dd><dt id="pc-weight-label">Арматура</dt><dd id="pc-weight"></dd><dt>Трудоёмкость</dt><dd id="pc-hours"></dd><dt>Основание расчёта</dt><dd id="pc-source-label"></dd></dl><button id="pc-edit-product" class="cursor-interaction pc-edit-product" type="button">Изменить параметры изделия…</button><dl id="pc-project-properties" hidden></dl><div class="pc-context" id="pc-geometry-note"></div><div id="pc-collision-card" class="pc-collision-card" hidden></div><button id="pc-product-issues-link" type="button" hidden></button></div>
+          <div class="pc-properties"><div class="pc-section-label" id="pc-property-heading">Параметры изделия</div><span id="pc-model-readiness" class="pc-model-readiness"></span><dl><dt>Расход бетона</dt><dd id="pc-volume"></dd><dt id="pc-weight-label">Арматура</dt><dd id="pc-weight"></dd><dt>Трудоёмкость</dt><dd id="pc-hours"></dd><dt>Основание расчёта</dt><dd id="pc-source-label"></dd></dl><button id="pc-edit-product" class="cursor-interaction pc-edit-product" type="button">Изменить параметры изделия…</button><dl id="pc-project-properties" hidden></dl><div class="pc-context" id="pc-geometry-note"></div><div id="pc-collision-card" class="pc-collision-card" hidden></div><button id="pc-product-issues-link" type="button" hidden></button></div>
         </div>
       </div>
       <div id="pc-calculation-panel">
-        <section id="pc-calculation" class="pc-calculation" aria-labelledby="pc-calculation-heading">
-        <div class="pc-table-head"><h3 id="pc-calculation-heading">Калькуляция на 1 изделие</h3><div class="pc-table-tools"><span id="pc-calculation-product"></span><span>Все цены без НДС</span><button id="pc-calculation-expand" type="button" aria-label="Развернуть калькуляцию" aria-expanded="false">Развернуть</button></div></div>
-        <div class="pc-table-scroll" tabindex="0" role="region" aria-label="Статьи калькуляции, прокручиваемая таблица"><table><colgroup><col class="pc-col-article"><col class="pc-col-unit"><col class="pc-col-qty"><col class="pc-col-rate"><col class="pc-col-amount"><col class="pc-col-qty"><col class="pc-col-rate"><col class="pc-col-amount"></colgroup><thead><tr><th rowspan="2" scope="col">Статья</th><th rowspan="2" scope="col">Ед.</th><th colspan="3" scope="colgroup">Расчёт сервиса</th><th colspan="3" scope="colgroup">Моя калькуляция</th></tr><tr><th scope="col">Объём</th><th scope="col">Цена</th><th scope="col">Сумма</th><th scope="col">Объём</th><th scope="col">Цена</th><th scope="col">Сумма</th></tr></thead><tbody id="pc-rows"></tbody></table></div>
+        <section id="pc-calculation" class="pc-calculation" data-compare="false" aria-labelledby="pc-calculation-heading">
+        <div id="pc-calculation-summary" class="pc-calculation-summary"></div>
+        <div class="pc-table-head"><h3 id="pc-calculation-heading">Калькуляция на 1 изделие</h3><div class="pc-table-tools"><span id="pc-calculation-product"></span><label class="pc-compare-control"><input id="pc-compare" type="checkbox"> Сравнить с расчётом сервиса</label><button id="pc-calculation-expand" type="button" aria-label="Развернуть калькуляцию" aria-expanded="false">Развернуть</button></div></div>
+        <div class="pc-table-scroll" tabindex="0" role="region" aria-label="Статьи калькуляции, прокручиваемая таблица"><table><colgroup><col class="pc-col-article"><col class="pc-col-unit"><col class="pc-col-qty pc-baseline-col"><col class="pc-col-rate pc-baseline-col"><col class="pc-col-amount pc-baseline-col"><col class="pc-col-qty"><col class="pc-col-rate"><col class="pc-col-amount"></colgroup><thead><tr class="pc-compact-head"><th scope="col">Статья</th><th scope="col">Ед.</th><th scope="col">Количество</th><th scope="col">Цена, ₽</th><th scope="col">Сумма, ₽</th></tr><tr class="pc-compare-head"><th rowspan="2" scope="col">Статья</th><th rowspan="2" scope="col">Ед.</th><th colspan="3" scope="colgroup">Расчёт сервиса</th><th colspan="3" scope="colgroup">Моя калькуляция</th></tr><tr class="pc-compare-head"><th scope="col">Количество</th><th scope="col">Цена</th><th scope="col">Сумма</th><th scope="col">Количество</th><th scope="col">Цена</th><th scope="col">Сумма</th></tr></thead><tbody id="pc-rows"></tbody></table></div>
         <div class="pc-calculation-footer">
-        <div class="pc-footer-actions"><button id="pc-add" class="cursor-interaction">+ Добавить статью</button><button id="pc-clear" class="cursor-interaction">Сбросить корректировки</button><span class="pc-context">Пустое поле — использовать расчёт</span></div>
+        <div class="pc-footer-actions"><button id="pc-add" type="button" class="cursor-interaction">+ Добавить статью</button><details class="pc-row-menu"><summary>Действия ▾</summary><div class="pc-menu-content"><button id="pc-clear" type="button" class="cursor-interaction">Сбросить корректировки</button></div></details><span class="pc-context">Пустое поле — расчёт сервиса · синим выделены корректировки</span></div>
         <div class="pc-totals" aria-live="polite"><div><span>Расчёт без НДС</span><strong id="pc-baseline"></strong></div><div><span>Моя цена без НДС</span><strong id="pc-effective"></strong></div><div><span>Отклонение</span><strong id="pc-delta"></strong></div></div>
         <div class="pc-context" id="pc-vat"></div>
         </div>
@@ -89,6 +104,7 @@
   <dialog id="pc-model-results-dialog" aria-labelledby="pc-model-results-title"><div class="pc-results-heading"><h2 id="pc-model-results-title">Результаты исполнителей</h2><button id="pc-model-results-close" type="button" aria-label="Закрыть результаты">×</button></div><div id="pc-model-results-content"></div></dialog>
   <dialog id="pc-commercial-dialog" aria-labelledby="pc-commercial-dialog-title"><div class="pc-commercial-dialog-heading"><div><span class="pc-context">Справочная цена · сравнение с сохранённой калькуляцией</span><h2 id="pc-commercial-dialog-title">Ориентир КП</h2></div><button id="pc-commercial-close" type="button" aria-label="Закрыть ориентир КП" autofocus>×</button></div><div id="pc-commercial-content"></div></dialog>
 </div>
+<dialog id="pc-reset-dialog" aria-labelledby="pc-reset-title"><h2 id="pc-reset-title">Сбросить корректировки?</h2><p id="pc-reset-description"></p><p>Расчёт сервиса сохранится. Ручные значения и дополнительные статьи этого изделия будут удалены.</p><div class="pc-dialog-actions"><button id="pc-reset-cancel" type="button" autofocus>Отмена</button><button id="pc-reset-confirm" type="button">Сбросить</button></div></dialog>
 <dialog id="pc-product-dialog" aria-labelledby="pc-dialog-title">
   <form id="pc-product-form">
     <div class="pc-dialog-heading"><h2 id="pc-dialog-title">Новое изделие</h2><button id="pc-dialog-close" type="button" aria-label="Закрыть">×</button></div>

@@ -5,7 +5,7 @@
  const date=s=>new Date(s).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'});
  const sources=(issue,productId=issue.productId)=>(issue.sources||[]).map(s=>`<a href="${esc(s.url)}" data-source-product="${esc(productId)}">${esc(s.label||s.sourceId)} · PDF стр. ${s.pdfPage}</a>`).join(' · ');
  let report=null,previousView='model',page=0,request=0;
- function close(){if(panel.hidden)return;request++;panel.hidden=true;q('.pc-tabs').hidden=false;q('#pc-'+previousView+'-panel').hidden=false;}
+ function close(){if(panel.hidden)return;request++;panel.hidden=true;q('.pc-tabs').hidden=false;q('#pc-'+previousView+'-panel').hidden=false;if(window.CalcZhBIUI?.section==='reports')window.CalcZhBIUI.enter('products');}
  function renderProduct(product){
   if(product.discrepancies===undefined){q('#pc-product-discrepancies').hidden=false;q('#pc-product-discrepancies').innerHTML='<h3>Технические вопросы</h3><p class="pc-context" role="status">Загрузка…</p>';return;}
   const collisionText=/пересек|пересеч|коллиз|проникнов|столкнов/i,all=[...(product.discrepancies||[]),...(product.dataIssues||[])],items=all.filter(i=>!collisionText.test(i.title+' '+i.description)),allPending=product.documentModel?.solidModel?.pending||product.documentModel?.preview3d?.pendingReinforcement||[],pending=allPending.filter(p=>!collisionText.test(p)),host=q('#pc-product-discrepancies');
@@ -33,7 +33,7 @@
   try{await window.CalcZhBIWorkspace?.flush();const result=await api.request('/calc/api/project-report');if(serial!==request||panel.hidden)return;report=result;page=0;render();}
   catch(e){if(serial===request){panel.innerHTML=`<p>${esc(e.message)}</p><button id="pc-report-close" type="button">Вернуться к изделию</button>`;q('#pc-report-close').addEventListener('click',close);}}
  }
- function open(){window.CalcZhBINorms?.close();previousView=q('.pc-tabs [data-view][aria-pressed="true"]')?.dataset.view||'model';q('.pc-tabs').hidden=true;for(const view of ['calculation','model','tech','issues','collisions','sources','sheets','history'])q('#pc-'+view+'-panel').hidden=true;panel.hidden=false;void load();}
+ function open(){window.CalcZhBINorms?.close();window.CalcZhBIUI?.enter('reports');previousView=q('.pc-tabs [data-view][aria-pressed="true"]')?.dataset.view||'model';q('.pc-tabs').hidden=true;for(const view of ['calculation','model','tech','issues','collisions','sources','sheets','history'])q('#pc-'+view+'-panel').hidden=true;panel.hidden=false;void load();}
  function table(workbook,name,headers,rows,widths){
   const sheet=workbook.addWorksheet(name,{views:[{state:'frozen',ySplit:1}],pageSetup:{orientation:'landscape',paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0}});
   sheet.columns=headers.map((header,i)=>({header,width:widths[i]||25}));sheet.addRows(rows);sheet.autoFilter={from:{row:1,column:1},to:{row:rows.length+1,column:headers.length}};
