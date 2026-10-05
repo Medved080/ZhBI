@@ -7539,7 +7539,6 @@ async function openObjectHome(objectId) {
   const закрыть = o.kind === "mfr" ? "Открыть модель МФР" : "Открыть схему";
   box.innerHTML = `
     <div class="ohv-head">
-      ${o.has_avatar ? `<img class="ohv-avatar" src="/objects/${o.id}/avatar?t=${Date.now()}" alt="">` : ""}
       <div class="ohv-titles">
         <div class="ohv-crumb">${e(o.project_name)}</div>
         <h2 class="ohv-title">${e(o.name)}</h2>
@@ -7553,6 +7552,10 @@ async function openObjectHome(objectId) {
     </div>
     <div class="ohv-grid">
       <div class="ohv-col">
+        <figure class="ohv-photo${o.has_photo ? "" : " ohv-photo-empty"}" title="${o.has_photo ? "" : "Фото не добавлено — показана заглушка"}">
+          <img src="${o.has_photo ? `/objects/${o.id}/photo?t=${Date.now()}` : "/static/object-photo-placeholder.webp"}" alt="${o.has_photo ? "Фото объекта" : "Фото не добавлено"}"
+            data-fallback="/static/object-photo-placeholder.webp">
+        </figure>
         <section class="ohv-card"><h4>Реквизиты</h4><dl class="ohv-dl">
           ${строка("Проект", e(o.project_name))}${строка("Статус", e(OBJECT_STATUS_RU[o.status] || o.status))}${строка("Тип учёта", e(OBJECT_KIND_RU[o.kind] || o.kind))}
           ${строка("Адрес", e(o.address))}${строка("Координаты", есть ? `${e(o.lat)}, ${e(o.lon)}` : "")}
@@ -7578,6 +7581,9 @@ async function openObjectHome(objectId) {
   box.scrollTop = 0;
   const править = () => { closeObjectHome(); openCatalog(); };
   document.getElementById("ohv-open").addEventListener("click", closeObjectHome);
+  // Фото не загрузилось — вместо пустой рамки та же заглушка.
+  const фото = box.querySelector(".ohv-photo img");
+  фото?.addEventListener("error", () => { if (фото.getAttribute("src") !== фото.dataset.fallback) { фото.src = фото.dataset.fallback; фото.closest(".ohv-photo")?.classList.add("ohv-photo-empty"); } });
   document.getElementById("ohv-edit").addEventListener("click", править);
   document.getElementById("ohv-edit2")?.addEventListener("click", править);
   if (есть) {

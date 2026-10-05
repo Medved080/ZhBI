@@ -5088,6 +5088,10 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
         смус = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM smu_catalog")}
         физлица = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM individuals")}
         команды = object_team.teams_by_object(conn)
+        # Первая картинка среди вложений объекта — запасное фото заглавной страницы, когда превью не назначено (одним запросом на все).
+        _рядом = ",".join("?" * len(AVATAR_MIME))
+        картинки_вложений = {r["entity_id"] for r in conn.execute(
+            f"SELECT DISTINCT entity_id FROM attachments WHERE entity_type = 'object' AND content_type IN ({_рядом})", AVATAR_MIME)}
         # Раньше отдавались ВСЕ объекты всем вошедшим — это и был готовый
         # «каталог целей» для перебора id в /plan-data и отчётах: имена,
         # адреса, счётчики и имена файлов чертежей (аудит безопасности
@@ -5155,6 +5159,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
                 avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
+                has_photo=(bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False) or row["id"] in картинки_вложений,
                 team=команды.get(row["id"], {}),
                 version=_object_version(row, команды.get(row["id"])),
                 **_адрес_из_строки(row),
@@ -5407,6 +5412,34 @@ def get_object_avatar(object_id: int, user: sqlite3.Row = Depends(get_current_us
         content=путь.read_bytes(), media_type=вложение["content_type"],
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+@app.get("/objects/{object_id}/photo")
+def get_object_photo(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Фото объекта для заглавной страницы: назначенное превью, а если его нет — первая картинка среди вложений объекта.
+    Тип ограничен тем же закрытым списком растровых форматов (AVATAR_MIME), что у превью, поэтому отдаётся своим content_type и
+    безопасно для <img> (см. get_object_avatar). Нет ни того, ни другого — 404, страница рисует заглушку."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT avatar_attachment_id FROM objects WHERE id = ?", (object_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Объект не найден")
+        assert_object_feature(conn, user, object_id, "attachments", "read")
+        вложение = attachment_row(conn, row["avatar_attachment_id"]) if row["avatar_attachment_id"] is not None else None
+        if вложение is None or (вложение["content_type"] or "") not in AVATAR_MIME:
+            рядом = ",".join("?" * len(AVATAR_MIME))
+            вложение = conn.execute(
+                f"SELECT * FROM attachments WHERE entity_type = 'object' AND entity_id = ? AND content_type IN ({рядом}) "
+                "ORDER BY id LIMIT 1", (object_id, *AVATAR_MIME)).fetchone()
+        if вложение is None:
+            raise HTTPException(status_code=404, detail="У объекта нет фото")
+    finally:
+        conn.close()
+    путь = ATTACHMENTS_DIR / вложение["stored_name"]
+    if not путь.is_file():
+        raise HTTPException(status_code=410, detail="Файл фото отсутствует на диске")
+    return Response(content=путь.read_bytes(), media_type=вложение["content_type"],
+                    headers={"Cache-Control": "private, max-age=300"})
 
 
 def _subtypes_object(conn, object_id: Optional[int]) -> int:

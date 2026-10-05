@@ -43,7 +43,6 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
     const links = LINKS.filter(([key]) => isAllowed?.(key)).map(([key, label]) => `<button type="button" class="v2-btn v2-primary" data-go="${esc(key)}">${esc(label)}</button>`).join("");
     page.innerHTML = `
       <div class="oh-head">
-        ${o.has_avatar ? `<img class="oh-avatar" src="/objects/${o.id}/avatar?t=${Date.now()}" alt="">` : ""}
         <div class="oh-titles">
           <div class="oh-crumb">${esc(o.project_name || "")}</div>
           <h2 class="oh-title">${esc(o.name)}</h2>
@@ -54,6 +53,10 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
       </div>
       <div class="oh-grid">
         <div class="oh-col">
+          <figure class="oh-photo${o.has_photo ? "" : " oh-photo-empty"}" title="${o.has_photo ? "" : "Фото не добавлено — показана заглушка"}">
+            <img src="${o.has_photo ? `/objects/${o.id}/photo?t=${Date.now()}` : "/static/object-photo-placeholder.webp"}" alt="${o.has_photo ? "Фото объекта" : "Фото не добавлено"}"
+              data-fallback="/static/object-photo-placeholder.webp">
+          </figure>
           <section class="oh-card"><h3>Реквизиты</h3><dl class="oh-dl">
             ${row("Проект", esc(o.project_name))}${row("Статус", esc(STATUS[o.status] || o.status))}${row("Тип учёта", esc(KIND[o.kind] || o.kind))}
             ${row("Адрес", esc(o.address))}${row("Координаты", coords ? `${esc(o.lat)}, ${esc(o.lon)}` : "")}
@@ -74,6 +77,9 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
         </section>
       </div>`;
     for (const b of page.querySelectorAll("[data-go]")) b.addEventListener("click", () => go?.(b.dataset.go));
+    // Фото не загрузилось (файл удалён с диска, нет доступа) — вместо пустой рамки показываем ту же заглушку.
+    const img = page.querySelector(".oh-photo img");
+    img?.addEventListener("error", () => { if (img.getAttribute("src") !== img.dataset.fallback) { img.src = img.dataset.fallback; img.closest(".oh-photo")?.classList.add("oh-photo-empty"); } });
     if (coords) {
       const box = page.querySelector("#oh-map");
       ensureMapModule(api).then((m) => m.createPinMap(box, { lat: o.lat, lon: o.lon, canEdit: false, onMove: () => {} }))
