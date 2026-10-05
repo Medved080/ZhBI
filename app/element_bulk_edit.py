@@ -88,6 +88,10 @@ COLUMNS = [
     ("project_delivery_date", FIELD_LABELS["project_delivery_date"], True),
     # Прогноз последней актуализации графика (2026-10-01, живой запрос) — только для чтения; у смонтированных — факт
     # (см. schedule_versions.forecast_dates). Загрузкой не правится: даты версий графика меняет загрузка графика.
+    # «Требуемая дата поставки» (2026-10-05, протокол 4Q26, A3) — та же величина, что колонка одноимённого отчёта «Статус
+    # комплектации»: начало СМР последней актуализации, у смонтированных пусто (факт — в «Фактической дате поставки»).
+    # Нужна рядом с плановой датой, чтобы сравнивать их, не выгружая второй файл. Только для чтения.
+    ("need_delivery_date", "Требуемая дата поставки", False),
     ("forecast_smr_start_date", "Начало СМР (прогноз)", False),
     ("forecast_smr_end_date", "Завершение СМР (прогноз)", False),
     ("comment", FIELD_LABELS["comment"], True),
@@ -193,6 +197,7 @@ def _element_rows(conn, element_ids: Optional[set] = None) -> list:
         f = прогноз.get(r["id"])
         d["forecast_smr_start_date"] = f[0] if f else None
         d["forecast_smr_end_date"] = f[1] if f else None
+        d["need_delivery_date"] = f[0] if f and not f[2] else None
         out.append(d)
     return out
 
@@ -202,7 +207,7 @@ def _element_rows(conn, element_ids: Optional[set] = None) -> list:
 # фактическая. `actual_delivery_date` тоже дата, хотя и не правится.
 _DATE_COLUMNS = {"planned_delivery_date", "project_smr_start_date",
                  "project_delivery_date", "actual_delivery_date",
-                 "forecast_smr_start_date", "forecast_smr_end_date"}
+                 "forecast_smr_start_date", "forecast_smr_end_date", "need_delivery_date"}
 
 
 def display_values(row, contract_by_id: dict) -> dict:

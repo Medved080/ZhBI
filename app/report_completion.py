@@ -84,6 +84,11 @@ COLUMNS = [
     {"key": "plan_date", "label": "Плановая дата поставки", "kind": "date"},
     {"key": "fact_date", "label": "Фактическая дата поставки", "kind": "date"},
     {"key": "need_date", "label": "Требуемая дата поставки", "kind": "date"},
+    # Контроль сроков (2026-10-05, протокол 4Q26, A3): то, что на совещаниях по комплектации каждый раз добавляли в
+    # выгрузку руками. ИСТИНА — плановая дата поставки не позже требуемой (срок соблюдён), ЛОЖЬ — поставка позже
+    # требуемой; отклонение — плановая минус требуемая в днях (плюс = опоздание). Нет любой из двух дат — пусто.
+    {"key": "deadline_ok", "label": "Проверка сроков (плановая ≤ требуемой)", "kind": "text"},
+    {"key": "delay_days", "label": "Отклонение, дней", "kind": "num"},
     # GUID — последней колонкой: читают отчёт по левым колонкам («кран,
     # стоянка, марка»), а GUID нужен при сверке с внешним перечнем и
     # копировании, и в начале строки он только отодвигал бы смысл вправо.
@@ -140,6 +145,17 @@ def _sort_key(value):
     реквизиты — текстом; общий ключ приводит и то, и другое к одному виду."""
     text = "" if value is None else str(value)
     return (1, []) if not text else (0, natural_key(text))
+
+
+def delivery_delay_days(plan_date, need_date) -> Optional[int]:
+    """Плановая минус требуемая дата поставки в днях (плюс — опоздание); None, если нет любой из дат."""
+    from datetime import date
+    if not plan_date or not need_date:
+        return None
+    try:
+        return (date.fromisoformat(str(plan_date)[:10]) - date.fromisoformat(str(need_date)[:10])).days
+    except ValueError:
+        return None
 
 
 def build_completion_report(conn, source_file: Optional[str],
@@ -221,6 +237,10 @@ def build_completion_report(conn, source_file: Optional[str],
         # XLS-экспорте: одна функция на все места (app/contracts.py).
         return build_document_label(number, date_str) if number else None
 
+    def deadline_cells(plan_date, need_date):
+        days = delivery_delay_days(plan_date, need_date)
+        return (None, None) if days is None else ("ИСТИНА" if days <= 0 else "ЛОЖЬ", days)
+
     out = [{
         "crane": zone_value(r["crane_number"], r["crane_name"]),
         "stance": zone_value(r["stance_number"], r["stance_name"]),
@@ -243,6 +263,8 @@ def build_completion_report(conn, source_file: Optional[str],
         "plan_date": r["plan_date"] or None,
         "fact_date": r["fact_date"] or None,
         "need_date": r["need_date"] or None,
+        "deadline_ok": deadline_cells(r["plan_date"], r["need_date"])[0],
+        "delay_days": deadline_cells(r["plan_date"], r["need_date"])[1],
         "guid": r["guid"] or None,
     } for r in rows]
     out.sort(key=lambda row: tuple(_sort_key(row[k]) for k in SORT_KEYS))
@@ -402,7 +424,7 @@ def build_completion_report_xlsx(report: dict) -> bytes:
     widths = {"crane": 8, "stance": 10, "element_type": 18, "subtype": 26,
               "mark": 20, "count": 9, "counterparty": 22, "agreement": 22,
               "specification": 22, "plan_date": 16, "fact_date": 18, "need_date": 16,
-              "status": 16, "guid": 34}
+              "deadline_ok": 18, "delay_days": 12, "status": 16, "guid": 34}
     for i, c in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(i)].width = widths.get(c["key"], 16)
     ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
@@ -518,6 +540,7 @@ def build_completion_report_pdf(report: dict, subtitle: str = "") -> bytes:
     shares = {"crane": 0.5, "stance": 0.75, "element_type": 1.1, "subtype": 1.35,
               "mark": 1.1, "count": 0.6, "counterparty": 1.15, "agreement": 1.1,
               "specification": 1.15, "plan_date": 0.95, "fact_date": 1.05, "need_date": 0.95,
+              "deadline_ok": 1.1, "delay_days": 0.8,
               "status": 1.2,
               # GUID — 32 символа без единого пробела: перенести его негде,
               # поэтому колонка широкая, а кегль в ней меньше (см. guid_style).
