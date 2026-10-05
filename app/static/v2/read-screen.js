@@ -486,7 +486,11 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       s.params.user_ids = v && v !== "__all__" ? [Number(v)] : null;
       load(active);
     });
-    bodyEl.querySelectorAll("[data-param]").forEach((inp) => inp.addEventListener("change", () => {
+    // Поле даты при наборе с клавиатуры отдаёт `change` на КАЖДОМ промежуточном значении (пока меняется день, месяц, год).
+    // Запрос на каждом шаге перерисовывал форму: поле заменялось новым, фокус пропадал, остаток набранного терялся, а
+    // отчёт оставался на промежуточной дате (2026-10-05: «поставил месяц — показывает до конца марта»). Поэтому запрос по
+    // дате откладывается до паузы в наборе или ухода из поля, а применяется всегда последнее значение.
+    const applyParam = (inp) => {
       if (!inp.value) return; // пустая дата — прежнее значение, а не запрос без даты
       s.params[inp.dataset.param] = inp.type === "date" ? inp.value : Number(inp.value) || inp.value;
       if (sec.report === "mywork" && (inp.dataset.param === "date_from" || inp.dataset.param === "date_to")) saveMyworkPeriod(s);
@@ -495,7 +499,16 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       const c = (sec.controls || []).find((x) => x.param === inp.dataset.param);
       if (c?.remember) lsSet(c.remember, String(s.params[c.param]));
       load(active);
-    }));
+    };
+    bodyEl.querySelectorAll("[data-param]").forEach((inp) => {
+      if (inp.type !== "date") { inp.addEventListener("change", () => applyParam(inp)); return; }
+      let timer = null;
+      let pending = false;
+      const flush = () => { clearTimeout(timer); if (pending) { pending = false; applyParam(inp); } };
+      inp.addEventListener("change", () => { pending = true; clearTimeout(timer); timer = setTimeout(flush, 900); });
+      inp.addEventListener("blur", flush);
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter") flush(); });
+    });
     bodyEl.querySelectorAll("[data-reset]").forEach((btn) => btn.addEventListener("click", () => {
       for (const p of btn.dataset.reset.split(",").filter(Boolean)) s.params[p] = null;
       load(active);
