@@ -9578,11 +9578,14 @@
         изделия со статусом «Отгружен» и выше не переносятся.
         <b>Обмен привязками</b> — изделия одной марки на двух контрактах меняются попарно
         контрактом, плановой датой и историей статусов, когда привязку перепутали.
+        <b>Балансировка поставки</b> — плановые даты поставщика заново раздаются изделиям одной марки
+        на контракте так, чтобы убрать просрочку относительно требуемых дат.
         Документ применяется кнопкой «Провести» и возвращается кнопкой «Отменить проведение».
       </p>
       <div style="display:flex; gap:6px; flex-wrap:wrap">
         <button class="btn btn-primary btn-sm" id="scd-new">Замена поставщика</button>
         <button class="btn btn-primary btn-sm" id="scd-new-swap">Обмен привязками</button>
+        <button class="btn btn-primary btn-sm" id="scd-new-rebalance">Балансировка поставки</button>
       </div>
     </div>
     <div class="modal-sticky-scroll"><div id="scd-list"></div></div>
@@ -9634,7 +9637,7 @@
         <div class="scd-middle">
           <div class="scd-arrow" id="scd-arrow" aria-hidden="true">→</div>
           <div id="scd-mark-row" style="display:none">
-            <label class="field" style="margin-top:0">Марка обмена</label>
+            <label class="field" style="margin-top:0" id="scd-mark-label">Марка обмена</label>
             <select id="scd-mark"></select>
             <div class="hint-text" id="scd-mark-note"></div>
           </div>
@@ -9651,6 +9654,7 @@
     </div>
     <div class="modal-sticky-scroll">
       <div id="scd-positions"></div>
+      <div id="scd-rebalance" style="display:none"></div>
       <div id="scd-swap" style="display:none">
         <div class="scd-swap-grid">
           <div class="scd-swap-side">
