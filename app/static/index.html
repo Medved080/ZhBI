@@ -2765,6 +2765,9 @@
   .modal.wide { max-width: 780px; }
   /* Окна «Документов контрактации» на всю ширину экрана (2026-10-06, запрос пользователя: максимально использовать пространство). */
   .modal.modal-xwide { width: 96vw; max-width: 96vw; }
+  /* Окно во всю ширину доходит до правого нижнего угла, где плавает кнопка «ИИ-помощник» (assistant.css) — под неё место, чтобы она не
+     закрывала кнопки действий («Провести», «Сохранить») (2026-10-06). */
+  .modal.modal-xwide .modal-sticky-foot { padding-right: 210px; }
   .scd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border); margin: 0 0 10px; flex-wrap: wrap; }
   .scd-tab { border: none; border-bottom: 3px solid transparent; background: none; padding: 8px 14px; font-size: 13px; font-weight: 600;
     color: var(--color-text-muted); cursor: pointer; margin-bottom: -1px; }
