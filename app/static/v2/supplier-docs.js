@@ -92,6 +92,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     <div class="v2-page-head"><div class="v2-container v2-container--wide"><h2>${esc(screen.title)}</h2></div></div>
     <div id="sd-body" class="v2-scroll"><div id="sd-inner" class="v2-container v2-container--wide"></div></div>
     <footer class="v2-foot"><div class="v2-container v2-container--wide"><span id="sd-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="sd-foot"></div></div></footer>`;
+  container.querySelector(".v2-foot").hidden = true;
   const inner = container.querySelector("#sd-inner"), statusEl = container.querySelector("#sd-status"), foot = container.querySelector("#sd-foot");
 
   // ------------------------------------------------------------ данные
@@ -602,9 +603,10 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const rbOpts = () => {
       const groups = new Map();
       for (const c of S.rbCands || []) { if (!groups.has(c.counterparty)) groups.set(c.counterparty, []); groups.get(c.counterparty).push(c); }
-      const label = (c) => { const k = contractById(c.contract_id); return `${k ? contractLabel(k) : c.name} — к балансировке: ${c.changed} изд.${c.late ? `, просрочено ${c.late}` : ""}`; };
+      const main = (c) => { const k = contractById(c.contract_id); return k ? contractLabel(k) : c.name; };
+      const label = (c) => `${main(c)} — к балансировке: ${c.changed} изд.${c.late ? `, просрочено ${c.late}` : ""}`;
       return `<option value="">${groups.size ? "— выберите —" : "— нет контрактов, по которым есть что балансировать —"}</option>`
-        + [...groups].map(([cp, list]) => `<optgroup label="${esc(cp)}">${list.map((c) => `<option value="${c.contract_id}" ${String(x.from) === String(c.contract_id) ? "selected" : ""}>${esc(label(c))}</option>`).join("")}</optgroup>`).join("")
+        + [...groups].map(([cp, list]) => `<optgroup label="${esc(cp)}">${list.map((c) => `<option value="${c.contract_id}" data-main="${esc(main(c))}" data-c="${c.changed}|${c.late}" ${String(x.from) === String(c.contract_id) ? "selected" : ""}>${esc(label(c))}</option>`).join("")}</optgroup>`).join("")
         + (x.from && !rbCandOf(x.from) ? fixed(x.from, (x.head?.from_contract_name || contractById(x.from)?.agreement_number || "контракт " + x.from) + " — балансировать уже нечего") : "");
     };
     const fromOpts = x.kind === "date_rebalance" && !viewOnly ? rbOpts() : viewOnly ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from)
@@ -614,7 +616,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const rbMarkOpts = () => {
       const marks = rbMarksOf(x.from);
       return `<option value="">${x.from ? (marks.length ? "— выберите марку —" : "— нет марок для балансировки —") : "— сначала контракт —"}</option>`
-        + marks.map((m) => `<option value="${esc(m.mark)}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`).join("")
+        + marks.map((m) => `<option value="${esc(m.mark)}" data-main="${esc(m.mark)}" data-c="${m.changed}|${m.count}|${m.late}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`).join("")
         + (x.mark && !marks.some((m) => m.mark === x.mark) ? fixed(x.mark, `${x.mark} — балансировать уже нечего`) : "");
     };
     const markOpts = x.kind === "date_rebalance" && !viewOnly ? rbMarkOpts() : viewOnly ? fixed(x.mark, x.mark || "—")
@@ -622,13 +624,13 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const note = posted
       ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится${viewOnly ? "." : " — сначала отмените проведение."}`
       : (viewOnly ? "Черновик: данные изделий он не менял — изменения вносит проведение." : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести».");
-    return `<div class="v2-bar"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span>${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div>
+    return `<div class="v2-bar v2-doc-head"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span>${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><div class="v2-foot-actions v2-doc-actions" id="sd-head-actions"><span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div></div>
       <p class="v2-muted">${note}</p>
       <div class="v2-fields" style="max-width:none; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
         <label class="v2-field">Дата документа<input type="date" data-f="date" value="${esc(x.date)}" ${dis}></label>
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
-        <label class="v2-field">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}>${fromOpts}</select></label>
-        ${swap || rb ? `<label class="v2-field">${rb ? "Марка" : "Марка обмена"}<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
+        <label class="v2-field">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке, изд.|Просрочено"' : ""}>${fromOpts}</select></label>
+        ${swap || rb ? `<label class="v2-field">${rb ? "Марка" : "Марка обмена"}<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке|Всего|Просрочено"' : ""}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
         ${rb ? "" : `<label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>`}
         <label class="v2-field v2-span">Причина<input data-f="reason" value="${esc(x.reason)}" ${dis} maxlength="300"></label>
         <label class="v2-field v2-span">Комментарий<input data-f="comment" value="${esc(x.comment)}" ${dis} maxlength="600"></label>
@@ -647,7 +649,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const swapPairsOk = x.kind !== "link_swap" || (x.sideA.length === x.sideB.length && x.sideA.length > 0);
     const supplierOk = !single(x.kind) || x.chosen.size > 0;
     return [x.id ? b("Удалить черновик", "delete", false) : "", b(busy ? "Сохранение…" : "Сохранить", "save", true, dirty ? "" : "1"),
-      x.id ? b("Провести", "post", false, dirty || !swapPairsOk || !supplierOk ? "1" : "") : ""].join("");
+      x.id ? b("Провести", "post", true, dirty || !swapPairsOk || !supplierOk ? "1" : "") : ""].join("");
   }
 
   function paint() {
@@ -655,9 +657,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const active = document.activeElement;
     const keep = active && inner.contains(active) ? { sel: active.getAttribute("data-f") ? `[data-f="${active.getAttribute("data-f")}"]` : null, pos: active.selectionStart } : null;
     inner.innerHTML = S.view === "list" ? listHtml() : docHtml();
-    foot.innerHTML = footHtml();
+    foot.innerHTML = "";   // кнопки управления документом — в его шапке (docHtml), нижняя панель скрыта
     const dirty = isDirty();
-    statusEl.textContent = S.busy ? "Выполняется запись — дождитесь ответа сервера…" : (dirty ? "Есть несохранённые изменения" : "");
+    setStatusText(S.busy ? "Выполняется запись — дождитесь ответа сервера…" : (dirty ? "Есть несохранённые изменения" : ""));
     bind();
     if (keep?.sel) { const el = inner.querySelector(keep.sel); if (el) { el.focus(); try { el.setSelectionRange(keep.pos, keep.pos); } catch (e) { /* не текстовое поле */ } } }
   }
@@ -666,6 +668,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const x = f();
     for (const el of container.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset));
     for (const el of inner.querySelectorAll("[data-open]")) el.addEventListener("click", () => openDoc(Number(el.dataset.open)));
+    // Выбор контракта и марки балансировки — списком с колонками (числа выровнены вправо), общий модуль column-select.js
+    const colSelects = inner.querySelectorAll("select[data-cs-heads]");
+    if (colSelects.length) import("/static/column-select.js").then((m) => { m.closeColumnSelectPopup(); colSelects.forEach((sel) => { if (sel.isConnected) m.attachColumnSelect(sel); }); });
     for (const el of inner.querySelectorAll("[data-tab]")) el.addEventListener("click", () => { S.tab = el.dataset.tab; S.listNote = ""; paint(); });
     if (!x) return;
     for (const el of inner.querySelectorAll("[data-f]")) el.addEventListener(el.tagName === "SELECT" || el.type === "date" ? "change" : "input", async () => {
@@ -710,8 +715,21 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       bindPickerSvg(x, pk);
     }
   }
-  function paintFoot() { foot.innerHTML = footHtml(); bindFoot(); statusEl.textContent = isDirty() ? "Есть несохранённые изменения" : ""; }
-  function bindFoot() { for (const el of foot.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset)); }
+  // Кнопки управления документом (сохранить, провести, удалить) стоят в шапке документа (2026-10-06, запрос пользователя); при вводе
+  // в поля шапки обновляется только их состояние, без перерисовки формы.
+  function setStatusText(text) {
+    const head = inner.querySelector("#sd-head-status");
+    if (head) { head.textContent = text; statusEl.textContent = ""; } else statusEl.textContent = text;
+  }
+  function paintFoot() {
+    const box = inner.querySelector("#sd-head-actions");
+    if (box) {
+      const status = box.querySelector("#sd-head-status")?.textContent || "";
+      box.innerHTML = `<span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button>`;
+      for (const el of box.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset));
+    }
+    setStatusText(isDirty() ? "Есть несохранённые изменения" : "");
+  }
 
   function onAction(a, d) {
     const x = f();

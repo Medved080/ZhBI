@@ -1398,3 +1398,9 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-doc-tabs button { border: 0; border-bottom: 3px solid transparent; background: none; padding: 10px 16px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; margin-bottom: -1px; }
 .v2-doc-tabs button:hover { color: var(--fg, inherit); }
 .v2-doc-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Шапка документа контрактации с кнопками управления (supplier-docs.js, 2026-10-06): остаётся на виду при прокрутке формы */
+.v2-doc-head { position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 10px 0; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.v2-doc-head h3 { margin: 0; }
+.v2-doc-actions { align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.v2-doc-actions #sd-head-status { font-size: 13px; margin-right: 6px; }

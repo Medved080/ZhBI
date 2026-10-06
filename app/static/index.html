@@ -2768,6 +2768,9 @@
   /* Окно во всю ширину доходит до правого нижнего угла, где плавает кнопка «ИИ-помощник» (assistant.css) — под неё место, чтобы она не
      закрывала кнопки действий («Провести», «Сохранить») (2026-10-06). */
   .modal.modal-xwide .modal-sticky-foot { padding-right: 210px; }
+  .scd-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .scd-head-row h2 { margin: 0; }
+  .scd-head-actions { margin: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .scd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border); margin: 0 0 10px; flex-wrap: wrap; }
   .scd-tab { border: none; border-bottom: 3px solid transparent; background: none; padding: 8px 14px; font-size: 13px; font-weight: 600;
     color: var(--color-text-muted); cursor: pointer; margin-bottom: -1px; }
@@ -9690,7 +9693,20 @@
 <div class="modal-backdrop" id="supplier-change-form-backdrop">
   <div class="modal wide modal-xwide modal-sticky">
     <div class="modal-sticky-head">
-      <h2 id="scd-form-title">Документ</h2>
+      <div class="scd-head-row">
+        <h2 id="scd-form-title">Документ</h2>
+      <div class="actions scd-head-actions">
+          <button class="btn btn-secondary" id="scd-form-cancel">Закрыть</button>
+          <button class="btn btn-secondary menu-item-danger" id="scd-delete" style="display:none">Удалить черновик</button>
+          <button class="btn btn-secondary" id="scd-save">Сохранить черновик</button>
+          <!-- «ОК» — сохранить и закрыть, без проведения (2026-08-11, запрос
+               пользователя): обычный выход из формы, когда документ ещё
+               набирают и применять его рано. -->
+          <button class="btn btn-secondary" id="scd-ok">ОК</button>
+          <button class="btn btn-primary" id="scd-post">Провести</button>
+          <button class="btn btn-secondary" id="scd-unpost" style="display:none">Отменить проведение</button>
+        </div>
+      </div>
       <div class="scd-status-row">
         <span class="scd-status" id="scd-status-badge">Черновик</span>
         <span class="hint-text" id="scd-status-note"></span>
@@ -9770,17 +9786,7 @@
     <div class="modal-sticky-foot">
       <div class="hint-text" id="scd-summary"></div>
       <div class="error-text" id="scd-error" style="white-space:pre-line"></div>
-      <div class="actions">
-        <button class="btn btn-secondary" id="scd-form-cancel">Закрыть</button>
-        <button class="btn btn-secondary menu-item-danger" id="scd-delete" style="display:none">Удалить черновик</button>
-        <button class="btn btn-secondary" id="scd-save">Сохранить черновик</button>
-        <!-- «ОК» — сохранить и закрыть, без проведения (2026-08-11, запрос
-             пользователя): обычный выход из формы, когда документ ещё
-             набирают и применять его рано. -->
-        <button class="btn btn-secondary" id="scd-ok">ОК</button>
-        <button class="btn btn-primary" id="scd-post">Провести</button>
-        <button class="btn btn-secondary" id="scd-unpost" style="display:none">Отменить проведение</button>
-      </div>
+
     </div>
   </div>
 </div>

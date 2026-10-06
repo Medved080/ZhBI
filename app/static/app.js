@@ -19196,7 +19196,8 @@ function scdFillContracts(select, counterpartyId, выбранный) {
       const кандидат = scdKind === SCD_KIND_REBALANCE ? scdRbCandOf(c.id) : null;
       const хвост = scdKind !== SCD_KIND_REBALANCE ? ""
         : кандидат ? ` — к балансировке: ${кандидат.changed} изд.${кандидат.late ? `, просрочено ${кандидат.late}` : ""}` : " — балансировать уже нечего";
-      return `<option value="${c.id}"${String(c.id) === String(выбранный) ? " selected" : ""}>`
+      const колонки = кандидат ? ` data-main="${escapeHtml(scdContractLabel(c))}" data-c="${кандидат.changed}|${кандидат.late}"` : "";
+      return `<option value="${c.id}"${колонки}${String(c.id) === String(выбранный) ? " selected" : ""}>`
         + `${escapeHtml(scdContractLabel(c) + хвост)}</option>`;
     })
   ).join("");
@@ -19214,6 +19215,18 @@ function scdContractById(id) {
 }
 
 // ---------- вид формы: заголовки, видимость блоков, состояние кнопок ----------
+
+// Выбор контракта и марки балансировки — списком с колонками, числа выровнены вправо (общий модуль column-select.js); в остальных видах документов
+// и в проведённом документе — родной select.
+async function scdSyncColumnSelects() {
+  const m = await import("/static/column-select.js");
+  m.closeColumnSelectPopup();
+  for (const [id, heads] of [["scd-from-contract", "К балансировке, изд.|Просрочено"], ["scd-mark", "К балансировке|Всего|Просрочено"]]) {
+    const sel = document.getElementById(id);
+    if (scdKind === SCD_KIND_REBALANCE && !scdPosted()) { sel.dataset.csHeads = heads; m.attachColumnSelect(sel); }
+    else { delete sel.dataset.csHeads; m.detachColumnSelect(sel); }
+  }
+}
 
 function scdApplyMode() {
   const обмен = scdKind === SCD_KIND_SWAP;
@@ -19261,6 +19274,7 @@ function scdApplyMode() {
   document.getElementById("scd-post").style.display = проведён ? "none" : "";
   document.getElementById("scd-unpost").style.display = проведён ? "" : "none";
   document.getElementById("scd-delete").style.display = (scdDoc && !проведён) ? "" : "none";
+  scdSyncColumnSelects();
 }
 
 // ---------- замена поставщика: позиции и остатки ----------
@@ -19454,7 +19468,7 @@ async function scdReloadMarks(сохранитьВыбор) {
       ? "По этому контракту балансировать нечего." : "К контракту стороны 1 не привязано ни одного изделия — обменивать нечего.";
   } else {
     select.innerHTML = ['<option value="">— выберите марку —</option>'].concat(
-      scdSwapMarks.map(m => `<option value="${escapeHtml(m.mark)}"${m.mark === выбрана ? " selected" : ""}>`
+      scdSwapMarks.map(m => `<option value="${escapeHtml(m.mark)}"${scdKind === SCD_KIND_REBALANCE ? ` data-main="${escapeHtml(m.mark)}" data-c="${m.changed}|${m.count}|${m.late}"` : ""}${m.mark === выбрана ? " selected" : ""}>`
         + (scdKind === SCD_KIND_REBALANCE
           ? `${escapeHtml(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`
           : `${escapeHtml(m.mark)} · ${escapeHtml(m.element_type || "—")} · ${m.count} шт.</option>`))
