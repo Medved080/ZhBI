@@ -191,7 +191,8 @@ export function mountShellNav(el, {
   function render() {
     const q = searchText.trim().toLowerCase();
     const currentKey = getCurrentKey();
-    const allScreens = registry.screens.filter((s) => s.group !== "home" && allowedScreen(s));
+    // listed: false — экран открывается только переходом (заглавная страница объекта открывается выбором объекта), в списках его нет.
+    const allScreens = registry.screens.filter((s) => s.group !== "home" && s.listed !== false && allowedScreen(s));
     const byGroup = new Map();
     for (const s of allScreens) { if (!byGroup.has(s.group)) byGroup.set(s.group, []); byGroup.get(s.group).push(s); }
     const workItems = byGroup.get("work") || [];

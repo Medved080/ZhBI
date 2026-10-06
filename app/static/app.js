@@ -19146,6 +19146,19 @@ let scdRebalIds = [];            // изделия балансировки — 
 let scdRebalAll = false;         // показывать все изделия, а не только те, у которых меняется дата
 let scdSnapshot = "";            // слепок формы на момент открытия/сохранения — для контроля изменений
 
+// Балансировка поставки: предлагаются только контракты и марки, по которым есть что балансировать (расчёт изменит хотя бы одну плановую
+// дату), с числом таких изделий (2026-10-06, запрос пользователя). Расчёт — на сервере, тот же, что при проведении.
+let scdRbCands = [];
+async function scdLoadRbCands() {
+  try {
+    scdRbCands = (await api(objectUrl("/supplier-changes/rebalance-candidates"))).contracts;
+  } catch (e) {
+    scdRbCands = [];
+    showToast("Не удалось получить контракты для балансировки: " + e.message, "warning");
+  }
+}
+function scdRbCandOf(contractId) { return scdRbCands.find((c) => String(c.contract_id) === String(contractId)) || null; }
+
 function scdKey(type, mark) { return `${type || ""} ${mark || ""}`; }
 function scdPosted() { return !!scdDoc && scdDoc.status === "posted"; }
 
@@ -19160,7 +19173,12 @@ function scdContractLabel(c) {
 // Архивные не предлагаются НИ СЛЕВА, НИ СПРАВА: справа их запрещает сервер
 // (архив — отработанный документ), а слева за архивным контрактом по правилу
 // архивации не числится ни одного изделия, то есть брать оттуда нечего.
-function scdSelectable() { return scdContracts.filter(c => !c.is_archived); }
+function scdSelectable() {
+  const все = scdContracts.filter(c => !c.is_archived);
+  if (scdKind !== SCD_KIND_REBALANCE) return все;
+  const свой = scdDoc ? String(scdDoc.from_contract_id) : null;
+  return все.filter(c => scdRbCandOf(c.id) || String(c.id) === свой);
+}
 
 function scdFillCounterparties(select, выбранный) {
   const виденные = new Map();
@@ -19174,8 +19192,13 @@ function scdFillCounterparties(select, выбранный) {
 function scdFillContracts(select, counterpartyId, выбранный) {
   const свои = scdSelectable().filter(c => String(c.counterparty_id) === String(counterpartyId));
   select.innerHTML = ['<option value="">— выберите —</option>'].concat(
-    свои.map(c => `<option value="${c.id}"${String(c.id) === String(выбранный) ? " selected" : ""}>`
-      + `${escapeHtml(scdContractLabel(c))}</option>`)
+    свои.map(c => {
+      const кандидат = scdKind === SCD_KIND_REBALANCE ? scdRbCandOf(c.id) : null;
+      const хвост = scdKind !== SCD_KIND_REBALANCE ? ""
+        : кандидат ? ` — к балансировке: ${кандидат.changed} изд.${кандидат.late ? `, просрочено ${кандидат.late}` : ""}` : " — балансировать уже нечего";
+      return `<option value="${c.id}"${String(c.id) === String(выбранный) ? " selected" : ""}>`
+        + `${escapeHtml(scdContractLabel(c) + хвост)}</option>`;
+    })
   ).join("");
   select.disabled = !counterpartyId;
 }
@@ -19413,19 +19436,28 @@ async function scdReloadMarks(сохранитьВыбор) {
   }
   select.innerHTML = '<option value="">— загрузка… —</option>';
   try {
-    const ответ = await api(objectUrl("/supplier-changes/contract-marks", { contract_id: from }));
-    scdSwapMarks = ответ.marks;
+    if (scdKind === SCD_KIND_REBALANCE) {
+      const кандидат = scdRbCandOf(from);
+      scdSwapMarks = кандидат ? кандидат.marks : [];
+    } else {
+      const ответ = await api(objectUrl("/supplier-changes/contract-marks", { contract_id: from }));
+      scdSwapMarks = ответ.marks;
+    }
   } catch (e) {
     document.getElementById("scd-error").textContent = e.message;
     scdSwapMarks = [];
   }
   if (!scdSwapMarks.length) {
-    select.innerHTML = '<option value="">— на контракте нет изделий —</option>';
-    заметка.textContent = "К контракту стороны 1 не привязано ни одного изделия — обменивать нечего.";
+    select.innerHTML = scdKind === SCD_KIND_REBALANCE
+      ? '<option value="">— нет марок для балансировки —</option>' : '<option value="">— на контракте нет изделий —</option>';
+    заметка.textContent = scdKind === SCD_KIND_REBALANCE
+      ? "По этому контракту балансировать нечего." : "К контракту стороны 1 не привязано ни одного изделия — обменивать нечего.";
   } else {
     select.innerHTML = ['<option value="">— выберите марку —</option>'].concat(
       scdSwapMarks.map(m => `<option value="${escapeHtml(m.mark)}"${m.mark === выбрана ? " selected" : ""}>`
-        + `${escapeHtml(m.mark)} · ${escapeHtml(m.element_type || "—")} · ${m.count} шт.</option>`)
+        + (scdKind === SCD_KIND_REBALANCE
+          ? `${escapeHtml(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`
+          : `${escapeHtml(m.mark)} · ${escapeHtml(m.element_type || "—")} · ${m.count} шт.</option>`))
     ).join("");
     заметка.textContent = "";
   }
@@ -20067,6 +20099,14 @@ function scdRenderTabs() {
   document.getElementById("scd-new-rebalance").style.display = scdTab === SCD_KIND_REBALANCE ? "" : "none";
 }
 
+// Список документов вида — таблицей со столбцами по виду (2026-10-06): у замены поставщика — контрагенты и контракты обеих сторон.
+const SCD_COLUMNS = {
+  [SCD_KIND_SUPPLIER]: [["Текущий поставщик (контрагент)", (d) => d.from_counterparty || "—"], ["Из контракта", (d) => d.from_contract_name],
+    ["Новый поставщик (контрагент)", (d) => d.to_counterparty || "—"], ["В контракт", (d) => d.to_contract_name]],
+  [SCD_KIND_SWAP]: [["Марка", (d) => d.mark || "—"], ["Контракт стороны 1", (d) => d.from_contract_name], ["Контракт стороны 2", (d) => d.to_contract_name]],
+  [SCD_KIND_REBALANCE]: [["Марка", (d) => d.mark || "—"], ["Контракт (поставщик)", (d) => d.from_contract_name]],
+};
+
 function scdRenderCards() {
   const box = document.getElementById("scd-list");
   box.innerHTML = "";
@@ -20076,21 +20116,22 @@ function scdRenderCards() {
     box.innerHTML = '<div class="hint-text">Документов этого вида пока нет.</div>';
     return;
   }
+  const колонки = SCD_COLUMNS[scdTab];
+  const table = document.createElement("table");
+  table.className = "scd-pos-table scd-doc-table";
+  table.innerHTML = `<thead><tr><th>№</th><th>Дата</th><th>Состояние</th>${колонки.map(([h]) => `<th>${escapeHtml(h)}</th>`).join("")}<th>Изделий</th><th>Создал</th></tr></thead>`;
+  const tbody = document.createElement("tbody");
   for (const d of docs) {
-    const карточка = document.createElement("div");
-    карточка.className = "scd-doc-card";
-    const стрелка = d.kind === SCD_KIND_SWAP ? "⇄" : "→";
-    const контракты = d.kind === SCD_KIND_REBALANCE ? escapeHtml(d.from_contract_name)
-      : `${escapeHtml(d.from_contract_name)} ${стрелка} ${escapeHtml(d.to_contract_name)}`;
-    карточка.innerHTML = `
-      <div class="scd-doc-title">№ ${escapeHtml(d.number)} от ${formatDateRu(d.doc_date)} · ${d.items} шт.
-        <span class="scd-status ${d.status}">${escapeHtml(d.status_title)}</span></div>
-      <div class="hint-text">${контракты}
-        ${d.mark ? "· марка " + escapeHtml(d.mark) : ""}</div>
-      <div class="hint-text">${d.reason ? escapeHtml(d.reason) + " · " : ""}${escapeHtml(d.created_by || "")}</div>`;
-    карточка.addEventListener("click", () => scdOpenDoc(d.id));
-    box.appendChild(карточка);
+    const tr = document.createElement("tr");
+    tr.className = "scd-doc-row";
+    tr.innerHTML = `<td><b>${escapeHtml(d.number)}</b></td><td>${formatDateRu(d.doc_date)}</td>
+      <td><span class="scd-status ${d.status}">${escapeHtml(d.status_title)}</span></td>
+      ${колонки.map(([, f]) => `<td>${escapeHtml(f(d))}</td>`).join("")}<td>${d.items}</td><td>${escapeHtml(d.created_by || "")}</td>`;
+    tr.addEventListener("click", () => scdOpenDoc(d.id));
+    tbody.appendChild(tr);
   }
+  table.appendChild(tbody);
+  box.appendChild(table);
 }
 
 async function scdRenderList() {
@@ -20158,13 +20199,20 @@ function scdResetForm(kind) {
 
 async function scdNewDocument(kind) {
   scdTab = kind;
+  scdKind = kind;   // до проверок: scdSelectable() для балансировки отбирает контракты по виду документа
   try {
     await scdEnsureContracts();
+    if (kind === SCD_KIND_REBALANCE) await scdLoadRbCands();
   } catch (e) {
     showToast("Не удалось прочитать контракты объекта: " + e.message, "error");
     return;
   }
-  if (scdSelectable().length < (kind === SCD_KIND_REBALANCE ? 1 : 2)) {
+  if (kind === SCD_KIND_REBALANCE) {
+    if (!scdSelectable().length) {
+      showToast("Нет контрактов, по которым есть что балансировать: просрочки нет или все плановые даты уже расставлены", "warning");
+      return;
+    }
+  } else if (scdSelectable().length < 2) {
     showToast("Нужны минимум два действующих контракта объекта", "warning");
     return;
   }
@@ -20179,6 +20227,7 @@ async function scdOpenDoc(docId) {
     await scdEnsureContracts();
     const doc = await api(`/supplier-changes/${docId}`);
     scdTab = doc.kind;
+    if (doc.kind === SCD_KIND_REBALANCE) await scdLoadRbCands();
     scdResetForm(doc.kind);
     scdDoc = doc;
     document.getElementById("scd-date").value = (doc.doc_date || "").slice(0, 10);

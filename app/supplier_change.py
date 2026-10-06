@@ -172,6 +172,16 @@ def _contract_name(conn, contract_id: int) -> str:
     )
 
 
+def _contract_counterparty(conn, contract_id: int) -> Optional[str]:
+    """Краткое название контрагента контракта (для столбцов списка документов)."""
+    row = conn.execute(
+        "SELECT specification_id FROM contracts WHERE id = ?", (contract_id,)).fetchone()
+    if row is None:
+        return None
+    chain = _specification_chain(conn, row["specification_id"])
+    return chain["counterparty_short_name"] if chain is not None else None
+
+
 def _object_contracts(conn, object_id: int) -> list:
     """Контракты ОБЪЕКТА — те, чей договор привязан к нему (та же цепочка
     контракт → спецификация → договор.object_id, по которой считается и
@@ -617,6 +627,63 @@ def _rebalance_plan(conn, object_id: int, contract_id: int, mark: str, element_i
         "without_need": sum(1 for i in items if i["need_date"] is None)}}
 
 
+def _rebalance_candidates(conn, object_id: int) -> list:
+    """Контракты объекта, по которым ЕСТЬ ЧТО балансировать, и марки в них: [{contract_id, counterparty, changed, late, marks:[
+    {mark, count, changed, late}]}]. «Есть что балансировать» — расчёт (`_rebalance_allocate`) меняет плановую дату хотя бы у
+    одного изделия марки. Контракты и марки без изменений в список не попадают: предлагать их в форме значило бы вести человека
+    к документу, который ничего не сделает. Один проход по изделиям объекта, а не расчёт на каждую пару."""
+    from app.schedule_versions import forecast_dates
+
+    rows = conn.execute(
+        "SELECT id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, is_current, "
+        "planned_delivery_date FROM elements WHERE object_id = ? AND is_current = 1 AND contract_id IS NOT NULL "
+        "AND planned_delivery_date IS NOT NULL", (object_id,)).fetchall()
+    группы: dict = {}
+    for r in rows:
+        if _rebalance_eligible(r, r["contract_id"], "") is not None:
+            continue
+        ключ = (r["contract_id"], (r["mark"] or "").strip().lower())
+        группы.setdefault(ключ, []).append(r)
+    прогноз = forecast_dates(conn, object_id)
+    по_контрактам: dict = {}
+    for (contract_id, _), изделия in группы.items():
+        if len(изделия) < 2:
+            continue
+        need = {r["id"]: (прогноз[r["id"]][0] if r["id"] in прогноз and not прогноз[r["id"]][2] else None) for r in изделия}
+        раскладка = _rebalance_allocate(изделия, need)
+        изменится = sum(1 for i in раскладка if i["plan_old"] != i["plan_new"])
+        if not изменится:
+            continue
+        просрочено = sum(1 for i in раскладка if i["delay_old"] is not None and i["delay_old"] > 0)
+        марка = (изделия[0]["mark"] or "").strip()
+        запись = по_контрактам.setdefault(contract_id, {"contract_id": contract_id, "changed": 0, "late": 0, "marks": []})
+        запись["changed"] += изменится
+        запись["late"] += просрочено
+        запись["marks"].append({"mark": марка, "count": len(изделия), "changed": изменится, "late": просрочено})
+    имена = {c["id"]: c for c in _object_contracts(conn, object_id)}
+    out = []
+    for contract_id, запись in по_контрактам.items():
+        c = имена.get(contract_id)
+        if c is None or c["is_archived"]:
+            continue
+        запись["marks"].sort(key=lambda m: m["mark"])
+        out.append({**запись, "name": c["name"], "counterparty": c["counterparty_short_name"]})
+    out.sort(key=lambda x: (str(x["counterparty"]).lower(), x["name"]))
+    return out
+
+
+@router.get("/rebalance-candidates")
+def rebalance_candidates(object_id: int = Query(...),
+                         user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write"))):
+    """Контракты и марки, по которым балансировка что-то изменит, с числом изделий (для выбора в форме документа)."""
+    conn = get_connection()
+    try:
+        assert_object_any_feature(conn, user, object_id, DOC_FEATURES, "write")
+        return {"contracts": _rebalance_candidates(conn, object_id)}
+    finally:
+        conn.close()
+
+
 @router.get("/rebalance-preview")
 def rebalance_preview(object_id: int = Query(...), contract_id: int = Query(...), mark: str = Query(...),
                       doc_id: Optional[int] = Query(None),
@@ -712,6 +779,9 @@ def _doc_head(conn, r) -> dict:
         "from_contract_id": r["from_contract_id"], "to_contract_id": r["to_contract_id"],
         "from_contract_name": _contract_name(conn, r["from_contract_id"]),
         "to_contract_name": _contract_name(conn, r["to_contract_id"]),
+        # Контрагенты сторон — отдельными полями для столбцов списка (2026-10-06: «в замену поставщика добавь столбцы с контрагентами»).
+        "from_counterparty": _contract_counterparty(conn, r["from_contract_id"]),
+        "to_counterparty": _contract_counterparty(conn, r["to_contract_id"]),
     }
 
 

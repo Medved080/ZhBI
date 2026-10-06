@@ -132,7 +132,7 @@ export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRig
   el.className = "v2-page";
   const groups = registry.groups.filter((g) => g.id !== "home");
   const cards = groups.map((g) => {
-    const items = registry.screens.filter((s) => s.group === g.id && allowed(s));
+    const items = registry.screens.filter((s) => s.group === g.id && s.listed !== false && allowed(s));
     if (!items.length) return "";
     return `<section class="v2-card">
       <h3>${esc(g.title)} <span class="v2-muted">· ${items.length}</span></h3>
@@ -140,7 +140,7 @@ export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRig
         ${homeChip(s)}</li>`).join("")}</ul>
     </section>`;
   }).join("");
-  const mine = registry.screens.filter((s) => allowed(s) && s.group !== "home");
+  const mine = registry.screens.filter((s) => allowed(s) && s.group !== "home" && s.listed !== false);
   const inV2 = mine.filter((s) => !inV1Only(s)).length;
   const full = mine.filter((s) => !inV1Only(s) && s.status === 5).length;
   el.innerHTML = `<div class="v2-container">

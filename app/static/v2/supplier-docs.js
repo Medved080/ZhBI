@@ -79,6 +79,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     tab: null,                          // закладка списка по виду документа: supplier_change | link_swap | date_rebalance
     list: { loaded: false, error: "", items: [] },
     refs: { loaded: false, error: "", contracts: [] },
+    rbCands: null,                      // кандидаты на балансировку: [{contract_id, counterparty, changed, late, marks:[{mark,count,changed,late}]}]
     colors: {},                         // status -> цвет маркера мини-схемы (GET /status-colors, то же читает «Состояние БД»); не критично — без него нейтральный серый
     f: null,                            // форма открытого документа
     busy: false,                        // идёт запись — все действия документа заблокированы (ставится ДО первого await)
@@ -105,6 +106,14 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     catch (err) { S.refs.error = err?.detail || "Не удалось загрузить контракты объекта"; }
   }
   async function loadColors() { try { S.colors = await api.get("/status-colors"); } catch (err) { /* мини-схема тогда рисует нейтральным цветом — не критично для подбора */ } }
+  // Балансировка поставки: предлагаются только контракты и марки, по которым есть что балансировать (расчёт изменит хотя бы одну
+  // плановую дату), с числом таких изделий (2026-10-06, запрос пользователя). Тот же расчёт, что при проведении, — на сервере.
+  async function loadRbCands() {
+    try { S.rbCands = (await api.get(`/supplier-changes/rebalance-candidates?object_id=${objectId}`)).contracts; }
+    catch (err) { S.rbCands = []; S.refs.error = err?.detail || "Не удалось получить контракты для балансировки"; }
+  }
+  const rbCandOf = (contractId) => (S.rbCands || []).find((c) => String(c.contract_id) === String(contractId)) || null;
+  const rbMarksOf = (contractId) => rbCandOf(contractId)?.marks || [];
   const contractById = (id) => S.refs.contracts.find((c) => String(c.id) === String(id)) || null;
   const selectable = () => S.refs.contracts.filter((c) => !c.is_archived);
   const contractLabel = (c) => `${c.agreement_number}${c.agreement_date ? " от " + ruDate(c.agreement_date) : ""} / ${c.specification_number}${c.specification_date ? " от " + ruDate(c.specification_date) : ""}`;
@@ -150,6 +159,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       // контракты объекта нужны только правке (сервер отдаёт их при «Изменении»); просмотр берёт названия из шапки документа
       if (!S.refs.loaded && canAny) await loadRefs();
       const d = await api.get(`/supplier-changes/${id}`);
+      if (d.kind === "date_rebalance" && canAny) await loadRbCands();
       S.f = fromDoc(d); S.view = "doc"; S.message = ""; S.tab = d.kind;
       S.busy = false;
       paint();
@@ -160,6 +170,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   async function newDoc(kind) {
     if (S.busy || !can(kind)) return;
     if (!S.refs.loaded) { S.busy = true; paint(); await loadRefs(); S.busy = false; }
+    if (kind === "date_rebalance") { S.busy = true; paint(); await loadRbCands(); S.busy = false; }
     S.f = blankForm(kind); S.f.saved = fingerprint(S.f); S.view = "doc"; S.message = ""; S.tab = kind; paint();
   }
   async function backToList(force) {
@@ -189,7 +200,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   async function loadMarks(initial) {
     const x = f(); x.marks = []; x.marksError = ""; x.sideBCounts = new Map(); x.sideBError = "";
     if (!x.from) { paint(); return; }
-    try { x.marks = (await api.get(`/supplier-changes/contract-marks?object_id=${objectId}&contract_id=${x.from}`)).marks; }
+    if (x.kind === "date_rebalance") x.marks = rbMarksOf(x.from);   // только марки, где балансировка что-то изменит
+    else try { x.marks = (await api.get(`/supplier-changes/contract-marks?object_id=${objectId}&contract_id=${x.from}`)).marks; }
     catch (err) { x.marksError = err?.detail || "Не удалось загрузить марки контракта"; }
     if (f() !== x) return;
     if (x.mark) await (x.kind === "date_rebalance" ? loadRebalance(initial) : loadSideB()); else paint();
@@ -481,7 +493,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     date_rebalance: { new: "Новая балансировка поставки", note: "Заново раздаёт согласованные плановые даты поставщика изделиям одной марки на контракте так, чтобы убрать просрочку относительно требуемых дат." },
   };
   const TAB_COLUMNS = {
-    supplier_change: [["Из контракта", (d) => d.from_contract_name], ["В контракт", (d) => d.to_contract_name]],
+    supplier_change: [["Текущий поставщик (контрагент)", (d) => d.from_counterparty || "—"], ["Из контракта", (d) => d.from_contract_name],
+      ["Новый поставщик (контрагент)", (d) => d.to_counterparty || "—"], ["В контракт", (d) => d.to_contract_name]],
     link_swap: [["Марка", (d) => d.mark || "—"], ["Контракт стороны 1", (d) => d.from_contract_name], ["Контракт стороны 2", (d) => d.to_contract_name]],
     date_rebalance: [["Марка", (d) => d.mark || "—"], ["Контракт (поставщик)", (d) => d.from_contract_name]],
   };
@@ -586,11 +599,25 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     // Только просмотр: выбор контракта и марки показывается одной строкой — тем, что записано в документе (контракты объекта
     // читателю не запрашиваются, см. шапку файла). Пишущему — прежние списки.
     const fixed = (value, label) => `<option value="${esc(value)}" selected>${esc(label)}</option>`;
-    const fromOpts = viewOnly ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from)
+    const rbOpts = () => {
+      const groups = new Map();
+      for (const c of S.rbCands || []) { if (!groups.has(c.counterparty)) groups.set(c.counterparty, []); groups.get(c.counterparty).push(c); }
+      const label = (c) => { const k = contractById(c.contract_id); return `${k ? contractLabel(k) : c.name} — к балансировке: ${c.changed} изд.${c.late ? `, просрочено ${c.late}` : ""}`; };
+      return `<option value="">${groups.size ? "— выберите —" : "— нет контрактов, по которым есть что балансировать —"}</option>`
+        + [...groups].map(([cp, list]) => `<optgroup label="${esc(cp)}">${list.map((c) => `<option value="${c.contract_id}" ${String(x.from) === String(c.contract_id) ? "selected" : ""}>${esc(label(c))}</option>`).join("")}</optgroup>`).join("")
+        + (x.from && !rbCandOf(x.from) ? fixed(x.from, (x.head?.from_contract_name || contractById(x.from)?.agreement_number || "контракт " + x.from) + " — балансировать уже нечего") : "");
+    };
+    const fromOpts = x.kind === "date_rebalance" && !viewOnly ? rbOpts() : viewOnly ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from)
       : `${contractOptions(x.from)}${x.from && !contractById(x.from) ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from) : ""}`;
     const toOpts = viewOnly ? fixed(x.to, x.head?.to_contract_name || "контракт " + x.to)
       : `${contractOptions(x.to, swap && !ro ? onlyB : null)}${x.to && !contractById(x.to) ? fixed(x.to, x.head?.to_contract_name || "контракт " + x.to) : ""}`;
-    const markOpts = viewOnly ? fixed(x.mark, x.mark || "—")
+    const rbMarkOpts = () => {
+      const marks = rbMarksOf(x.from);
+      return `<option value="">${x.from ? (marks.length ? "— выберите марку —" : "— нет марок для балансировки —") : "— сначала контракт —"}</option>`
+        + marks.map((m) => `<option value="${esc(m.mark)}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`).join("")
+        + (x.mark && !marks.some((m) => m.mark === x.mark) ? fixed(x.mark, `${x.mark} — балансировать уже нечего`) : "");
+    };
+    const markOpts = x.kind === "date_rebalance" && !viewOnly ? rbMarkOpts() : viewOnly ? fixed(x.mark, x.mark || "—")
       : `<option value="">${x.from ? "— выберите марку —" : "— сначала контракт стороны 1 —"}</option>${x.marks.map((m) => `<option value="${esc(m.mark)}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · ${esc(m.element_type || "—")} · ${m.count} шт.</option>`).join("")}${x.mark && !x.marks.some((m) => m.mark === x.mark) ? fixed(x.mark, x.mark) : ""}`;
     const note = posted
       ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится${viewOnly ? "." : " — сначала отмените проведение."}`
