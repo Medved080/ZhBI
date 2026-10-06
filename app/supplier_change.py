@@ -128,6 +128,10 @@ DOC_STATUS_TITLES = {DRAFT: "Черновик", POSTED: "Проведён"}
 BLOCKED_FROM = "shipped"
 _ORDER = [s.value for s in STATUS_ORDER]
 BLOCKED_STATUSES = set(_ORDER[_ORDER.index(BLOCKED_FROM):])
+# Балансировка поставки (2026-10-06, запрос пользователя): в неё входят и отгруженные, и доставленные, но ещё не смонтированные изделия —
+# их плановая дата поставки переходит между изделиями наравне с прочими. Не входят смонтированные и принятые.
+REBALANCE_BLOCKED_FROM = "installed"
+REBALANCE_BLOCKED_STATUSES = set(_ORDER[_ORDER.index(REBALANCE_BLOCKED_FROM):])
 
 
 class SupplierChangeIn(BaseModel):
@@ -599,8 +603,8 @@ def _rebalance_eligible(e, contract_id: Optional[int], mark: str) -> Optional[st
         return "изделие стоит не на контракте документа"
     if mark and (e["mark"] or "").strip().lower() != mark.strip().lower():
         return f"марка изделия не совпадает с маркой документа «{mark}»"
-    if e["current_status"] in BLOCKED_STATUSES:
-        return "изделие уже отгружено — его дата поставки не переставляется"
+    if e["current_status"] in REBALANCE_BLOCKED_STATUSES:
+        return "изделие уже смонтировано — его дата поставки не переставляется"
     if not e["planned_delivery_date"]:
         return "у изделия нет плановой даты поставки"
     return None
