@@ -1404,3 +1404,14 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-doc-head h3 { margin: 0; }
 .v2-doc-actions { align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .v2-doc-actions #sd-head-status { font-size: 13px; margin-right: 6px; }
+
+/* Группы табличной части балансировки: поставщик → контракт → марка (supplier-docs.js, 2026-10-06) */
+.v2-rb-tools { display: flex; gap: 8px; margin: 8px 0; }
+.v2-rb-grp { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-soft, var(--bg)); margin-top: 6px; }
+.v2-rb-d0 { background: var(--sel, var(--bg)); font-size: 15px; }
+.v2-rb-toggle { background: none; border: 0; padding: 2px 4px; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.v2-rb-toggle small { color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-size: 10px; margin: 0 4px; }
+.v2-rb-sub { margin-left: 18px; }
+.v2-rb-body { margin: 6px 0 6px 0; max-height: 360px; overflow: auto; }
+.v2-rb-toggle small, .v2-rb-toggle b, .v2-rb-toggle span { display: inline; }
+.v2-rb-toggle { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }

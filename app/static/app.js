@@ -19149,15 +19149,34 @@ let scdSnapshot = "";            // слепок формы на момент о
 // Балансировка поставки: предлагаются только контракты и марки, по которым есть что балансировать (расчёт изменит хотя бы одну плановую
 // дату), с числом таких изделий (2026-10-06, запрос пользователя). Расчёт — на сервере, тот же, что при проведении.
 let scdRbCands = [];
+let scdRbPool = null;             // кандидаты при общем пуле дат: {changed, late, marks}
+const SCD_ALL = "*";              // значение выбора «Все контракты» / «Все марки»
 async function scdLoadRbCands() {
   try {
-    scdRbCands = (await api(objectUrl("/supplier-changes/rebalance-candidates"))).contracts;
+    const r = await api(objectUrl("/supplier-changes/rebalance-candidates"));
+    scdRbCands = r.contracts;
+    scdRbPool = r.pool;
   } catch (e) {
     scdRbCands = [];
+    scdRbPool = null;
     showToast("Не удалось получить контракты для балансировки: " + e.message, "warning");
   }
 }
 function scdRbCandOf(contractId) { return scdRbCands.find((c) => String(c.contract_id) === String(contractId)) || null; }
+// Марки выбранного охвата. «Все контракты»: сумма по контрактам (каждый отдельно) или, при общем пуле, свой расчёт сервера.
+function scdRbMarksOf(contractId, pool) {
+  if (String(contractId) !== SCD_ALL) { const c = scdRbCandOf(contractId); return c ? c.marks : []; }
+  if (pool) return scdRbPool ? scdRbPool.marks : [];
+  const сводка = new Map();
+  for (const c of scdRbCands) for (const k of c.marks) {
+    const a = сводка.get(k.mark.toLowerCase()) || { mark: k.mark, count: 0, changed: 0, late: 0 };
+    a.count += k.count; a.changed += k.changed; a.late += k.late;
+    сводка.set(k.mark.toLowerCase(), a);
+  }
+  return [...сводка.values()].sort((a, b) => a.mark.localeCompare(b.mark, "ru"));
+}
+const scdSum = (list, key) => list.reduce((n, m) => n + m[key], 0);
+function scdPoolChecked() { return !!document.getElementById("scd-pool").checked; }
 
 function scdKey(type, mark) { return `${type || ""} ${mark || ""}`; }
 function scdPosted() { return !!scdDoc && scdDoc.status === "posted"; }
@@ -19183,13 +19202,21 @@ function scdSelectable() {
 function scdFillCounterparties(select, выбранный) {
   const виденные = new Map();
   for (const c of scdSelectable()) виденные.set(c.counterparty_id, c.counterparty_short_name);
-  select.innerHTML = ['<option value="">— выберите —</option>'].concat(
+  const все = scdKind === SCD_KIND_REBALANCE && select.id === "scd-from-counterparty"
+    ? [`<option value="${SCD_ALL}"${выбранный === SCD_ALL ? " selected" : ""}>Все контракты</option>`] : [];
+  select.innerHTML = ['<option value="">— выберите —</option>'].concat(все,
     [...виденные.entries()].map(([id, name]) =>
       `<option value="${id}"${String(id) === String(выбранный) ? " selected" : ""}>${escapeHtml(name)}</option>`)
   ).join("");
 }
 
 function scdFillContracts(select, counterpartyId, выбранный) {
+  if (scdKind === SCD_KIND_REBALANCE && counterpartyId === SCD_ALL && select.id === "scd-from-contract") {
+    const ch = scdSum(scdRbCands, "changed"), late = scdSum(scdRbCands, "late");
+    select.innerHTML = `<option value="${SCD_ALL}" selected data-main="Все контракты" data-c="${ch}|${late}">Все контракты — к балансировке: ${ch} изд.${late ? `, просрочено ${late}` : ""}</option>`;
+    select.disabled = false;
+    return;
+  }
   const свои = scdSelectable().filter(c => String(c.counterparty_id) === String(counterpartyId));
   select.innerHTML = ['<option value="">— выберите —</option>'].concat(
     свои.map(c => {
@@ -19208,6 +19235,13 @@ function scdCurrentIds() {
   const from = document.getElementById("scd-from-contract").value;
   // У балансировки контракт один: в шапке документа он хранится в обеих колонках.
   return { from, to: scdKind === SCD_KIND_REBALANCE ? from : document.getElementById("scd-to-contract").value };
+}
+
+// Галочка «общий пул дат» осмыслена только у балансировки по ВСЕМ контрактам.
+function scdSyncPoolRow() {
+  const показать = scdKind === SCD_KIND_REBALANCE && document.getElementById("scd-from-contract").value === SCD_ALL;
+  document.getElementById("scd-pool-row").style.display = показать ? "" : "none";
+  if (!показать) document.getElementById("scd-pool").checked = false;
 }
 
 function scdContractById(id) {
@@ -19259,7 +19293,7 @@ function scdApplyMode() {
   // Проведённый документ читается, но не правится: подмена состава под уже
   // разошедшимися движениями была бы отменой, сделанной втихую.
   for (const id of ["scd-date", "scd-number", "scd-reason", "scd-comment", "scd-mark",
-                    "scd-from-counterparty", "scd-from-contract",
+                    "scd-from-counterparty", "scd-from-contract", "scd-pool",
                     "scd-to-counterparty", "scd-to-contract"]) {
     document.getElementById(id).disabled = проведён;
   }
@@ -19274,6 +19308,7 @@ function scdApplyMode() {
   document.getElementById("scd-post").style.display = проведён ? "none" : "";
   document.getElementById("scd-unpost").style.display = проведён ? "" : "none";
   document.getElementById("scd-delete").style.display = (scdDoc && !проведён) ? "" : "none";
+  scdSyncPoolRow();
   scdSyncColumnSelects();
 }
 
@@ -19440,7 +19475,8 @@ async function scdReloadMarks(сохранитьВыбор) {
   const { from } = scdCurrentIds();
   const select = document.getElementById("scd-mark");
   const заметка = document.getElementById("scd-mark-note");
-  const выбрана = сохранитьВыбор ? (select.value || (scdDoc && scdDoc.mark) || "") : "";
+  const выбрана = сохранитьВыбор ? (select.value || (scdDoc && (scdDoc.all_marks ? SCD_ALL : scdDoc.mark)) || "") : "";
+  scdSyncPoolRow();
   scdSwapMarks = [];
   if (!from) {
     select.innerHTML = '<option value="">— сначала выберите контракт стороны 1 —</option>';
@@ -19451,8 +19487,7 @@ async function scdReloadMarks(сохранитьВыбор) {
   select.innerHTML = '<option value="">— загрузка… —</option>';
   try {
     if (scdKind === SCD_KIND_REBALANCE) {
-      const кандидат = scdRbCandOf(from);
-      scdSwapMarks = кандидат ? кандидат.marks : [];
+      scdSwapMarks = scdRbMarksOf(from, scdPoolChecked());
     } else {
       const ответ = await api(objectUrl("/supplier-changes/contract-marks", { contract_id: from }));
       scdSwapMarks = ответ.marks;
@@ -19467,7 +19502,9 @@ async function scdReloadMarks(сохранитьВыбор) {
     заметка.textContent = scdKind === SCD_KIND_REBALANCE
       ? "По этому контракту балансировать нечего." : "К контракту стороны 1 не привязано ни одного изделия — обменивать нечего.";
   } else {
-    select.innerHTML = ['<option value="">— выберите марку —</option>'].concat(
+    const всеМарки = scdKind === SCD_KIND_REBALANCE
+      ? [`<option value="${SCD_ALL}" data-main="Все марки" data-c="${scdSum(scdSwapMarks, "changed")}|${scdSum(scdSwapMarks, "count")}|${scdSum(scdSwapMarks, "late")}"${выбрана === SCD_ALL ? " selected" : ""}>Все марки · к балансировке: ${scdSum(scdSwapMarks, "changed")} из ${scdSum(scdSwapMarks, "count")} изд.${scdSum(scdSwapMarks, "late") ? `, просрочено ${scdSum(scdSwapMarks, "late")}` : ""}</option>`] : [];
+    select.innerHTML = ['<option value="">— выберите марку —</option>'].concat(всеМарки,
       scdSwapMarks.map(m => `<option value="${escapeHtml(m.mark)}"${scdKind === SCD_KIND_REBALANCE ? ` data-main="${escapeHtml(m.mark)}" data-c="${m.changed}|${m.count}|${m.late}"` : ""}${m.mark === выбрана ? " selected" : ""}>`
         + (scdKind === SCD_KIND_REBALANCE
           ? `${escapeHtml(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`
@@ -19494,9 +19531,11 @@ async function scdReloadRebalance(свой) {
   if (!from || !марка) { scdRenderRebalance(); return; }
   document.getElementById("scd-rebalance").innerHTML = '<div class="hint-text">Расчёт…</div>';
   try {
-    const свойДокумент = свой && scdDoc && String(scdDoc.from_contract_id) === String(from) && scdDoc.mark === марка;
+    const всеК = from === SCD_ALL, всеМ = марка === SCD_ALL, пул = всеК && scdPoolChecked();
+    const свойДокумент = свой && scdDoc && !!scdDoc.all_contracts === всеК && (всеК || String(scdDoc.from_contract_id) === String(from))
+      && !!scdDoc.all_marks === всеМ && (всеМ || scdDoc.mark === марка) && !!scdDoc.pool === пул;
     scdRebalance = await api(objectUrl("/supplier-changes/rebalance-preview",
-      { contract_id: from, mark: марка, doc_id: свойДокумент ? scdDoc.id : "" }));
+      { contract_id: всеК ? "" : from, mark: всеМ ? "" : марка, pool: пул ? "true" : "", doc_id: свойДокумент ? scdDoc.id : "" }));
     scdRebalIds = scdRebalance.items.map(i => i.element_id);
   } catch (e) {
     document.getElementById("scd-error").textContent = e.message;
@@ -19505,41 +19544,71 @@ async function scdReloadRebalance(свой) {
   scdUpdateSummary();
 }
 
+// Табличная часть балансировки сгруппирована: поставщик → контракт → марка, группы сворачиваются (2026-10-06, запрос пользователя).
+// Уровень, на котором у документа одно значение, не показывается; без уровней — плоская таблица.
+function scdRbGrouped(items, head, строка, сводка) {
+  const норм = (v) => String(v ?? "—").trim() || "—";
+  const уровни = [["counterparty", "Поставщик"], ["contract_name", "Контракт"], ["mark", "Марка"]]
+    .filter(([k]) => new Set(items.map((i) => норм(i[k]).toLowerCase())).size > 1);
+  const показать = (список) => scdRebalAll || scdPosted() ? список : список.filter((i) => i.plan_old === undefined || i.plan_old !== i.plan_new);
+  const таблица = (список) => `<table class="scd-pos-table"><thead><tr>${head}</tr></thead><tbody>${показать(список).map(строка).join("")}</tbody></table>`;
+  if (!уровни.length) return таблица(items);
+  function уровень(список, глубина) {
+    if (глубина === уровни.length) return таблица(список);
+    const [поле, название] = уровни[глубина], группы = new Map();
+    for (const i of список) {
+      const k = норм(i[поле]), ключ = k.toLowerCase();
+      if (!группы.has(ключ)) группы.set(ключ, { имя: k, список: [] });
+      группы.get(ключ).список.push(i);
+    }
+    return [...группы.values()].map((g) => `<details class="scd-rb-grp"${глубина < уровни.length - 1 ? " open" : ""}>
+        <summary><small>${название}</small> <b>${escapeHtml(g.имя)}</b> <span class="hint-text">${сводка(g.список)}</span></summary>
+        <div class="scd-rb-sub${глубина + 1 === уровни.length ? " scd-rb-leaf" : ""}">${уровень(g.список, глубина + 1)}</div></details>`).join("");
+  }
+  return `<div class="scd-rb-tools"><button type="button" class="btn btn-secondary" data-rb-fold="open">Развернуть всё</button>
+    <button type="button" class="btn btn-secondary" data-rb-fold="close">Свернуть всё</button></div>` + уровень(items, 0);
+}
+
 function scdRenderRebalance() {
   const box = document.getElementById("scd-rebalance");
   if (scdPosted() && scdDoc) {
-    box.innerHTML = `<table class="scd-pos-table"><thead><tr><th>Адрес</th><th>Этаж</th><th>Статус сейчас</th>
-        <th>Плановая дата было</th><th>Плановая дата сейчас</th></tr></thead><tbody>`
-      + scdDoc.items.map(i => `<tr><td>${escapeHtml(i.address || "№" + i.element_id)}</td><td>${escapeHtml(i.floor ?? "—")}</td>
+    const шапка = "<th>Адрес</th><th>Этаж</th><th>Статус сейчас</th><th>Плановая дата было</th><th>Плановая дата сейчас</th>";
+    const строка = (i) => `<tr><td>${escapeHtml(i.address || "№" + i.element_id)}</td><td>${escapeHtml(i.floor ?? "—")}</td>
           <td>${escapeHtml(state.statusLabels[i.current_status] || i.current_status || "—")}</td>
-          <td>${i.prev_plan ? formatDateRu(i.prev_plan) : "—"}</td><td>${i.plan_now ? formatDateRu(i.plan_now) : "—"}</td></tr>`).join("")
-      + "</tbody></table>";
+          <td>${i.prev_plan ? formatDateRu(i.prev_plan) : "—"}</td><td>${i.plan_now ? formatDateRu(i.plan_now) : "—"}</td></tr>`;
+    box.innerHTML = scdRbGrouped(scdDoc.items, шапка, строка, (l) => `${l.length} изд.`);
+    scdBindRbFold(box);
     return;
   }
   if (!scdRebalance) {
-    box.innerHTML = '<div class="hint-text">Выберите контракт (поставщика) и марку — здесь появится, как поменяются плановые даты.</div>';
+    box.innerHTML = '<div class="hint-text">Выберите контракт (поставщика) и марку — или «Все контракты» / «Все марки» — здесь появится, как поменяются плановые даты.</div>';
     return;
   }
   const { items, summary: sm } = scdRebalance;
   if (!items.length) {
-    box.innerHTML = '<div class="hint-text">Подходящих изделий нет: нужны изделия этой марки на контракте, ещё не отгруженные и с плановой датой поставки.</div>';
+    box.innerHTML = '<div class="hint-text">Подходящих изделий нет: нужны изделия на контракте, ещё не отгруженные, с плановой датой поставки и такие, у которых балансировка меняет дату.</div>';
     return;
   }
   const дн = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
-  const показанные = scdRebalAll ? items : items.filter(i => i.plan_old !== i.plan_new);
+  const шапка = "<th>Адрес</th><th>Этаж</th><th>Требуемая дата</th><th>Плановая было</th><th>Плановая стало</th><th>Откл., дн. было</th><th>Откл., дн. стало</th>";
+  const строка = (i) => `<tr${i.plan_old !== i.plan_new ? ' style="font-weight:600"' : ""}>
+        <td>${escapeHtml(i.address || "№" + i.element_id)}</td><td>${escapeHtml(i.floor ?? "—")}</td>
+        <td>${i.need_date ? formatDateRu(i.need_date) : "—"}</td><td>${formatDateRu(i.plan_old)}</td><td>${formatDateRu(i.plan_new)}</td>
+        <td>${дн(i.delay_old)}</td><td>${дн(i.delay_new)}</td></tr>`;
+  const сводка = (l) => `${l.length} изд., меняется ${l.filter((i) => i.plan_old !== i.plan_new).length}, просрочено ${l.filter((i) => i.delay_old > 0).length} → ${l.filter((i) => i.delay_new > 0).length}`;
   box.innerHTML = `<div class="hint-text">Изделий: ${sm.count}, у ${sm.changed} изменится плановая дата. Просрочка (плановая позже требуемой):
       изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.${
         sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика).` : ""}</div>
     <label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
-      <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, у которых меняется дата</label>
-    <table class="scd-pos-table"><thead><tr><th>Адрес</th><th>Этаж</th><th>Требуемая дата</th><th>Плановая было</th>
-      <th>Плановая стало</th><th>Откл., дн. было</th><th>Откл., дн. стало</th></tr></thead><tbody>`
-    + показанные.map(i => `<tr${i.plan_old !== i.plan_new ? ' style="font-weight:600"' : ""}>
-        <td>${escapeHtml(i.address || "№" + i.element_id)}</td><td>${escapeHtml(i.floor ?? "—")}</td>
-        <td>${i.need_date ? formatDateRu(i.need_date) : "—"}</td><td>${formatDateRu(i.plan_old)}</td><td>${formatDateRu(i.plan_new)}</td>
-        <td>${дн(i.delay_old)}</td><td>${дн(i.delay_new)}</td></tr>`).join("")
-    + "</tbody></table>";
+      <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, у которых меняется дата</label>`
+    + scdRbGrouped(items, шапка, строка, сводка);
   document.getElementById("scd-rebal-all").addEventListener("change", (e) => { scdRebalAll = !e.target.checked; scdRenderRebalance(); });
+  scdBindRbFold(box);
+}
+function scdBindRbFold(box) {
+  for (const b of box.querySelectorAll("[data-rb-fold]")) b.addEventListener("click", () => {
+    for (const d of box.querySelectorAll("details.scd-rb-grp")) d.open = b.dataset.rbFold === "open";
+  });
 }
 
 // Сторона 2 собирается ИЗ МАРКИ: предлагаются только контрагенты и контракты,
@@ -20118,7 +20187,8 @@ const SCD_COLUMNS = {
   [SCD_KIND_SUPPLIER]: [["Текущий поставщик (контрагент)", (d) => d.from_counterparty || "—"], ["Из контракта", (d) => d.from_contract_name],
     ["Новый поставщик (контрагент)", (d) => d.to_counterparty || "—"], ["В контракт", (d) => d.to_contract_name]],
   [SCD_KIND_SWAP]: [["Марка", (d) => d.mark || "—"], ["Контракт стороны 1", (d) => d.from_contract_name], ["Контракт стороны 2", (d) => d.to_contract_name]],
-  [SCD_KIND_REBALANCE]: [["Марка", (d) => d.mark || "—"], ["Контракт (поставщик)", (d) => d.from_contract_name]],
+  [SCD_KIND_REBALANCE]: [["Марка", (d) => d.all_marks ? "Все марки" : (d.mark || "—")],
+    ["Контракт (поставщик)", (d) => d.all_contracts ? `Все контракты${d.pool ? " (общий пул)" : ""}` : d.from_contract_name]],
 };
 
 function scdRenderCards() {
@@ -20177,6 +20247,7 @@ function scdResetForm(kind) {
   scdSideA = []; scdSideB = [];
   scdSwapMarks = [];
   scdRebalance = null; scdRebalIds = []; scdRebalAll = false;
+  document.getElementById("scd-pool").checked = false;
   document.getElementById("scd-rebalance").innerHTML = "";
   document.getElementById("scd-date").value = todayIsoLocal();
   document.getElementById("scd-number").value = "";
@@ -20254,6 +20325,13 @@ async function scdOpenDoc(docId) {
     }
     причина.value = doc.reason || "";
     for (const [сторона, contractId] of [["from", doc.from_contract_id], ["to", doc.to_contract_id]]) {
+      if (doc.kind === SCD_KIND_REBALANCE && doc.all_contracts) {   // «все контракты»: контракт шапки — лишь представитель
+        if (сторона === "from") {
+          scdFillCounterparties(document.getElementById("scd-from-counterparty"), SCD_ALL);
+          scdFillContracts(document.getElementById("scd-from-contract"), SCD_ALL, SCD_ALL);
+        }
+        continue;
+      }
       const контракт = scdContractById(contractId);
       const cp = document.getElementById(`scd-${сторона}-counterparty`);
       scdFillCounterparties(cp, контракт ? контракт.counterparty_id : "");
@@ -20263,11 +20341,12 @@ async function scdOpenDoc(docId) {
     if (doc.kind === SCD_KIND_REBALANCE) {
       // Марка — из состава контракта; записанная в документе добавляется в список, даже если изделий на контракте уже нет.
       const выбор = document.getElementById("scd-mark");
+      document.getElementById("scd-pool").checked = !!doc.pool;
       await scdReloadMarks(true);
-      if (doc.mark && ![...выбор.options].some(o => o.value === doc.mark)) {
+      if (doc.mark && !doc.all_marks && ![...выбор.options].some(o => o.value === doc.mark)) {
         выбор.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(doc.mark)}">${escapeHtml(doc.mark)}</option>`);
       }
-      выбор.value = doc.mark || "";
+      выбор.value = doc.all_marks ? SCD_ALL : (doc.mark || "");
       if (doc.status === "posted") { scdRenderRebalance(); } else { await scdReloadRebalance(true); }
     } else if (doc.kind === SCD_KIND_SWAP) {
       // Марка ставится ДО пересборки списков стороны 2: она их и определяет.
@@ -20334,13 +20413,17 @@ function scdRenderPostedItems(doc) {
 
 function scdPayload() {
   const { from, to } = scdCurrentIds();
+  const перебал = scdKind === SCD_KIND_REBALANCE;
+  const всеК = перебал && from === SCD_ALL, всеМ = перебал && document.getElementById("scd-mark").value === SCD_ALL;
   return {
     object_id: state.objectId,
     kind: scdKind,
     number: document.getElementById("scd-number").value.trim() || null,
     doc_date: document.getElementById("scd-date").value,
-    from_contract_id: Number(from), to_contract_id: Number(to),
-    mark: scdKind === SCD_KIND_SWAP || scdKind === SCD_KIND_REBALANCE ? (document.getElementById("scd-mark").value || null) : null,
+    // «Все контракты»: контракт-представитель для шапки выберет сервер, шлём 0
+    from_contract_id: всеК ? 0 : Number(from), to_contract_id: всеК ? 0 : Number(to),
+    mark: scdKind === SCD_KIND_SWAP || перебал ? (всеМ ? null : (document.getElementById("scd-mark").value || null)) : null,
+    ...(перебал ? { all_contracts: всеК, all_marks: всеМ, pool: всеК && scdPoolChecked() } : {}),
     reason: document.getElementById("scd-reason").value || null,
     comment: document.getElementById("scd-comment").value.trim() || null,
     element_ids: scdKind === SCD_KIND_REBALANCE ? scdRebalIds : scdKind === SCD_KIND_SWAP ? [] : scdChosenIds(),
@@ -20563,6 +20646,13 @@ async function scdOnSideAChange() {
   await scdReloadMarks(false);
   scdUpdateSummary();
 }
+
+// Общий пул дат меняет списки марок (расчёт идёт по маркам через контракты) и состав документа
+document.getElementById("scd-pool").addEventListener("change", async () => {
+  scdRebalance = null; scdRebalIds = [];
+  await scdReloadMarks(true);
+  scdUpdateSummary();
+});
 
 document.getElementById("scd-mark").addEventListener("change", async () => {
   if (scdKind === SCD_KIND_REBALANCE) { await scdReloadRebalance(false); scdUpdateSummary(); return; }

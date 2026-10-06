@@ -380,6 +380,10 @@ _COLUMN_MIGRATIONS = [
     ("supplier_change_docs", "posted_at", "TEXT"),
     ("supplier_change_docs", "posted_by", "TEXT"),
     ("supplier_change_docs", "posted_by_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
+    # Охват балансировки поставки: все контракты / все марки / общий пул дат (2026-10-06, запрос пользователя)
+    ("supplier_change_docs", "all_contracts", "INTEGER NOT NULL DEFAULT 0"),
+    ("supplier_change_docs", "all_marks", "INTEGER NOT NULL DEFAULT 0"),
+    ("supplier_change_docs", "pool", "INTEGER NOT NULL DEFAULT 0"),
     ("supplier_change_items", "side", "INTEGER NOT NULL DEFAULT 1"),
     ("supplier_change_items", "pair_no", "INTEGER"),
     # «Что было» до проведения — единственное основание для отмены. У

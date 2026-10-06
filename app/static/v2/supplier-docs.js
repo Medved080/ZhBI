@@ -110,11 +110,23 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   // Балансировка поставки: предлагаются только контракты и марки, по которым есть что балансировать (расчёт изменит хотя бы одну
   // плановую дату), с числом таких изделий (2026-10-06, запрос пользователя). Тот же расчёт, что при проведении, — на сервере.
   async function loadRbCands() {
-    try { S.rbCands = (await api.get(`/supplier-changes/rebalance-candidates?object_id=${objectId}`)).contracts; }
-    catch (err) { S.rbCands = []; S.refs.error = err?.detail || "Не удалось получить контракты для балансировки"; }
+    try { const r = await api.get(`/supplier-changes/rebalance-candidates?object_id=${objectId}`); S.rbCands = r.contracts; S.rbPool = r.pool; }
+    catch (err) { S.rbCands = []; S.rbPool = null; S.refs.error = err?.detail || "Не удалось получить контракты для балансировки"; }
   }
+  const RB_ALL = "*";   // значение выбора «Все контракты» / «Все марки»
   const rbCandOf = (contractId) => (S.rbCands || []).find((c) => String(c.contract_id) === String(contractId)) || null;
-  const rbMarksOf = (contractId) => rbCandOf(contractId)?.marks || [];
+  // Марки выбранного охвата. «Все контракты»: сумма по контрактам (каждый отдельно) или, при общем пуле, свой расчёт сервера.
+  function rbMarksOf(contractId, pool) {
+    if (String(contractId) !== RB_ALL) return rbCandOf(contractId)?.marks || [];
+    if (pool) return S.rbPool?.marks || [];
+    const m = new Map();
+    for (const c of S.rbCands || []) for (const k of c.marks) {
+      const a = m.get(k.mark.toLowerCase()) || { mark: k.mark, count: 0, changed: 0, late: 0 };
+      a.count += k.count; a.changed += k.changed; a.late += k.late; m.set(k.mark.toLowerCase(), a);
+    }
+    return [...m.values()].sort((a, b) => a.mark.localeCompare(b.mark, "ru"));
+  }
+  const rbSum = (list, key) => list.reduce((n, m) => n + m[key], 0);
   const contractById = (id) => S.refs.contracts.find((c) => String(c.id) === String(id)) || null;
   const selectable = () => S.refs.contracts.filter((c) => !c.is_archived);
   const contractLabel = (c) => `${c.agreement_number}${c.agreement_date ? " от " + ruDate(c.agreement_date) : ""} / ${c.specification_number}${c.specification_date ? " от " + ruDate(c.specification_date) : ""}`;
@@ -133,18 +145,20 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       sideA: [], sideB: [],             // обмен: массивы изделий (порядок = пары)
       marks: [], marksError: "", sideBCounts: new Map(), sideBError: "",
       rb: null, rbError: "", rbLoading: false,             // балансировка: ответ /rebalance-preview
+      pool: false, rbOpen: new Set(), rbMode: null,        // балансировка: общий пул дат; свёрнутые/развёрнутые группы таблицы
       picker: null,                     // {side, all, floor, sel:Set, error, loading}
       posted: null, saved: null, error: "" };
   }
   function fingerprint(x) {
-    return JSON.stringify([x.number.trim(), x.date, x.reason.trim(), x.comment.trim(), String(x.from), String(x.to), x.kind !== "supplier_change" ? x.mark : "",
+    return JSON.stringify([x.number.trim(), x.date, x.reason.trim(), x.comment.trim(), String(x.from), String(x.to), x.kind !== "supplier_change" ? x.mark : "", x.kind === "date_rebalance" ? !!x.pool : "",
       single(x.kind) ? [...x.chosen.keys()].sort((a, b) => a - b) : [x.sideA.map((e) => e.id), x.sideB.map((e) => e.id)]]);
   }
   const isDirty = () => S.view === "doc" && !!f() && !readOnly(f()) && fingerprint(f()) !== f().saved;
   function fromDoc(d) {
     const x = blankForm(d.kind);
     Object.assign(x, { id: d.id, status: d.status, version: d.version, number: d.number, date: d.doc_date, reason: d.reason || "", comment: d.comment || "",
-      from: String(d.from_contract_id), to: String(d.to_contract_id), mark: d.mark || "", posted: d.status === "posted" ? { by: d.posted_by, at: d.posted_at } : null, head: d });
+      from: d.all_contracts ? RB_ALL : String(d.from_contract_id), to: String(d.to_contract_id), mark: d.all_marks ? RB_ALL : (d.mark || ""),
+      pool: !!d.pool, posted: d.status === "posted" ? { by: d.posted_by, at: d.posted_at } : null, head: d });
     const info = (i) => ({ id: i.element_id, type: i.element_type, mark: i.mark, address: i.address, floor: i.floor, status: i.current_status });
     x.items = d.items;
     if (single(d.kind)) for (const i of d.items) x.chosen.set(i.element_id, info(i));
@@ -201,7 +215,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   async function loadMarks(initial) {
     const x = f(); x.marks = []; x.marksError = ""; x.sideBCounts = new Map(); x.sideBError = "";
     if (!x.from) { paint(); return; }
-    if (x.kind === "date_rebalance") x.marks = rbMarksOf(x.from);   // только марки, где балансировка что-то изменит
+    if (x.kind === "date_rebalance") x.marks = rbMarksOf(x.from, x.pool);   // только марки, где балансировка что-то изменит
     else try { x.marks = (await api.get(`/supplier-changes/contract-marks?object_id=${objectId}&contract_id=${x.from}`)).marks; }
     catch (err) { x.marksError = err?.detail || "Не удалось загрузить марки контракта"; }
     if (f() !== x) return;
@@ -214,11 +228,14 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (!x.from || !x.mark) { paint(); return; }
     x.rbLoading = true; paint();
     try {
-      const own = initial && x.id && x.head && String(x.head.from_contract_id) === String(x.from) && x.head.mark === x.mark;
-      const r = await api.get(`/supplier-changes/rebalance-preview?object_id=${objectId}&contract_id=${x.from}&mark=${encodeURIComponent(x.mark)}${own ? `&doc_id=${x.id}` : ""}`);
+      const h = x.head, allC = x.from === RB_ALL, allM = x.mark === RB_ALL;
+      const own = initial && x.id && h && !!h.all_contracts === allC && (allC || String(h.from_contract_id) === String(x.from))
+        && !!h.all_marks === allM && (allM || h.mark === x.mark) && !!h.pool === !!x.pool;
+      const q = `object_id=${objectId}${allC ? "" : `&contract_id=${x.from}`}${allM ? "" : `&mark=${encodeURIComponent(x.mark)}`}${allC && x.pool ? "&pool=true" : ""}${own ? `&doc_id=${x.id}` : ""}`;
+      const r = await api.get(`/supplier-changes/rebalance-preview?${q}`);
       if (f() === x) {
         x.rb = r;
-        if (!own) { x.chosen.clear(); for (const i of r.items) x.chosen.set(i.element_id, { id: i.element_id, mark: x.mark, address: i.address, floor: i.floor, status: i.status }); }
+        if (!own) { x.chosen.clear(); for (const i of r.items) x.chosen.set(i.element_id, { id: i.element_id, mark: i.mark, address: i.address, floor: i.floor, status: i.status }); }
       }
     } catch (err) { if (f() === x) x.rbError = err?.detail || "Не удалось рассчитать балансировку"; }
     if (f() === x) { x.rbLoading = false; paint(); }
@@ -237,7 +254,13 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function bodyFor(x) {
     const b = { object_id: objectId, kind: x.kind, number: x.number.trim() || null, doc_date: x.date, from_contract_id: Number(x.from), to_contract_id: Number(x.to),
       reason: x.reason.trim() || null, comment: x.comment.trim() || null };
-    if (x.kind === "date_rebalance") { b.element_ids = [...x.chosen.keys()]; b.mark = x.mark; b.to_contract_id = Number(x.from); }
+    if (x.kind === "date_rebalance") {
+      b.element_ids = [...x.chosen.keys()];
+      b.all_contracts = x.from === RB_ALL; b.all_marks = x.mark === RB_ALL; b.pool = b.all_contracts && !!x.pool;
+      b.mark = b.all_marks ? null : x.mark;
+      b.from_contract_id = b.all_contracts ? 0 : Number(x.from);   // «все контракты»: контракт-представитель выберет сервер
+      b.to_contract_id = b.from_contract_id;
+    }
     else if (x.kind === "supplier_change") b.element_ids = [...x.chosen.keys()];
     else { b.mark = x.mark; b.side_a = x.sideA.map((e) => e.id); b.side_b = x.sideB.map((e) => e.id); }
     if (x.id && x.version) b.expected_version = x.version;
@@ -302,7 +325,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       const c = contractById(x.from), sm = x.rb?.summary;
       return undo
         ? `Отменить проведение балансировки № ${x.number}?\nИзделиям (${x.chosen.size} шт.) вернутся плановые даты поставки, какими они были до документа. Контракт, статус и история не менялись.`
-        : `Провести балансировку поставки № ${x.number}?\nМарка «${x.mark}», контракт «${c ? contractLabel(c) : "—"}», изделий: ${x.chosen.size}.\nНабор согласованных плановых дат поставщика не меняется: даты лишь переходят между изделиями этой марки так, чтобы убрать просрочку (меняются только даты изделий-участников обмена).${sm ? `\nПросрочка (плановая позже требуемой) по расчёту сейчас: изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.; даты изменятся у ${sm.changed} из ${sm.count}.` : ""}\nПроведение пересчитывает раскладку по данным на момент проведения. Отмена — кнопкой «Отменить проведение».`;
+        : `Провести балансировку поставки № ${x.number}?\n${x.mark === RB_ALL ? "Все марки" : `Марка «${x.mark}»`}, ${x.from === RB_ALL ? `все контракты (${x.pool ? "общий пул дат между контрактами" : "каждый контракт отдельно"})` : `контракт «${c ? contractLabel(c) : "—"}»`}, изделий: ${x.chosen.size}.\nНабор согласованных плановых дат поставщика не меняется: даты лишь переходят между изделиями одной марки так, чтобы убрать просрочку (меняются только даты изделий-участников обмена).${sm ? `\nПросрочка (плановая позже требуемой) по расчёту сейчас: изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.; даты изменятся у ${sm.changed} из ${sm.count}.` : ""}\nПроведение пересчитывает раскладку по данным на момент проведения. Отмена — кнопкой «Отменить проведение».`;
     }
     if (x.kind === "link_swap") {
       const pairs = Math.min(x.sideA.length, x.sideB.length);
@@ -497,7 +520,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     supplier_change: [["Текущий поставщик (контрагент)", (d) => d.from_counterparty || "—"], ["Из контракта", (d) => d.from_contract_name],
       ["Новый поставщик (контрагент)", (d) => d.to_counterparty || "—"], ["В контракт", (d) => d.to_contract_name]],
     link_swap: [["Марка", (d) => d.mark || "—"], ["Контракт стороны 1", (d) => d.from_contract_name], ["Контракт стороны 2", (d) => d.to_contract_name]],
-    date_rebalance: [["Марка", (d) => d.mark || "—"], ["Контракт (поставщик)", (d) => d.from_contract_name]],
+    date_rebalance: [["Марка", (d) => d.all_marks ? "Все марки" : (d.mark || "—")], ["Контракт (поставщик)", (d) => d.all_contracts ? `Все контракты${d.pool ? " (общий пул)" : ""}` : d.from_contract_name]],
   };
   function listHtml() {
     if (S.list.error && !S.list.loaded) return `<p class="v2-note">${esc(S.list.error)} <button type="button" class="v2-btn" data-a="reload-list">Повторить</button></p>`;
@@ -567,25 +590,55 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <p class="${equal ? "v2-muted" : "v2-auth-error"}">${equal ? `Пар к обмену: ${pairs}` : `Сторона 1: ${x.sideA.length} шт., сторона 2: ${x.sideB.length} шт.${x.sideA.length || x.sideB.length ? " — количества не совпадают, провести нельзя" : ""}`}</p>`;
   }
 
+  // Табличная часть балансировки сгруппирована: поставщик → контракт → марка, группы сворачиваются (2026-10-06). Уровень, на котором
+  // у документа одно значение, не показывается; без уровней — плоская таблица.
+  function rbGrouped(x, items, head, rowHtml, summary) {
+    const norm = (v) => String(v ?? "—").trim() || "—";
+    const levels = [["counterparty", "Поставщик"], ["contract_name", "Контракт"], ["mark", "Марка"]]
+      .filter(([k]) => new Set(items.map((i) => norm(i[k]).toLowerCase())).size > 1);
+    const table = (list) => `<table class="v2-table"><thead><tr>${head}</tr></thead><tbody>${list.map(rowHtml).join("")}</tbody></table>`;
+    if (!levels.length) return `<div style="max-height:420px;overflow:auto">${table(shownOf(items))}</div>`;
+    const isOpen = (key, depth) => {
+      const def = x.rbMode === "all" ? true : x.rbMode === "none" ? false : depth < levels.length - 1;
+      return x.rbOpen.has(key) ? !def : def;
+    };
+    function level(list, depth, path) {
+      if (depth === levels.length) return `<div class="v2-rb-body">${table(shownOf(list))}</div>`;
+      const [field, title] = levels[depth], groups = new Map();
+      for (const i of list) { const k = norm(i[field]); if (!groups.has(k.toLowerCase())) groups.set(k.toLowerCase(), { name: k, list: [] }); groups.get(k.toLowerCase()).list.push(i); }
+      return [...groups].map(([lk, g]) => {
+        const key = `${path}/${lk}`, open = isOpen(key, depth);
+        return `<div class="v2-rb-grp v2-rb-d${depth}"><button type="button" class="v2-rb-toggle" data-a="rb-toggle" data-k="${esc(key)}" data-d="${depth}" aria-expanded="${open}"><span aria-hidden="true">${open ? "▾" : "▸"}</span> <small>${title}</small> <b>${esc(g.name)}</b></button><span class="v2-muted">${summary(g.list)}</span></div>${open ? `<div class="v2-rb-sub">${level(g.list, depth + 1, key)}</div>` : ""}`;
+      }).join("");
+    }
+    return `<div class="v2-rb-tools"><button type="button" class="v2-btn" data-a="rb-expand" data-m="all">Развернуть всё</button><button type="button" class="v2-btn" data-a="rb-expand" data-m="none">Свернуть всё</button></div>${level(items, 0, "")}`;
+  }
+  const shownOf = (list) => (f()?.rbAll === true || f()?.status === "posted") ? list : list.filter((i) => i.plan_old === undefined || i.plan_old !== i.plan_new);
+
   function rebalanceHtml(x, ro) {
     if (x.status === "posted" || ro) {
       const items = x.items || [];
-      return `<h4>Изделия документа (${items.length})</h4>${items.length ? `<div style="max-height:420px;overflow:auto"><table class="v2-table"><thead><tr><th>Адрес</th><th>Этаж</th><th>Статус сейчас</th><th>Плановая дата было</th><th>Плановая дата сейчас</th></tr></thead><tbody>${items.map((i) => `<tr><td>${esc(i.address || "№" + i.element_id)}</td><td>${esc(i.floor ?? "—")}</td><td>${esc(STATUS[i.current_status] || i.current_status || "—")}</td><td>${i.prev_plan ? ruDate(i.prev_plan) : "—"}</td><td>${ruDate(i.plan_now)}</td></tr>`).join("")}</tbody></table></div>` : ""}${x.status === "posted" ? "" : `<p class="v2-muted">Колонка «было» заполняется при проведении.</p>`}`;
+      const head = `<th>Адрес</th><th>Этаж</th><th>Статус сейчас</th><th>Плановая дата было</th><th>Плановая дата сейчас</th>`;
+      const row = (i) => `<tr><td>${esc(i.address || "№" + i.element_id)}</td><td>${esc(i.floor ?? "—")}</td><td>${esc(STATUS[i.current_status] || i.current_status || "—")}</td><td>${i.prev_plan ? ruDate(i.prev_plan) : "—"}</td><td>${ruDate(i.plan_now)}</td></tr>`;
+      return `<h4>Изделия документа (${items.length})</h4>${items.length ? rbGrouped(x, items, head, row, (l) => `${l.length} изд.`) : ""}${x.status === "posted" ? "" : `<p class="v2-muted">Колонка «было» заполняется при проведении.</p>`}`;
     }
-    if (!x.from) return `<p class="v2-muted">Выберите контракт (поставщика) и марку — ниже появится, как поменяются плановые даты.</p>`;
-    if (!x.mark) return `<p class="v2-muted">Выберите марку.</p>`;
+    if (!x.from) return `<p class="v2-muted">Выберите контракт (поставщика) и марку — или «Все контракты» / «Все марки» — ниже появится, как поменяются плановые даты.</p>`;
+    if (!x.mark) return `<p class="v2-muted">Выберите марку или «Все марки».</p>`;
     if (x.rbLoading) return `<p class="v2-muted">Расчёт…</p>`;
     if (x.rbError) return `<p class="v2-auth-error" role="alert">${esc(x.rbError)} <button type="button" class="v2-btn" data-a="reload-rb">Повторить</button></p>`;
     if (!x.rb) return "";
     const sm = x.rb.summary, items = x.rb.items;
-    if (!items.length) return `<p class="v2-note">Подходящих изделий нет: нужны изделия этой марки на контракте, ещё не отгруженные и с плановой датой поставки.</p>`;
+    if (!items.length) return `<p class="v2-note">Подходящих изделий нет: нужны изделия на контракте, ещё не отгруженные, с плановой датой поставки и такие, у которых балансировка меняет дату.</p>`;
     const dl = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
-    const onlyChanged = x.rbAll !== true, shown = onlyChanged ? items.filter((i) => i.plan_old !== i.plan_new) : items;
+    const onlyChanged = x.rbAll !== true;
+    const head = `<th>Адрес</th><th>Этаж</th><th>Требуемая дата</th><th>Плановая было</th><th>Плановая стало</th><th>Откл., дн. было</th><th>Откл., дн. стало</th>`;
+    const row = (i) => `<tr ${i.plan_old !== i.plan_new ? 'style="font-weight:600"' : ""}><td>${esc(i.address || "№" + i.element_id)}</td><td>${esc(i.floor ?? "—")}</td><td>${i.need_date ? ruDate(i.need_date) : "—"}</td><td>${ruDate(i.plan_old)}</td><td>${ruDate(i.plan_new)}</td><td>${dl(i.delay_old)}</td><td>${dl(i.delay_new)}</td></tr>`;
+    const gsum = (l) => { const ch = l.filter((i) => i.plan_old !== i.plan_new).length, la = l.filter((i) => i.delay_old > 0).length, lb = l.filter((i) => i.delay_new > 0).length;
+      return `${l.length} изд., меняется ${ch}, просрочено ${la} → ${lb}`; };
     return `<h4>Что изменится</h4>
       <p class="v2-muted">Изделий: ${sm.count}, у ${sm.changed} изменится плановая дата. Просрочка (плановая позже требуемой): изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они идут в конец очереди.` : ""}</p>
       <label class="v2-role-check"><input type="checkbox" data-a="rb-only" ${onlyChanged ? "checked" : ""}><span>Показывать только изделия, у которых меняется дата (${sm.changed} из ${sm.count})</span></label>
-      <div style="max-height:420px;overflow:auto"><table class="v2-table"><thead><tr><th>Адрес</th><th>Этаж</th><th>Требуемая дата</th><th>Плановая было</th><th>Плановая стало</th><th>Откл., дн. было</th><th>Откл., дн. стало</th></tr></thead><tbody>
-      ${shown.map((i) => `<tr ${i.plan_old !== i.plan_new ? 'style="font-weight:600"' : ""}><td>${esc(i.address || "№" + i.element_id)}</td><td>${esc(i.floor ?? "—")}</td><td>${i.need_date ? ruDate(i.need_date) : "—"}</td><td>${ruDate(i.plan_old)}</td><td>${ruDate(i.plan_new)}</td><td>${dl(i.delay_old)}</td><td>${dl(i.delay_new)}</td></tr>`).join("")}</tbody></table></div>`;
+      ${rbGrouped(x, items, head, row, gsum)}`;
   }
 
   function docHtml() {
@@ -605,21 +658,24 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       for (const c of S.rbCands || []) { if (!groups.has(c.counterparty)) groups.set(c.counterparty, []); groups.get(c.counterparty).push(c); }
       const main = (c) => { const k = contractById(c.contract_id); return k ? contractLabel(k) : c.name; };
       const label = (c) => `${main(c)} — к балансировке: ${c.changed} изд.${c.late ? `, просрочено ${c.late}` : ""}`;
+      const cs = S.rbCands || [];
       return `<option value="">${groups.size ? "— выберите —" : "— нет контрактов, по которым есть что балансировать —"}</option>`
+        + `<option value="${RB_ALL}" data-main="Все контракты" data-c="${rbSum(cs, "changed")}|${rbSum(cs, "late")}" ${x.from === RB_ALL ? "selected" : ""}>Все контракты — к балансировке: ${rbSum(cs, "changed")} изд.${rbSum(cs, "late") ? `, просрочено ${rbSum(cs, "late")}` : ""}</option>`
         + [...groups].map(([cp, list]) => `<optgroup label="${esc(cp)}">${list.map((c) => `<option value="${c.contract_id}" data-main="${esc(main(c))}" data-c="${c.changed}|${c.late}" ${String(x.from) === String(c.contract_id) ? "selected" : ""}>${esc(label(c))}</option>`).join("")}</optgroup>`).join("")
-        + (x.from && !rbCandOf(x.from) ? fixed(x.from, (x.head?.from_contract_name || contractById(x.from)?.agreement_number || "контракт " + x.from) + " — балансировать уже нечего") : "");
+        + (x.from && x.from !== RB_ALL && !rbCandOf(x.from) ? fixed(x.from, (x.head?.from_contract_name || contractById(x.from)?.agreement_number || "контракт " + x.from) + " — балансировать уже нечего") : "");
     };
-    const fromOpts = x.kind === "date_rebalance" && !viewOnly ? rbOpts() : viewOnly ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from)
+    const fromOpts = x.kind === "date_rebalance" && !viewOnly ? rbOpts() : viewOnly ? fixed(x.from, x.from === RB_ALL ? "Все контракты" : (x.head?.from_contract_name || "контракт " + x.from))
       : `${contractOptions(x.from)}${x.from && !contractById(x.from) ? fixed(x.from, x.head?.from_contract_name || "контракт " + x.from) : ""}`;
     const toOpts = viewOnly ? fixed(x.to, x.head?.to_contract_name || "контракт " + x.to)
       : `${contractOptions(x.to, swap && !ro ? onlyB : null)}${x.to && !contractById(x.to) ? fixed(x.to, x.head?.to_contract_name || "контракт " + x.to) : ""}`;
     const rbMarkOpts = () => {
-      const marks = rbMarksOf(x.from);
+      const marks = rbMarksOf(x.from, x.pool);
       return `<option value="">${x.from ? (marks.length ? "— выберите марку —" : "— нет марок для балансировки —") : "— сначала контракт —"}</option>`
+        + (x.from ? `<option value="${RB_ALL}" data-main="Все марки" data-c="${rbSum(marks, "changed")}|${rbSum(marks, "count")}|${rbSum(marks, "late")}" ${x.mark === RB_ALL ? "selected" : ""}>Все марки · к балансировке: ${rbSum(marks, "changed")} из ${rbSum(marks, "count")} изд.${rbSum(marks, "late") ? `, просрочено ${rbSum(marks, "late")}` : ""}</option>` : "")
         + marks.map((m) => `<option value="${esc(m.mark)}" data-main="${esc(m.mark)}" data-c="${m.changed}|${m.count}|${m.late}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · к балансировке: ${m.changed} из ${m.count} изд.${m.late ? `, просрочено ${m.late}` : ""}</option>`).join("")
-        + (x.mark && !marks.some((m) => m.mark === x.mark) ? fixed(x.mark, `${x.mark} — балансировать уже нечего`) : "");
+        + (x.mark && x.mark !== RB_ALL && !marks.some((m) => m.mark === x.mark) ? fixed(x.mark, `${x.mark} — балансировать уже нечего`) : "");
     };
-    const markOpts = x.kind === "date_rebalance" && !viewOnly ? rbMarkOpts() : viewOnly ? fixed(x.mark, x.mark || "—")
+    const markOpts = x.kind === "date_rebalance" && !viewOnly ? rbMarkOpts() : viewOnly ? fixed(x.mark, x.mark === RB_ALL ? "Все марки" : (x.mark || "—"))
       : `<option value="">${x.from ? "— выберите марку —" : "— сначала контракт стороны 1 —"}</option>${x.marks.map((m) => `<option value="${esc(m.mark)}" ${m.mark === x.mark ? "selected" : ""}>${esc(m.mark)} · ${esc(m.element_type || "—")} · ${m.count} шт.</option>`).join("")}${x.mark && !x.marks.some((m) => m.mark === x.mark) ? fixed(x.mark, x.mark) : ""}`;
     const note = posted
       ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится${viewOnly ? "." : " — сначала отмените проведение."}`
@@ -631,6 +687,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
         <label class="v2-field">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке, изд.|Просрочено"' : ""}>${fromOpts}</select></label>
         ${swap || rb ? `<label class="v2-field">${rb ? "Марка" : "Марка обмена"}<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке|Всего|Просрочено"' : ""}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
+        ${rb && x.from === RB_ALL ? `<label class="v2-role-check v2-span"><input type="checkbox" data-a="rb-pool" ${x.pool ? "checked" : ""} ${dis}><span>Общий пул дат: изделия одной марки делят плановые даты разных контрактов (даты переходят между контрактами; контракт изделия не меняется). Без галочки каждый контракт балансируется отдельно.</span></label>` : ""}
         ${rb ? "" : `<label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>`}
         <label class="v2-field v2-span">Причина<input data-f="reason" value="${esc(x.reason)}" ${dis} maxlength="300"></label>
         <label class="v2-field v2-span">Комментарий<input data-f="comment" value="${esc(x.comment)}" ${dis} maxlength="600"></label>
@@ -738,7 +795,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (a === "back") { backToList(false); return; }
     if (!x) return;
     // Документ вида, который изменять не дано: кнопок записи и подбора нет в разметке, но и прочие пути к ним закрыты здесь
-    if (!can(x.kind) && a !== "toggle-pos") return;
+    if (!can(x.kind) && a !== "toggle-pos" && a !== "rb-toggle" && a !== "rb-expand") return;
     if (a === "save") saveDraft();
     else if (a === "post") postOrUnpost(false);
     else if (a === "unpost") postOrUnpost(true);
@@ -746,6 +803,14 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     else if (a === "reload-cand") loadCandidates();
     else if (a === "reload-rb") loadRebalance(false);
     else if (a === "rb-only") { x.rbAll = !x.rbAll; paint(); }
+    else if (a === "rb-toggle") { if (x.rbOpen.has(d.k)) x.rbOpen.delete(d.k); else x.rbOpen.add(d.k); paint(); }
+    else if (a === "rb-expand") { x.rbMode = d.m; x.rbOpen.clear(); paint(); }
+    else if (a === "rb-pool") {
+      x.pool = !x.pool; x.chosen.clear(); x.rb = null; x.error = "";
+      const marks = rbMarksOf(x.from, x.pool);
+      if (x.mark && x.mark !== RB_ALL && !marks.some((m) => m.mark === x.mark)) x.mark = "";
+      loadMarks(false);
+    }
     else if (a === "toggle-pos") { x.openPos = x.openPos || new Set(); const i = Number(d.pi); if (x.openPos.has(i)) x.openPos.delete(i); else x.openPos.add(i); paint(); }
     else if (a === "pick") openPicker(d.side);
     else if (a === "pk-cancel") { x.picker = null; paint(); }

@@ -2771,6 +2771,12 @@
   .scd-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
   .scd-head-row h2 { margin: 0; }
   .scd-head-actions { margin: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .scd-rb-tools { display: flex; gap: 8px; margin: 8px 0; }
+  .scd-rb-grp { border: 1px solid var(--border, #d6dce6); border-radius: 8px; margin-top: 6px; padding: 4px 8px; }
+  .scd-rb-grp > summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .scd-rb-grp > summary small { text-transform: uppercase; letter-spacing: .04em; font-size: 10px; opacity: .7; }
+  .scd-rb-sub { margin: 6px 0 6px 14px; }
+  .scd-rb-leaf { max-height: 360px; overflow: auto; }
   .scd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border); margin: 0 0 10px; flex-wrap: wrap; }
   .scd-tab { border: none; border-bottom: 3px solid transparent; background: none; padding: 8px 14px; font-size: 13px; font-weight: 600;
     color: var(--color-text-muted); cursor: pointer; margin-bottom: -1px; }
@@ -9746,6 +9752,12 @@
             <label class="field" style="margin-top:0" id="scd-mark-label">Марка обмена</label>
             <select id="scd-mark"></select>
             <div class="hint-text" id="scd-mark-note"></div>
+            <div id="scd-pool-row" style="display:none">
+              <label style="font-size:12px;display:flex;gap:6px;align-items:flex-start;margin-top:8px">
+                <input type="checkbox" id="scd-pool"/>
+                <span>Общий пул дат: изделия одной марки делят плановые даты разных контрактов (контракт изделия не меняется). Без галочки каждый контракт балансируется отдельно.</span>
+              </label>
+            </div>
           </div>
         </div>
         <div class="scd-contract-box" id="scd-to-box">

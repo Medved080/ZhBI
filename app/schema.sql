@@ -899,6 +899,10 @@ CREATE TABLE IF NOT EXISTS supplier_change_docs (
     posted_at TEXT,
     posted_by TEXT,
     posted_by_user_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    -- Охват балансировки поставки (2026-10-06): «по всем контрактам» / «по всем маркам» и режим «общий пул дат». У остальных видов 0.
+    all_contracts INTEGER NOT NULL DEFAULT 0,
+    all_marks INTEGER NOT NULL DEFAULT 0,
+    pool INTEGER NOT NULL DEFAULT 0,
     UNIQUE (object_id, number)
 );
 
