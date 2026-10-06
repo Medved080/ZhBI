@@ -41,6 +41,15 @@ export function screenAllowed(screen, structure, rights) {
   }));
 }
 
+// Раздел скрыт не из-за прав, а потому что к ТИПУ текущего объекта он не относится (ЖБИ-раздел на объекте МФР и наоборот): права
+// администратора это не меняют, и называть такое «скрыто по правам» было бы неверно (2026-10-06, замечание пользователя-админа).
+export function screenNotApplicable(screen, structure, rights) {
+  const need = [...(screen.menuFeatures ?? structure?.menu_features ?? []), ...(screen.feature || [])];
+  if (!need.length) return false;
+  const notApplicable = new Set(rights?.not_applicable || []);
+  return need.every(([names]) => (Array.isArray(names) ? names : [names]).every((n) => notApplicable.has(n)));
+}
+
 // Ссылка в V1 с контекстом: объект, рабочее место, пункт меню «Действия». Разбирает V1 в applyStartupDeepLink()
 // (app/static/app.js): параметры одноразовые, права V1 проверяет сам.
 export function v1Href(screen, structure, objectId) {

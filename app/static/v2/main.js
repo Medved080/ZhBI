@@ -12,7 +12,7 @@ import { mountObjectHome } from "./object-home.js";
 import { mountProjectsObjects } from "./projects-objects.js";
 import { mountCounterparties } from "./counterparties.js";
 import { keepFocus } from "./focus.js";
-import { loadRegistry, screenAllowed } from "./registry.js";
+import { loadRegistry, screenAllowed, screenNotApplicable } from "./registry.js";
 import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountWorkspace } from "./workspace.js";
@@ -632,8 +632,11 @@ async function renderShell(user, permissions) {
       headSection.textContent = key === "home" ? "" : (target ? target.title : "");
       if (key === "home") {
         document.title = "ЖБИ — новый интерфейс";
-        const hidden = registry.screens.filter((s) => !allowedScreen(s)).length;
-        activeModule = mountHome(content, { registry, allowed: allowedScreen, hiddenCount: hidden, go: (k) => openSection(k) });
+        // Скрытое делится на две причины: раздел не относится к типу текущего объекта (ЖБИ ↔ МФР) и нет прав. Администратору
+        // «скрыто по правам» не бывает — у него остаётся только первая причина.
+        const hiddenAll = registry.screens.filter((s) => !allowedScreen(s));
+        const hiddenByType = hiddenAll.filter((s) => !isModule(s) && screenNotApplicable(s, registry.structure[s.id], rights)).length;
+        activeModule = mountHome(content, { registry, allowed: allowedScreen, hiddenByType, hiddenByRights: hiddenAll.length - hiddenByType, go: (k) => openSection(k) });
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, { ...moduleCtx, objectId });

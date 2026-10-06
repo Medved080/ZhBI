@@ -2763,6 +2763,13 @@
     position: relative; /* якорь для .modal-window-resize-handle ниже */
   }
   .modal.wide { max-width: 780px; }
+  /* Окна «Документов контрактации» на всю ширину экрана (2026-10-06, запрос пользователя: максимально использовать пространство). */
+  .modal.modal-xwide { width: 96vw; max-width: 96vw; }
+  .scd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border); margin: 0 0 10px; flex-wrap: wrap; }
+  .scd-tab { border: none; border-bottom: 3px solid transparent; background: none; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    color: var(--color-text-muted); cursor: pointer; margin-bottom: -1px; }
+  .scd-tab:hover { color: var(--color-text); }
+  .scd-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
 
   /* Плавающие окна: перетаскивание/изменение размера/разворот на весь
      экран (живой запрос пользователя 2026-09-11 — кнопки не влезали в
@@ -9649,22 +9656,20 @@
      и выбор. Документ живёт черновиком, пока его не провели; проведённый
      правится только через отмену проведения. ========================== -->
 <div class="modal-backdrop" id="supplier-change-backdrop">
-  <div class="modal wide modal-sticky">
+  <div class="modal wide modal-xwide modal-sticky">
     <div class="modal-sticky-head">
       <h2>Документы контрактации</h2>
-      <p class="hint-text" style="margin:0 0 10px;">
-        <b>Замена поставщика</b> — перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт;
-        изделия со статусом «Отгружен» и выше не переносятся.
-        <b>Обмен привязками</b> — изделия одной марки на двух контрактах меняются попарно
-        контрактом, плановой датой и историей статусов, когда привязку перепутали.
-        <b>Балансировка поставки</b> — плановые даты поставщика заново раздаются изделиям одной марки
-        на контракте так, чтобы убрать просрочку относительно требуемых дат.
-        Документ применяется кнопкой «Провести» и возвращается кнопкой «Отменить проведение».
-      </p>
+      <!-- Три вида документов — три закладки (2026-10-06): в каждой свой список, своё описание и своя кнопка создания. -->
+      <div class="scd-tabs" id="scd-tabs" role="tablist" aria-label="Виды документов">
+        <button type="button" class="scd-tab" role="tab" data-kind="supplier_change">Замена поставщика</button>
+        <button type="button" class="scd-tab" role="tab" data-kind="link_swap">Обмен привязками</button>
+        <button type="button" class="scd-tab" role="tab" data-kind="date_rebalance">Балансировка поставки</button>
+      </div>
+      <p class="hint-text" id="scd-tab-note" style="margin:0 0 10px;"></p>
       <div style="display:flex; gap:6px; flex-wrap:wrap">
-        <button class="btn btn-primary btn-sm" id="scd-new">Замена поставщика</button>
-        <button class="btn btn-primary btn-sm" id="scd-new-swap">Обмен привязками</button>
-        <button class="btn btn-primary btn-sm" id="scd-new-rebalance">Балансировка поставки</button>
+        <button class="btn btn-primary btn-sm" id="scd-new">Новая замена поставщика</button>
+        <button class="btn btn-primary btn-sm" id="scd-new-swap">Новый обмен привязками</button>
+        <button class="btn btn-primary btn-sm" id="scd-new-rebalance">Новая балансировка поставки</button>
       </div>
     </div>
     <div class="modal-sticky-scroll"><div id="scd-list"></div></div>
@@ -9677,7 +9682,7 @@
 </div>
 
 <div class="modal-backdrop" id="supplier-change-form-backdrop">
-  <div class="modal wide modal-sticky">
+  <div class="modal wide modal-xwide modal-sticky">
     <div class="modal-sticky-head">
       <h2 id="scd-form-title">Документ</h2>
       <div class="scd-status-row">

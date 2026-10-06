@@ -123,7 +123,12 @@ function homeChip(s) {
   return "";   // статусные плашки «в V2 / не всё / заблокирован» убраны (2026-09-30)
 }
 
-export function mountHome(el, { registry, allowed, hiddenCount, go }) {
+function ruPlural(n, one, few, many) {
+  const n10 = n % 10, n100 = n % 100;
+  return n10 === 1 && n100 !== 11 ? one : n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20) ? few : many;
+}
+
+export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRights = 0, go }) {
   el.className = "v2-page";
   const groups = registry.groups.filter((g) => g.id !== "home");
   const cards = groups.map((g) => {
@@ -139,9 +144,8 @@ export function mountHome(el, { registry, allowed, hiddenCount, go }) {
   const inV2 = mine.filter((s) => !inV1Only(s)).length;
   const full = mine.filter((s) => !inV1Only(s) && s.status === 5).length;
   el.innerHTML = `<div class="v2-container">
-    <h2 class="v2-home-title">Новый интерфейс</h2>
-    <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. «в V1» — раздел пока открывается в текущем интерфейсе.
-      Доступно вам: ${mine.length} разделов.${hiddenCount ? ` Скрыто по правам: ${hiddenCount}.` : ""}</p>
+    <h2 class="v2-home-title">Действия</h2>
+    <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. Доступно вам: ${mine.length} ${ruPlural(mine.length, "раздел", "раздела", "разделов")}.${hiddenByRights ? ` Скрыто по правам: ${hiddenByRights}.` : ""}${hiddenByType ? ` Не относятся к типу текущего объекта: ${hiddenByType}.` : ""}</p>
     <div class="v2-cards">${cards}</div>
   </div>`;
   el.querySelectorAll("[data-screen-link]").forEach((a) => a.addEventListener("click", (e) => {

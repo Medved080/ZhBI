@@ -90,6 +90,9 @@ export function mountShellNav(el, {
 
   let tempOpen = false;      // сеансовое — не переживает перезагрузку (в отличие от закрепления)
   let searchText = "";       // сеансовое
+  // Режим настройки меню (2026-10-06): звёздочки «в избранное» и стрелки порядка у пунктов показываются ТОЛЬКО в нём — включается
+  // шестерёнкой сверху панели, сеансовое. Вне режима панель чистая: видны только сами пункты.
+  let settingsMode = false;
   let busy = false;          // идёт запись — переходы временно недоступны (см. main.js::syncPending)
   let dragging = false;
   // Кнопка, открывшая временную панель (её id, НЕ ссылка на DOM-узел — render() пересобирает всю разметку
@@ -169,6 +172,7 @@ export function mountShellNav(el, {
   // кнопка в кнопке недопустима в HTML и ломает доступность). Только вне поиска — во время поиска список неполный
   // и переставлять/закреплять по нему было бы непонятно (см. render()).
   function itemRowHtml(s, currentKey, groupId, isFirst, isLast) {
+    if (!settingsMode) return itemHtml(s, currentKey);
     return `<div class="v2-shellnav-row">${itemHtml(s, currentKey)}<span class="v2-shellnav-tools">${favBtnHtml(s)}${moveBtnsHtml(groupId, s, isFirst, isLast)}</span></div>`;
   }
   function moveItem(groupId, itemId, dir) {
@@ -245,7 +249,7 @@ export function mountShellNav(el, {
       }
     }
     const favTopHtml = favTop.length
-      ? `<div class="v2-shellnav-static-head">Избранное</div><div class="v2-shellnav-favtop">${favTop.map((s) => `<div class="v2-shellnav-row">${itemHtml(s, currentKey)}<span class="v2-shellnav-tools">${favBtnHtml(s)}</span></div>`).join("")}</div>`
+      ? `<div class="v2-shellnav-static-head">Избранное</div><div class="v2-shellnav-favtop">${favTop.map((s) => (settingsMode ? `<div class="v2-shellnav-row">${itemHtml(s, currentKey)}<span class="v2-shellnav-tools">${favBtnHtml(s)}</span></div>` : itemHtml(s, currentKey))).join("")}</div>`
       : "";
 
     // ---- полное меню (общее для «temp» и «pinned»)
@@ -253,11 +257,16 @@ export function mountShellNav(el, {
       <div class="v2-shellnav-panelhead">
         <input type="search" id="v2-shellnav-search" class="v2-search v2-shellnav-search" placeholder="Найти раздел"
                aria-label="Найти раздел" value="${esc(searchText)}">
+        <button type="button" class="v2-shellnav-pin v2-shellnav-gear" id="v2-shellnav-gear" aria-pressed="${settingsMode}"
+                title="${settingsMode ? "Завершить настройку меню" : "Настройка меню: избранное и порядок пунктов"}" aria-label="Настройка меню">
+          ${svgIcon("gear", { size: 15 })}
+        </button>
         <button type="button" class="v2-shellnav-pin" id="v2-shellnav-pin" aria-pressed="${prefsStore.get().navPinned}"
                 title="${prefsStore.get().navPinned ? "Открепить панель" : "Закрепить панель слева"}">
           ${prefsStore.get().navPinned ? pinFilledSvg({ size: 15 }) : svgIcon("pin", { size: 15 })}
         </button>
       </div>
+      ${settingsMode ? `<div class="v2-shellnav-settings-note" role="status">Настройка меню: <b>★</b> — в избранное, <b>▲▼</b> — порядок пунктов в группе. Нажмите ⚙, чтобы закончить.</div>` : ""}
       <div class="v2-shellnav-scroll">
         <button type="button" class="v2-shellnav-item v2-shellnav-home" data-section="home" aria-pressed="${currentKey === "home"}">${svgIcon("home", { size: 15 })}<span class="v2-shellnav-item-label">Начало</span></button>
         ${favTopHtml}
@@ -381,6 +390,11 @@ export function mountShellNav(el, {
         }
       });
     }
+    el.querySelector("#v2-shellnav-gear")?.addEventListener("click", () => {
+      settingsMode = !settingsMode;
+      render();
+      el.querySelector("#v2-shellnav-gear")?.focus();
+    });
     el.querySelector("#v2-shellnav-pin")?.addEventListener("click", () => {
       const now = !prefsStore.get().navPinned;
       prefsStore.setNavPinned(now);

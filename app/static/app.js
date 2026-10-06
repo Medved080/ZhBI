@@ -20045,13 +20045,35 @@ document.getElementById("scd-pick-b").addEventListener("click", () => scdOpenPic
 
 // ---------- список документов ----------
 
-async function scdRenderList() {
+// Закладки списка документов по видам (2026-10-06): активная закладка, описание вида и кнопка создания именно этого вида.
+let scdTab = SCD_KIND_SUPPLIER;
+let scdDocsCache = [];
+const SCD_TAB_NOTES = {
+  [SCD_KIND_SUPPLIER]: "Замена поставщика — перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт; изделия со статусом «Отгружен» и выше не переносятся.",
+  [SCD_KIND_SWAP]: "Обмен привязками — изделия одной марки на двух контрактах меняются попарно контрактом, плановой датой и историей статусов, когда привязку перепутали.",
+  [SCD_KIND_REBALANCE]: "Балансировка поставки — плановые даты поставщика заново раздаются изделиям одной марки на контракте так, чтобы убрать просрочку относительно требуемых дат.",
+};
+
+function scdRenderTabs() {
+  for (const b of document.querySelectorAll("#scd-tabs .scd-tab")) {
+    b.classList.toggle("active", b.dataset.kind === scdTab);
+    b.setAttribute("aria-selected", String(b.dataset.kind === scdTab));
+    const n = scdDocsCache.filter((d) => d.kind === b.dataset.kind).length;
+    b.textContent = `${SCD_KIND_TITLES[b.dataset.kind]} · ${n}`;
+  }
+  document.getElementById("scd-tab-note").textContent = SCD_TAB_NOTES[scdTab] + " Документ применяется кнопкой «Провести» и возвращается кнопкой «Отменить проведение».";
+  document.getElementById("scd-new").style.display = scdTab === SCD_KIND_SUPPLIER ? "" : "none";
+  document.getElementById("scd-new-swap").style.display = scdTab === SCD_KIND_SWAP ? "" : "none";
+  document.getElementById("scd-new-rebalance").style.display = scdTab === SCD_KIND_REBALANCE ? "" : "none";
+}
+
+function scdRenderCards() {
   const box = document.getElementById("scd-list");
-  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
-  const docs = await api(objectUrl("/supplier-changes"));
   box.innerHTML = "";
+  scdRenderTabs();
+  const docs = scdDocsCache.filter((d) => d.kind === scdTab);
   if (!docs.length) {
-    box.innerHTML = '<div class="hint-text">Документов пока нет.</div>';
+    box.innerHTML = '<div class="hint-text">Документов этого вида пока нет.</div>';
     return;
   }
   for (const d of docs) {
@@ -20062,7 +20084,6 @@ async function scdRenderList() {
       : `${escapeHtml(d.from_contract_name)} ${стрелка} ${escapeHtml(d.to_contract_name)}`;
     карточка.innerHTML = `
       <div class="scd-doc-title">№ ${escapeHtml(d.number)} от ${formatDateRu(d.doc_date)} · ${d.items} шт.
-        <span class="scd-kind">${escapeHtml(d.kind_title)}</span>
         <span class="scd-status ${d.status}">${escapeHtml(d.status_title)}</span></div>
       <div class="hint-text">${контракты}
         ${d.mark ? "· марка " + escapeHtml(d.mark) : ""}</div>
@@ -20071,6 +20092,20 @@ async function scdRenderList() {
     box.appendChild(карточка);
   }
 }
+
+async function scdRenderList() {
+  const box = document.getElementById("scd-list");
+  box.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  scdDocsCache = await api(objectUrl("/supplier-changes"));
+  scdRenderCards();
+}
+
+document.getElementById("scd-tabs").addEventListener("click", (e) => {
+  const b = e.target.closest(".scd-tab");
+  if (!b) return;
+  scdTab = b.dataset.kind;
+  scdRenderCards();
+});
 
 // ---------- открытие формы ----------
 
@@ -20122,6 +20157,7 @@ function scdResetForm(kind) {
 }
 
 async function scdNewDocument(kind) {
+  scdTab = kind;
   try {
     await scdEnsureContracts();
   } catch (e) {
@@ -20142,6 +20178,7 @@ async function scdOpenDoc(docId) {
   try {
     await scdEnsureContracts();
     const doc = await api(`/supplier-changes/${docId}`);
+    scdTab = doc.kind;
     scdResetForm(doc.kind);
     scdDoc = doc;
     document.getElementById("scd-date").value = (doc.doc_date || "").slice(0, 10);

@@ -76,6 +76,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
 
   const S = {
     view: "list",                       // "list" | "doc"
+    tab: null,                          // закладка списка по виду документа: supplier_change | link_swap | date_rebalance
     list: { loaded: false, error: "", items: [] },
     refs: { loaded: false, error: "", contracts: [] },
     colors: {},                         // status -> цвет маркера мини-схемы (GET /status-colors, то же читает «Состояние БД»); не критично — без него нейтральный серый
@@ -87,9 +88,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
 
   container.className = "v2-page v2-app";
   container.innerHTML = `
-    <div class="v2-page-head"><div class="v2-container"><h2>${esc(screen.title)}</h2></div></div>
-    <div id="sd-body" class="v2-scroll"><div id="sd-inner" class="v2-container"></div></div>
-    <footer class="v2-foot"><div class="v2-container"><span id="sd-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="sd-foot"></div></div></footer>`;
+    <div class="v2-page-head"><div class="v2-container v2-container--wide"><h2>${esc(screen.title)}</h2></div></div>
+    <div id="sd-body" class="v2-scroll"><div id="sd-inner" class="v2-container v2-container--wide"></div></div>
+    <footer class="v2-foot"><div class="v2-container v2-container--wide"><span id="sd-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="sd-foot"></div></div></footer>`;
   const inner = container.querySelector("#sd-inner"), statusEl = container.querySelector("#sd-status"), foot = container.querySelector("#sd-foot");
 
   // ------------------------------------------------------------ данные
@@ -149,7 +150,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       // контракты объекта нужны только правке (сервер отдаёт их при «Изменении»); просмотр берёт названия из шапки документа
       if (!S.refs.loaded && canAny) await loadRefs();
       const d = await api.get(`/supplier-changes/${id}`);
-      S.f = fromDoc(d); S.view = "doc"; S.message = "";
+      S.f = fromDoc(d); S.view = "doc"; S.message = ""; S.tab = d.kind;
       S.busy = false;
       paint();
       await loadFormData(true);
@@ -159,7 +160,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   async function newDoc(kind) {
     if (S.busy || !can(kind)) return;
     if (!S.refs.loaded) { S.busy = true; paint(); await loadRefs(); S.busy = false; }
-    S.f = blankForm(kind); S.f.saved = fingerprint(S.f); S.view = "doc"; S.message = ""; paint();
+    S.f = blankForm(kind); S.f.saved = fingerprint(S.f); S.view = "doc"; S.message = ""; S.tab = kind; paint();
   }
   async function backToList(force) {
     if (S.busy) return false;
@@ -472,23 +473,39 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   }
 
   // ------------------------------------------------------------ отрисовка
+  // Три вида документов — три закладки (2026-10-06, запрос пользователя): в каждой свой список, своя кнопка создания и свои колонки.
+  const DOC_KINDS = ["supplier_change", "link_swap", "date_rebalance"];
+  const TAB_INFO = {
+    supplier_change: { new: "Новая замена поставщика", note: "Переводит НЕпоставленные изделия одного контракта на другой (статус ниже «Отгружен», в пределах свободного количества нового контракта)." },
+    link_swap: { new: "Новый обмен привязками", note: "Меняет местами изделия ОДНОЙ марки между двумя контрактами: контракт, плановую дату и всю историю статусов — когда привязку перепутали." },
+    date_rebalance: { new: "Новая балансировка поставки", note: "Заново раздаёт согласованные плановые даты поставщика изделиям одной марки на контракте так, чтобы убрать просрочку относительно требуемых дат." },
+  };
+  const TAB_COLUMNS = {
+    supplier_change: [["Из контракта", (d) => d.from_contract_name], ["В контракт", (d) => d.to_contract_name]],
+    link_swap: [["Марка", (d) => d.mark || "—"], ["Контракт стороны 1", (d) => d.from_contract_name], ["Контракт стороны 2", (d) => d.to_contract_name]],
+    date_rebalance: [["Марка", (d) => d.mark || "—"], ["Контракт (поставщик)", (d) => d.from_contract_name]],
+  };
   function listHtml() {
     if (S.list.error && !S.list.loaded) return `<p class="v2-note">${esc(S.list.error)} <button type="button" class="v2-btn" data-a="reload-list">Повторить</button></p>`;
     if (!S.list.loaded) return `<p class="v2-muted">Загрузка…</p>`;
-    // Только виды, которые человеку дано смотреть: сервер отдаёт список при «Чтении» хотя бы одного из двух разделов, а открыть
+    // Только виды, которые человеку дано смотреть: сервер отдаёт список при «Чтении» хотя бы одного из разделов, а открыть
     // документ разрешает по разделу ЕГО вида — без отбора строка чужого вида вела бы в отказ 403.
-    const rows = S.list.items.filter((d) => canRead(d.kind));
-    return `<div class="v2-bar"><h3>Документы объекта</h3><div class="v2-inline">
-        ${can("supplier_change") ? `<button type="button" class="v2-btn v2-primary" data-a="new-supplier_change" ${S.busy ? "disabled" : ""}>Новая замена поставщика</button>` : ""}
-        ${can("link_swap") ? `<button type="button" class="v2-btn v2-primary" data-a="new-link_swap" ${S.busy ? "disabled" : ""}>Новый обмен привязками</button>` : ""}
-        ${can("date_rebalance") ? `<button type="button" class="v2-btn v2-primary" data-a="new-date_rebalance" ${S.busy ? "disabled" : ""}>Новая балансировка поставки</button>` : ""}
+    const kinds = DOC_KINDS.filter(canRead);
+    if (!kinds.length) return `<p class="v2-note">Нет права просмотра документов контрактации.</p>`;
+    if (!S.tab || !kinds.includes(S.tab)) S.tab = kinds[0];
+    const tab = S.tab, info = TAB_INFO[tab], cols = TAB_COLUMNS[tab];
+    const rows = S.list.items.filter((d) => d.kind === tab);
+    const count = (k) => S.list.items.filter((d) => d.kind === k).length;
+    return `<div class="v2-doc-tabs" role="tablist" aria-label="Виды документов">${kinds.map((k) => `<button type="button" role="tab" data-tab="${k}" aria-selected="${k === tab}">${esc(KIND_TITLE[k])} <span class="v2-muted">· ${count(k)}</span></button>`).join("")}</div>
+      <div class="v2-bar"><h3>${esc(KIND_TITLE[tab])}</h3><div class="v2-inline">
+        ${can(tab) ? `<button type="button" class="v2-btn v2-primary" data-a="new-${tab}" ${S.busy ? "disabled" : ""}>${esc(info.new)}</button>` : ""}
       </div></div>
       ${S.listNote ? `<p class="v2-ok" role="status">${esc(S.listNote)}</p>` : ""}
       ${S.list.error ? `<p class="v2-auth-error" role="alert">${esc(S.list.error)}</p>` : ""}
-      <p class="v2-muted">«Замена поставщика» переводит непоставленные изделия одного контракта на другой; «Обмен привязками» меняет местами изделия одной марки между двумя контрактами; «Балансировка поставки» заново раздаёт согласованные плановые даты одного поставщика изделиям одной марки по очерёдности требуемых дат. Документ — черновик, пока его не проведут.</p>
+      <p class="v2-muted">${esc(info.note)} Документ — черновик, пока его не проведут.</p>
       ${canAny ? "" : `<p class="v2-note" data-readonly-note>Только просмотр: на этом объекте у вас нет права изменять документы контрактации — создание, правка, подбор, проведение и отмена проведения недоступны.</p>`}
-      ${rows.length ? `<table class="v2-table"><thead><tr><th>№</th><th>Дата</th><th>Вид</th><th>Состояние</th><th>Марка</th><th>Из контракта</th><th>В контракт</th><th>Изделий</th><th>Создал</th></tr></thead><tbody>
-        ${rows.map((d) => `<tr><td><button type="button" class="v2-link" data-open="${d.id}">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.kind_title)}</td><td>${esc(d.status_title)}</td><td>${esc(d.mark || "—")}</td><td>${esc(d.from_contract_name)}</td><td>${esc(d.to_contract_name)}</td><td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов пока нет.</p>`}`;
+      ${rows.length ? `<table class="v2-table"><thead><tr><th>№</th><th>Дата</th><th>Состояние</th>${cols.map(([h]) => `<th>${esc(h)}</th>`).join("")}<th>Изделий</th><th>Создал</th></tr></thead><tbody>
+        ${rows.map((d) => `<tr><td><button type="button" class="v2-link" data-open="${d.id}">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.status_title)}</td>${cols.map(([, f]) => `<td>${esc(f(d))}</td>`).join("")}<td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов этого вида пока нет.</p>`}`;
   }
 
   function positionsHtml(x, ro) {
@@ -580,7 +597,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       : (viewOnly ? "Черновик: данные изделий он не менял — изменения вносит проведение." : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести».");
     return `<div class="v2-bar"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span>${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div>
       <p class="v2-muted">${note}</p>
-      <div class="v2-fields" style="max-width:none">
+      <div class="v2-fields" style="max-width:none; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
         <label class="v2-field">Дата документа<input type="date" data-f="date" value="${esc(x.date)}" ${dis}></label>
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
         <label class="v2-field">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}>${fromOpts}</select></label>
@@ -622,6 +639,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const x = f();
     for (const el of container.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset));
     for (const el of inner.querySelectorAll("[data-open]")) el.addEventListener("click", () => openDoc(Number(el.dataset.open)));
+    for (const el of inner.querySelectorAll("[data-tab]")) el.addEventListener("click", () => { S.tab = el.dataset.tab; S.listNote = ""; paint(); });
     if (!x) return;
     for (const el of inner.querySelectorAll("[data-f]")) el.addEventListener(el.tagName === "SELECT" || el.type === "date" ? "change" : "input", async () => {
       const k = el.dataset.f;

@@ -186,6 +186,8 @@ small { display: block; color: var(--muted); font-size: 12px; }
 }
 .v2-btn:hover { background: var(--surface); }
 .v2-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+/* Основная кнопка при наведении остаётся синей (2026-10-06): общее `.v2-btn:hover` красило её в светлый фон, а текст оставался белым — надпись пропадала. */
+.v2-btn.v2-primary:hover { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); filter: brightness(.92); }
 .v2-link { border: 0; padding: 0; background: none; color: var(--accent); text-align: left; }
 .v2-icon-btn {
   border: 0; padding: 6px; background: none; border-radius: 6px;
@@ -681,19 +683,26 @@ input:disabled, select:disabled, textarea:disabled {
 /* Заголовки визуально ОТЛИЧАЮТСЯ от пунктов (п.4 задания: не одинаковый список кнопок) — без чисел (счётчик
    пунктов группы — техническая деталь, из вида убрана; данные остаются в screens.json для документации). */
 .v2-shellnav-static-head {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
-  padding: 10px 10px 4px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink);
+  padding: 14px 4px 6px;
 }
-.v2-shellnav-favtop { display: flex; flex-direction: column; gap: 1px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
-.v2-shellnav-work { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
-.v2-shellnav-group { margin-top: 2px; }
+/* Группы — отдельные плашки (2026-10-06, запрос пользователя «сделай группировки пунктов более явными»): рамка, заголовок на
+   подложке с акцентной полосой слева, пункты внутри с отступом. Раньше заголовок был мелкой серой строкой над теми же кнопками. */
+.v2-shellnav-favtop, .v2-shellnav-work {
+  display: flex; flex-direction: column; gap: 1px; padding: 4px; margin-bottom: 4px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+.v2-shellnav-group { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
 .v2-shellnav-group-head {
-  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: none;
-  font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 8px 10px;
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; border-left: 4px solid var(--accent);
+  background: var(--surface); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--ink); padding: 9px 10px;
 }
-.v2-shellnav-group-head:hover { color: var(--ink); }
-.v2-shellnav-chevron { width: 10px; flex: none; }
-.v2-shellnav-group-body { display: flex; flex-direction: column; gap: 1px; }
+.v2-shellnav-group-head:hover { background: var(--sel); }
+.v2-shellnav-group-head[aria-expanded="true"] { border-bottom: 1px solid var(--line); }
+.v2-shellnav-chevron { width: 12px; flex: none; color: var(--accent); }
+.v2-shellnav-group-body { display: flex; flex-direction: column; gap: 1px; padding: 4px; }
+.v2-shellnav-settings-note { margin: 2px 10px 4px; padding: 6px 8px; border-radius: 6px; background: var(--sel); font-size: 12px; color: var(--ink); line-height: 1.35; }
 .v2-shellnav-divider { height: 1px; background: var(--line); margin: 10px 6px; }
 .v2-shellnav-empty { padding: 8px 10px; }
 
@@ -1379,3 +1388,10 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ui-switch button:hover:not(.active):not(:disabled) { background: var(--surface, #f3f4f6); }
 .v2-ui-switch button.active { background: var(--accent, #2f4fd1); color: var(--accent-ink, #fff); cursor: default; }
 .v2-ui-switch button:disabled { opacity: .6; cursor: default; }
+
+
+/* Закладки по видам документов (supplier-docs.js, 2026-10-06) */
+.v2-doc-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 4px 0 14px; flex-wrap: wrap; }
+.v2-doc-tabs button { border: 0; border-bottom: 3px solid transparent; background: none; padding: 10px 16px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; margin-bottom: -1px; }
+.v2-doc-tabs button:hover { color: var(--fg, inherit); }
+.v2-doc-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
