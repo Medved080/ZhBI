@@ -19544,15 +19544,18 @@ async function scdReloadRebalance(свой) {
   scdUpdateSummary();
 }
 
-// Табличная часть балансировки сгруппирована: поставщик → контракт → марка, группы сворачиваются (2026-10-06, запрос пользователя).
-// Уровень, на котором у документа одно значение, не показывается; без уровней — плоская таблица.
-function scdRbGrouped(items, head, строка, сводка) {
+// Табличная часть балансировки — ПАРЫ изделий, поменявшихся местами (2026-10-06, запрос пользователя): в строке видно, с кем изделие
+// обменялось статусом и плановой датой. Пары сгруппированы: поставщик → контракт → марка (по ведущему изделию пары), группы сворачиваются.
+// Уровень, на котором у документа одно значение, не показывается; без уровней — плоская таблица. Изделия без обмена — по галочке.
+const scdIsPairRow = (i) => !!(i.partner_id || i.pair_no);
+function scdRbGrouped(всеСтроки, head, строка, сводка) {
+  const rows = всеСтроки.filter((i) => scdIsPairRow(i) || scdRebalAll);
+  if (!rows.length) return '<div class="hint-text">Пар нет.</div>';
   const норм = (v) => String(v ?? "—").trim() || "—";
   const уровни = [["counterparty", "Поставщик"], ["contract_name", "Контракт"], ["mark", "Марка"]]
-    .filter(([k]) => new Set(items.map((i) => норм(i[k]).toLowerCase())).size > 1);
-  const показать = (список) => scdRebalAll || scdPosted() ? список : список.filter((i) => i.plan_old === undefined || i.plan_old !== i.plan_new);
-  const таблица = (список) => `<table class="scd-pos-table"><thead><tr>${head}</tr></thead><tbody>${показать(список).map(строка).join("")}</tbody></table>`;
-  if (!уровни.length) return таблица(items);
+    .filter(([k]) => new Set(rows.map((i) => норм(i[k]).toLowerCase())).size > 1);
+  const таблица = (список) => `<table class="scd-pos-table"><thead><tr>${head}</tr></thead><tbody>${список.map(строка).join("")}</tbody></table>`;
+  if (!уровни.length) return `<div class="scd-rb-leaf">${таблица(rows)}</div>`;
   function уровень(список, глубина) {
     if (глубина === уровни.length) return таблица(список);
     const [поле, название] = уровни[глубина], группы = new Map();
@@ -19566,42 +19569,58 @@ function scdRbGrouped(items, head, строка, сводка) {
         <div class="scd-rb-sub${глубина + 1 === уровни.length ? " scd-rb-leaf" : ""}">${уровень(g.список, глубина + 1)}</div></details>`).join("");
   }
   return `<div class="scd-rb-tools"><button type="button" class="btn btn-secondary" data-rb-fold="open">Развернуть всё</button>
-    <button type="button" class="btn btn-secondary" data-rb-fold="close">Свернуть всё</button></div>` + уровень(items, 0);
+    <button type="button" class="btn btn-secondary" data-rb-fold="close">Свернуть всё</button></div>` + уровень(rows, 0);
 }
 
 function scdRenderRebalance() {
   const box = document.getElementById("scd-rebalance");
+  const ст = (c) => state.statusLabels[c] || c || "—";
+  const перех = (x, y) => x === y ? escapeHtml(x) : `${escapeHtml(x)} → <b>${escapeHtml(y)}</b>`;
   if (scdPosted() && scdDoc) {
-    const шапка = "<th>Адрес</th><th>Этаж</th><th>Статус сейчас</th><th>Плановая дата было</th><th>Плановая дата сейчас</th>";
-    const строка = (i) => `<tr><td>${escapeHtml(i.address || "№" + i.element_id)}</td><td>${escapeHtml(i.floor ?? "—")}</td>
-          <td>${escapeHtml(state.statusLabels[i.current_status] || i.current_status || "—")}</td>
-          <td>${i.prev_plan ? formatDateRu(i.prev_plan) : "—"}</td><td>${i.plan_now ? formatDateRu(i.plan_now) : "—"}</td></tr>`;
-    box.innerHTML = scdRbGrouped(scdDoc.items, шапка, строка, (l) => `${l.length} изд.`);
+    const items = scdDoc.items, второй = new Map();
+    for (const i of items) if (i.pair_no && i.side === 2) второй.set(i.pair_no, i);
+    const rows = items.filter((i) => !i.pair_no || i.side === 1).sort((x, y) => (x.pair_no ?? 1e9) - (y.pair_no ?? 1e9));
+    const без = rows.filter((i) => !i.pair_no).length;
+    const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th></th><th>Поменялось местами с</th><th>Статус</th><th>Плановая дата</th>";
+    const ячейки = (i) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
+      <td>${перех(ст(i.status_at_move || i.current_status), ст(i.current_status))}</td>
+      <td>${перех(i.prev_plan ? formatDateRu(i.prev_plan) : "—", i.plan_now ? formatDateRu(i.plan_now) : "—")}</td>`;
+    const строка = (i) => { const q = i.pair_no ? второй.get(i.pair_no) : null;
+      return `<tr><td>${i.pair_no ?? "—"}</td>${ячейки(i)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q) : '<td colspan="3" class="hint-text">без обмена</td>'}</tr>`; };
+    box.innerHTML = (без ? `<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
+        <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? " checked" : ""}> Показывать и изделия без обмена (${без})</label>` : "")
+      + scdRbGrouped(rows, шапка, строка, (l) => `${l.filter((i) => i.pair_no).length} пар`);
+    const ф = document.getElementById("scd-rebal-all");
+    if (ф) ф.addEventListener("change", (e) => { scdRebalAll = e.target.checked; scdRenderRebalance(); });
     scdBindRbFold(box);
     return;
   }
   if (!scdRebalance) {
-    box.innerHTML = '<div class="hint-text">Выберите контракт (поставщика) и марку — или «Все контракты» / «Все марки» — здесь появится, как поменяются плановые даты.</div>';
+    box.innerHTML = '<div class="hint-text">Выберите контракт (поставщика) и марку — или «Все контракты» / «Все марки» — здесь появится, какие изделия поменяются местами.</div>';
     return;
   }
   const { items, summary: sm } = scdRebalance;
   if (!items.length) {
-    box.innerHTML = '<div class="hint-text">Подходящих изделий нет: нужны изделия на контракте, ещё не смонтированные (в том числе отгруженные и доставленные), с плановой датой поставки и такие, у которых балансировка меняет дату.</div>';
+    box.innerHTML = '<div class="hint-text">Подходящих изделий нет: нужны изделия на контракте, ещё не смонтированные (в том числе отгруженные и доставленные), с плановой датой поставки и такие, у которых обмен местами убирает просрочку.</div>';
     return;
   }
   const дн = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
-  const шапка = "<th>Адрес</th><th>Этаж</th><th>Требуемая дата</th><th>Плановая было</th><th>Плановая стало</th><th>Откл., дн. было</th><th>Откл., дн. стало</th>";
-  const строка = (i) => `<tr${i.plan_old !== i.plan_new ? ' style="font-weight:600"' : ""}>
-        <td>${escapeHtml(i.address || "№" + i.element_id)}</td><td>${escapeHtml(i.floor ?? "—")}</td>
-        <td>${i.need_date ? formatDateRu(i.need_date) : "—"}</td><td>${formatDateRu(i.plan_old)}</td><td>${formatDateRu(i.plan_new)}</td>
-        <td>${дн(i.delay_old)}</td><td>${дн(i.delay_new)}</td></tr>`;
-  const сводка = (l) => `${l.length} изд., меняется ${l.filter((i) => i.plan_old !== i.plan_new).length}, просрочено ${l.filter((i) => i.delay_old > 0).length} → ${l.filter((i) => i.delay_new > 0).length}`;
-  box.innerHTML = `<div class="hint-text">Изделий: ${sm.count}, у ${sm.changed} изменится плановая дата. Просрочка (плановая позже требуемой):
-      изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.${
-        sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика).` : ""}</div>
+  const byId = new Map(items.map((i) => [i.element_id, i]));
+  const rows = items.filter((i) => i.lead || !i.partner_id);
+  const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th>";
+  const ячейки = (i, другой) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${другой && другой.contract_name !== i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
+      <td>${перех(ст(i.status), ст(i.status_new))}</td><td>${перех(formatDateRu(i.plan_old), formatDateRu(i.plan_new))}</td>
+      <td>${перех(дн(i.delay_old), дн(i.delay_new))}</td>`;
+  const строка = (a) => { const q = a.partner_id ? byId.get(a.partner_id) : null;
+    return `<tr${q ? ' style="font-weight:600"' : ""}><td>${a.pair_no ?? "—"}</td>${ячейки(a, null)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q, a) : '<td colspan="4" class="hint-text">без обмена</td>'}</tr>`; };
+  const сводка = (l) => { const пары = l.filter((i) => i.partner_id), все = l.flatMap((i) => i.partner_id ? [i, byId.get(i.partner_id)] : [i]);
+    return `${пары.length} пар, просрочено ${все.filter((i) => i.delay_old > 0).length} → ${все.filter((i) => i.delay_new > 0).length}`; };
+  box.innerHTML = `<div class="hint-text">Пар к обмену: ${sm.pairs} (изделий: ${sm.pairs * 2} из ${sm.count}). Изделия меняются местами: плановая дата, контракт и вся история
+      статусов уходят к партнёру, текущий статус пересчитывается. Просрочка (плановая позже требуемой): изделий ${sm.late_before} → ${sm.late_after}, максимум
+      ${sm.max_delay_before} → ${sm.max_delay_after} дн.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только партнёром.` : ""}</div>
     <label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
-      <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, у которых меняется дата</label>`
-    + scdRbGrouped(items, шапка, строка, сводка);
+      <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, поменявшиеся местами (скрыто без обмена: ${sm.count - sm.pairs * 2})</label>`
+    + scdRbGrouped(rows, шапка, строка, сводка);
   document.getElementById("scd-rebal-all").addEventListener("change", (e) => { scdRebalAll = !e.target.checked; scdRenderRebalance(); });
   scdBindRbFold(box);
 }
@@ -19742,7 +19761,7 @@ function scdUpdateSummary() {
   if (scdKind === SCD_KIND_REBALANCE) {
     const sm = scdRebalance && scdRebalance.summary;
     строка.textContent = scdRebalIds.length
-      ? `Изделий: ${scdRebalIds.length}${sm ? `, дат изменится: ${sm.changed}, просрочено ${sm.late_before} → ${sm.late_after}` : ""}`
+      ? `Изделий: ${scdRebalIds.length}${sm ? `, пар к обмену: ${sm.pairs}, просрочено ${sm.late_before} → ${sm.late_after}` : ""}`
       : "Нет изделий для балансировки";
     провести.disabled = !scdRebalIds.length || scdPosted();
     return;
@@ -20166,7 +20185,7 @@ let scdDocsCache = [];
 const SCD_TAB_NOTES = {
   [SCD_KIND_SUPPLIER]: "Замена поставщика — перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт; изделия со статусом «Отгружен» и выше не переносятся.",
   [SCD_KIND_SWAP]: "Обмен привязками — изделия одной марки на двух контрактах меняются попарно контрактом, плановой датой и историей статусов, когда привязку перепутали.",
-  [SCD_KIND_REBALANCE]: "Балансировка поставки — плановые даты поставщика заново раздаются изделиям одной марки на контракте так, чтобы убрать просрочку относительно требуемых дат.",
+  [SCD_KIND_REBALANCE]: "Балансировка поставки — изделия одной марки меняются местами парами (плановая дата, контракт и статус уходят партнёру по паре), чтобы убрать просрочку относительно требуемых дат.",
 };
 
 function scdRenderTabs() {
@@ -20515,7 +20534,9 @@ document.getElementById("scd-post").addEventListener("click", async () => {
     if (!doc) return;
     const итог = await api(`/supplier-changes/${doc.id}/post`, { method: "POST" });
     ошибка.textContent = "";
-    showToast(`Документ № ${итог.number} проведён`, "success");
+    showToast(итог.kind === SCD_KIND_REBALANCE
+      ? `Документ № ${итог.number} проведён: поменялись местами ${итог.pairs} пар (${итог.moved} изд.) — даты, контракты и статусы перешли к партнёрам`
+      : `Документ № ${итог.number} проведён`, "success");
     // Перечитываем документ ЦЕЛИКОМ, а не показываем то, что было на экране:
     // проведение изменило статусы и контракты изделий, и список, собранный
     // подбором до проведения, показывал бы вчерашние статусы (поймано живой
