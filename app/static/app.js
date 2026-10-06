@@ -1270,7 +1270,7 @@ document.getElementById("menu-my-sessions").addEventListener("click", () => {
 // целиком — то есть добраться до этого пункта, пока где-то открыта несохранённая форма, и так нельзя: сам факт клика уже
 // значит, что модалок нет. Проверка dataset.dirty ниже — подстраховка на случай НЕмодального редактируемого состояния
 // (сегодня в V1 такого нет, весь риск несохранённого сосредоточен в формах-модалках), а не рабочий сторож для сегодняшнего UI.
-document.getElementById("menu-ui-v2").addEventListener("click", () => {
+function goToNewInterface() {
   document.getElementById("settings-menu").classList.remove("open");
   const занятаяФорма = document.querySelector('.modal-backdrop.open[data-dirty="1"]');
   if (занятаяФорма
@@ -1279,7 +1279,10 @@ document.getElementById("menu-ui-v2").addEventListener("click", () => {
   // Объект и рабочее место переходят вместе с человеком: V2 откроет то же рабочее место на том же объекте (если оно ему доступно)
   const wsRoute = { model: "ws-model", mfr: "ws-mfr", picker: "ws-picker", foreman: "ws-foreman" }[workspace];
   location.href = (state.objectId ? `/v2?object_id=${state.objectId}` : "/v2") + (wsRoute ? `#/${wsRoute}` : "");
-});
+}
+// Два входа в новый интерфейс: пункт меню «Действия» и переключатель «Текущий | Новый» в верхней панели (2026-10-06).
+document.getElementById("menu-ui-v2").addEventListener("click", goToNewInterface);
+document.getElementById("ui-switch-v2").addEventListener("click", goToNewInterface);
 document.getElementById("sessions-close").addEventListener("click", () =>
   sessionsBackdrop.classList.remove("open"));
 document.getElementById("menu-sessions").addEventListener("click", () => {

@@ -317,7 +317,10 @@ async function renderShell(user, permissions) {
         <span class="v2-nav-note" id="v2-nav-note" role="status" aria-live="polite"></span>
         <span class="v2-user-name">${escapeHtml(user.display_name)}</span>
         <button type="button" class="v2-back" id="v2-logout-btn" title="Завершить свой сеанс и вернуться на экран входа">Выйти</button>
-        <button type="button" class="v2-back" id="v2-back-btn" title="">← Текущий интерфейс</button>
+        <div class="v2-ui-switch" role="group" aria-label="Интерфейс">
+          <button type="button" id="v2-back-btn" title="Перейти в текущий интерфейс на том же объекте" aria-pressed="false">Текущий</button>
+          <button type="button" class="active" aria-pressed="true" title="Вы в новом интерфейсе" tabindex="-1">Новый</button>
+        </div>
       </div>
     </header>
     <div class="v2-gate-note" id="v2-gate-note" role="status" aria-live="polite" hidden></div>
@@ -572,7 +575,7 @@ async function renderShell(user, permissions) {
   const WAIT_TEXT = "Идёт сохранение — переход временно недоступен";
   function syncPending(n) {
     backBtn.disabled = n > 0;
-    backBtn.title = n > 0 ? "Дождитесь завершения сохранения" : "";
+    backBtn.title = n > 0 ? "Дождитесь завершения сохранения" : "Перейти в текущий интерфейс на том же объекте";
     objectBtn.disabled = n > 0 || !tree.projects.length;
     legacySelect.disabled = n > 0 || !activeObjects.length;
     shellNav.setBusy(n > 0);

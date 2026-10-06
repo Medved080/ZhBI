@@ -589,6 +589,14 @@
   .view-mode-btn:hover { background: var(--color-surface-2); }
   .view-mode-btn.active { background: var(--color-primary); color: #fff; }
   .view-mode-btn:disabled { opacity: .6; cursor: default; }
+  /* Переключатель интерфейсов «Текущий | Новый» — та же сегментная плашка, что у 2D/3D, но свои классы: на .view-mode-btn
+     повешены обработчики режимов схемы. */
+  .ui-switch.toolbar-tile { padding: 0; overflow: hidden; align-items: stretch; }
+  .ui-switch-btn { border: none; background: var(--color-surface); color: var(--color-text-muted); font-size: 13px; padding: 5px 12px;
+    min-height: 30px; cursor: pointer; font-weight: 500; }
+  .ui-switch-btn + .ui-switch-btn { border-left: 1px solid var(--color-border); }
+  .ui-switch-btn:hover:not(.active) { background: var(--color-surface-2); }
+  .ui-switch-btn.active { background: var(--color-primary); color: #fff; cursor: default; }
   /* Кнопка «Заполнить» временной обработки гаснет, когда заполнять нечего.
      Правило точечное, а не общее `.btn:disabled`: у .btn своего вида для
      выключенного состояния нет во всём проекте, и вводить его сразу всем
@@ -5668,6 +5676,11 @@
     </div>
   </div>
   <div id="toolbar-pinned">
+    <!-- Переключатель интерфейсов (2026-10-06): «Текущий» — этот, «Новый» — V2 (/v2). Тот же переход, что и пункт «Новый интерфейс» в меню. -->
+    <div class="ui-switch toolbar-tile" id="ui-switch" role="group" aria-label="Интерфейс">
+      <button type="button" class="ui-switch-btn active" id="ui-switch-v1" aria-pressed="true" title="Вы в текущем интерфейсе">Текущий</button>
+      <button type="button" class="ui-switch-btn" id="ui-switch-v2" aria-pressed="false" title="Перейти в новый интерфейс на том же объекте">Новый</button>
+    </div>
     <div id="user-box" class="toolbar-tile">
       <span><b id="user-name"></b></span>
       <button class="btn btn-sm btn-secondary" id="btn-logout">Выйти</button>

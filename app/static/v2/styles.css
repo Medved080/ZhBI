@@ -1370,3 +1370,12 @@ button.ws-tile:hover { background: var(--surface); }
   .oh-photo { display: none; }   /* в узкой области фото не помещается без прокрутки */
   .oh-dl dd { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }   /* длинные адрес и описание — в две строки */
 }
+
+
+/* Переключатель интерфейсов «Текущий | Новый» в верхней панели (2026-10-06); кнопка с id v2-back-btn — «Текущий» (main.js: onBackClick) */
+.v2-ui-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
+.v2-ui-switch button { border: 0; background: var(--bg); color: var(--muted); font: inherit; font-size: 13px; font-weight: 500; padding: 5px 12px; cursor: pointer; }
+.v2-ui-switch button + button { border-left: 1px solid var(--line); }
+.v2-ui-switch button:hover:not(.active):not(:disabled) { background: var(--surface, #f3f4f6); }
+.v2-ui-switch button.active { background: var(--accent, #2f4fd1); color: var(--accent-ink, #fff); cursor: default; }
+.v2-ui-switch button:disabled { opacity: .6; cursor: default; }
