@@ -3358,6 +3358,10 @@
     font-size: 13px; padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid var(--color-border);
     width: 100%; background: var(--color-surface); color: var(--color-text);
   }
+  /* Окно документов контрактации: поля контрастнее (2026-10-06) */
+  .modal.modal-xwide input[type="date"], .modal.modal-xwide input[type="text"], .modal.modal-xwide select {
+    border-color: color-mix(in srgb, var(--color-text) 42%, var(--color-surface)); }
+  .modal.modal-xwide input:disabled, .modal.modal-xwide select:disabled { border-color: var(--color-border); }
   .modal label.field { display: block; font-size: 12px; color: var(--color-text-muted); margin: 10px 0 4px; }
   .modal label.radio { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
   .modal label.checkbox { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }

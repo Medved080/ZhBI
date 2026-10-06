@@ -1415,3 +1415,8 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-rb-body { margin: 6px 0 6px 0; max-height: 360px; overflow: auto; }
 .v2-rb-toggle small, .v2-rb-toggle b, .v2-rb-toggle span { display: inline; }
 .v2-rb-toggle { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+
+/* Поля формы документа контрактации контрастнее (2026-10-06, замечание пользователя: поля сливались с фоном) */
+#sd-inner label.v2-field input, #sd-inner label.v2-field select { border: 1px solid color-mix(in srgb, var(--ink, var(--color-text, #302d29)) 42%, var(--bg, var(--color-surface, #fff))); background: var(--bg); }
+#sd-inner label.v2-field input:disabled, #sd-inner label.v2-field select:disabled { border-color: var(--line); }
+#sd-inner label.v2-field input:focus, #sd-inner label.v2-field select:focus { border-color: var(--accent); outline: 2px solid var(--sel); }

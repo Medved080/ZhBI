@@ -16,7 +16,8 @@ const CSS = `
 .zcs-wrap{display:block;position:relative;min-width:0}
 .zcs-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;text-align:left;cursor:pointer;
   font:inherit;color:var(--ink,var(--color-text,inherit));background:var(--bg,var(--color-surface,#fff));
-  border:1px solid var(--line,var(--color-border,#c9d1dc));border-radius:7px;padding:8px 10px;min-height:36px}
+  border:1px solid color-mix(in srgb, var(--ink, var(--color-text, #302d29)) 42%, var(--bg, var(--color-surface, #fff)));border-radius:7px;padding:8px 10px;min-height:36px}
+.zcs-btn:hover:not(:disabled){border-color:var(--accent,var(--color-primary,#0d4cd3))}
 .zcs-btn:disabled{opacity:.6;cursor:default}
 .zcs-btn span.zcs-cur{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .zcs-btn .zcs-caret{flex:none;color:var(--muted,var(--color-text-muted,#6b7683));font-size:11px}
@@ -72,11 +73,13 @@ export function attachColumnSelect(select) {
   select.insertAdjacentElement("afterend", wrap);
   select.style.display = "none";
 
-  const label = () => select.options[select.selectedIndex]?.textContent || "";
+  // В закрытой кнопке — только основной текст (числа видны в списке и в подсказке): длинная подпись с числами в поле не помещается
+  const full = () => select.options[select.selectedIndex]?.textContent || "";
+  const label = () => select.options[select.selectedIndex]?.dataset.main || full();
   const sync = () => {
     btn.querySelector(".zcs-cur").textContent = label();
     btn.disabled = select.disabled;
-    btn.title = label();
+    btn.title = full();
     const id = select.getAttribute("aria-label"); if (id) btn.setAttribute("aria-label", id);
   };
   sync();
