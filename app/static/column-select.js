@@ -19,7 +19,7 @@ const CSS = `
   border:1px solid color-mix(in srgb, var(--ink, var(--color-text, #302d29)) 42%, var(--bg, var(--color-surface, #fff)));border-radius:7px;padding:8px 10px;min-height:36px}
 .zcs-btn:hover:not(:disabled){border-color:var(--accent,var(--color-primary,#0d4cd3))}
 .zcs-btn:disabled{opacity:.6;cursor:default}
-.zcs-btn span.zcs-cur{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.zcs-btn span.zcs-cur{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.3}
 .zcs-btn .zcs-caret{flex:none;color:var(--muted,var(--color-text-muted,#6b7683));font-size:11px}
 .zcs-pop{position:fixed;z-index:19500;box-sizing:border-box;max-height:min(60vh,420px);overflow:auto;background:var(--bg,var(--color-surface,#fff));
   color:var(--ink,var(--color-text,inherit));border:1px solid var(--line,var(--color-border,#c9d1dc));border-radius:10px;box-shadow:0 8px 28px rgb(0 0 0/.22);padding:4px 0}
