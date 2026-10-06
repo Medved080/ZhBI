@@ -149,14 +149,18 @@ export function attachColumnSelect(select) {
     }
     document.body.append(pop);
     // положение: под кнопкой, ширина — по содержимому, но не уже кнопки и не шире экрана; не помещается справа — сдвигаем влево
-    const b = btn.getBoundingClientRect();
-    const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
-    const width = Math.min(Math.max(b.width, 640), vw - 24);
-    pop.style.width = width + "px";
-    pop.style.left = Math.max(12, Math.min(b.left, vw - width - 12)) + "px";
-    const below = vh - b.bottom - 12, above = b.top - 12;
-    if (below >= 200 || below >= above) { pop.style.top = b.bottom + 4 + "px"; pop.style.maxHeight = Math.min(420, below) + "px"; }
-    else { pop.style.bottom = vh - b.top + 4 + "px"; pop.style.maxHeight = Math.min(420, above) + "px"; }
+    const place = () => {
+      const b = btn.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+      const width = Math.min(Math.max(b.width, 640), vw - 24);
+      pop.style.width = width + "px";
+      pop.style.left = Math.max(12, Math.min(b.left, vw - width - 12)) + "px";
+      const below = vh - b.bottom - 12, above = b.top - 12;
+      pop.style.top = pop.style.bottom = "";
+      if (below >= 200 || below >= above) { pop.style.top = b.bottom + 4 + "px"; pop.style.maxHeight = Math.min(420, below) + "px"; }
+      else { pop.style.bottom = vh - b.top + 4 + "px"; pop.style.maxHeight = Math.min(420, above) + "px"; }
+    };
+    place();
 
     let cur = Math.max(0, items.findIndex((i) => i.value === select.value));
     const mark = () => {
@@ -171,16 +175,23 @@ export function attachColumnSelect(select) {
       else if (e.key === "Tab") closePop(false);
     };
     const onDoc = (e) => { if (!pop.contains(e.target) && !btn.contains(e.target)) closePop(false); };
+    // Прокрутка САМОГО списка его не закрывает (раньше закрывала: capture-слушатель ловил и её); прокрутка страницы или окна под ним
+    // двигает список вслед за полем, а если поле ушло с экрана — закрывает
+    const onScroll = (e) => {
+      if (pop.contains(e.target)) return;
+      const r = btn.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > document.documentElement.clientHeight) closePop(false); else place();
+    };
     const onMove = () => closePop(false);
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("mousedown", onDoc, true);
     window.addEventListener("resize", onMove);
-    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("scroll", onScroll, true);
     const cleanup = () => {
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("mousedown", onDoc, true);
       window.removeEventListener("resize", onMove);
-      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
     openPop = { pop, btn, cleanup };
     btn.setAttribute("aria-expanded", "true");
