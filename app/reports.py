@@ -500,8 +500,9 @@ def _cumulative(pairs: list, weeks: list) -> list:
 DYN_MODE_SERIES = {
     "montage": ["plan_smr", "fact_montage", "forecast_montage"],
     "delivery": ["plan_delivery", "fact_delivery", "forecast_delivery"],
+    # 2026-10-07 (живой запрос): план — ВСЕГДА синяя сплошная линия, и у монтажа, и у поставки; в режиме «обе» отдельная линия плана поставки не рисуется
     "both": ["plan_smr", "fact_montage", "forecast_montage",
-             "plan_delivery", "fact_delivery", "forecast_delivery"],
+             "fact_delivery", "forecast_delivery"],
 }
 DYN_MODE_LABELS = {"montage": "Монтаж", "delivery": "Поставка", "both": "Поставка и монтаж"}
 
@@ -855,7 +856,8 @@ DYN_SERIES_ORDER = DYN_MODE_SERIES["both"]
 # прогноза», формулировка заказчика), а не как третий самостоятельный план.
 DYN_SERIES_COLORS = {
     "plan_smr": "#4A86C8", "fact_montage": "#8C99A6", "forecast_montage": "#8C99A6",
-    "plan_delivery": "#C2571A", "fact_delivery": "#E8703A", "forecast_delivery": "#E8703A",
+    # план поставки — тем же синим, что план монтажа (2026-10-07): «план — синяя сплошная» для обеих кривых
+    "plan_delivery": "#4A86C8", "fact_delivery": "#E8703A", "forecast_delivery": "#E8703A",
 }
 # 2026-10-03: план и факт — сплошные, пунктиром только прогноз (как на экране)
 DYN_SERIES_DASHED = {"forecast_montage", "forecast_delivery"}

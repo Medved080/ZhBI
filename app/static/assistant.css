@@ -52,5 +52,11 @@ html.has-ai-launch #toolbar,html.has-ai-launch .v2-head,html.has-ai-launch #prec
    у кнопок нового — 35 px и 7, у панели калькулятора — 33 px и 5, в строке высотой 46 px. */
 html[data-ai-host="v2"] [data-assistant] .ai-launch{top:14px;height:35px;border-radius:7px;font-weight:500}
 html[data-ai-host="v2"] [data-assistant] .ai-panel{top:58px}
+/* Рабочее место нового интерфейса (#v2-root.v2-ws-mode): шапка ужата до 46 px, кнопки в ней — 29 px и стоят на 8 px сверху, а правило
+   `#v2-root.v2-ws-mode .v2-head { padding: 5px 14px }` сбрасывало отступ справа — кнопка ИИ закрывала переключатель «Текущий / Новый»
+   (живая находка 2026-10-07: на экране отчёта шапка высокая, и там размер был подогнан верно, а здесь кнопка выходила на голову выше соседей). */
+html.has-ai-launch #v2-root.v2-ws-mode .v2-head{padding-right:88px}
+html[data-ai-host="v2"]:has(#v2-root.v2-ws-mode) [data-assistant] .ai-launch{top:8px;height:29px}
+html[data-ai-host="v2"]:has(#v2-root.v2-ws-mode) [data-assistant] .ai-panel{top:46px}
 html[data-ai-host="calc"] [data-assistant] .ai-launch{top:6px;height:33px;border-radius:5px;padding:0 11px}
 html[data-ai-host="calc"] [data-assistant] .ai-panel{top:48px}

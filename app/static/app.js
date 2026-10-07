@@ -21828,7 +21828,7 @@ const DYN_COLORS = {
   plan_smr: "#4A86C8",
   fact_montage: "#8C99A6",
   forecast_montage: "#8C99A6",
-  plan_delivery: "#C2571A",
+  plan_delivery: "#4A86C8",   // план поставки — того же синего, что план монтажа (2026-10-07)
   fact_delivery: "#E8703A",
   forecast_delivery: "#E8703A",
 };
@@ -21844,8 +21844,9 @@ const DYN_DASHDOT = new Set();   // штрихпунктира больше не
 const DYN_MODE_SERIES = {
   montage: ["plan_smr", "fact_montage", "forecast_montage"],
   delivery: ["plan_delivery", "fact_delivery", "forecast_delivery"],
+  // 2026-10-07 (живой запрос): план — ВСЕГДА синяя сплошная линия, и у монтажа, и у поставки; в режиме «обе» отдельная линия плана поставки не рисуется
   both: ["plan_smr", "fact_montage", "forecast_montage",
-         "plan_delivery", "fact_delivery", "forecast_delivery"],
+         "fact_delivery", "forecast_delivery"],
 };
 const DYN_MODE_LABELS = { montage: "Монтаж", delivery: "Поставка", both: "Обе" };
 // …но в отчёт он всё же уходит: выгрузки XLSX и PDF собираются на сервере и

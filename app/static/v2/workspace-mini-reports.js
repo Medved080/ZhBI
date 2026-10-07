@@ -13,7 +13,7 @@ const dateRu = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || ""); retu
 const DYN_MODE_SERIES = {
   montage: ["plan_smr", "fact_montage", "forecast_montage"],
   delivery: ["plan_delivery", "fact_delivery", "forecast_delivery"],
-  both: ["plan_smr", "fact_montage", "forecast_montage", "plan_delivery", "fact_delivery", "forecast_delivery"],
+  both: ["plan_smr", "fact_montage", "forecast_montage", "fact_delivery", "forecast_delivery"],   // 2026-10-07 (живой запрос): план — ВСЕГДА синяя сплошная линия, и у монтажа, и у поставки; в режиме «обе» отдельная линия плана поставки не рисуется
 };
 function mondayOf(iso) {
   const d = new Date(`${iso}T00:00:00`);
