@@ -514,7 +514,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   const TAB_INFO = {
     supplier_change: { new: "Новая замена поставщика", note: "Переводит НЕпоставленные изделия одного контракта на другой (статус ниже «Отгружен», в пределах свободного количества нового контракта)." },
     link_swap: { new: "Новый обмен привязками", note: "Меняет местами изделия ОДНОЙ марки между двумя контрактами: контракт, плановую дату и всю историю статусов — когда привязку перепутали." },
-    date_rebalance: { new: "Новая балансировка поставки", note: "Меняет местами изделия одной марки (не смонтированные, включая отгруженные и доставленные): плановая дата, контракт и статус уходят партнёру по паре, чтобы убрать просрочку относительно требуемых дат." },
+    date_rebalance: { new: "Новая балансировка поставки", note: "Меняет местами изделия одной марки (не смонтированные, включая отгруженные и доставленные): плановая дата, контракт и статус уходят другому изделию (парами или цепочками), чтобы убрать просрочку относительно требуемых дат." },
   };
   const TAB_COLUMNS = {
     supplier_change: [["Текущий поставщик (контрагент)", (d) => d.from_counterparty || "—"], ["Из контракта", (d) => d.from_contract_name],
@@ -522,6 +522,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     link_swap: [["Марка", (d) => d.mark || "—"], ["Контракт стороны 1", (d) => d.from_contract_name], ["Контракт стороны 2", (d) => d.to_contract_name]],
     date_rebalance: [["Марка", (d) => d.all_marks ? "Все марки" : (d.mark || "—")], ["Контракт (поставщик)", (d) => d.all_contracts ? `Все контракты${d.pool ? " (общий пул)" : ""}` : d.from_contract_name]],
   };
+  // Признак «проведён / не проведён» (2026-10-07): метка с значком и цветом (зелёная — проведён, янтарная — черновик) и цветная полоса у строки списка
+  const docState = (status, title) => { const posted = status === "posted";
+    return `<span class="v2-doc-state v2-doc-state-${posted ? "posted" : "draft"}"><span aria-hidden="true">${posted ? "✓" : "○"}</span> ${esc(posted ? "Проведён" : (title || "Черновик"))}</span>`; };
   function listHtml() {
     if (S.list.error && !S.list.loaded) return `<p class="v2-note">${esc(S.list.error)} <button type="button" class="v2-btn" data-a="reload-list">Повторить</button></p>`;
     if (!S.list.loaded) return `<p class="v2-muted">Загрузка…</p>`;
@@ -542,7 +545,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <p class="v2-muted">${esc(info.note)} Документ — черновик, пока его не проведут.</p>
       ${canAny ? "" : `<p class="v2-note" data-readonly-note>Только просмотр: на этом объекте у вас нет права изменять документы контрактации — создание, правка, подбор, проведение и отмена проведения недоступны.</p>`}
       ${rows.length ? `<table class="v2-table"><thead><tr><th>№</th><th>Дата</th><th>Состояние</th>${cols.map(([h]) => `<th>${esc(h)}</th>`).join("")}<th>Изделий</th><th>Создал</th></tr></thead><tbody>
-        ${rows.map((d) => `<tr class="v2-row-click" data-open="${d.id}"><td><button type="button" class="v2-link">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.status_title)}</td>${cols.map(([, f]) => `<td>${esc(f(d))}</td>`).join("")}<td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов этого вида пока нет.</p>`}`;
+        ${rows.map((d) => `<tr class="v2-row-click v2-doc-${d.status === "posted" ? "posted" : "draft"}" data-open="${d.id}"><td><button type="button" class="v2-link">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${docState(d.status, d.status_title)}</td>${cols.map(([, f]) => `<td>${esc(f(d))}</td>`).join("")}<td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов этого вида пока нет.</p>`}`;
   }
 
   function positionsHtml(x, ro) {
@@ -753,7 +756,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const note = posted
       ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится${viewOnly ? "." : " — сначала отмените проведение."}`
       : (viewOnly ? "Черновик: данные изделий он не менял — изменения вносит проведение." : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести».");
-    return `<div class="v2-bar v2-doc-head"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span>${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><div class="v2-foot-actions v2-doc-actions" id="sd-head-actions"><span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div></div>
+    return `<div class="v2-bar v2-doc-head"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} ${docState(posted ? "posted" : "draft", x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)")}${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><div class="v2-foot-actions v2-doc-actions" id="sd-head-actions"><span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div></div>
       <p class="v2-muted">${note}</p>
       ${x.error ? `<p class="v2-auth-error" role="alert" style="white-space:pre-line">${esc(x.error)}</p>` : ""}
       ${S.message ? `<p class="v2-ok" role="status">${esc(S.message)}</p>` : ""}

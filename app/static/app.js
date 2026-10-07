@@ -19284,7 +19284,7 @@ function scdApplyMode() {
   document.getElementById("scd-side-b-title").textContent = "Сторона 2";
 
   const метка = document.getElementById("scd-status-badge");
-  метка.textContent = scdDoc ? scdDoc.status_title : "Черновик (не сохранён)";
+  метка.textContent = (проведён ? "✓ " : "○ ") + (scdDoc ? (проведён ? "Проведён" : scdDoc.status_title) : "Черновик (не сохранён)");
   метка.className = "scd-status " + (проведён ? "posted" : "draft");
   document.getElementById("scd-status-note").textContent = проведён
     ? `Проведён: ${scdDoc.posted_by || "—"}${scdDoc.posted_at ? " · " + formatMomentRu(scdDoc.posted_at) : ""}. `
@@ -20290,9 +20290,9 @@ function scdRenderCards() {
   const tbody = document.createElement("tbody");
   for (const d of docs) {
     const tr = document.createElement("tr");
-    tr.className = "scd-doc-row";
+    tr.className = "scd-doc-row " + (d.status === "posted" ? "scd-row-posted" : "scd-row-draft");
     tr.innerHTML = `<td><b>${escapeHtml(d.number)}</b></td><td>${formatDateRu(d.doc_date)}</td>
-      <td><span class="scd-status ${d.status}">${escapeHtml(d.status_title)}</span></td>
+      <td><span class="scd-status ${d.status}">${d.status === "posted" ? "✓" : "○"} ${escapeHtml(d.status === "posted" ? "Проведён" : d.status_title)}</span></td>
       ${колонки.map(([, f]) => `<td>${escapeHtml(f(d))}</td>`).join("")}<td>${d.items}</td><td>${escapeHtml(d.created_by || "")}</td>`;
     tr.addEventListener("click", () => scdOpenDoc(d.id));
     tbody.appendChild(tr);

@@ -4417,8 +4417,12 @@
     border: 1px solid var(--color-border); border-radius: 3px; padding: 1px 5px;
     color: var(--color-text-muted); white-space: nowrap;
   }
-  .scd-status.posted { color: var(--color-success); border-color: var(--color-success); font-weight: 700; }
-  .scd-status.draft { color: var(--color-text-muted); }
+  /* Признак «проведён / не проведён» (2026-10-07): заметная метка со значком и цветом + цветная полоса у строки списка */
+  .scd-status { font-size: 12px; text-transform: none; letter-spacing: 0; border-radius: 999px; padding: 2px 10px; font-weight: 600; }
+  .scd-status.posted { color: var(--color-success); border-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 14%, transparent); }
+  .scd-status.draft { color: #b45309; border-color: #d97706; background: rgba(217, 119, 6, .13); }
+  .scd-doc-row.scd-row-posted td:first-child { box-shadow: inset 4px 0 0 var(--color-success); }
+  .scd-doc-row.scd-row-draft td:first-child { box-shadow: inset 4px 0 0 #d97706; }
   .scd-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   /* Обмен: две стороны рядом, строки друг напротив друга — пара читается
      по горизонтали, поэтому строки одинаковой высоты и без переносов. */
