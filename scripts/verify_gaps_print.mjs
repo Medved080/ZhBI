@@ -10,7 +10,7 @@ const c = checker("gaps-print-reports");
 // report-block-status/schedule/linear-track — данные учёта по блокам, нужен объект типа МФР (kind=mfr);
 // остальные — свод по элементам ЖБИ (feature.kinds ограничивает их объектами kind=zhbi: тип объекта
 // проверяется РАНЬШЕ обхода system_admin, app/access.py has_feature — иначе 403 даже у администратора).
-const REPORTS_ZHBI = ["report-status", "report-dynamics", "report-delivery", "report-completion", "report-mywork", "report-contracting", "report-analytics"];
+const REPORTS_ZHBI = ["report-status", "report-dynamics", "report-completion", "report-mywork", "report-analytics"];
 const REPORTS_MFR = ["report-block-status", "report-block-schedule", "report-linear-track"];
 const OBJECT_ZHBI = Number(process.env.GP_OBJECT_ZHBI || 1);
 const OBJECT_MFR = Number(process.env.GP_OBJECT_MFR || 4);

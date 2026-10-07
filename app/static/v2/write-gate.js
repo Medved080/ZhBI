@@ -174,13 +174,6 @@ function dbTransferForgetProblem(b) {
   if (!isObj(b) || Object.keys(b).some((k) => k !== "token")) return "лишние поля";
   return isTransferToken(b.token) ? null : "нет идентификатора загруженного снимка";
 }
-function fillScopeApplyProblem(b) {
-  if (!isObj(b) || Object.keys(b).some((k) => !["project_id", "object_id", "keys"].includes(k))) return "лишние поля";
-  if (!(b.project_id === null || (Number.isInteger(b.project_id) && b.project_id > 0))) return "неверный проект";
-  if (!(b.object_id === null || (Number.isInteger(b.object_id) && b.object_id > 0))) return "неверный объект";
-  if (!Array.isArray(b.keys) || !b.keys.length || !b.keys.every((k) => typeof k === "string" && k)) return "не выбрано ни одного справочника";
-  return null;
-}
 function boolMapProblem(b) {
   if (!isObj(b)) return "тело не объект";
   if (!Object.keys(b).length) return "нет изменённых строк";
@@ -390,7 +383,6 @@ export const POLICY = [
   { id: "address.fetch", screen: "address-classifier", action: "Адресный классификатор: скачать с сайта ФНС или распаковать уже загруженный архив (фоновая задача; download=false — без обращения в сеть)", method: "POST", path: re("/address/fetch"), check: (b, q) => { const p = new URLSearchParams(q || ""); return p.get("houses") && p.get("download") ? null : "нет параметров houses/download"; }, risk: "внешний запрос браузера сервера при download=true; файлы на сервере", allowed: true, proof: "HTTP: download=false на синтетическом архиве — распаковка без сети; download=true с сайтом ФНС не проверялось (нет доступа в интернет из тестовой среды — точный блокер в Docs/v2-progress/admin2.md), 403" },
   { id: "activity.cleanup", screen: "activity", action: "Журнал действий: очистить записи раньше даты (счёт заранее, подтверждение датой)", method: "POST", path: re("/activity/cleanup"), risk: "журнал, необратимо", allowed: true, proof: "HTTP+браузер: счёт, очистка, факт очистки в журнале, 403" },
   { id: "release.run", screen: "changelog", action: "Что нового: повторить обработку данных обновления (копия базы снимается сервером)", method: "POST", path: re(`/release-tasks/[^/]+/run`), risk: "данные, служебное", allowed: true, proof: "HTTP+браузер: повтор выполненной обработки идемпотентен, 404, 403" },
-  { id: "fill-scope.apply", screen: "fill-scope", action: "Заполнить пустые «Объект» и «Проект» у отмеченных справочников (временная необратимая обработка, предпросмотр и подтверждение словом — в интерфейсе)", method: "POST", path: re("/admin/fill-empty-scope/apply"), check: fillScopeApplyProblem, risk: "данные иерархии нескольких справочников, необратимо через интерфейс, служебное (администратор сервиса)", allowed: true, proof: "HTTP+браузер: применение отмеченного → SQL (пустых полей стало меньше), 403 у не-администратора, конфликт объекта/проекта из разных строк — отказ без изменений" },
   { id: "db-transfer.stage", screen: "bulk-edit", action: "Перенос базы: принять снимок (.zip) и сверить с текущей базой — ничего не меняет", method: "POST", path: re("/admin/db-transfer/stage"), check: uploadCheck({ ext: ["zip"] }), risk: "чтение (сверка), файл лежит в очереди на диске до применения или отмены", allowed: true, proof: "HTTP+браузер: сверка своим же снимком, числа таблиц совпадают, предупреждения по несовпадению версии/таблиц, 403 у не-администратора" },
   { id: "db-transfer.apply", screen: "bulk-edit", action: "Перенос базы: ПОЛНАЯ ЗАМЕНА текущей базы и вложений содержимым сверенного снимка (кодовое слово проверяет сервер; служебная копия текущего состояния снимается перед заменой)", method: "POST", path: re("/admin/db-transfer/apply"), onlyKeys: ["token", "confirm"], check: dbTransferApplyProblem, risk: "ВСЯ база и вложения, необратимо интерфейсом (только из служебной копии)", allowed: true, proof: "HTTP+браузер на копии БД: применение своим же снимком → служебная копия создана, счётчики совпали, неверное слово отклонено без изменений, 403 у не-администратора" },
   { id: "db-transfer.forget", screen: "bulk-edit", action: "Перенос базы: убрать снимок из очереди, не применяя", method: "POST", path: re("/admin/db-transfer/forget"), onlyKeys: ["token"], check: dbTransferForgetProblem, risk: "служебное (файл снимка на диске)", allowed: true, proof: "HTTP+браузер: повторное применение забытого токена → 404" },

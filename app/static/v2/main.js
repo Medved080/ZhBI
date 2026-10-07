@@ -32,7 +32,6 @@ import { mountZonesEdit } from "./zones-edit.js";
 import { mountVisibilityEdit } from "./visibility-edit.js";
 import { mountDbStatusView } from "./db-status-view.js";
 import { mountAdminGuideView } from "./admin-guide-view.js";
-import { mountFillScopeEdit } from "./fill-scope-edit.js";
 import { mountDbTransfer } from "./db-transfer.js";
 import { mountAddressClassifier } from "./address-classifier.js";
 import { mountAppearanceEdit } from "./appearance-edit.js";
@@ -695,11 +694,6 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountAdminGuideView(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
-        });
-      } else if (target.impl === "fill-scope-edit") {
-        document.title = `${target.title} — ЖБИ`;
-        activeModule = mountFillScopeEdit(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "db-transfer") {
         document.title = `${target.title} — ЖБИ`;

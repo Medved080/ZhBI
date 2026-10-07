@@ -8,7 +8,6 @@ import sqlite3
 import sys
 
 from app.report_analytics import build_analytics_report
-from app.report_delivery import build_delivery_schedule_report
 from app.report_pivot import build_completion_pivot
 
 
@@ -24,7 +23,6 @@ def reports(path):
             "completion": build_completion_pivot(
                 conn, source_file=source, object_id=1, group_by=["crane", "stance"]
             ),
-            "delivery": build_delivery_schedule_report(conn, source_file=source),
             "analytics": build_analytics_report(conn, 1, "2026-09-27"),
         }
     finally:

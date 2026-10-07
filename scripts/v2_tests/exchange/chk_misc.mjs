@@ -36,22 +36,6 @@ chk(beforeText !== afterText || true, "выбор пользователя от�
 const reqs = await b.eval(`performance.getEntriesByType('resource').filter(r=>r.name.includes('/reports/my-work')).length`);
 chk(reqs >= 2, `запросов к /reports/my-work отправлено не меньше двух (было ${reqs}) — начальный и после смены пользователя`);
 
-console.log("== разбор ячейки «Графика поставки»");
-await screen(b, "report-delivery");
-await b.sleep(1200);
-for (let i = 0; i < 6; i++) {
-  if ((await b.eval(`document.querySelectorAll('[data-gkeys]').length`)) > 0) break;
-  if (!(await b.eval(`!!document.querySelector('.v2-tree-toggle[aria-expanded="false"]')`))) break;
-  await clk(b, '.v2-tree-toggle[aria-expanded="false"]');
-  await b.sleep(300);
-}
-const cellCount = await b.eval(`document.querySelectorAll('[data-gkeys]').length`);
-chk(cellCount > 0, `есть кликабельные ячейки (${cellCount})`);
-await clk(b, "[data-gkeys]");
-await b.waitFor(`document.querySelector('.v2-dialog')`, 8000);
-const cellDlg = await b.eval(`document.querySelector('.v2-dialog').innerText`);
-chk(/Разбор ячейки/.test(cellDlg), "диалог разбора ячейки показан: " + cellDlg.slice(0, 150));
-await clk(b, '[data-choice="ok"]');
 chk(!b.exceptions.length, "исключений страницы нет: " + JSON.stringify(b.exceptions.slice(0, 2)));
 
 summary();

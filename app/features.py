@@ -266,14 +266,10 @@ FEATURES = [
             None, ["POST /reports/status(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
     Feature("report_dynamics", "Отчёты", "Динамика поставки и монтажа",
             None, ["POST /reports/dynamics(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
-    Feature("report_delivery", "Отчёты", "График поставки",
-            None, ["POST /reports/delivery-schedule"], SCOPE_OBJECT, _все(READ)),
     Feature("report_completion", "Отчёты", "Статус комплектации",
             None, ["POST /reports/completion(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
     Feature("report_mywork", "Отчёты", "Моя работа",
             None, ["POST /reports/my-work"], SCOPE_OBJECT, _все(READ)),
-    Feature("report_contracting", "Отчёты", "График контрактации и поставки",
-            None, ["POST /reports/contracting-schedule"], SCOPE_OBJECT, _все(READ)),
     Feature("report_analytics", "Отчёты", "Аналитическая справка",
             None, ["POST /reports/analytics(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
     # Карта — обзор ВСЕХ доступных объектов сразу, поэтому SCOPE_SERVICE, а не
@@ -417,10 +413,6 @@ FEATURES = [
     Feature("release_tasks", "Ведение сервиса", "Обработки данных при обновлении",
             "Повторный запуск обработки кнопкой в «Что нового».",
             ["POST /release-tasks/{name}/run"], SCOPE_SERVICE, _только_админ_сервиса()),
-    Feature("fill_scope", "Ведение сервиса",
-            "Заполнить пустые «Объект» и «Проект» (временная)",
-            "Лечит дообъектное наследие; удалить вместе с наследием.",
-            ["GET/POST /admin/fill-empty-scope"], SCOPE_SERVICE, _только_админ_сервиса()),
 
     # ------------------------------------------------------------ Обучение
     # 2026-08-14. Инструкция и тест собираются ПО РАЗДЕЛАМ этого же файла
@@ -543,8 +535,7 @@ _ТОЛЬКО_ЖБИ = {
     "contracts", "agreements", "default_contracts",
     "doc_supplier_change", "doc_link_swap", "schedule",
     # отчёты по изделиям
-    "report_status", "report_dynamics", "report_delivery", "report_completion",
-    "report_contracting", "report_analytics",
+    "report_status", "report_dynamics", "report_completion", "report_analytics",
     # справочники изделий
     "dict_marks", "dict_subtypes", "dict_mark_prefixes",
     "dict_status_colors", "dict_element_shapes",

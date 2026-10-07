@@ -597,12 +597,6 @@
   .ui-switch-btn + .ui-switch-btn { border-left: 1px solid var(--color-border); }
   .ui-switch-btn:hover:not(.active) { background: var(--color-surface-2); }
   .ui-switch-btn.active { background: var(--color-primary); color: #fff; cursor: default; }
-  /* Кнопка «Заполнить» временной обработки гаснет, когда заполнять нечего.
-     Правило точечное, а не общее `.btn:disabled`: у .btn своего вида для
-     выключенного состояния нет во всём проекте, и вводить его сразу всем
-     кнопкам — отдельная правка с отдельной проверкой. Без правила кнопка
-     выглядит нажимаемой и молча ничего не делает. */
-  #fill-scope-apply:disabled { opacity: .45; cursor: default; }
   #toolbar .spacer { flex: 1 1 12px; }
   #workdate-box { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-text-muted); flex-shrink: 0; }
   #workdate-input { font-size: 12px; padding: 5px 6px; width: 192px; }
@@ -2626,7 +2620,7 @@
   .em-save-feedback.ok { color: var(--color-success, #2a8a4a); }
   /* «Отмена»/«Сохранить» гаснут, пока черновик не отличается от
      сохранённого. Правило точечное по той же причине, что у
-     #fill-scope-apply: общего вида выключенной .btn в проекте нет. */
+     удалённой кнопки временной обработки: общего вида выключенной .btn в проекте нет. */
   .em-card .btn:disabled { opacity: .45; cursor: default; }
   .em-tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .em-tools-grid .btn { width: 100%; white-space: nowrap; }
@@ -3283,7 +3277,7 @@
   #bulk-edit-mode .view-mode-btn.mode-danger.active { background: #d7263d; color: #fff; }
   /* Пока сверка не пройдена, кнопка замены и поле кодового слова обязаны
      ВЫГЛЯДЕТЬ выключенными: у .btn общего вида для выключенного состояния
-     в проекте нет (см. #fill-scope-apply), а красная кнопка в полную силу
+     в проекте нет (как и у других кнопок форм), а красная кнопка в полную силу
      читается как «жми сюда» — здесь это худшее, что она может сказать. */
   #transfer-apply:disabled { opacity: .38; cursor: default; }
   #transfer-confirm-word:disabled { opacity: .5; cursor: default; }
@@ -4213,24 +4207,6 @@
   .ds-sep { color: var(--color-text-muted); margin: 0 1px; }
   #ds-table td[data-col] { cursor: help; }
 
-  /* Подсказка по ячейке: чего не хватает и откуда переставить. position:
-     fixed — она всплывает поверх модальной формы, а не внутри её скролла,
-     иначе уезжала бы вместе с таблицей. */
-  #ds-tooltip {
-    position: fixed; z-index: 400; pointer-events: none; display: none;
-    max-width: 460px; max-height: 70vh; overflow: hidden;
-    background: rgba(30,32,38,.96); color: #fff;
-    font-size: 11.5px; line-height: 1.5; padding: 8px 11px;
-    border-radius: var(--radius-sm); box-shadow: 0 4px 14px rgba(0,0,0,.35);
-  }
-  #ds-tooltip .dst-head { font-weight: 700; margin-bottom: 4px; }
-  #ds-tooltip .dst-mark { margin-top: 5px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,.16); }
-  #ds-tooltip .dst-mark:first-of-type { border-top: none; padding-top: 0; }
-  #ds-tooltip .dst-name { font-weight: 600; }
-  #ds-tooltip .dst-lack { color: #f2a79c; }
-  #ds-tooltip .dst-src { color: #cfd2d8; padding-left: 10px; }
-  #ds-tooltip .dst-src.urgent { color: #f0c674; }
-  #ds-tooltip .dst-more { color: #9aa0aa; font-style: italic; }
 
   /* Печать: на бумагу уходит только таблица отчёта. Без этого печатались бы
      схема, сайдбар и затемнение модального окна.
@@ -4534,52 +4510,6 @@
   }
   #contracts-list { background: var(--color-surface-2); border-radius: var(--radius); padding: 4px 10px 10px; }
 
-  /* -------- «График контрактации и поставки» (2026-08-06) -------- */
-  /* Прокрутка ТОЛЬКО у таблицы, а не у формы: закреплённые слева колонки
-     держатся на position:sticky, а он считается от ближайшего предка со
-     скроллом — вынеси прокрутку выше, и колонки поедут вместе с календарём. */
-  .cs-scroll { overflow: auto; max-height: 64vh; }
-  .cs-table { border-collapse: separate; border-spacing: 0; font-size: 11px; white-space: nowrap; }
-  .cs-table th, .cs-table td {
-    padding: 3px 6px; border-bottom: 1px solid var(--color-border);
-    background: var(--color-surface); text-align: left;
-  }
-  .cs-table thead th { position: sticky; top: 0; z-index: 3; font-weight: 600;
-    color: var(--color-text-muted); }
-  /* Пять закреплённых колонок слева. Смещения заданы числами: считать их
-     из ширин в JS значило бы пересчитывать на каждый ререндер и всё равно
-     промахиваться на дробных пикселях. Ширины ниже фиксированные — из них
-     смещения и складываются. */
-  .cs-sticky { position: sticky; z-index: 2; }
-  .cs-table thead .cs-sticky { z-index: 4; }
-  .cs-c1 { left: 0;     min-width: 96px;  max-width: 96px; }
-  .cs-c2 { left: 96px;  min-width: 132px; max-width: 132px; }
-  .cs-c3 { left: 228px; min-width: 96px;  max-width: 96px; }
-  .cs-c4 { left: 324px; min-width: 118px; max-width: 118px; }
-  .cs-c5 { left: 442px; min-width: 78px;  max-width: 78px;
-    box-shadow: 1px 0 0 var(--color-border); }
-  /* Закреплённые колонки фиксированной ширины, и длинный текст (реквизиты
-     договора в расшифровке) обрезается многоточием, а не режется на
-     полсимвола. Полное значение — в подсказке при наведении. */
-  .cs-sticky { overflow: hidden; text-overflow: ellipsis; }
-  .cs-table td.num, .cs-table th.num { text-align: right; }
-  .cs-period { min-width: 92px; text-align: center !important; }
-  .cs-cell { text-align: center; }
-  /* Четыре шкалы различаются ЦВЕТОМ, а не подписью: подписать каждое число
-     в клетке значит не поместить в неё ничего. Легенда — над таблицей. */
-  .cs-need { color: var(--color-text); font-weight: 600; }
-  .cs-contracted { color: #b4690e; }
-  .cs-planned { color: #1353d6; }
-  .cs-fact { color: var(--color-success); }
-  .cs-zero { color: var(--color-border); }
-  .cs-deficit { color: var(--color-danger); font-weight: 700; }
-  .cs-total td { font-weight: 600; background: var(--color-surface-2); }
-  .cs-child td { background: var(--color-surface-2); }
-  .cs-child .cs-c2 { padding-left: 14px; }
-  .cs-legend { margin-bottom: 6px; }
-  .cs-legend .cs-need, .cs-legend .cs-contracted,
-  .cs-legend .cs-planned, .cs-legend .cs-fact { font-size: 13px; }
-  .cs-toggle { font: inherit; }
 
   /* ==================== «Аналитическая справка» (2026-08-11) ====================
      Отчёт из шести разделов, а не одна таблица: плитки-показатели, выводы,
@@ -5363,13 +5293,6 @@
                 <button id="menu-dict-individuals" data-feature="dict_individuals" data-feature-kind="read">Физлица</button>
                 <button id="menu-project-card" data-feature="project_card" data-feature-kind="write">Карточка объекта</button>
                 <button id="menu-report-notes" data-feature="report_notes" data-feature-kind="write">События, задачи, вопросы</button>
-                <!-- ВРЕМЕННАЯ обработка (2026-08-03): дообъектное наследие —
-                     записи, заведённые до того, как у них появилось поле
-                     «Объект»/«Проект». Помечена временной и в названии пункта,
-                     и в самой форме: она нужна, пока такие записи есть, и
-                     подлежит удалению вместе с ними. Только администратору
-                     сервиса — трогает данные всех объектов разом. -->
-                <button id="menu-fill-scope" class="admin-only">Заполнить пустые «Объект» и «Проект» (временная)</button>
               </div>
             </div>
             <!-- Три справочника зон (этап 2, решение З15: физически одна
@@ -5464,18 +5387,12 @@
             <button id="menu-report-map" data-feature="map" data-feature-kind="read">Карта проектов</button>
             <button id="menu-report-status">Статус монтажа</button>
             <button id="menu-report-dynamics">Отчёт о динамике поставки и монтажа</button>
-            <button id="menu-report-delivery" class="menu-item-in-dev">График поставки <span class="in-dev-mark">(в разработке)</span></button>
             <button id="menu-report-completion">Статус комплектации</button>
             <!-- «Моя работа» — тоже всем ролям и по той же причине: это
                  отчёт человека о СВОЕЙ работе, а не наблюдение за чужой
                  (выбор пользователя открывается только администратору
                  объекта, см. _my_work_scope в app/main.py). -->
             <button id="menu-report-mywork">Моя работа</button>
-            <!-- «График контрактации и поставки» (2026-08-06): насколько
-                 потребность стройки закрыта контрактами, по маркам и во
-                 времени. Всем ролям, как и остальные отчёты, — он только
-                 читает данные. -->
-            <button id="menu-report-contracting" class="menu-item-in-dev">График контрактации и поставки <span class="in-dev-mark">(в разработке)</span></button>
             <!-- «Аналитическая справка» (2026-08-11): что мешает стройке
                  прямо сейчас — контрактация под ближайшие этапы СМР и
                  критический путь поставки. Всем ролям, как и остальные
@@ -6794,40 +6711,6 @@
     <button type="button" class="image-lightbox-close" id="image-lightbox-close" title="Закрыть">✕</button>
     <img alt=""/>
     <div class="image-lightbox-caption"></div>
-  </div>
-</div>
-
-<!-- ВРЕМЕННАЯ обработка: заполнение пустых полей «Объект» и «Проект».
-     Подробности, перечень целей и что НЕ считается пустым полем — в
-     модульной строке документации app/fill_scope.py.
-
-     Форма двухшаговая по построению, а не по кнопкам: сначала показывается
-     что найдено (сервер только читает), и лишь потом человек нажимает
-     «Заполнить». Заполнение необратимо через интерфейс — обратной кнопки
-     «снять объект» нет ни у одной из этих записей, — поэтому предпросмотр
-     обязателен, а не удобство. -->
-<div class="modal-backdrop" id="fill-scope-backdrop">
-  <div class="modal" style="max-width:820px">
-    <h2>Заполнить пустые «Объект» и «Проект»</h2>
-    <p class="hint-text" style="color:var(--color-danger)">
-      Временная обработка. Иерархия «Проект → Объект» вводилась поэтапно, и часть
-      записей заведена до появления у них этого поля. Запись без объекта не видна
-      ни в одном справочнике объекта и доступна только администратору сервиса.
-      Когда таких записей не останется, обработку следует убрать: новые записи
-      без объекта система заводить не даёт.
-    </p>
-    <div class="object-fields" style="margin-bottom:12px">
-      <label class="object-field"><span>Проект</span>
-        <select id="fill-scope-project"></select></label>
-      <label class="object-field"><span>Объект</span>
-        <select id="fill-scope-object"></select></label>
-    </div>
-    <div id="fill-scope-body">Загрузка…</div>
-    <div id="fill-scope-status" style="margin-top:10px; font-size:12px; color:var(--color-text-muted);"></div>
-    <div class="actions">
-      <button class="btn btn-secondary" id="fill-scope-close">Закрыть</button>
-      <button class="btn btn-primary" id="fill-scope-apply">Заполнить</button>
-    </div>
   </div>
 </div>
 
@@ -8188,10 +8071,8 @@
         <div class="report-tabs" id="report-tabs" role="group" aria-label="Вид отчёта">
           <button type="button" class="report-tab active" data-report="status">Статус монтажа</button>
           <button type="button" class="report-tab" data-report="dynamics">Отчёт о динамике поставки и монтажа</button>
-          <button type="button" class="report-tab in-dev" data-report="delivery">График поставки <span class="in-dev-mark">(в разработке)</span></button>
           <button type="button" class="report-tab" data-report="completion">Статус комплектации</button>
           <button type="button" class="report-tab" data-report="mywork">Моя работа</button>
-          <button type="button" class="report-tab in-dev" data-report="contracting">График контрактации и поставки <span class="in-dev-mark">(в разработке)</span></button>
           <button type="button" class="report-tab" data-report="analytics">Аналитическая справка</button>
           <button type="button" class="report-tab" data-report="block_status">Учёт по блокам: статусы</button>
         </div>
@@ -8265,40 +8146,6 @@
            заголовком формы. Та же фраза уходит внутрь XLSX и PDF — см.
            IN_DEVELOPMENT_NOTE в app/reports.py, откуда её и берёт клиент. -->
       <div id="report-in-development" class="in-dev-note" style="display:none"></div>
-      <!-- Период, шаг оси и порядок группировки — только у «Графика
-           поставки». Порядок уровней задаёт пользователь (фишки ниже):
-           одному нужен разрез по поставщикам, другому — по захваткам и
-           этажам, и фиксированной иерархии тут быть не может. -->
-      <div class="ds-controls" id="report-delivery-box" style="display:none">
-        <label class="field">Период с <input type="date" id="ds-from" style="width:auto"/></label>
-        <label class="field">по <input type="date" id="ds-to" style="width:auto"/></label>
-        <label class="field">Шаг
-          <select id="ds-step" style="width:auto">
-            <option value="day">День</option>
-            <option value="week">Неделя</option>
-            <option value="month">Месяц</option>
-          </select>
-        </label>
-        <div class="ds-chips">
-          <span class="hint-text">Группировка:</span>
-          <span id="ds-groups"></span>
-        </div>
-      </div>
-      <!-- Масштаб оси времени «Графика контрактации и поставки». Это
-           ГРУППИРОВКА колонок, а не пересчёт: числа те же, меняется только
-           ширина шага. -->
-      <div class="ds-controls" id="report-contracting-box" style="display:none">
-        <label class="field">Масштаб
-          <select id="cs-scale" style="width:auto">
-            <option value="day">По дням</option>
-            <option value="week">По неделям</option>
-            <option value="month" selected>По месяцам</option>
-            <option value="quarter">По кварталам</option>
-          </select>
-        </label>
-        <label class="toggle"><input type="checkbox" id="cs-only-deficit"/>
-          Только марки с дефицитом</label>
-      </div>
       <!-- «Статус комплектации» в двух видах (2026-08-20, живой запрос по
            образцу заказчика): перечень позиций и сводная таблица по нему же.
            Шкала дат, шаг календаря и порядок уровней — только для сводной,
@@ -8393,9 +8240,6 @@
     </div>
   </div>
 </div>
-<!-- Подсказка по ячейке «Графика поставки». Вне формы: position:fixed
-     внутри прокручиваемого блока прижимался бы к его границам. -->
-<div id="ds-tooltip"></div>
 
 <!-- Редакции текстовых блоков отчёта. Слева — список дат, справа — сама
      редакция. Отчёт на дату берёт последнюю редакцию с датой не позже

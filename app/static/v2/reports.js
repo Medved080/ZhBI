@@ -3,7 +3,6 @@
 // без сторонней библиотеки — перенос из V1: app.js buildDynamicsChartSvg/anChartHtml) — здесь же, у «Динамики» и
 // «Аналитической справки», единственных двух отчётов V1 с графиком.
 import { esc } from "./screen-view.js";
-import { EXCHANGE_REPORT_RENDERERS, bindExchangeReport } from "./reports-exchange.js";
 import { registerChartHover, ensureChartHoverListener } from "./chart-hover.js";
 import { WORK_REPORT_RENDERERS, REPORT_INIT, bindWorkReport } from "./reports-work.js";
 
@@ -356,13 +355,12 @@ function completionReport(data, state) {
 }
 
 // Отчёты, сверенные с V1 по сценарию (аудит «рабочие места и отчёты»), — в reports-work.js; здесь только сборка общего реестра.
-export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, ...WORK_REPORT_RENDERERS, ...EXCHANGE_REPORT_RENDERERS };
+export const REPORT_RENDERERS = { status: statusReport, completion: completionReport, ...WORK_REPORT_RENDERERS };
 export { REPORT_INIT };
 
 // Взаимодействие: сворачивание узлов дерева, страницы перечня. `ctx` — {api, objectId, canWrite, data, rights, params, setParams, go,
 // switchObject, hasObject} (read-screen.js): правка ячейки прямо в таблице, перезапрос с новыми параметрами, переходы.
 export function bindReport(name, root, state, repaint, ctx) {
-  bindExchangeReport(name, root, state, repaint);   // «График поставки» и «График контрактации и поставки» (reports-exchange.js)
   bindWorkReport(name, root, state, repaint, ctx);  // отчёты reports-work.js
   if (name === "status") {
     root.querySelectorAll(".v2-tree-toggle").forEach((b) => b.addEventListener("click", () => {

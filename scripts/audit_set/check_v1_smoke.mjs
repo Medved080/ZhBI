@@ -8,7 +8,7 @@ await b.goto(BASE + "/?ui=v1&object_id=1", 1500);
 await b.waitFor("!!document.getElementById('menu-view-mode') && typeof state === 'object' && state.elements && state.elements.length > 0", 60000, 500);
 ok("V1 загрузился, схема объекта 1 показана", await b.eval("state.elements.length > 1000"));
 const MENU = [
-  ["menu-report-notes", "report-notes-backdrop"], ["menu-fill-scope", "fill-scope-backdrop"], ["menu-zones-zakhvatka", "zones-backdrop"],
+  ["menu-report-notes", "report-notes-backdrop"], ["menu-zones-zakhvatka", "zones-backdrop"],
   ["menu-subtypes", "subtypes-backdrop"], ["menu-mark-prefixes", "mark-type-prefixes-backdrop"], ["menu-address-classifier", "address-backdrop"],
   ["menu-db-status", "db-status-backdrop"], ["menu-bulk-edit", "bulk-edit-backdrop"], ["menu-admin-guide", "admin-guide-backdrop"],
   ["menu-view-mode", "menu-view-backdrop"], ["menu-label-color", "label-color-backdrop"], ["menu-colors", "settings-backdrop"],

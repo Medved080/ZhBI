@@ -4361,7 +4361,7 @@ function buildPickerMetricTile(metric, base) {
       share.className = "picker-metric-share";
       // Сравнение именно с потребностью модели: «выкуплено бумагой»
       // против «нужно построить» — тот же смысл, что в отчёте
-      // «График контрактации и поставки» (app/report_contracting.py).
+      // «График контрактации и поставки» (app/report_contracting.py (удалён 2026-10-07)).
       share.textContent = base.length
         ? `модель: ${pickerNumber(base.length)} · ${contracted.value >= base.length ? "покрыто" : "дефицит " + pickerNumber(base.length - contracted.value)}`
         : "";
@@ -13543,167 +13543,14 @@ document.getElementById("address-load").addEventListener("click", async () => {
   }
 });
 
-// ============ ВРЕМЕННАЯ ОБРАБОТКА: пустые «Объект» и «Проект» ============
-// Что и зачем заполняет, а главное — что заполнять НЕЛЬЗЯ (системные записи
-// app_settings, уровень гранта в user_access) — в модульной строке
-// документации app/fill_scope.py. Здесь только форма.
-//
-// Перечень справочников приходит С СЕРВЕРА, а не описан здесь вторым списком:
-// цели обработки, их подписи и пояснения живут рядом с кодом, который эти
-// поля заполняет. Разъехавшись, форма обещала бы не то, что делает.
-
-const fillScopeBackdrop = document.getElementById("fill-scope-backdrop");
-let fillScopeTargets = [];   // последний ответ /admin/fill-empty-scope
-
-// Списки проектов и объектов те же, что у справочника «Объекты». Объекты
-// отбираются по выбранному проекту: сервер всё равно откажет, если объект
-// окажется из другого проекта (заполнить договоры объектом одной стройки, а
-// объекты — проектом другой человек может только по ошибке), и лучше не дать
-// собрать такую пару вовсе, чем показать отказ после нажатия.
-async function renderFillScopeScope() {
-  const projSel = document.getElementById("fill-scope-project");
-  const objSel = document.getElementById("fill-scope-object");
-  const projects = await api("/projects");
-  const objects = await api("/objects");
-  const текущий = currentObject();
-  projSel.innerHTML = projects.map(p =>
-    `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-  if (текущий && текущий.project.id) projSel.value = String(текущий.project.id);
-
-  const заполнитьОбъекты = () => {
-    const pid = Number(projSel.value);
-    const свои = objects.filter(o => o.project_id === pid);
-    objSel.innerHTML = свои.length
-      ? свои.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("")
-      : `<option value="">— в проекте нет объектов —</option>`;
-    if (текущий && свои.some(o => o.id === текущий.object.id)) {
-      objSel.value = String(текущий.object.id);
-    }
-  };
-  заполнитьОбъекты();
-  projSel.onchange = заполнитьОбъекты;
-}
-
-function renderFillScopeBody(data) {
-  fillScopeTargets = data.targets;
-  const box = document.getElementById("fill-scope-body");
-  const естьЧто = data.targets.some(t => t.empty);
-  if (!естьЧто) {
-    box.innerHTML = `<p class="hint-text">Пустых полей «Объект» и «Проект» не найдено —
-      заполнять нечего. Это и есть то состояние, в котором обработку можно убрать.</p>`;
-    document.getElementById("fill-scope-apply").disabled = true;
-    return;
-  }
-  document.getElementById("fill-scope-apply").disabled = false;
-  box.innerHTML = data.targets.map(t => {
-    // Справочник без пустых полей не убирается из списка, а показывается
-    // серым и выключенным — тот же принцип, что у фильтров схемы: «нечего
-    // заполнять» и «такого справочника обработка не знает» это разные ответы,
-    // и исчезнувшая строка выдаёт первый за второй.
-    const off = !t.empty;
-    return `
-    <div class="object-card" style="${off ? "opacity:.55" : ""}">
-      <label style="display:flex; gap:8px; align-items:flex-start; cursor:${off ? "default" : "pointer"}">
-        <input type="checkbox" data-fill-key="${t.key}" style="margin-top:3px"
-               ${off ? "disabled" : (t.default_on ? "checked" : "")}/>
-        <span>
-          <b>${escapeHtml(t.title)}</b> —
-          поле «${t.field === "project" ? "Проект" : "Объект"}»
-          (<code>${escapeHtml(t.table)}.${escapeHtml(t.column)}</code>):
-          ${off ? "пустых записей нет" : `<b>${t.empty}</b> ${plural(t.empty, "запись", "записи", "записей")} без значения`}
-          <div class="hint-text" style="margin-top:4px">${escapeHtml(t.note)}</div>
-          ${t.samples.length ? `<div class="hint-text" style="margin-top:4px">
-            Например: ${t.samples.map(s => escapeHtml(s.label)).join("; ")}${
-              t.empty > data.sample_limit ? ` … и ещё ${t.empty - data.sample_limit}` : ""}.
-          </div>` : ""}
-        </span>
-      </label>
-    </div>`;
-  }).join("");
-}
-
-// Своя мелкая функция склонения: в проекте её ещё не было, а «1 записей»
-// в форме, которую открывают раз в жизни, читается как недоделка.
+// Склонение по числу: «1 запись», «2 записи», «5 записей». Общая функция — раньше жила внутри временной обработки
+// «Заполнить пустые…» (удалена 2026-10-07) и осталась нужна форме «Динамики», картам и справочникам.
 function plural(n, one, few, many) {
   const с = Math.abs(n) % 100, е = с % 10;
   if (с > 10 && с < 20) return many;
   if (е > 1 && е < 5) return few;
   return е === 1 ? one : many;
 }
-
-async function loadFillScope() {
-  const box = document.getElementById("fill-scope-body");
-  box.textContent = "Загрузка…";
-  try {
-    renderFillScopeBody(await api("/admin/fill-empty-scope"));
-  } catch (e) {
-    box.textContent = e.message || "Не удалось получить сводку";
-  }
-}
-
-document.getElementById("menu-fill-scope").addEventListener("click", async () => {
-  fillScopeBackdrop.classList.add("open");
-  document.getElementById("fill-scope-status").textContent = "";
-  await renderFillScopeScope();
-  await loadFillScope();
-});
-document.getElementById("fill-scope-close").addEventListener("click", () =>
-  fillScopeBackdrop.classList.remove("open"));
-
-document.getElementById("fill-scope-apply").addEventListener("click", async () => {
-  const statusBox = document.getElementById("fill-scope-status");
-  const keys = Array.from(document.querySelectorAll("#fill-scope-body [data-fill-key]"))
-    .filter(cb => cb.checked && !cb.disabled).map(cb => cb.dataset.fillKey);
-  if (!keys.length) {
-    statusBox.style.color = "var(--color-danger)";
-    statusBox.textContent = "Отметьте хотя бы один справочник";
-    return;
-  }
-  const projSel = document.getElementById("fill-scope-project");
-  const objSel = document.getElementById("fill-scope-object");
-  const выбранные = fillScopeTargets.filter(t => keys.includes(t.key));
-  const итого = выбранные.reduce((s, t) => s + t.empty, 0);
-  // Переспрашиваем с ЧИСЛОМ и НАЗВАНИЕМ объекта: обратной кнопки «снять
-  // объект» у этих записей нет, и цена ошибки — разбор вручную по одной.
-  if (!confirm(
-    `Заполнить у ${итого} ${plural(итого, "записи", "записей", "записей")} `
-    + `(${выбранные.map(t => t.title).join(", ")}) `
-    + `объект «${objSel.options[objSel.selectedIndex] ? objSel.options[objSel.selectedIndex].text : "—"}» `
-    + `и проект «${projSel.options[projSel.selectedIndex].text}»?\n\n`
-    + `Действие необратимо через интерфейс.`)) return;
-  statusBox.style.color = "var(--color-text-muted)";
-  statusBox.textContent = "Заполняем…";
-  try {
-    const r = await api("/admin/fill-empty-scope/apply", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        project_id: Number(projSel.value) || null,
-        object_id: Number(objSel.value) || null,
-        keys,
-      }),
-    });
-    // Пересканирование ПЕРЕД отчётом: renderFillScopeBody переписывает тело
-    // формы, и человек должен увидеть новое состояние («пустых нет») рядом с
-    // тем, что именно произошло.
-    await loadFillScope();
-    const строки = r.results.map(res => {
-      const хвост = (res.extra || []).length ? ` (${res.extra.join("; ")})` : "";
-      const пропуск = res.skipped
-        ? `<div class="hint-text" style="color:var(--color-danger)">Пропущено ${res.skipped}: `
-          + res.reasons.map(escapeHtml).join(" ") + `</div>`
-        : "";
-      return `<div>${escapeHtml(res.title)}: заполнено ${res.filled}${escapeHtml(хвост)}.${пропуск}</div>`;
-    }).join("");
-    statusBox.innerHTML = `<b>Готово. Всего заполнено: ${r.total_filled}.</b>${строки}`;
-    // Договоры и объекты меняют то, из чего построены крошка и каскад формы
-    // контракта, — дерево перечитывается, иначе изменения увидит только
-    // перезагрузка страницы.
-    await loadProjectsTree();
-  } catch (e) {
-    statusBox.style.color = "var(--color-danger)";
-    statusBox.textContent = e.message || "Не удалось заполнить";
-  }
-});
 
 // ==================== СПРАВОЧНИК ЭЛЕМЕНТОВ (этап 3, решение Э1) ====================
 // Таблица всех элементов объекта с отбором по колонкам и сортировкой.
@@ -21572,153 +21419,6 @@ const IN_DEVELOPMENT_NOTE =
   "ОТЧЁТ В РАЗРАБОТКЕ: данные могут быть неполными или неверными, "
   + "использовать для принятия решений нельзя";
 
-// ==================== «График контрактации и поставки» (2026-08-06) ====================
-//
-// Слева ЗАКРЕПЛЁННЫЕ итоги марки (потребность, законтрактовано, дефицит),
-// справа календарь накопительным итогом. Закреплены именно эти колонки:
-// прокрутив календарь на полгода вправо, без них не понять, чью строку
-// читаешь и хватает ли по ней вообще.
-//
-// Накопление считает КЛИЕНТ по разреженным приращениям сервера (см.
-// app/report_contracting.py): марок под тысячу, периодов при масштабе «по
-// дням» сотни, и плотная матрица на четыре шкалы — это миллионы чисел на
-// каждое открытие. Накапливаем только то, что рисуем.
-const CS_SERIES = [
-  { key: "need", label: "Потребность", css: "cs-need" },
-  { key: "contracted", label: "Законтрактовано", css: "cs-contracted" },
-  { key: "planned", label: "План поставки", css: "cs-planned" },
-  { key: "fact", label: "Факт", css: "cs-fact" },
-];
-
-// Развёрнутые марки — по ключу «тип|марка». Живёт вне reportData: перестройка
-// отчёта (смена масштаба) не должна схлопывать то, что человек раскрыл.
-let csExpanded = new Set();
-
-// Сколько строк рисуем за раз. Ограничение НЕ косметическое: при масштабе
-// «по дням» периодов выходит за триста, марок на объекте под тысячу, и
-// таблица целиком — это больше миллиона ячеек. Первая версия без предела
-// вешала вкладку намертво (замерено: отрисовка не завершалась за 30 с).
-//
-// Предел по ЯЧЕЙКАМ, а не по строкам: при «по кварталам» колонок пять, и
-// резать там до сотни марок незачем — читается всё сразу.
-const CS_CELL_BUDGET = 40000;
-let csShownRows = 0;   // сколько строк показано сейчас; 0 = пересчитать от бюджета
-
-function csCumulative(deltas, длина) {
-  const ряд = new Array(длина).fill(0);
-  let сумма = 0;
-  for (let i = 0; i < длина; i++) {
-    сумма += deltas[i] || 0;
-    ряд[i] = сумма;
-  }
-  return ряд;
-}
-
-function csRowKey(r) {
-  return `${r.element_type || ""}|${r.mark}`;
-}
-
-// Ячейка календаря: четыре числа в одной клетке периода. Ноль не печатаем —
-// на сотне колонок нули превращают таблицу в шум, а смысл несут переходы.
-function csCellHtml(ряды, i) {
-  const части = CS_SERIES.map(с => {
-    const v = ряды[с.key][i];
-    return v ? `<span class="${с.css}">${v}</span>` : `<span class="cs-zero">·</span>`;
-  });
-  return `<td class="cs-cell">${части.join(" ")}</td>`;
-}
-
-function csSeries(источник, длина) {
-  const ряды = {};
-  for (const с of CS_SERIES) ряды[с.key] = csCumulative(источник.deltas[с.key] || {}, длина);
-  return ряды;
-}
-
-function renderContractingReport(data) {
-  if (!data || !data.rows.length) {
-    return `<p class="hint-text">Нет изделий с маркой — отчёту нечего показывать.</p>`;
-  }
-  const периодов = data.periods.length;
-  const толькоДефицит = document.getElementById("cs-only-deficit").checked;
-  const всеСтроки = толькоДефицит ? data.rows.filter(r => r.deficit > 0) : data.rows;
-  const порция = Math.max(20, Math.floor(CS_CELL_BUDGET / Math.max(периодов, 1)));
-  if (!csShownRows) csShownRows = порция;
-  const строки = всеСтроки.slice(0, csShownRows);
-  const остаток = всеСтроки.length - строки.length;
-
-  const шапка = `<thead>
-    <tr>
-      <th class="cs-sticky cs-c1">Тип</th>
-      <th class="cs-sticky cs-c2">Марка</th>
-      <th class="cs-sticky cs-c3 num">Потребность</th>
-      <th class="cs-sticky cs-c4 num">Законтрактовано</th>
-      <th class="cs-sticky cs-c5 num">Дефицит</th>
-      ${data.periods.map(p => `<th class="cs-period">${escapeHtml(p.label)}</th>`).join("")}
-    </tr>
-  </thead>`;
-
-  const итог = csSeries(data.totals, периодов);
-  const телоИтога = `<tr class="cs-total">
-      <td class="cs-sticky cs-c1" colspan="2">${data.element_filter ? "Итого по отбору" : "Итого по объекту"}</td>
-      <td class="cs-sticky cs-c3 num">${data.totals.need}</td>
-      <td class="cs-sticky cs-c4 num">${data.totals.contracted}</td>
-      <td class="cs-sticky cs-c5 num ${data.totals.deficit > 0 ? "cs-deficit" : ""}">${data.totals.deficit}</td>
-      ${data.periods.map((_, i) => csCellHtml(итог, i)).join("")}
-    </tr>`;
-
-  const части = [];
-  for (const r of строки) {
-    const ключ = csRowKey(r);
-    const развёрнута = csExpanded.has(ключ);
-    const ряды = csSeries(r, периодов);
-    части.push(`<tr class="cs-mark" data-cs-key="${escapeHtml(ключ)}">
-      <td class="cs-sticky cs-c1">${escapeHtml(r.element_type || "—")}</td>
-      <td class="cs-sticky cs-c2">
-        <button type="button" class="link-like cs-toggle">${развёрнута ? "▾" : "▸"} ${escapeHtml(r.mark)}</button>
-        ${r.children.length ? `<span class="hint-text">(${r.children.length})</span>` : ""}
-      </td>
-      <td class="cs-sticky cs-c3 num">${r.need}</td>
-      <td class="cs-sticky cs-c4 num">${r.contracted}</td>
-      <td class="cs-sticky cs-c5 num ${r.deficit > 0 ? "cs-deficit" : ""}">${r.deficit}</td>
-      ${data.periods.map((_, i) => csCellHtml(ряды, i)).join("")}
-    </tr>`);
-    if (!развёрнута) continue;
-    if (!r.children.length) {
-      части.push(`<tr class="cs-child"><td class="cs-sticky cs-c1"></td>
-        <td class="cs-sticky cs-c2" colspan="4"><span class="hint-text">контрактов по этой марке нет</span></td>
-        ${data.periods.map(() => "<td></td>").join("")}</tr>`);
-      continue;
-    }
-    for (const c of r.children) {
-      const дет = csSeries(c, периодов);
-      части.push(`<tr class="cs-child">
-        <td class="cs-sticky cs-c1"></td>
-        <td class="cs-sticky cs-c2">${escapeHtml(c.counterparty || "—")}</td>
-        <td class="cs-sticky cs-c3" title="${escapeHtml(документНадпись(c.agreement, c.agreement_date))}">${escapeHtml(документНадпись(c.agreement, c.agreement_date))}</td>
-        <td class="cs-sticky cs-c4" title="${escapeHtml(документНадпись(c.specification, c.specification_date))}">${escapeHtml(документНадпись(c.specification, c.specification_date))}</td>
-        <td class="cs-sticky cs-c5 num">${c.contracted}</td>
-        ${data.periods.map((_, i) => csCellHtml(дет, i)).join("")}
-      </tr>`);
-    }
-  }
-
-  const легенда = CS_SERIES.map(с => `<span class="${с.css}">■</span> ${с.label}`).join(" · ");
-  // Предупреждение приходит с сервера готовым текстом (см.
-  // app/report_contracting.py): у изделия без прогноза нет даты
-  // потребности, и кривая до итога слева не дорастает. Без этой строки
-  // расхождение читалось бы как ошибка расчёта.
-  return `${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
-    <div class="hint-text cs-legend">В клетке накопительным итогом: ${легенда}.
-      Масштаб — ${escapeHtml(data.scale_label)}; периодов ${периодов}.
-      ${толькоДефицит ? "Показаны только марки с дефицитом." : ""}</div>
-    <div class="cs-scroll"><table class="cs-table">${шапка}
-      <tbody>${телоИтога}${части.join("")}</tbody></table></div>
-    ${остаток > 0 ? `<div class="hint-text cs-more">
-      Показано ${строки.length} марок из ${всеСтроки.length} — самые дефицитные сверху.
-      <button type="button" class="link-like" id="cs-more">Показать ещё ${Math.min(остаток, порция)}</button>
-      </div>` : ""}`;
-}
-
 // Реквизиты документа — тем же форматом, что в интерфейсе и в выгрузках
 // (build_document_label на сервере): «НОМЕР от ДД.ММ.ГГГГ», без даты просто
 // номер.
@@ -21898,13 +21598,6 @@ const REPORTS = {
     render: renderDynamicsReport,
     needsDate: true,
   },
-  delivery: {
-    title: "График поставки ЖБИ",
-    endpoint: "/reports/delivery-schedule",
-    render: renderDeliveryReport,
-    needsPeriod: true,
-    inDevelopment: true,
-  },
   // «Статус комплектации» (живой запрос 2026-08-03, по образцу заказчика) —
   // плоский перечень «кран · стоянка · изделие · контракт · три даты» с
   // количеством (см. app/report_completion.py).
@@ -21934,20 +21627,6 @@ const REPORTS = {
     endpoint: "/reports/my-work",
     render: renderMyWorkReport,
     needsWorkPeriod: true,
-  },
-  // «График контрактации и поставки» (живой запрос 2026-08-06) — насколько
-  // потребность стройки закрыта контрактами, по маркам и во времени
-  // (см. app/report_contracting.py). Широкий: слева итоги, справа календарь
-  // на десятки колонок.
-  contracting: {
-    title: "График контрактации и поставки",
-    endpoint: "/reports/contracting-schedule",
-    render: renderContractingReport,
-    needsScale: true,
-    wide: true,
-    // Доработка приостановлена пользователем 2026-08-06 — отчёт остаётся
-    // доступен, но с пометкой (см. app/reports.py: признак не про доступ).
-    inDevelopment: true,
   },
   // «Аналитическая справка» (2026-08-11) — что мешает стройке сейчас:
   // контрактация под ближайшие этапы СМР и критический путь поставки
@@ -22084,9 +21763,6 @@ function reportRequestBody() {
       body.group_by = completionGroupChooser.selected();
     }
   }
-  if (REPORTS[currentReport].needsScale) {
-    body.scale = document.getElementById("cs-scale").value;
-  }
   if (REPORTS[currentReport].needsDate) {
     body.report_date = document.getElementById("report-date").value || null;
     body.week_from = dynRange.from;
@@ -22097,14 +21773,6 @@ function reportRequestBody() {
     body.dyn_mode = document.getElementById("dyn-mode").value;
     // Источник плана — общий с панелью «Статус» (тот же выбор попадает и в XLSX/PDF)
     body.plan_source = sidePlanSource;
-  }
-  if (REPORTS[currentReport].needsPeriod) {
-    body.date_from = document.getElementById("ds-from").value || null;
-    body.date_to = document.getElementById("ds-to").value || null;
-    // Шаг не отправляем, пока пользователь его не выбрал: на первом
-    // открытии его подбирает сервер по ширине периода и возвращает обратно.
-    body.step = deliveryStepChosen ? document.getElementById("ds-step").value : null;
-    body.group_by = deliveryGroupChooser.selected();
   }
   return body;
 }
@@ -22626,7 +22294,7 @@ function renderDynamicsReport(data) {
 //
 // Календарь потребности в поставке: по горизонтали дни/недели/месяцы, по
 // вертикали иерархия, порядок уровней которой задаёт ПОЛЬЗОВАТЕЛЬ. Всё
-// считает сервер (app/report_delivery.py) — здесь только вёрстка таблицы
+// считает сервер (app/report_delivery.py (удалён 2026-10-07)) — здесь только вёрстка таблицы
 // и управление параметрами запроса.
 //
 // Порядок уровней хранится в localStorage: это настройка «как я привык
@@ -22713,30 +22381,9 @@ function createGroupChooser({ containerId, storageKey, allGroups, defaultOn, onC
   return { render, selected: () => groups.filter(g => g.on).map(g => g.key) };
 }
 
-const DS_GROUPS_KEY = "zhbi_delivery_groups";
-const DS_ALL_GROUPS = [
-  { key: "counterparty", label: "Контрагент" },
-  { key: "contract", label: "Контракт" },
-  { key: "zakhvatka", label: "Захватка" },
-  { key: "stance", label: "Стоянка" },
-  { key: "floor", label: "Этаж" },
-  { key: "type", label: "Тип/подтип элемента" },
-  { key: "mark", label: "Марка" },
-];
-const DS_DEFAULT_ON = ["counterparty", "contract", "type"];
-
-// Состав уровней продублирован здесь и в app/report_delivery.GROUPS: список
-// нужен ДО первого ответа сервера (иначе нечего показать и нечего
-// отправить). Ключи и подписи обязаны совпадать — сервер чужие ключи молча
-// отбрасывает, и разошедшийся список выглядел бы как «галочка не работает».
-const deliveryGroupChooser = createGroupChooser({
-  containerId: "ds-groups", storageKey: DS_GROUPS_KEY,
-  allGroups: DS_ALL_GROUPS, defaultOn: DS_DEFAULT_ON, onChange: () => loadReport(),
-});
-
 // «График работ по блокам» — состав уровней продублирован здесь и в
-// app/report_block_schedule.GROUPS (тот же приём и та же оговорка, что у
-// deliveryGroupChooser выше: ключи и подписи обязаны совпадать).
+// app/report_block_schedule.GROUPS (ключи и подписи обязаны совпадать: сервер
+// чужие ключи молча отбрасывает, и разошедшийся список выглядел бы как «галочка не работает»).
 const BSCH_GROUPS_KEY = "zhbi_block_schedule_groups";
 const BSCH_ALL_GROUPS = [
   { key: "track", label: "Трек" },
@@ -22751,217 +22398,6 @@ const blockScheduleGroupChooser = createGroupChooser({
   allGroups: BSCH_ALL_GROUPS, defaultOn: BSCH_DEFAULT_ON, onChange: () => loadReport(),
 });
 document.getElementById("bsch-view").addEventListener("change", loadReport);
-
-// Шаг оси на первом открытии подбирает сервер по ширине периода; как только
-// пользователь выбрал его сам, отправляем выбранное и больше не подменяем.
-let deliveryStepChosen = false;
-
-for (const id of ["ds-from", "ds-to"]) {
-  document.getElementById(id).addEventListener("change", loadReport);
-}
-document.getElementById("ds-step").addEventListener("change", () => {
-  deliveryStepChosen = true;
-  loadReport();
-});
-
-// Три числа ячейки — потребность (по дате начала СМР), план поставки, факт.
-// Классы и подписи берутся из data.scales, приходящего с сервера: порядок
-// и названия шкал заданы в одном месте (app/report_delivery.SCALES).
-const DS_SCALE_CLASS = ["ds-need", "ds-plan", "ds-f"];
-
-function deliveryCellHtml(trio, cls, extraAttr = "", gap = 0) {
-  // Непокрытая потребность (ни план, ни факт не попадают в срок) — заливкой
-  // ячейки, а не четвёртым числом: три числа это шкалы, а подсветка —
-  // ответ на вопрос «где сорвётся», ради которого в отчёт и смотрят.
-  const full = gap ? `${cls} ds-gap` : cls;
-  const title = gap ? ` title="Не перекрыто ${gap} шт: ни плановая поставка, ни факт не попадают в срок"` : "";
-  // Пустая ячейка вместо «0/0/0»: на календаре из сотен колонок нули —
-  // шум, из-за которого не видно самих поставок.
-  if (!trio || !trio.some(v => v)) return `<td class="${full}"${extraAttr}${title}></td>`;
-  const html = trio.map((v, i) => `<span class="${DS_SCALE_CLASS[i]}">${v || 0}</span>`)
-    .join('<span class="ds-sep">/</span>');
-  return `<td class="${full}"${extraAttr}${title}>${html}</td>`;
-}
-
-const deliveryColClass = (col) =>
-  col.kind === "edge" ? "ds-edge" : (col.weekend ? "ds-weekend" : "");
-
-// Путь строки в сырых значениях уровней (gkey) — им адресуется ячейка при
-// наведении. Держим отдельным массивом, а не в data-атрибуте: значения
-// бывают составными (пара «тип, подтип»), и в атрибуте это был бы JSON в
-// разметке на каждой строке.
-let deliveryRowPaths = [];
-
-function renderDeliveryReport(data) {
-  const columns = data.columns;
-  deliveryRowPaths = [];
-  const head = `<thead><tr>
-    <th class="ds-name">${escapeHtml(data.root_label)}</th>
-    ${columns.map(c => `<th class="${deliveryColClass(c)}"${c.title ? ` title="${escapeHtml(c.title)}"` : ""}>${escapeHtml(c.label)}</th>`).join("")}
-    <th class="ds-sum">${escapeHtml(data.total_label)}</th>
-  </tr></thead>`;
-
-  const parts = [];
-  const walk = (node, path, gpath) => {
-    const collapsed = reportCollapsed.has(path);
-    const kids = node.children && node.children.length;
-    const toggle = `<button class="report-toggle${kids ? "" : " empty"}" data-path="${escapeHtml(path)}">${collapsed ? "▸" : "▾"}</button>`;
-    const rowIndex = deliveryRowPaths.push(gpath) - 1;
-    parts.push(`<tr class="lvl-${node.level}" data-row="${rowIndex}">
-      <td class="ds-name" style="padding-left:${4 + node.level * 14}px" title="${escapeHtml(node.label)}" data-label="${escapeHtml(node.label)}">${toggle}${escapeHtml(node.label)}</td>
-      ${columns.map(c => deliveryCellHtml(node.values[c.key], deliveryColClass(c), ` data-col="${escapeHtml(c.key)}"`, (node.gaps || {})[c.key] || 0)).join("")}
-      ${deliveryCellHtml(node.total, "ds-sum", "", node.gap_total || 0)}</tr>`);
-    if (collapsed) return;
-    for (const child of node.children || []) walk(child, `${path}/${child.label}`, gpath.concat([child.gkey]));
-  };
-  for (const row of data.rows) walk(row, row.label, [row.gkey]);
-
-  const t = data.total;
-  parts.push(`<tr class="ds-total">
-    <td class="ds-name">${escapeHtml(t.label)}</td>
-    ${columns.map(c => deliveryCellHtml(t.values[c.key], deliveryColClass(c), "", (t.gaps || {})[c.key] || 0)).join("")}
-    ${deliveryCellHtml(t.total, "ds-sum", "", t.gap_total || 0)}</tr>`);
-
-  const legend = data.scales
-    .map((s, i) => `<span class="${DS_SCALE_CLASS[i]}">${escapeHtml(s.label.toLowerCase())}</span> — ${escapeHtml(s.hint)}`)
-    .join(" · ");
-  // Подпись и предупреждение приходят с сервера готовым текстом — тем же,
-  // что попадёт в Excel и PDF (см. app/report_delivery.py).
-  return `<div class="hint-text" style="margin-bottom:2px">${escapeHtml(data.subtitle)}</div>
-    <div class="hint-text" style="margin-bottom:6px">${legend}. <span class="ds-gap-legend">Розовым</span> — потребность не перекрыта: ни плановая поставка, ни факт не попадают в срок (всего ${data.total.gap_total || 0} изд.). Наведите на ячейку — разбор по маркам.</div>
-    ${data.warning ? `<div class="dyn-warn">${escapeHtml(data.warning)}</div>` : ""}
-    <div class="ds-wrap"><table id="ds-table" class="cal-table">${head}<tbody>${parts.join("")}</tbody></table></div>`;
-}
-
-// ---------- подсказка по ячейке: чего не хватает и откуда переставить ----------
-//
-// Разбор считает сервер отдельным запросом (см. app/report_delivery.
-// build_delivery_cell_detail): на реальном файле это тысячи троек «строка ×
-// колонка × марка», и в тело отчёта они не помещаются. Отсюда — задержка
-// перед запросом (курсор проезжает по десяткам ячеек) и кэш на время
-// показа отчёта: один и тот же разбор дважды не запрашивается.
-const DS_TIP_DELAY_MS = 350;
-// Подсказка обрезается по высоте экрана, поэтому показывается лишь
-// верхушка разбора; сервер отдаёт марки, отсортированные по дефициту.
-const DS_TIP_MAX_MARKS = 4;
-const DS_TIP_MAX_SOURCES = 3;
-const dsTooltip = document.getElementById("ds-tooltip");
-let dsTipTimer = null;
-let dsTipCache = new Map();
-let dsTipRequestId = 0;
-let dsTipCell = null;
-
-function hideDeliveryTip() {
-  clearTimeout(dsTipTimer);
-  dsTipTimer = null;
-  dsTipCell = null;
-  dsTipRequestId++;   // ответ на уже покинутую ячейку показывать нельзя
-  dsTooltip.style.display = "none";
-}
-
-// Последнее положение курсора: подсказка показывается через задержку и
-// после ответа сервера, к этому моменту координаты из события наведения
-// уже устарели бы.
-let dsTipPos = { clientX: 0, clientY: 0 };
-
-function placeDeliveryTip() {
-  dsTooltip.style.display = "block";
-  // Размеры берём в следующем кадре, а не сразу после присвоения
-  // innerHTML: замер «по горячим следам» один раз уже вернул высоту
-  // ПРЕДЫДУЩЕГО содержимого, и подсказка на пол-экрана уехала за нижний
-  // край. Итоговое прижатие к границам окна — страховка на тот же случай.
-  requestAnimationFrame(() => {
-    const h = dsTooltip.offsetHeight, w = dsTooltip.offsetWidth;
-    const maxY = Math.max(8, window.innerHeight - h - 8);
-    const maxX = Math.max(8, window.innerWidth - w - 8);
-    const below = dsTipPos.clientY + 18;
-    const y = below + h > window.innerHeight ? dsTipPos.clientY - h - 12 : below;
-    dsTooltip.style.left = `${Math.min(Math.max(8, dsTipPos.clientX + 14), maxX)}px`;
-    dsTooltip.style.top = `${Math.min(Math.max(8, y), maxY)}px`;
-  });
-}
-
-function deliveryTipHtml(detail, rowLabel) {
-  if (!detail.marks.length) {
-    return `<div class="dst-head">${escapeHtml(rowLabel)} · ${escapeHtml(detail.column_label)}</div>
-      <div class="dst-more">нет изделий</div>`;
-  }
-  const parts = [`<div class="dst-head">${escapeHtml(rowLabel)} · ${escapeHtml(detail.column_label)}</div>`];
-  for (const m of detail.marks.slice(0, DS_TIP_MAX_MARKS)) {
-    parts.push(`<div class="dst-mark"><span class="dst-name">${escapeHtml(m.mark)}</span>: ` +
-      `потребность ${m.need}, план ${m.plan}, факт ${m.fact}</div>`);
-    if (!m.deficit) continue;
-    parts.push(`<div class="dst-lack">не перекрыто ${m.deficit} шт (ни план, ни факт не попадают в срок)` +
-      (m.total_need > m.need ? `; всего требуется на эту дату по объекту: ${m.total_need}` : "") + `</div>`);
-    if (!m.sources.length) {
-      parts.push(`<div class="dst-src">переставить неоткуда: свободных изделий этой марки на площадке нет</div>`);
-      continue;
-    }
-    parts.push(`<div class="dst-src">можно переставить (${escapeHtml(detail.available_status_label)}):</div>`);
-    for (const s of m.sources.slice(0, DS_TIP_MAX_SOURCES)) {
-      parts.push(`<div class="dst-src${s.urgent ? " urgent" : ""}">• ${escapeHtml(s.where)} — ${s.count} шт` +
-        (s.earliest_need ? `, свой срок ${formatDateRu(s.earliest_need)}${s.urgent ? " (не позже этой даты!)" : ""}` : "") +
-        `</div>`);
-    }
-    if (m.sources.length > DS_TIP_MAX_SOURCES) {
-      parts.push(`<div class="dst-more">…ещё мест: ${m.sources.length - DS_TIP_MAX_SOURCES}</div>`);
-    }
-  }
-  if (detail.marks.length > DS_TIP_MAX_MARKS) {
-    parts.push(`<div class="dst-more">…ещё марок: ${detail.marks.length - DS_TIP_MAX_MARKS} (показаны с наибольшей нехваткой)</div>`);
-  }
-  return parts.join("");
-}
-
-async function showDeliveryTip(cell) {
-  const tr = cell.closest("tr");
-  const col = cell.dataset.col;
-  const rowIndex = Number(tr.dataset.row);
-  const path = deliveryRowPaths[rowIndex];
-  if (!path || col === undefined) return;
-  // Подпись берём из data-label, а не из текста ячейки: в тексте первым
-  // идёт значок «▾» кнопки сворачивания.
-  const rowLabel = tr.querySelector(".ds-name").dataset.label || "";
-  const key = `${rowIndex}|${col}`;
-  const my = ++dsTipRequestId;
-
-  let detail = dsTipCache.get(key);
-  if (!detail) {
-    dsTooltip.innerHTML = `<div class="dst-more">Считаем разбор по маркам…</div>`;
-    placeDeliveryTip();
-    try {
-      detail = await api("/reports/delivery-schedule/cell", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...reportRequestBody(), path, column: col }),
-      });
-    } catch (e) {
-      if (my !== dsTipRequestId) return;
-      dsTooltip.innerHTML = `<div class="dst-lack">${escapeHtml(e.message)}</div>`;
-      placeDeliveryTip();
-      return;
-    }
-    dsTipCache.set(key, detail);
-  }
-  if (my !== dsTipRequestId) return;   // курсор уже ушёл на другую ячейку
-  dsTooltip.innerHTML = deliveryTipHtml(detail, rowLabel);
-  placeDeliveryTip();
-}
-
-document.getElementById("report-body").addEventListener("mouseover", (e) => {
-  const cell = e.target.closest("#ds-table td[data-col]");
-  if (!cell) { if (dsTipCell) hideDeliveryTip(); return; }
-  if (cell === dsTipCell) return;
-  hideDeliveryTip();
-  dsTipCell = cell;
-  dsTipTimer = setTimeout(() => showDeliveryTip(cell), DS_TIP_DELAY_MS);
-});
-document.getElementById("report-body").addEventListener("mousemove", (e) => {
-  dsTipPos = { clientX: e.clientX, clientY: e.clientY };
-});
-document.getElementById("report-body").addEventListener("mouseleave", hideDeliveryTip);
-// Прокрутка таблицы курсором не отслеживается — подсказка осталась бы
-// висеть над чужой ячейкой.
-document.getElementById("report-body").addEventListener("scroll", hideDeliveryTip, true);
 
 // ======== отчёт «Статус комплектации» (живой запрос 2026-08-03) ========
 //
@@ -23389,19 +22825,6 @@ async function loadReport() {
       // открытии их выбирает не пользователь, а форма (текущий день).
       document.getElementById("mw-from").value = reportData.date_from || "";
       document.getElementById("mw-to").value = reportData.date_to || "";
-    } else if (def.needsPeriod) {
-      // Разборы ячеек считались для ПРЕЖНИХ параметров — держать их
-      // дальше значило бы показывать чужие числа под новой таблицей.
-      dsTipCache = new Map();
-      hideDeliveryTip();
-      const [need, plan, fact] = reportData.total.total;
-      statusLine.textContent =
-        `Потребность: ${need}, план поставки: ${plan}, поставлено: ${fact}`;
-      // Период и шаг подставляем фактически применёнными: на первом
-      // открытии их выбирает сервер (весь срок проекта, шаг по ширине).
-      document.getElementById("ds-from").value = reportData.date_from;
-      document.getElementById("ds-to").value = reportData.date_to;
-      document.getElementById("ds-step").value = reportData.step;
     } else if (def.needsAnalytics) {
       // Горизонты и дату подставляем фактически применёнными: и то, и другое
       // мог подставить сервер (пустое поле = сегодня, умолчание месяц).
@@ -23439,15 +22862,6 @@ async function loadReport() {
         : "Запланированных работ ещё нет — «Настройки» в панели блока";
     } else if (def.linearTrack) {
       statusLine.textContent = `Позиций: ${reportData.count}`;
-    } else if (def.needsScale) {
-      // «График контрактации»: главное число — не «сколько изделий», а
-      // разрыв между потребностью и контрактами. Его и выносим в строку
-      // состояния, чтобы ответ был виден до прокрутки таблицы.
-      const т = reportData.totals;
-      statusLine.textContent =
-        `Марок: ${reportData.rows.length}. Потребность: ${т.need}, законтрактовано: ${т.contracted}` +
-        (т.deficit > 0 ? `, не хватает: ${т.deficit}` : ", потребность закрыта полностью") +
-        `. План поставки: ${т.planned}, факт: ${т.fact}`;
     } else {
       statusLine.textContent = reportData.total
         ? `Всего изделий: ${reportData.total.values.total}`
@@ -23481,8 +22895,6 @@ async function switchReport(key) {
   document.getElementById("report-date-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-period-box").style.display = REPORTS[key].needsDate ? "" : "none";
   document.getElementById("report-dyn-mode-box").style.display = REPORTS[key].needsDate ? "" : "none";
-  document.getElementById("report-delivery-box").style.display = REPORTS[key].needsPeriod ? "" : "none";
-  document.getElementById("report-contracting-box").style.display = REPORTS[key].needsScale ? "" : "none";
   document.getElementById("report-work-box").style.display = REPORTS[key].needsWorkPeriod ? "" : "none";
   document.getElementById("report-analytics-box").style.display = REPORTS[key].needsAnalytics ? "" : "none";
   document.getElementById("report-block-status-box").style.display =
@@ -23499,10 +22911,9 @@ async function switchReport(key) {
   // без этого переход по вкладке молча менял бы отбор соседних отчётов.
   document.getElementById("report-use-filter").checked = key in reportUseFilter
     ? reportUseFilter[key] : !!REPORTS[key].useFilterByDefault;
-  // «Моей работе» ширина нужна не меньше, чем «Графику поставки»: шесть
-  // колонок, две из которых — свободный текст «было/стало».
+  // «Моей работе» нужна ширина: шесть колонок, две из которых — свободный текст «было/стало».
   reportsBackdrop.querySelector(".modal").classList.toggle(
-    "report-full", !!(REPORTS[key].needsPeriod || REPORTS[key].needsWorkPeriod || REPORTS[key].wide));
+    "report-full", !!(REPORTS[key].needsWorkPeriod || REPORTS[key].wide));
   if (REPORTS[key].needsBlockSchedule) blockScheduleGroupChooser.render();
   if (REPORTS[key].needsAnalytics) {
     // Дата и горизонт заполняются один раз: вернувшись на вкладку, человек
@@ -23524,7 +22935,6 @@ async function switchReport(key) {
     document.getElementById("cmp-view").value = completionView;
     updateCompletionControls();
   }
-  if (REPORTS[key].needsPeriod) deliveryGroupChooser.render();
   if (REPORTS[key].needsWorkPeriod) {
     // Период по умолчанию — текущий день (живой запрос). Заполняется один
     // раз: вернувшись на вкладку, человек ожидает увидеть свой выбор, а не
@@ -23687,34 +23097,7 @@ for (const id of ["mw-from", "mw-to", "mw-user"]) {
   document.getElementById(id).addEventListener("change", loadReport);
 }
 
-// Масштаб оси — перезапрос: периоды считает сервер. Фильтр «только дефицит»
-// — перерисовка без запроса: данные те же, меняется набор показанных строк.
-document.getElementById("cs-scale").addEventListener("change", () => {
-  csShownRows = 0;   // при другом масштабе в бюджет ячеек влезает другое число строк
-  loadReport();
-});
-document.getElementById("cs-only-deficit").addEventListener("change", () => {
-  csShownRows = 0;
-  if (currentReport === "contracting" && reportData) {
-    document.getElementById("report-body").innerHTML = renderContractingReport(reportData);
-  }
-});
-
 document.getElementById("report-body").addEventListener("click", (e) => {
-  // Разворот марки в расшифровку по контрактации.
-  if (e.target.id === "cs-more") {
-    const периодов = reportData.periods.length;
-    csShownRows += Math.max(20, Math.floor(CS_CELL_BUDGET / Math.max(периодов, 1)));
-    document.getElementById("report-body").innerHTML = renderContractingReport(reportData);
-    return;
-  }
-  const переключатель = e.target.closest(".cs-toggle");
-  if (переключатель) {
-    const ключ = переключатель.closest("[data-cs-key]").dataset.csKey;
-    if (csExpanded.has(ключ)) csExpanded.delete(ключ); else csExpanded.add(ключ);
-    document.getElementById("report-body").innerHTML = renderContractingReport(reportData);
-    return;
-  }
   if (e.target.classList.contains("dyn-edit")) {
     openReportNotes(document.getElementById("report-date").value || null);
     return;
@@ -23748,12 +23131,6 @@ document.getElementById("menu-report-dynamics").addEventListener("click", () => 
   showBackToReport(false);
   switchReport("dynamics");
 });
-document.getElementById("menu-report-delivery").addEventListener("click", () => {
-  reportsBackdrop.classList.add("open");
-  applyReportSize();
-  showBackToReport(false);
-  switchReport("delivery");
-});
 document.getElementById("menu-report-completion").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");
   applyReportSize();
@@ -23765,12 +23142,6 @@ document.getElementById("menu-report-mywork").addEventListener("click", () => {
   applyReportSize();
   showBackToReport(false);
   switchReport("mywork");
-});
-document.getElementById("menu-report-contracting").addEventListener("click", () => {
-  reportsBackdrop.classList.add("open");
-  applyReportSize();
-  showBackToReport(false);
-  switchReport("contracting");
 });
 document.getElementById("menu-report-analytics").addEventListener("click", () => {
   reportsBackdrop.classList.add("open");

@@ -130,13 +130,6 @@ REPLACED_BY = {
         "(app/settings_import.py; write-gate.js: settings.analyze/settings.apply); старый одношаговый "
         "`POST /settings/import` сохранён для V1 (поведение не менялось, там же добавлена атомарность записи), "
         "но интерфейс V2 его не вызывает — exchange-settings.js вызывает только .../analyze и .../apply."),
-    "POST /reports/delivery-schedule/cell": (
-        None,
-        "тот же маршрут уже вызывается из V2 (app/static/v2/reports-exchange.js — атрибут `data-gkeys` кликабельной "
-        "ячейки листовой строки; app/static/v2/read-screen.js — обработчик клика, `api.readPost(`${sec.endpoint}/cell`, ...)`); "
-        "живьём проверено: щелчок по развёрнутой ячейке шлёт запрос и открывает диалог разбора по маркам "
-        "(разовая проверка сессии, не сохранена файлом). Генератор не разобрал вызов — путь собран из поля объекта "
-        "(`sec.endpoint`), а не строкового литерала."),
     "GET /zones": (
         None,
         "тот же маршрут уже вызывается из V2 (app/static/v2/zones-edit.js: `api.get(`${spec.endpoint}?${q}`)`, "
@@ -1915,7 +1908,6 @@ RULES = [
     (r"^/admin/(backups|disk-space)", None, S_SVC, "admin", "backups"),
     (r"^/admin/db-status", None, S_SVC, "admin", "db-status"),
     (r"^/admin/db-transfer", None, S_SVC, "admin", None),
-    (r"^/admin/fill-empty-scope", None, S_SVC, "admin", "fill-scope"),
     (r"^/admin/reset-status-history(/preview)?$", None, S_SVC, "admin", "reset-history"),
     (r"^/activity", None, S_SVC, "admin", "activity"),
     (r"^/admin-guide", None, S_SVC, "admin", "admin-guide"),
@@ -1940,8 +1932,8 @@ DICT_KIND_RULES = {
 TECH_PATHS = {"/", "/v2", "/health", "/login", "/logout", "/login-users", "/app-build", "/me", "/me/permissions", "/me/last-object"}
 TECH_ROUTES = {"POST /activity"}      # пачка клиентских событий (телеметрия): пользователь её не вызывает
 
-REPORT_SCREEN = {"status": "report-status", "dynamics": "report-dynamics", "delivery-schedule": "report-delivery",
-                 "completion": "report-completion", "my-work": "report-mywork", "contracting-schedule": "report-contracting",
+REPORT_SCREEN = {"status": "report-status", "dynamics": "report-dynamics",
+                 "completion": "report-completion", "my-work": "report-mywork",
                  "analytics": "report-analytics", "block-status": "report-block-status", "block-schedule": "report-block-schedule",
                  "linear-track": "report-linear-track"}
 IMPORT_SCREEN = {"/import-dxf": "upload-drawing", "/import-pdf": "pdf-import", "/import-revit": "revit-import",
@@ -2365,7 +2357,7 @@ SCENE_DATA_RE = re.compile(r"^(/plan-data|/changes|/source-files|/elements/chang
                            r"/objects/\{[^}]+\}/(grids|plan-images|plan-images/\{[^}]+\}\.png|blocks/geometry|blocks/planning-tracks|blocks/\{[^}]+\}/card|"
                            r"external-models|external-models/\{[^}]+\}/content))$")
 READ_POST_RE = re.compile(r"^/reports/|^/export\.|/export$|/export\.(xlsx|pdf)$|^/plan-data$|^/elements/changed$|^/schedule-versions/deviation$|"
-                          r"/chess-flat-export|^/ldap-search$|^/reports/delivery-schedule/cell$|"
+                          r"/chess-flat-export|^/ldap-search$|"
                           # предпросмотры (считают последствия, ничего не пишут) — вызываются через api.readPost(), не через
                           # запись, значит write-gate.js POLICY им не нужен (app/static/v2/api.js: request(), read:true пропускает
                           # checkWrite целиком); без этой строки ANALYZE_RE ловил бы «…/preview» effect=analyze и генератор ошибочно
@@ -2778,8 +2770,8 @@ def fallback_scenario(r):
     return f"{verb}: {noun}"
 
 
-REPORT_NAMES = {"status": "Статус монтажа", "dynamics": "Динамика поставки и монтажа", "delivery-schedule": "График поставки",
-                "completion": "Статус комплектации", "my-work": "Моя работа", "contracting-schedule": "График контрактации и поставки",
+REPORT_NAMES = {"status": "Статус монтажа", "dynamics": "Динамика поставки и монтажа",
+                "completion": "Статус комплектации", "my-work": "Моя работа",
                 "analytics": "Аналитическая справка", "block-status": "Учёт по блокам: статусы", "block-schedule": "График работ по блокам",
                 "linear-track": "Линейный трек"}
 DICT_ACTION_RU = {"candidates": "Кандидаты для замены записи справочника", "delete-plan": "План последствий удаления записи справочника",

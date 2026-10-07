@@ -37,33 +37,15 @@ try {
   const deny = await b.eval(`(async()=>{const r=await fetch('/reports/completion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({object_id:3,view:'pivot'})}); const r2=await fetch('/reports/contracting-schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({object_id:3})}); return [r.status, r2.status];})()`);
   check("user4: объект вне доступа (проект 2) — сервер отвечает 403 обоим отчётам", deny[0] === 403 && deny[1] === 403, JSON.stringify(deny));
 
-  // ---- «График контрактации» с фильтром схемы под user4 ----
-  const { snap } = await v2ExcludeFirstStatus(b, openScreen);
-  await openScreen(b, "report-contracting", `!!document.querySelector('#rd-report table.v2-cs-tbl')`);
-  from = b.requests.length;
-  await clickEl(b, `document.getElementById('rd-use-filter')`);
-  req = await waitReq(b, /\/reports\/contracting-schedule$/, from);
-  await b.waitFor(`!!document.querySelector('#rd-report table.v2-cs-tbl') && document.getElementById('rd-use-filter').checked`, 30000);
-  const d = await responseJson(b, req);
-  check("user4: «График контрактации» с отбором — 200, сужен (element_filter)", req.status === 200 && d.element_filter?.elements > 0 && (body(req).element_ids || []).length === snap.elementIds.length, JSON.stringify(d.element_filter));
-  acts = await actions(b);
-  const allowedCs = new Set(["Обновить", "Открыть в текущем интерфейсе →", "Печать", "Справка", "Учитывать текущий фильтр схемы", "Только марки с дефицитом", "Показать ещё"]);
-  const extraCs = acts.filter((a) => !allowedCs.has(a) && !/^[▸▾]/.test(a));
-  check("user4, «График контрактации»: лишних действий нет", extraCs.length === 0, extraCs.length ? `лишнее: ${extraCs.slice(0, 5).join(" | ")}` : `действий ${acts.length}`);
-
   // ---- раскладка ----
   for (const [w, h] of [[1920, 1080], [1366, 768]]) {
     await b.viewport(w, h);
     await sleep(400);
-    let m = await metrics(b);
-    check(`${w}×${h} «График контрактации» (с отбором): страница не прокручивается целиком, таблица — в своей области`, noScroll(m) && m.wrap?.ownScroll, JSON.stringify(m));
-    await b.shot(`${SHOTS}/contracting-${w}.png`);
     await openScreen(b, "report-completion", `!!document.querySelector('#rd-report table.v2-cmp-pivot')`);
     await sleep(400);
-    m = await metrics(b);
+    let m = await metrics(b);
     check(`${w}×${h} «Статус комплектации», сводная: страница не прокручивается целиком, таблица — в своей области`, noScroll(m) && m.wrap?.ownScroll, JSON.stringify(m));
     await b.shot(`${SHOTS}/pivot-${w}.png`);
-    await openScreen(b, "report-contracting", `!!document.querySelector('#rd-report table.v2-cs-tbl')`);
   }
   check("нет ошибок JavaScript", b.exceptions.length === 0, b.exceptions.slice(0, 3).join("; "));
 } catch (e) {

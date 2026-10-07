@@ -149,7 +149,6 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
   let dead = false;
   let active = 0;
   let editor = null; // открытая карточка строки (правка запланированной работы)
-  let deliveryCellsBound = false; // обработчики разбора ячейки «Графика поставки» уже на #rd-body (см. paintReport)
   const canEditRows = (sec) => !!sec.rowEdit && (!!rights?.system_admin || rights?.features?.[sec.rowEdit.feature] === "write");
   // Отчёт с правкой ячейки прямо в таблице (mfr2: «Учёт по блокам: статусы») — право записи берётся из своего раздела
   // (`writeFeature`, обычно "work_progress"), НЕ из права на сам отчёт (`report_block_status`) — так же, как в V1.
@@ -571,36 +570,6 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
         await showInfoDialog(`Не удалось получить справку: ${errorText(err)}`);
       } finally { btn.disabled = false; }
     });
-    // «График поставки»: разбор ячейки по маркам (POST /reports/delivery-schedule/cell) — делегирование на постоянный
-    // контейнер (таблица перерисовывается при сворачивании строк), тот же приём, что у наведения в V1. Вешается ОДИН раз
-    // на экран (reports2): прежде каждый показ отчёта добавлял ещё пару обработчиков на тот же #rd-body, и после смены шага
-    // один щелчок по ячейке слал два запроса разбора и открывал два окна. Состояние (s, параметры) читается в момент щелчка.
-    if (sec.report === "delivery" && !deliveryCellsBound) {
-      deliveryCellsBound = true;
-      bodyEl.addEventListener("keydown", (e) => {
-        if ((e.key === "Enter" || e.key === " ") && e.target.closest("[data-gkeys]")) { e.preventDefault(); e.target.click(); }
-      });
-      bodyEl.addEventListener("click", async (e) => {
-        const cell = e.target.closest("[data-gkeys]");
-        if (!cell) return;
-        const gkeys = JSON.parse(cell.dataset.gkeys);
-        const column = cell.dataset.col;
-        cell.setAttribute("aria-busy", "true");
-        try {
-          // разбор ячейки требует ТЕ ЖЕ даты/шаг, что уже построили показанный отчёт — сервер их не подставляет сам
-          // (в отличие от самого отчёта): берём применённые сервером значения (s.data), если человек их не менял (s.params).
-          const cellBody = { ...reportBody(sec, s), date_from: s.params.date_from ?? s.data?.date_from, date_to: s.params.date_to ?? s.data?.date_to, step: s.params.step ?? s.data?.step, path: gkeys, column };
-          const detail = await api.readPost(`${sec.endpoint}/cell`, cellBody);
-          const rows = (detail.marks || []).map((r) => {
-            const src = (r.sources || []).map((so) => `${so.where}: ${so.count}${so.urgent ? " (спешно — свой срок не позже этой даты)" : ""}`).join("; ");
-            return `${r.mark}: нужно ${r.need}, план ${r.plan}, факт ${r.fact}${r.deficit ? `, НЕ ПЕРЕКРЫТО ${r.deficit} (всего к дате нужно ${r.total_need})` : ""}${src ? `\n  можно взять: ${src}` : (r.deficit ? "\n  взять негде — нет доставленных, не смонтированных изделий этой марки" : "")}`;
-          });
-          await showInfoDialog(`Разбор ячейки «${detail.column_label || column}» по маркам\n\n${rows.length ? rows.join("\n\n") : "По этой ячейке нечего показать."}`);
-        } catch (err) {
-          await showInfoDialog(`Не удалось разобрать ячейку: ${errorText(err)}`);
-        } finally { cell.removeAttribute("aria-busy"); }
-      });
-    }
     const repaint = (focusPath) => {
       ctx.data = s.data;
       bodyEl.querySelector("#rd-report").innerHTML = render(s.data, s.rs, ctx);

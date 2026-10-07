@@ -165,20 +165,14 @@ from app.input_import import import_input_dxf, import_input_xlsx, list_input_fil
 from app.reports import (
     build_dynamics_report, build_dynamics_report_pdf, build_dynamics_report_xlsx,
     build_status_report, build_status_report_pdf, build_status_report_xlsx,
-    in_development_title,
 )
 from app.report_analytics import (
     TITLE as ANALYTICS_TITLE, DEFAULT_HORIZON_DAYS as ANALYTICS_DEFAULT_HORIZON_DAYS,
     HORIZONS as ANALYTICS_HORIZONS,
     build_analytics_report, build_analytics_report_pdf, build_analytics_report_xlsx,
 )
-from app.report_contracting import build_contracting_schedule
 from app.report_completion import (
     build_completion_report, build_completion_report_pdf, build_completion_report_xlsx,
-)
-from app.report_delivery import (
-    IN_DEVELOPMENT as DELIVERY_IN_DEVELOPMENT, build_delivery_cell_detail,
-    build_delivery_schedule_pdf, build_delivery_schedule_report, build_delivery_schedule_xlsx,
 )
 from app.report_pivot import (
     VIEW_PIVOT, build_completion_pivot, build_completion_pivot_pdf,
@@ -241,7 +235,6 @@ from app.admin_guide import router as admin_guide_router
 from app.training import router as training_router
 from app.db_status import router as db_status_router
 from app.db_status import table_bytes as db_status_table_bytes
-from app.fill_scope import router as fill_scope_router
 from app.ldap_auth import router as ldap_router
 from app.release_tasks import router as release_tasks_router
 from app.rights_matrix import router as rights_matrix_router
@@ -462,7 +455,6 @@ app.include_router(training_router)
 app.include_router(db_status_router)
 app.include_router(kladr_router)
 app.include_router(project_map_router)
-app.include_router(fill_scope_router)
 app.include_router(contracts_router)
 app.include_router(supplier_change_router)
 app.include_router(team_access_router)
@@ -1716,7 +1708,7 @@ class ReportRequestIn(BaseModel):
     # склеились бы молча.
     date_scale: Optional[str] = None
     # Для «Графика поставки»: период календаря, шаг оси и ПОРЯДОК уровней
-    # группировки (его задаёт пользователь, см. app/report_delivery.py).
+    # группировки (его задаёт пользователь, см. app/report_delivery.py (удалён 2026-10-07, история в git)).
     # Сводная «Статуса комплектации» берёт отсюда же `step` и `group_by` —
     # это один и тот же вопрос «как разложить», а не два разных.
     # Пусто = сервер подставит свои значения и вернёт применённые.
@@ -1976,32 +1968,6 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.post("/reports/contracting-schedule")
-def report_contracting_schedule(body: ReportRequestIn,
-                                user: sqlite3.Row = Depends(get_current_user)):
-    """Отчёт «График контрактации и поставки» (2026-08-06): насколько
-    потребность стройки закрыта контрактами — по маркам и во времени.
-
-    Масштаб оси времени приходит в `scale` (день/неделя/месяц/квартал) — это
-    только группировка колонок, сами данные от него не зависят.
-    """
-    conn = get_connection()
-    try:
-        body = _guard_report(conn, user, body, "report_contracting")
-        object_id = _report_object_id(conn, body)
-        if object_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Отчёт строится по объекту — выберите объект в тулбаре")
-        # Доступ проверен _guard_report по source_file; объект берётся из
-        # него же, поэтому чужой сюда не пройдёт. element_ids (фильтр схемы)
-        # _guard_report проверил тоже — по объектам самих элементов.
-        return build_contracting_schedule(conn, object_id, body.scale or "month",
-                                          body.element_ids)
-    finally:
-        conn.close()
-
-
 def _analytics(conn, user, body: ReportRequestIn) -> dict:
     """Общая часть трёх эндпоинтов справки: проверка доступа, объект и
     расчёт. Экран, XLSX и PDF обязаны строиться из ОДНОГО результата.
@@ -2134,131 +2100,6 @@ def report_completion_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get
                                      "Статус комплектации (сводная).pdf", "application/pdf")
     return _report_file_response(build_completion_report_pdf(report, subtitle),
                                  "Статус комплектации.pdf", "application/pdf")
-
-
-def _delivery_schedule(conn, user, body: "ReportRequestIn") -> dict:
-    """Общая точка для экрана, XLSX и PDF «Графика поставки». ValueError
-    (слишком много календарных колонок) — это ошибка ЗАПРОСА, а не сбой:
-    отдаём 400 с текстом, который уже объясняет, что сделать.
-
-    Проверка доступа тоже ЗДЕСЬ, а не в каждом из трёх роутов: три копии
-    одной проверки — это ровно та схема, при которой забытая четвёртая
-    открывает отчёт целиком (аудит безопасности 2026-08-03)."""
-    body = _guard_report(conn, user, body, "report_delivery")
-    try:
-        report = build_delivery_schedule_report(
-            conn, body.source_file, body.element_ids,
-            body.date_from, body.date_to, body.step, body.group_by)
-        object_id = _report_object_id(conn, body)
-        if object_id is None:
-            if conn.execute(
-                "SELECT 1 FROM crane_zone_versions WHERE kind = 'published' LIMIT 1"
-            ).fetchone():
-                raise ValueError(
-                    "После корректировки зон график строится по одному объекту. "
-                    "Выберите объект в шапке."
-                )
-            return report
-        if not conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
-            (object_id,),
-        ).fetchone():
-            return report
-        version = crane_zone_period_version(
-            conn, object_id, report["date_from"], report["date_to"],
-        )
-        with historical_zone_overlay(conn, version, report["date_to"]):
-            return build_delivery_schedule_report(
-                conn, body.source_file, body.element_ids,
-                body.date_from, body.date_to, body.step, body.group_by,
-            )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.post("/reports/delivery-schedule")
-def report_delivery_schedule(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
-    """Отчёт «График поставки» — календарь потребности в поставке по дате
-    начала СМР против фактической поставки."""
-    conn = get_connection()
-    try:
-        return _delivery_schedule(conn, user, body)
-    finally:
-        conn.close()
-
-
-class DeliveryCellIn(ReportRequestIn):
-    """Адрес ячейки «Графика поставки» для подсказки при наведении.
-    path — СЫРЫЕ значения уровней группировки (`gkey` узлов отчёта), по
-    одному на каждый уровень group_by; column — ключ колонки календаря."""
-    path: list = []
-    column: Optional[str] = None
-
-
-@app.post("/reports/delivery-schedule/cell")
-def report_delivery_schedule_cell(body: DeliveryCellIn,
-                                  user: sqlite3.Row = Depends(get_current_user)):
-    """Разбор одной ячейки по маркам: чего не хватает и откуда это можно
-    переставить. Отдельным запросом при наведении, а не в теле отчёта — на
-    реальном файле это тысячи троек «строка × колонка × марка»."""
-    conn = get_connection()
-    try:
-        body = _guard_report(conn, user, body, "report_delivery")
-        object_id = _report_object_id(conn, body)
-        version = None
-        if object_id is not None and conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE object_id = ? AND kind = 'published'",
-            (object_id,),
-        ).fetchone():
-            if not body.date_from or not body.date_to:
-                raise ValueError("Не задан период отчёта")
-            version = crane_zone_period_version(conn, object_id, body.date_from, body.date_to)
-        elif object_id is None and conn.execute(
-            "SELECT 1 FROM crane_zone_versions WHERE kind = 'published' LIMIT 1"
-        ).fetchone():
-            raise ValueError("Выберите один объект для разбора графика после корректировки зон")
-        def build_cell():
-            return build_delivery_cell_detail(
-                conn, body.source_file, body.element_ids, body.date_from, body.date_to,
-                body.step, body.group_by, body.path, body.column)
-        if version is not None:
-            with historical_zone_overlay(conn, version, body.date_to):
-                return build_cell()
-        return build_cell()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    finally:
-        conn.close()
-
-
-def _delivery_file_base() -> str:
-    """Имя выгружаемого файла «Графика поставки» — с пометкой «(в разработке)»,
-    пока признак стоит. Файл живёт дольше экрана и уходит из системы: пометка
-    обязана быть видна и в имени, а не только внутри."""
-    return in_development_title("График поставки", DELIVERY_IN_DEVELOPMENT)
-
-
-@app.post("/reports/delivery-schedule.xlsx")
-def report_delivery_schedule_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
-    conn = get_connection()
-    try:
-        report = _delivery_schedule(conn, user, body)
-    finally:
-        conn.close()
-    return _report_file_response(
-        build_delivery_schedule_xlsx(report), f"{_delivery_file_base()}.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
-@app.post("/reports/delivery-schedule.pdf")
-def report_delivery_schedule_pdf(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
-    conn = get_connection()
-    try:
-        report = _delivery_schedule(conn, user, body)
-    finally:
-        conn.close()
-    return _report_file_response(build_delivery_schedule_pdf(report),
-                                 f"{_delivery_file_base()}.pdf", "application/pdf")
 
 
 def _block_schedule(conn, user, body: "ReportRequestIn") -> dict:
