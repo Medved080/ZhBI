@@ -23851,11 +23851,11 @@ const SIDE_REPORTS_DEBOUNCE_MS = 250;
 // Источник плана для «Статуса монтажа» (версия 2) и «Динамики» (2026-10-02): "baseline" — базовый график, "current" — актуализированный
 let sidePlanSource = (() => { try { return localStorage.getItem("zhbi_plan_source") === "current" ? "current" : "baseline"; } catch (e) { return "baseline"; } })();
 let sideStatusData = null;
-// Версия отчёта «Статус монтажа» (2026-10-01): 1 — дерево статусов, 2 — сводка плана/факта и темпов (POST /reports/status-summary)
-let sideStatusVersion = (() => { try { return localStorage.getItem("zhbi_side_status_version") === "2" ? 2 : 1; } catch (e) { return 1; } })();
+// «Статус монтажа» в правой панели — сводка плана/факта и темпов (POST /reports/status-summary). Версия 1 (дерево статусов) убрана 2026-10-07;
+// полное дерево по-прежнему в отчёте «Статус монтажа» (кнопка ⤢). Прежний выбор версии в браузере больше не нужен — забываем его.
+try { localStorage.removeItem("zhbi_side_status_version"); } catch (e) { /* не критично */ }
 let sideDynData = null;
 let sideDevData = null;   // сводка отклонения от базового графика (2026-08-14)
-let sideStatusCollapsed = new Set();
 // Устаревание считается ПО ОТЧЁТУ, а не одним флагом на оба: свёрнутый отчёт
 // не пересчитывается, и когда его раскроют, надо знать, что он отстал.
 let sideStale = { status: true, dynamics: true, deviation: true };
@@ -23922,7 +23922,7 @@ async function loadSidebarReports() {
       body: JSON.stringify(sideReportBody(withDate)),
     });
     const [status, dyn, dev] = await Promise.all([
-      want.status ? post(sideStatusVersion === 2 ? "/reports/status-summary" : "/reports/status", false) : null,
+      want.status ? post("/reports/status-summary", false) : null,
       want.dynamics ? post("/reports/dynamics", true) : null,
       // Отклонение — свой эндпоинт: это не отчёт, а сравнение двух версий
       // графика, и общего с ними у него только список изделий среза.
@@ -23936,7 +23936,6 @@ async function loadSidebarReports() {
     }
     if (want.status) {
       sideStatusData = status;
-      if (sideStatusVersion === 1) sideStatusCollapsed = defaultCollapsedTree(status);
       sideStale.status = false;
       renderSideStatusReport();
     }
@@ -24041,63 +24040,14 @@ function renderSideStatusSummary(d) {
   planSel.addEventListener("change", () => {
     sidePlanSource = planSel.value === "current" ? "current" : "baseline";
     try { localStorage.setItem("zhbi_plan_source", sidePlanSource); } catch (err) { /* не критично */ }
-    // меняются план «Статуса монтажа» (версия 2) и «Динамики»; «Отклонение» и версия 1 от плана не зависят
+    // меняются план «Статуса монтажа» и «Динамики»; «Отклонение» от плана не зависит
     sideStatusData = null; sideDynData = null;
     sideStale.status = true; sideStale.dynamics = true;
     loadSidebarReports();
   });
 }
 
-document.getElementById("side-status-ver").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-ver]");
-  if (!b) return;
-  const v = Number(b.dataset.ver);
-  if (v === sideStatusVersion) return;
-  sideStatusVersion = v;
-  try { localStorage.setItem("zhbi_side_status_version", String(v)); } catch (err) { /* не критично */ }
-  syncSideStatusVersion();
-  // данные другой версии не годятся: пересчёт заново
-  sideStatusData = null;
-  sideStale.status = true;
-  document.getElementById("side-status-body").innerHTML = '<div class="hint-text">Построение…</div>';
-  loadSidebarReports();
-});
-function syncSideStatusVersion() {
-  document.querySelectorAll("#side-status-ver [data-ver]").forEach((b) =>
-    b.setAttribute("aria-pressed", String(Number(b.dataset.ver) === sideStatusVersion)));
-}
-syncSideStatusVersion();
-
-function renderSideStatusReport() {
-  if (sideStatusVersion === 2) { renderSideStatusSummary(sideStatusData); return; }
-  const data = sideStatusData;
-  const body = document.getElementById("side-status-body");
-  document.getElementById("side-status-line").textContent =
-    data ? `Всего изделий: ${data.total.values.total}` : "";
-  if (!data || !data.rows.length) {
-    body.innerHTML = '<div class="hint-text">нет данных</div>';
-    return;
-  }
-  // Колонок столько же, сколько в форме (все встретившиеся статусы +
-  // «Остаток» + «В проекте») — сокращать состав нельзя, иначе сумма по
-  // строке перестанет сходиться. Широкая часть уезжает в свой скролл, а
-  // первая колонка липкая (тот же приём, что у легенды выше).
-  body.innerHTML = `<div class="legend-table-wrap">${renderTreeReport(data, {
-    collapsed: sideStatusCollapsed, indent: 8, tableAttr: 'class="side-table side-tree"',
-  })}</div>`;
-  const wrap = body.firstElementChild;
-  requestAnimationFrame(() => {
-    wrap.classList.toggle("scrollable", wrap.scrollWidth > wrap.clientWidth + 1);
-  });
-}
-
-document.getElementById("side-status-body").addEventListener("click", (e) => {
-  const path = e.target.dataset.path;
-  if (path === undefined) return;
-  if (sideStatusCollapsed.has(path)) sideStatusCollapsed.delete(path);
-  else sideStatusCollapsed.add(path);
-  renderSideStatusReport();
-});
+function renderSideStatusReport() { renderSideStatusSummary(sideStatusData); }
 
 function sideChartLegendHtml(data) {
   // То же правило, что в самом графике: подпись только у нарисованных.

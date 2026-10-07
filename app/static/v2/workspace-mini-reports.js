@@ -1,7 +1,7 @@
 // Мини-отчёты вкладки «Статус» рабочих мест ЖБИ. Числа берутся из тех же
 // серверных отчётов, что и полноразмерные экраны; клиент только компонует их.
 import { esc } from "./screen-view.js";
-import { buildDynamicsChartSvg, defaultCollapsed, dynamicsChartLegendHtml } from "./reports.js";
+import { buildDynamicsChartSvg, dynamicsChartLegendHtml } from "./reports.js";
 
 const today = () => {
   const d = new Date();
@@ -27,16 +27,14 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
   let date = today();
   let mode = "both", range = { from: null, to: null };
   let data = {}, errors = {};
-  let tree = { collapsed: null };
   const expanded = new Set(["status", "deviation", "dynamics"]);
-  // Версия отчёта «Статус монтажа» (2026-10-01): 1 — дерево статусов, 2 — сводка плана/факта и темпов; выбор помнится в браузере
-  // Источник плана для «Статуса монтажа» (версия 2) и «Динамики» (2026-10-02): "baseline" — базовый график, "current" — актуализированный
+  // «Статус монтажа» в панели — сводка плана/факта и темпов; версия 1 (дерево статусов) убрана 2026-10-07 (полное дерево — в полном отчёте, кнопка ⤢)
+  // Источник плана для «Статуса монтажа» и «Динамики» (2026-10-02): "baseline" — базовый график, "current" — актуализированный
   let planSource = (() => { try { return localStorage.getItem("v2.planSource") === "current" ? "current" : "baseline"; } catch (e) { return "baseline"; } })();
-  let statusVersion = (() => { try { return localStorage.getItem("v2.statusVersion") === "2" ? 2 : 1; } catch (e) { return 1; } })();
+  try { localStorage.removeItem("v2.statusVersion"); } catch (e) { /* не критично */ }
 
   function clear() {
     ++seq; ids = null; key = ""; data = {}; errors = {}; loading = false;
-    tree = { collapsed: null };
     repaint();
   }
 
@@ -45,7 +43,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
     const clean = nextIds.filter((id) => Number.isSafeInteger(id) && id > 0);
     const nextKey = `${objectId}:${clean.join(",")}`;
     if (nextKey === key) return;
-    ids = clean; key = nextKey; tree = { collapsed: null };
+    ids = clean; key = nextKey;
     load();
   }
 
@@ -58,8 +56,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
     if (!selected?.length) { loading = false; repaint(); return; }
     const base = { object_id: objectId, element_ids: selected, plan_source: planSource };
     const jobs = [
-      ["status", "/reports/status", base],
-      ["summary", "/reports/status-summary", base],
+      ["status", "/reports/status-summary", base],
       ["deviation", "/schedule-versions/deviation", base],
       ["dynamics", "/reports/dynamics", { ...base, report_date: date }],
     ];
@@ -79,9 +76,9 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
       ${expanded.has(kind) ? `<div class="ws-mini-content">${loading ? `<p class="v2-muted">Построение…</p>` : errors[kind] ? `<p class="ws-mini-error">${esc(errors[kind])}</p>` : contents}</div>` : ""}</section>`;
   }
 
-  // Версия 2: сводка плана/факта и темпов (app/report_status_summary.py)
+  // Сводка плана/факта и темпов (app/report_status_summary.py)
   function summaryHtml() {
-    const d = data.summary;
+    const d = data.status;
     if (!d) return `<p class="v2-muted">Нет данных.</p>`;
     const pct = (p) => (p === null || p === undefined ? "" : `${p}%`);
     const days = (n) => n === null || n === undefined ? "—" : `<span class="${n < 0 ? "dev-late" : n > 0 ? "dev-early" : "dev-ok"}">${n}</span>`;
@@ -99,29 +96,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
       ${kv("Фактический темп монтажа, шт/сут", num(d.fact_tempo))}${kv("Прогнозная дата завершения СМР", date(d.forecast_date))}
       ${kv("Отставание, дней", days(d.lag_forecast_days))}</table></div>`;
   }
-  const versionSwitch = () => `<div class="side-ver" role="group" aria-label="Версия отчёта «Статус монтажа»">${[1, 2].map((v) => `<button type="button" data-mini-ver="${v}" aria-pressed="${statusVersion === v}">Версия ${v}</button>`).join("")}</div>`;
-
-  function statusHtml() {
-    if (statusVersion === 2) return versionSwitch() + summaryHtml();
-    return versionSwitch() + statusTreeHtml();
-  }
-
-  function statusTreeHtml() {
-    const d = data.status;
-    if (!d) return `<p class="v2-muted">Нет данных.</p>`;
-    if (!tree.collapsed) tree.collapsed = defaultCollapsed(d);
-    if (!d.rows?.length) return `<p class="v2-muted">Нет данных.</p>`;
-    const columns = d.columns || [];
-    const row = (n, path) => {
-      const children = n.children || [], closed = tree.collapsed.has(path);
-      return `<tr class="lvl-${n.level}"><td style="padding-left:${8 + n.level * 8}px"><button type="button" class="report-toggle${children.length ? "" : " empty"}" data-mini-tree="${esc(path)}" aria-expanded="${!closed}">${closed ? "▸" : "▾"}</button>${esc(n.label)}</td>${columns.map((c) => `<td class="num">${n.values?.[c.key] || ""}</td>`).join("")}</tr>`
-        + (closed ? "" : children.map((ch) => row(ch, `${path}/${ch.label}`)).join(""));
-    };
-    const total = d.total || { label: "Итого", values: {} };
-    return `<div class="hint-text side-status-line">Всего изделий: ${total.values?.total ?? ids?.length}</div>
-      <div class="legend-table-wrap ws-mini-table"><table class="side-table side-tree"><thead><tr><th>${esc(d.root_label || "")}</th>${columns.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead><tbody>
-      ${d.rows.map((r) => row(r, r.label)).join("")}<tr class="total"><td>${esc(total.label)}</td>${columns.map((c) => `<td class="num">${total.values?.[c.key] || ""}</td>`).join("")}</tr></tbody></table></div>`;
-  }
+  const statusHtml = summaryHtml;
 
   function deviationHtml() {
     const d = data.deviation;
@@ -178,7 +153,7 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
   function html() {
     if (ids === null) return `<div class="ws-pad"><p class="v2-muted">Получаем состав показанных изделий…</p></div>`;
     if (!ids.length) return `<div class="ws-pad"><p class="v2-muted">В текущем отборе нет изделий.</p></div>`;
-    const reportTotal = data.status?.total?.values?.total;
+    const reportTotal = data.status?.total;
     const scopeNote = Number.isInteger(reportTotal) && reportTotal !== ids.length
       ? `<p class="v2-muted ws-mini-scope">Отчёты учитывают ${num(reportTotal)} изделий актуального чертежа из ${num(ids.length)} показанных в срезе.</p>` : "";
     const planSwitch = `<div class="side-plan-source"><label>План считать от <select data-mini-plan aria-label="Источник плана для отчётов вкладки «Статус»"><option value="baseline" ${planSource === "baseline" ? "selected" : ""}>Базового графика</option><option value="current" ${planSource === "current" ? "selected" : ""}>Актуализированного графика</option></select></label></div>`;
@@ -199,24 +174,12 @@ export function createWorkspaceMiniReports({ api, getObjectId, repaint, requestI
       try { localStorage.setItem("v2.planSource", planSource); } catch (err) { /* не критично */ }
       load();
     });
-    root.querySelectorAll("[data-mini-ver]").forEach((b) => b.addEventListener("click", () => {
-      const v = Number(b.dataset.miniVer);
-      if (v === statusVersion) return;
-      statusVersion = v;
-      try { localStorage.setItem("v2.statusVersion", String(v)); } catch (e) { /* не критично */ }
-      repaint();
-    }));
     root.querySelectorAll("[data-mini-full]").forEach((b) => b.addEventListener("click", () => openFull(b.dataset.miniFull, ids, data.dynamics?.report_date || date)));
     root.querySelector("[data-mini-date]")?.addEventListener("change", (e) => { date = e.target.value || today(); load(); });
     root.querySelector("[data-mini-mode]")?.addEventListener("change", (e) => { mode = e.target.value; repaint(); });
     root.querySelector("[data-mini-from]")?.addEventListener("change", (e) => { range.from = e.target.value || null; repaint(); });
     root.querySelector("[data-mini-to]")?.addEventListener("change", (e) => { range.to = e.target.value || null; repaint(); });
     root.querySelector("[data-mini-range-reset]")?.addEventListener("click", () => { range = { from: null, to: null }; repaint(); });
-    root.querySelectorAll("[data-mini-tree]").forEach((b) => b.addEventListener("click", () => {
-      const path = b.dataset.miniTree;
-      tree.collapsed.has(path) ? tree.collapsed.delete(path) : tree.collapsed.add(path);
-      repaint();
-    }));
   }
 
   return { clear, receive, html, bind, refresh: () => { requestIds(); if (ids !== null) load(); } };
