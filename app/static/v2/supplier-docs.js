@@ -730,6 +730,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       : (viewOnly ? "Черновик: данные изделий он не менял — изменения вносит проведение." : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести».");
     return `<div class="v2-bar v2-doc-head"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} <span class="v2-tag">${x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)"}</span>${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><div class="v2-foot-actions v2-doc-actions" id="sd-head-actions"><span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div></div>
       <p class="v2-muted">${note}</p>
+      ${x.error ? `<p class="v2-auth-error" role="alert" style="white-space:pre-line">${esc(x.error)}</p>` : ""}
+      ${S.message ? `<p class="v2-ok" role="status">${esc(S.message)}</p>` : ""}
       <div class="v2-fields" style="max-width:none; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
         <label class="v2-field">Дата документа<input type="date" data-f="date" value="${esc(x.date)}" ${dis}></label>
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
@@ -741,8 +743,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
         <label class="v2-field v2-span">Комментарий<input data-f="comment" value="${esc(x.comment)}" ${dis} maxlength="600"></label>
       </div>
       <div style="margin-top:16px">${swap ? swapHtml(x, ro) : rb ? rebalanceHtml(x, ro) : positionsHtml(x, ro)}</div>
-      ${x.error ? `<p class="v2-auth-error" role="alert" style="margin-top:12px">${esc(x.error)}</p>` : ""}
-      ${S.message ? `<p class="v2-ok" role="status" style="margin-top:12px">${esc(S.message)}</p>` : ""}`;
+`;
   }
 
   function footHtml() {
