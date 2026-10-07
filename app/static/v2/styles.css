@@ -408,6 +408,13 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
   padding: 20px;
 }
 .v2-dialog p { margin: 0 0 16px; font-size: 14px; }
+/* Справка (showHelpDialog, 2026-10-07): широкое окно, прокручивается только тело — заголовок и кнопка «Закрыть» всегда на виду. */
+.v2-dialog-wide { width: 780px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.v2-dialog-wide .v2-help-title { margin: 0 0 12px; font-size: 18px; }
+.v2-dialog-wide .v2-help-body { overflow-y: auto; min-height: 0; margin-bottom: 16px; padding-right: 8px; }
+.v2-dialog-wide .v2-help-body h4 { margin: 16px 0 4px; font-size: 14px; }
+.v2-dialog-wide .v2-help-body h4:first-child { margin-top: 0; }
+.v2-dialog-wide .v2-help-body p { margin: 0 0 8px; line-height: 1.5; }
 .v2-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
 /* Окно выбора объекта в шапке (2026-09-22, shell-object-picker.js) — тот же .v2-dialog-backdrop/.v2-dialog,

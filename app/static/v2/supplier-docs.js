@@ -21,7 +21,7 @@
 // отдаёт только при «Изменении» — это материал для ПРАВКИ; просмотру хватает самого документа (GET /supplier-changes/{id}: названия
 // контрактов в шапке, состав с адресами и статусами), поэтому читателю они не запрашиваются вовсе. Изменяющие запросы по-прежнему
 // проверяет сервер (403) — здесь только не показываются кнопки, которые он всё равно отклонил бы.
-import { showUnsavedDialog, showConfirmDialog, showInfoDialog } from "./dialogs.js";
+import { showUnsavedDialog, showConfirmDialog, showInfoDialog, showHelpDialog } from "./dialogs.js";
 import { ApiError } from "./api.js";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -756,7 +756,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const note = posted
       ? `Проведён: ${esc(x.posted?.by || "—")}${x.posted?.at ? " · " + ruMoment(x.posted.at) : ""}. Пока документ проведён, его состав не правится${viewOnly ? "." : " — сначала отмените проведение."}`
       : (viewOnly ? "Черновик: данные изделий он не менял — изменения вносит проведение." : "Черновик данные изделий не меняет — изменения вносит кнопка «Провести».");
-    return `<div class="v2-bar v2-doc-head"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} ${docState(posted ? "posted" : "draft", x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)")}${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><div class="v2-foot-actions v2-doc-actions" id="sd-head-actions"><span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div></div>
+    return `<div class="v2-bar v2-doc-head"><h3>${esc(KIND_TITLE[x.kind])} — ${x.id ? `№ ${esc(x.number)} от ${ruDate(x.date)}` : "новый документ"} ${docState(posted ? "posted" : "draft", x.id ? (posted ? "Проведён" : "Черновик") : "Черновик (не сохранён)")}${viewOnly ? ` <span class="v2-tag" data-readonly-tag>Только просмотр</span>` : ""}</h3><div class="v2-foot-actions v2-doc-actions" id="sd-head-actions"><span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}${helpBtnHtml(x)}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button></div></div>
       <p class="v2-muted">${note}</p>
       ${x.error ? `<p class="v2-auth-error" role="alert" style="white-space:pre-line">${esc(x.error)}</p>` : ""}
       ${S.message ? `<p class="v2-ok" role="status">${esc(S.message)}</p>` : ""}
@@ -773,6 +773,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <div style="margin-top:16px">${swap ? swapHtml(x, ro) : rb ? rebalanceHtml(x, ro) : positionsHtml(x, ro)}</div>
 `;
   }
+
+  // «Справка» — только у балансировки; доступна и проведённому документу, и читателю (она ничего не меняет)
+  const helpBtnHtml = (x) => (x && x.kind === "date_rebalance" ? `<button type="button" class="v2-btn" data-a="help">Справка</button>` : "");
 
   function footHtml() {
     if (S.view !== "doc" || !f()) return "";
@@ -861,10 +864,21 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const box = inner.querySelector("#sd-head-actions");
     if (box) {
       const status = box.querySelector("#sd-head-status")?.textContent || "";
-      box.innerHTML = `<span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button>`;
+      box.innerHTML = `<span class="v2-muted" id="sd-head-status" role="status"></span>${footHtml()}${helpBtnHtml(f())}<button type="button" class="v2-btn" data-a="back" ${S.busy ? "disabled" : ""}>← К списку</button>`;
       for (const el of box.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset));
     }
     setStatusText(isDirty() ? "Есть несохранённые изменения" : "");
+  }
+
+  // Справка к документу: текст живёт на сервере (app/report_help.py, DOC_HELP) — один на V1 и V2
+  async function showDocHelp(x) {
+    if (!x || x.kind !== "date_rebalance") return;
+    try {
+      const h = await api.get("/report-help/rebalance");
+      await showHelpDialog(h.title || KIND_TITLE[x.kind], h.sections);
+    } catch (err) {
+      await showInfoDialog(`Не удалось получить справку: ${err?.detail || err?.message || "ошибка"}`);
+    }
   }
 
   function onAction(a, d) {
@@ -872,6 +886,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (a === "reload-list") { S.list.error = ""; loadList().then(paint); return; }
     if (a === "new-supplier_change" || a === "new-link_swap" || a === "new-date_rebalance") { newDoc(a.slice(4)); return; }
     if (a === "back") { backToList(false); return; }
+    if (a === "help") { showDocHelp(x); return; }
     if (!x) return;
     // Документ вида, который изменять не дано: кнопок записи и подбора нет в разметке, но и прочие пути к ним закрыты здесь
     if (!can(x.kind) && a !== "toggle-pos" && a !== "rb-toggle" && a !== "rb-expand" && a !== "rb-singles" && a !== "rb-group") return;

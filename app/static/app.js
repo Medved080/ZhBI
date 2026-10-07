@@ -19136,6 +19136,7 @@ function scdApplyMode() {
   document.getElementById("scd-post").style.display = проведён ? "none" : "";
   document.getElementById("scd-unpost").style.display = проведён ? "" : "none";
   document.getElementById("scd-delete").style.display = (scdDoc && !проведён) ? "" : "none";
+  document.getElementById("scd-help").style.display = перебал ? "" : "none";   // справка — у балансировки, в любом состоянии документа
   scdSyncPoolRow();
   scdSyncColumnSelects();
 }
@@ -22966,13 +22967,15 @@ document.getElementById("dyn-mode").addEventListener("change", loadReport);
 // заново в разметке.
 const reportHelpBackdrop = document.getElementById("report-help-backdrop");
 
-document.getElementById("report-help-btn").addEventListener("click", async () => {
+// Открыватель общий: справка отчёта (ключ — текущий отчёт) и справка документа «Балансировка поставки» (ключ "rebalance", 2026-10-07)
+// — один текст на V1 и V2 и одно окно.
+async function openHelpModal(ключ) {
   const body = document.getElementById("report-help-body");
   document.getElementById("report-help-title").textContent = "Справка";
   body.innerHTML = '<div class="hint-text">Загрузка…</div>';
   reportHelpBackdrop.classList.add("open");
   try {
-    const данные = await api(`/report-help/${encodeURIComponent(currentReport)}`);
+    const данные = await api(`/report-help/${encodeURIComponent(ключ)}`);
     document.getElementById("report-help-title").textContent = данные.title;
     body.innerHTML = данные.sections.map(([заголовок, абзацы]) =>
       `<h4>${escapeHtml(заголовок)}</h4>`
@@ -22981,7 +22984,9 @@ document.getElementById("report-help-btn").addEventListener("click", async () =>
   } catch (e) {
     body.innerHTML = `<div class="error-text">Не удалось загрузить справку: ${escapeHtml(e.message)}</div>`;
   }
-});
+}
+document.getElementById("report-help-btn").addEventListener("click", () => openHelpModal(currentReport));
+document.getElementById("scd-help").addEventListener("click", () => openHelpModal("rebalance"));
 document.getElementById("report-help-close")
   .addEventListener("click", () => reportHelpBackdrop.classList.remove("open"));
 

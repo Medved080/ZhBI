@@ -1280,6 +1280,8 @@
      вызывается ИЗ формы справочника, и на общем уровне он оказывался под
      ней — диалог был не виден вовсе (живой репорт 2026-08-05). */
   #dict-delete-backdrop { z-index: 120; }
+  /* Окно справки открывается и поверх формы документа балансировки (в разметке оно стоит РАНЬШЕ формы — при общем z-index оказалось бы под ней). */
+  #report-help-backdrop { z-index: 130; }
   /* Форма контракта открывается ПОВЕРХ формы контрагента (2026-08-05):
      контракты показаны в её иерархии, и клик по контракту обязан открыть
      отдельное окно, а не спрятать его под уже открытым. Ниже диалога
@@ -9576,6 +9578,8 @@
       <div class="scd-head-row">
         <h2 id="scd-form-title">Документ</h2>
       <div class="actions scd-head-actions">
+          <!-- «Справка» — только у балансировки поставки (2026-10-07): текст с сервера, app/report_help.py (DOC_HELP) -->
+          <button class="btn btn-secondary" id="scd-help" style="display:none">Справка</button>
           <button class="btn btn-secondary" id="scd-form-cancel">Закрыть</button>
           <button class="btn btn-secondary menu-item-danger" id="scd-delete" style="display:none">Удалить черновик</button>
           <button class="btn btn-secondary" id="scd-save">Сохранить черновик</button>
