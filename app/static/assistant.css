@@ -4,8 +4,8 @@
 [data-assistant] button{cursor:pointer;border:1px solid var(--line,#dbe4ee);border-radius:8px;padding:7px 11px;background:var(--bg,#fff)}
 [data-assistant] button:disabled{opacity:.6;cursor:wait}
 [data-assistant] button:focus-visible,[data-assistant] input:focus-visible,[data-assistant] select:focus-visible,[data-assistant] textarea:focus-visible{outline:2px solid var(--accent,#0d4cd3);outline-offset:2px}
-[data-assistant] .ai-launch{position:fixed;right:22px;bottom:22px;z-index:19000;background:var(--accent,#0d4cd3);color:var(--accent-ink,#fff);padding:12px 17px;box-shadow:0 4px 18px #0002;border-color:transparent}
-[data-assistant] .ai-panel{position:fixed;z-index:19001;right:18px;bottom:18px;width:min(460px,calc(100vw - 36px));max-height:calc(100dvh - 36px);background:var(--bg,#fff);border:1px solid var(--line,#dbe4ee);border-radius:15px;box-shadow:0 12px 50px #0003;display:flex;flex-direction:column;overflow:hidden}
+[data-assistant] .ai-launch{position:fixed;top:14px;right:14px;z-index:19000;height:40px;background:var(--accent,#0d4cd3);color:var(--accent-ink,#fff);padding:0 15px;border-radius:999px;font-weight:600;white-space:nowrap;box-shadow:0 2px 10px #0002;border-color:transparent}
+[data-assistant] .ai-panel{position:fixed;z-index:19001;right:14px;top:62px;width:min(460px,calc(100vw - 28px));max-height:calc(100dvh - 76px);background:var(--bg,#fff);border:1px solid var(--line,#dbe4ee);border-radius:15px;box-shadow:0 12px 50px #0003;display:flex;flex-direction:column;overflow:hidden}
 [data-assistant] .ai-heading{display:flex;align-items:center;justify-content:space-between;padding:15px 17px;border-bottom:1px solid var(--line,#dbe4ee);background:var(--surface,#f5f7fa)}
 [data-assistant] small{display:block;color:var(--muted,#61768a);font-size:11px;margin-top:5px}
 [data-assistant] .ai-heading button{font-size:24px;line-height:1}
@@ -43,3 +43,7 @@
 
 [data-assistant] .ai-step-failed::before{content:"! ";}
 [data-assistant] .ai-step-retry::before{content:"↻ ";}
+
+/* Кнопка вызова — в правом верхнем углу (2026-10-07): верхним панелям текущего и нового интерфейсов и калькулятора оставлено место справа,
+   чтобы она ничего не закрывала. Класс на <html> ставит сам помощник, пока он подключён. */
+html.has-ai-launch #toolbar,html.has-ai-launch .v2-head,html.has-ai-launch #precast-concept .pc-workspace-nav{padding-right:88px}

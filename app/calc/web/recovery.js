@@ -2,7 +2,7 @@
  const api=window.CalcZhBIAPI,escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const dialog=document.createElement('dialog');dialog.id='pc-recovery-dialog';dialog.setAttribute('aria-labelledby','pc-recovery-title');
  dialog.innerHTML=`<div class="pc-recovery-heading"><div><h2 id="pc-recovery-title">Обработка изделий · локальный Qwen</h2><p>Результаты сохраняются отдельно до подключения частичной модели.</p></div><button type="button" data-recovery-close aria-label="Закрыть обработку">×</button></div>
- <button type="button" data-recovery-assistant>ИИ-помощник</button>
+ <button type="button" data-recovery-assistant>ИИ</button>
  <div id="pc-recovery-status" role="status" aria-live="polite"></div><div class="pc-recovery-layout">
  <aside><section><h3>Подключение к ИИ</h3><p>Сервер и модель чтения чертежей задаются в основных настройках сервиса.</p><a href="/v2#/ai-integration" target="_top">Администрирование → Интеграция с ИИ</a><p id="pc-recovery-probe"></p></section>
  <section><h3>Новая партия</h3><label>Изделия<select id="pc-recovery-scope"><option value="active">Текущее изделие</option><option value="selected">Выбранные флажками</option><option value="visible">Показанные в списке</option><option value="remaining">Все без полной модели</option></select></label>

@@ -338,9 +338,7 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
   flex-wrap: wrap;
 }
 .v2-foot-actions { display: flex; gap: 8px; }
-/* Плавающая кнопка «ИИ-помощник» (assistant.css: fixed, справа внизу, ~170 px) не должна перекрывать кнопки нижней панели действий
-   (2026-10-06, замечание пользователя: закрывала «Провести»/«Сохранить» документа) — справа оставляем под неё место. */
-@media (min-width: 720px) { .v2-foot .v2-container { padding-right: 210px; } }
+/* Кнопка вызова ИИ теперь вверху справа (assistant.css), нижней панели место под неё не нужно. */
 
 .v2-role-check { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: flex-start; }
 .v2-role-check input { margin-top: 5px; accent-color: var(--accent); }

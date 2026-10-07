@@ -30,7 +30,7 @@ export function mountAssistant({getContext}) {
   if (document.querySelector("[data-assistant]")) return;
   css();
   const host=document.createElement("div");host.dataset.assistant="1";
-  host.innerHTML=`<button type="button" class="ai-launch" aria-controls="ai-panel" aria-expanded="false">✦ ИИ-помощник</button>
+  host.innerHTML=`<button type="button" class="ai-launch" aria-controls="ai-panel" aria-expanded="false" title="Задать вопрос ИИ по данным сервиса">✦ ИИ</button>
     <section id="ai-panel" class="ai-panel" aria-label="ИИ-помощник" hidden>
       <header class="ai-heading"><div><strong>Помощник по строительству</strong><small>Локальная модель · данные сервиса</small></div><button type="button" data-ai-close aria-label="Свернуть помощника">×</button></header>
       <div class="ai-context" id="ai-context"></div>
@@ -43,6 +43,7 @@ export function mountAssistant({getContext}) {
       <p class="ai-status" id="ai-status" role="status"></p></form>
     </section>`;
   document.body.append(host);
+  document.documentElement.classList.add("has-ai-launch");   // верхним панелям — место под кнопку (assistant.css)
   const $=s=>host.querySelector(s), form=$("#ai-form"), panel=$("#ai-panel"), launch=$(".ai-launch"), messages=$("#ai-messages"), status=$("#ai-status");
   let lastResultId=null, history=[], busy=false, requestId=null, generation=0, contextKey="", contextTimer;
   const evidenceDialogs=new Set();
@@ -127,7 +128,7 @@ export function mountAssistant({getContext}) {
     }catch(error){if(my===generation)say(error.message);}
     finally{if(my===generation){busy=false;requestId=null;controls();}}
   });
-  return {destroy(){for(const dialog of evidenceDialogs)dialog.close();generation++;void stop();clearInterval(contextTimer);window.removeEventListener("zhbi:assistant-open",open);host.remove();}};
+  return {destroy(){for(const dialog of evidenceDialogs)dialog.close();generation++;void stop();clearInterval(contextTimer);window.removeEventListener("zhbi:assistant-open",open);document.documentElement.classList.remove("has-ai-launch");host.remove();}};
 }
 // V2 монтирует помощника из оболочки после входа. Вложенные сцены используют кнопку родителя.
 if(!document.getElementById("v2-root") && window.parent===window){
