@@ -19544,18 +19544,20 @@ async function scdReloadRebalance(свой) {
   scdUpdateSummary();
 }
 
-// Табличная часть балансировки — ПАРЫ изделий, поменявшихся местами (2026-10-06, запрос пользователя): в строке видно, с кем изделие
-// обменялось статусом и плановой датой. Пары сгруппированы: поставщик → контракт → марка (по ведущему изделию пары), группы сворачиваются.
-// Уровень, на котором у документа одно значение, не показывается; без уровней — плоская таблица. Изделия без обмена — по галочке.
-const scdIsPairRow = (i) => !!(i.partner_id || i.pair_no);
+// Табличная часть балансировки — ОБМЕНЫ изделий местами (2026-10-06). Обмен — пара (в строке видно, с кем изделие поменялось статусом
+// и плановой датой) или цепочка из трёх и более изделий (каждое получает дату, статус и контракт следующего по кругу; в таблице
+// цепочка свёрнута до одной строки). Обмены сгруппированы: поставщик → контракт → марка (по ведущему изделию), группы сворачиваются;
+// уровень, на котором у документа одно значение, не показывается. Изделия без обмена — по галочке.
+const scdInExchange = (i) => !!(i.partner_id || i.pair_no);
 function scdRbGrouped(всеСтроки, head, строка, сводка) {
-  const rows = всеСтроки.filter((i) => scdIsPairRow(i) || scdRebalAll);
-  if (!rows.length) return '<div class="hint-text">Пар нет.</div>';
+  const видимые = (список) => scdRebalAll ? список : список.filter(scdInExchange);
+  const rows = видимые(всеСтроки);
+  if (!rows.length) return '<div class="hint-text">Обменов нет.</div>';
   const норм = (v) => String(v ?? "—").trim() || "—";
   const уровни = [["counterparty", "Поставщик"], ["contract_name", "Контракт"], ["mark", "Марка"]]
     .filter(([k]) => new Set(rows.map((i) => норм(i[k]).toLowerCase())).size > 1);
-  const таблица = (список) => `<table class="scd-pos-table"><thead><tr>${head}</tr></thead><tbody>${список.map(строка).join("")}</tbody></table>`;
-  if (!уровни.length) return `<div class="scd-rb-leaf">${таблица(rows)}</div>`;
+  const таблица = (список) => `<table class="scd-pos-table"><thead><tr>${head}</tr></thead><tbody>${видимые(список).map(строка).join("")}</tbody></table>`;
+  if (!уровни.length) return `<div class="scd-rb-leaf">${таблица(всеСтроки)}</div>`;
   function уровень(список, глубина) {
     if (глубина === уровни.length) return таблица(список);
     const [поле, название] = уровни[глубина], группы = new Map();
@@ -19564,12 +19566,12 @@ function scdRbGrouped(всеСтроки, head, строка, сводка) {
       if (!группы.has(ключ)) группы.set(ключ, { имя: k, список: [] });
       группы.get(ключ).список.push(i);
     }
-    return [...группы.values()].map((g) => `<details class="scd-rb-grp"${глубина < уровни.length - 1 ? " open" : ""}>
+    return [...группы.values()].filter((g) => видимые(g.список).length).map((g) => `<details class="scd-rb-grp"${глубина < уровни.length - 1 ? " open" : ""}>
         <summary><small>${название}</small> <b>${escapeHtml(g.имя)}</b> <span class="scd-rb-cells">${сводка(g.список).map(([k, v]) => `<span class="scd-rb-m"><small>${k}</small>${v}</span>`).join("")}</span></summary>
         <div class="scd-rb-sub${глубина + 1 === уровни.length ? " scd-rb-leaf" : ""}">${уровень(g.список, глубина + 1)}</div></details>`).join("");
   }
   return `<div class="scd-rb-tools"><button type="button" class="btn btn-secondary" data-rb-fold="open">Развернуть всё</button>
-    <button type="button" class="btn btn-secondary" data-rb-fold="close">Свернуть всё</button></div>` + уровень(rows, 0);
+    <button type="button" class="btn btn-secondary" data-rb-fold="close">Свернуть всё</button></div>` + уровень(всеСтроки, 0);
 }
 
 function scdRenderRebalance() {
@@ -19580,20 +19582,32 @@ function scdRenderRebalance() {
   const метка = (c) => { const цвет = /^#[0-9a-f]{3,8}$/i.test(colorFor(c)) ? colorFor(c) : "#999999";
     return `<span class="scd-st" style="--c:${цвет}">${escapeHtml(ст(c))}</span>`; };
   const статусы = (a, b) => a === b ? метка(a) : `${метка(a)} → ${метка(b)}`;
+  const место = (i, сКонтрактом) => `${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${сКонтрактом && i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span>`;
+  // Опоздание = плановая дата позже требуемой; «сокращено» — на сколько дней оно уменьшилось
+  const поздно = (i, k) => Math.max(0, (i && i[k]) ?? 0);
+  const выигрыш = (d) => d > 0 ? `<b class="scd-good">−${d} дн.</b>` : d < 0 ? `<b class="scd-bad">+${-d} дн.</b>` : "0";
+  // Заголовок цепочки (кнопка) и строки её изделий — скрыты, пока цепочка свёрнута (см. scdBindRbFold)
+  const заголовокЦепочки = (no, n) => `<button type="button" class="btn btn-secondary scd-chain-btn" data-rb-chain="${no}" aria-expanded="false">▸ Цепочка из ${n} изд.: каждое получает дату, статус и контракт следующего по кругу</button>`;
   if (scdPosted() && scdDoc) {
-    const items = scdDoc.items, второй = new Map();
-    for (const i of items) if (i.pair_no && i.side === 2) второй.set(i.pair_no, i);
+    const items = scdDoc.items, по_номеру = new Map();
+    for (const i of items) if (i.pair_no) { if (!по_номеру.has(i.pair_no)) по_номеру.set(i.pair_no, []); по_номеру.get(i.pair_no).push(i); }
+    for (const l of по_номеру.values()) l.sort((x, y) => x.side - y.side);       // порядок цикла: место i-го получает от (i+1)-го
     const rows = items.filter((i) => !i.pair_no || i.side === 1).sort((x, y) => (x.pair_no ?? 1e9) - (y.pair_no ?? 1e9));
     const без = rows.filter((i) => !i.pair_no).length;
     const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th></th><th>Поменялось местами с</th><th>Статус</th><th>Плановая дата</th>";
-    const ячейки = (i) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
-      <td>${статусы(i.status_at_move || i.current_status, i.current_status)}</td>
+    const ячейки = (i) => `<td>${место(i, true)}</td><td>${статусы(i.status_at_move || i.current_status, i.current_status)}</td>
       <td>${перех(i.prev_plan ? formatDateRu(i.prev_plan) : "—", i.plan_now ? formatDateRu(i.plan_now) : "—")}</td>`;
-    const строка = (i) => { const q = i.pair_no ? второй.get(i.pair_no) : null;
-      return `<tr><td>${i.pair_no ?? "—"}</td>${ячейки(i)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q) : '<td colspan="3" class="hint-text">без обмена</td>'}</tr>`; };
+    const строка = (a) => {
+      if (!a.pair_no) return `<tr><td>—</td>${ячейки(a)}<td colspan="4" class="hint-text">без обмена</td></tr>`;
+      const m = по_номеру.get(a.pair_no);
+      if (m.length === 2) return `<tr><td>${a.pair_no}</td>${ячейки(m[0])}<td>⇄</td>${ячейки(m[1])}</tr>`;
+      return `<tr class="scd-chain-head"><td>${a.pair_no}</td><td colspan="7">${заголовокЦепочки(a.pair_no, m.length)}</td></tr>`
+        + m.map((i, t) => `<tr class="scd-chain-row" data-chain="${a.pair_no}" hidden><td></td>${ячейки(i)}<td>←</td><td colspan="3">${место(m[(t + 1) % m.length], true)}</td></tr>`).join("");
+    };
+    const сводкаПроведённого = (l) => { const ex = l.filter((i) => i.pair_no); return [["обменов", ex.length], ["изд.", ex.reduce((n, i) => n + по_номеру.get(i.pair_no).length, 0)]]; };
     box.innerHTML = (без ? `<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
         <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? " checked" : ""}> Показывать и изделия без обмена (${без})</label>` : "")
-      + scdRbGrouped(rows, шапка, строка, (l) => [["пар", l.filter((i) => i.pair_no).length]]);
+      + scdRbGrouped(rows, шапка, строка, сводкаПроведённого);
     const ф = document.getElementById("scd-rebal-all");
     if (ф) ф.addEventListener("change", (e) => { scdRebalAll = e.target.checked; scdRenderRebalance(); });
     scdBindRbFold(box);
@@ -19610,34 +19624,47 @@ function scdRenderRebalance() {
   }
   const дн = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
   const byId = new Map(items.map((i) => [i.element_id, i]));
-  const rows = items.filter((i) => i.lead || !i.partner_id);
+  const rows = items.filter((i) => i.pair_no ? i.chain_pos === 1 : true);        // представитель обмена (ведущее изделие) и изделия без обмена
+  const участники = (a) => { const m = [a]; let q = byId.get(a.partner_id); while (q && q !== a) { m.push(q); q = byId.get(q.partner_id); } return m; };
   const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>";
-  const ячейки = (i, другой) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${другой && другой.contract_name !== i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
+  const ячейки = (i, другой) => `<td>${место(i, false).replace(/<\/span>$/, "")}${другой && другой.contract_name !== i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
       <td>${статусы(i.status, i.status_new)}</td><td>${перех(formatDateRu(i.plan_old), formatDateRu(i.plan_new))}</td>
       <td>${перех(дн(i.delay_old), дн(i.delay_new))}</td>`;
-  const строка = (a) => { const q = a.partner_id ? byId.get(a.partner_id) : null;
-    return `<tr${q ? ' style="font-weight:600"' : ""}><td>${a.pair_no ?? "—"}</td>${ячейки(a, null)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q, a) + `<td style="white-space:nowrap;text-align:right">${выигрыш(опоздание(a, q, "delay_old") - опоздание(a, q, "delay_new"))}</td>` : '<td colspan="5" class="hint-text">без обмена</td>'}</tr>`; };
-  // Опоздание = плановая дата позже требуемой; «сокращено» — на сколько дней оно уменьшилось у обоих изделий пары
-  const поздно = (i, k) => Math.max(0, (i && i[k]) ?? 0);
-  const опоздание = (a, q, k) => поздно(a, k) + поздно(q, k);
-  const выигрыш = (d) => d > 0 ? `<b class="scd-good">−${d} дн.</b>` : d < 0 ? `<b class="scd-bad">+${-d} дн.</b>` : "0";
-  const сводка = (l) => { const пары = l.filter((i) => i.partner_id), все = l.flatMap((i) => i.partner_id ? [i, byId.get(i.partner_id)] : [i]);
+  const выигрышГруппы = (l) => l.reduce((n, i) => n + поздно(i, "delay_old") - поздно(i, "delay_new"), 0);
+  const ячейкаВыигрыша = (d) => `<td style="white-space:nowrap;text-align:right">${выигрыш(d)}</td>`;
+  const строка = (a) => {
+    if (!a.pair_no) return `<tr><td>—</td>${ячейки(a, null)}<td colspan="6" class="hint-text">без обмена</td></tr>`;
+    const m = участники(a);
+    if (m.length === 2) return `<tr style="font-weight:600"><td>${a.pair_no}</td>${ячейки(m[0], null)}<td>⇄</td>${ячейки(m[1], m[0])}${ячейкаВыигрыша(выигрышГруппы(m))}</tr>`;
+    return `<tr class="scd-chain-head"><td>${a.pair_no}</td><td colspan="9">${заголовокЦепочки(a.pair_no, m.length)}</td>${ячейкаВыигрыша(выигрышГруппы(m))}</tr>`
+      + m.map((i, t) => `<tr class="scd-chain-row" data-chain="${a.pair_no}" hidden><td></td>${ячейки(i, null)}<td>←</td><td colspan="4">${место(m[(t + 1) % m.length], true)}</td>${ячейкаВыигрыша(поздно(i, "delay_old") - поздно(i, "delay_new"))}</tr>`).join("");
+  };
+  const сводка = (l) => {
+    const все = l.flatMap((i) => i.pair_no ? участники(i) : [i]), ex = l.filter((i) => i.pair_no);
     const dB = все.reduce((n, i) => n + поздно(i, "delay_old"), 0), dA = все.reduce((n, i) => n + поздно(i, "delay_new"), 0);
-    return [["пар", пары.length], ["просрочено изд.", `${все.filter((i) => i.delay_old > 0).length} → ${все.filter((i) => i.delay_new > 0).length}`],
+    return [["обменов", ex.length], ["изд.", все.filter((i) => i.pair_no).length], ["просрочено изд.", `${все.filter((i) => i.delay_old > 0).length} → ${все.filter((i) => i.delay_new > 0).length}`],
       ["опоздание, дн.", `${dB} → ${dA}`], ["сокращено", выигрыш(dB - dA)]]; };
   const плитка = (k, v, sub = "") => `<div class="scd-rb-tile"><small>${k}</small><b>${v}</b>${sub ? `<span class="hint-text">${sub}</span>` : ""}</div>`;
   const сэкономлено = sm.late_days_before - sm.late_days_after;
-  box.innerHTML = `<div class="scd-rb-tiles">${плитка("Пар к обмену", sm.pairs, `${sm.pairs * 2} из ${sm.count} изд.`)}${плитка("Просрочено изделий", `${sm.late_before} → ${sm.late_after}`, `−${sm.late_before - sm.late_after}`)}${плитка("Суммарное опоздание", `${sm.late_days_before} → ${sm.late_days_after} дн.`, "сумма по изделиям")}${плитка("Опоздание сокращено", `<span class="scd-good">−${сэкономлено} дн.</span>`, сэкономлено > 0 && sm.late_days_before ? `на ${Math.round(сэкономлено * 100 / sm.late_days_before)} %` : "")}${плитка("Максимальное опоздание", `${sm.max_delay_before} → ${sm.max_delay_after} дн.`)}</div>
-    <div class="hint-text">Изделия меняются местами: плановая дата, контракт и вся история статусов уходят к партнёру, текущий статус пересчитывается.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только партнёром.` : ""}</div>
+  box.innerHTML = `<div class="scd-rb-tiles">${плитка("Обменов", sm.pairs + sm.chains, `${sm.pairs} пар, ${sm.chains} цепочек · ${sm.moved} из ${sm.count} изд.`)}${плитка("Просрочено изделий", `${sm.late_before} → ${sm.late_after}`, `−${sm.late_before - sm.late_after}`)}${плитка("Суммарное опоздание", `${sm.late_days_before} → ${sm.late_days_after} дн.`, "сумма по изделиям")}${плитка("Опоздание сокращено", `<span class="scd-good">−${сэкономлено} дн.</span>`, сэкономлено > 0 && sm.late_days_before ? `на ${Math.round(сэкономлено * 100 / sm.late_days_before)} %` : "")}${плитка("Максимальное опоздание", `${sm.max_delay_before} → ${sm.max_delay_after} дн.`)}</div>
+    <div class="hint-text">Изделия меняются местами: плановая дата, контракт и вся история статусов уходят к другому изделию, текущий статус пересчитывается. Обмен — пара или цепочка (каждое изделие получает от следующего по кругу).${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только источником даты.` : ""}</div>
     <label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
-      <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, поменявшиеся местами (скрыто без обмена: ${sm.count - sm.pairs * 2})</label>`
+      <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, поменявшиеся местами (скрыто без обмена: ${sm.count - sm.moved})</label>`
     + scdRbGrouped(rows, шапка, строка, сводка);
   document.getElementById("scd-rebal-all").addEventListener("change", (e) => { scdRebalAll = !e.target.checked; scdRenderRebalance(); });
   scdBindRbFold(box);
 }
 function scdBindRbFold(box) {
+  const показатьЦепочку = (no, открыть) => {
+    for (const r of box.querySelectorAll(`tr.scd-chain-row[data-chain="${no}"]`)) r.hidden = !открыть;
+    const b = box.querySelector(`[data-rb-chain="${no}"]`);
+    if (b) { b.setAttribute("aria-expanded", String(открыть)); b.textContent = b.textContent.replace(/^[▸▾]/, открыть ? "▾" : "▸"); }
+  };
+  for (const b of box.querySelectorAll("[data-rb-chain]")) b.addEventListener("click", () => показатьЦепочку(b.dataset.rbChain, b.getAttribute("aria-expanded") !== "true"));
   for (const b of box.querySelectorAll("[data-rb-fold]")) b.addEventListener("click", () => {
-    for (const d of box.querySelectorAll("details.scd-rb-grp")) d.open = b.dataset.rbFold === "open";
+    const открыть = b.dataset.rbFold === "open";
+    for (const d of box.querySelectorAll("details.scd-rb-grp")) d.open = открыть;
+    for (const c of box.querySelectorAll("[data-rb-chain]")) показатьЦепочку(c.dataset.rbChain, открыть);
   });
 }
 
@@ -19772,7 +19799,7 @@ function scdUpdateSummary() {
   if (scdKind === SCD_KIND_REBALANCE) {
     const sm = scdRebalance && scdRebalance.summary;
     строка.textContent = scdRebalIds.length
-      ? `Изделий: ${scdRebalIds.length}${sm ? `, пар к обмену: ${sm.pairs}, просрочено ${sm.late_before} → ${sm.late_after}, опоздание сокращено на ${sm.late_days_before - sm.late_days_after} дн.` : ""}`
+      ? `Изделий: ${scdRebalIds.length}${sm ? `, обменов: ${sm.pairs + sm.chains} (затронуто изд.: ${sm.moved}), просрочено ${sm.late_before} → ${sm.late_after}, опоздание сокращено на ${sm.late_days_before - sm.late_days_after} дн.` : ""}`
       : "Нет изделий для балансировки";
     провести.disabled = !scdRebalIds.length || scdPosted();
     return;
@@ -20196,7 +20223,7 @@ let scdDocsCache = [];
 const SCD_TAB_NOTES = {
   [SCD_KIND_SUPPLIER]: "Замена поставщика — перевод НЕПОСТАВЛЕННОГО остатка контракта на другой контракт; изделия со статусом «Отгружен» и выше не переносятся.",
   [SCD_KIND_SWAP]: "Обмен привязками — изделия одной марки на двух контрактах меняются попарно контрактом, плановой датой и историей статусов, когда привязку перепутали.",
-  [SCD_KIND_REBALANCE]: "Балансировка поставки — изделия одной марки меняются местами парами (плановая дата, контракт и статус уходят партнёру по паре), чтобы убрать просрочку относительно требуемых дат.",
+  [SCD_KIND_REBALANCE]: "Балансировка поставки — изделия одной марки меняются местами (парами или цепочками: плановая дата, контракт и статус уходят другому изделию), чтобы убрать просрочку относительно требуемых дат.",
 };
 
 function scdRenderTabs() {
@@ -20546,7 +20573,7 @@ document.getElementById("scd-post").addEventListener("click", async () => {
     const итог = await api(`/supplier-changes/${doc.id}/post`, { method: "POST" });
     ошибка.textContent = "";
     showToast(итог.kind === SCD_KIND_REBALANCE
-      ? `Документ № ${итог.number} проведён: поменялись местами ${итог.pairs} пар (${итог.moved} изд.) — даты, контракты и статусы перешли к партнёрам`
+      ? `Документ № ${итог.number} проведён: поменялись местами ${итог.moved} изд. (${итог.pairs} пар, ${итог.chains} цепочек) — даты, контракты и статусы перешли к другим изделиям`
       : `Документ № ${итог.number} проведён`, "success");
     // Перечитываем документ ЦЕЛИКОМ, а не показываем то, что было на экране:
     // проведение изменило статусы и контракты изделий, и список, собранный

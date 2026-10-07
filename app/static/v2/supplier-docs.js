@@ -325,7 +325,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       const c = contractById(x.from), sm = x.rb?.summary;
       return undo
         ? `Отменить проведение балансировки № ${x.number}?\nИзделиям (${x.chosen.size} шт.) вернутся плановые даты поставки, какими они были до документа. Контракт, статус и история не менялись.`
-        : `Провести балансировку поставки № ${x.number}?\n${x.mark === RB_ALL ? "Все марки" : `Марка «${x.mark}»`}, ${x.from === RB_ALL ? `все контракты (${x.pool ? "общий пул дат между контрактами" : "каждый контракт отдельно"})` : `контракт «${c ? contractLabel(c) : "—"}»`}, изделий: ${x.chosen.size}.\nНабор согласованных плановых дат поставщика не меняется: изделия одной марки меняются МЕСТАМИ парами: плановая дата, контракт и вся история статусов уходят к партнёру (текущий статус и фактическая дата пересчитываются), остальные изделия не затрагиваются.${sm ? `\nПросрочка (плановая позже требуемой) по расчёту сейчас: изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.; обмен пройдут ${sm.pairs} пар (${sm.pairs * 2} изд. из ${sm.count}).` : ""}\nПроведение пересчитывает раскладку по данным на момент проведения. Отмена — кнопкой «Отменить проведение».`;
+        : `Провести балансировку поставки № ${x.number}?\n${x.mark === RB_ALL ? "Все марки" : `Марка «${x.mark}»`}, ${x.from === RB_ALL ? `все контракты (${x.pool ? "общий пул дат между контрактами" : "каждый контракт отдельно"})` : `контракт «${c ? contractLabel(c) : "—"}»`}, изделий: ${x.chosen.size}.\nНабор согласованных плановых дат поставщика не меняется: изделия одной марки меняются МЕСТАМИ (парами или цепочками): плановая дата, контракт и вся история статусов уходят к другому изделию (текущий статус и фактическая дата пересчитываются), остальные изделия не затрагиваются.${sm ? `\nПросрочка (плановая позже требуемой) по расчёту сейчас: изделий ${sm.late_before} → ${sm.late_after}, максимум ${sm.max_delay_before} → ${sm.max_delay_after} дн.; обмен пройдут ${sm.pairs} пар и ${sm.chains} цепочек (${sm.moved} изд. из ${sm.count}).` : ""}\nПроведение пересчитывает раскладку по данным на момент проведения. Отмена — кнопкой «Отменить проведение».`;
     }
     if (x.kind === "link_swap") {
       const pairs = Math.min(x.sideA.length, x.sideB.length);
@@ -367,7 +367,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     try {
       const d = await api.post(path, x.version ? { expected_version: x.version } : {});
       S.f = fromDoc(d);
-      S.message = undo ? `Проведение отменено: ${d.elements ?? ""} изд. возвращены в состояние до документа (плановые даты, статусы и история — как были). Документ снова черновик.` : `Документ № ${d.number} проведён: ${x.kind === "date_rebalance" ? `поменялись местами ${d.pairs} пар (${d.moved} изд.): плановые даты, контракты и статусы перешли к партнёрам по паре.` : `${d.moved ?? d.pairs ?? ""} ${d.pairs != null ? "пар" : "изд."} перенесено.`} Отмена — кнопкой «Отменить проведение».`;
+      S.message = undo ? `Проведение отменено: ${d.elements ?? ""} изд. возвращены в состояние до документа (плановые даты, статусы и история — как были). Документ снова черновик.` : `Документ № ${d.number} проведён: ${x.kind === "date_rebalance" ? `поменялись местами ${d.moved} изд. (${d.pairs} пар, ${d.chains} цепочек): плановые даты, контракты и статусы перешли к другим изделиям.` : `${d.moved ?? d.pairs ?? ""} ${d.pairs != null ? "пар" : "изд."} перенесено.`} Отмена — кнопкой «Отменить проведение».`;
       S.busy = false; paint(); loadFormDataSoon();
     } catch (err) {
       S.busy = false;
@@ -590,18 +590,20 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <p class="${equal ? "v2-muted" : "v2-auth-error"}">${equal ? `Пар к обмену: ${pairs}` : `Сторона 1: ${x.sideA.length} шт., сторона 2: ${x.sideB.length} шт.${x.sideA.length || x.sideB.length ? " — количества не совпадают, провести нельзя" : ""}`}</p>`;
   }
 
-  // Табличная часть балансировки — ПАРЫ изделий, поменявшихся местами (2026-10-06): в строке видно, с кем изделие обменялось статусом и
-  // плановой датой. Пары сгруппированы: поставщик → контракт → марка (по ведущему изделию пары), группы сворачиваются; уровень, на котором
-  // у документа одно значение, не показывается; без уровней — плоская таблица. Изделия без обмена скрыты, пока не включена галочка.
-  const isPairRow = (i) => !!(i.partner_id || i.pair_no);
+  // Табличная часть балансировки — ОБМЕНЫ изделий местами (2026-10-06). Обмен — пара (в строке видно, с кем изделие поменялось статусом
+  // и плановой датой) или цепочка из трёх и более изделий (каждое получает дату, статус и контракт следующего по кругу; в таблице
+  // цепочка свёрнута до одной строки). Обмены сгруппированы: поставщик → контракт → марка (по ведущему изделию), группы сворачиваются;
+  // уровень, на котором у документа одно значение, не показывается. Изделия без обмена скрыты, пока не включена галочка.
+  const inExchange = (i) => !!(i.partner_id || i.pair_no);
   function rbGrouped(x, allRows, head, rowHtml, summary) {
-    const rows = allRows.filter((i) => isPairRow(i) || x.rbAll === true);   // без обмена — только по галочке
-    if (!rows.length) return `<p class="v2-muted">Пар нет.</p>`;
+    const visible = (list) => x.rbAll === true ? list : list.filter(inExchange);   // без обмена — только по галочке
+    const rows = visible(allRows);
+    if (!rows.length) return `<p class="v2-muted">Обменов нет.</p>`;
     const norm = (v) => String(v ?? "—").trim() || "—";
     const levels = [["counterparty", "Поставщик"], ["contract_name", "Контракт"], ["mark", "Марка"]]
       .filter(([k]) => new Set(rows.map((i) => norm(i[k]).toLowerCase())).size > 1);
-    const table = (list) => `<table class="v2-table"><thead><tr>${head}</tr></thead><tbody>${list.map(rowHtml).join("")}</tbody></table>`;
-    if (!levels.length) return `<div style="max-height:520px;overflow:auto">${table(rows)}</div>`;
+    const table = (list) => `<table class="v2-table"><thead><tr>${head}</tr></thead><tbody>${visible(list).map(rowHtml).join("")}</tbody></table>`;
+    if (!levels.length) return `<div style="max-height:620px;overflow:auto">${table(allRows)}</div>`;
     const isOpen = (key, depth) => {
       const def = x.rbMode === "all" ? true : x.rbMode === "none" ? false : depth < levels.length - 1;
       return x.rbOpen.has(key) ? !def : def;
@@ -610,12 +612,12 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       if (depth === levels.length) return `<div class="v2-rb-body">${table(list)}</div>`;
       const [field, title] = levels[depth], groups = new Map();
       for (const i of list) { const k = norm(i[field]); if (!groups.has(k.toLowerCase())) groups.set(k.toLowerCase(), { name: k, list: [] }); groups.get(k.toLowerCase()).list.push(i); }
-      return [...groups].map(([lk, g]) => {
+      return [...groups].filter(([, g]) => visible(g.list).length).map(([lk, g]) => {
         const key = `${path}/${lk}`, open = isOpen(key, depth);
         return `<div class="v2-rb-grp v2-rb-d${depth}"><button type="button" class="v2-rb-toggle" data-a="rb-toggle" data-k="${esc(key)}" data-d="${depth}" aria-expanded="${open}"><span aria-hidden="true">${open ? "▾" : "▸"}</span> <small>${title}</small> <b>${esc(g.name)}</b></button><span class="v2-rb-cells">${summary(g.list).map(([k, v]) => `<span class="v2-rb-m"><small>${k}</small>${v}</span>`).join("")}</span></div>${open ? `<div class="v2-rb-sub">${level(g.list, depth + 1, key)}</div>` : ""}`;
       }).join("");
     }
-    return `<div class="v2-rb-tools"><button type="button" class="v2-btn" data-a="rb-expand" data-m="all">Развернуть всё</button><button type="button" class="v2-btn" data-a="rb-expand" data-m="none">Свернуть всё</button></div>${level(rows, 0, "")}`;
+    return `<div class="v2-rb-tools"><button type="button" class="v2-btn" data-a="rb-expand" data-m="all">Развернуть всё</button><button type="button" class="v2-btn" data-a="rb-expand" data-m="none">Свернуть всё</button></div>${level(allRows, 0, "")}`;
   }
   const stLabel = (c) => STATUS[c] || c || "—";
   // Цветовая индикация статуса (2026-10-06): цвет — из настроек сервиса (/status-colors), тот же, что на схеме; нет цвета — нейтральный серый
@@ -623,18 +625,33 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     return `<span class="v2-st" style="--c:${col}">${esc(stLabel(c))}</span>`; };
   const stMoved = (a, b) => a === b ? stChip(a) : `${stChip(a)} <span aria-hidden="true">→</span> ${stChip(b)}`;
   const moved = (a, b) => a === b ? esc(a) : `${esc(a)} → <b>${esc(b)}</b>`;
+  // Опоздание = плановая дата позже требуемой; «сокращено» — на сколько дней оно уменьшилось
+  const late = (i, k) => Math.max(0, i?.[k] ?? 0);
+  const gainHtml = (d) => d > 0 ? `<b class="v2-good">−${d} дн.</b>` : d < 0 ? `<b class="v2-bad">+${-d} дн.</b>` : `<span class="v2-muted">0</span>`;
+  const placeLine = (i, withContract) => `${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${withContract && i.contract_name ? " · " + esc(i.contract_name) : ""}</small>`;
+  // Строка-заголовок цепочки (кнопка) и, если развёрнута, строки её изделий; open — по состоянию rbOpen (в режиме «развернуть всё» — по умолчанию открыта)
+  const chainOpen = (x, key) => x.rbOpen.has(key) ? x.rbMode !== "all" : x.rbMode === "all";
+  const chainButton = (x, key, n, open) => `<button type="button" class="v2-rb-toggle v2-rb-chainbtn" data-a="rb-toggle" data-k="${key}" aria-expanded="${open}"><span aria-hidden="true">${open ? "▾" : "▸"}</span> Цепочка из ${n} изд.: каждое получает дату, статус и контракт следующего по кругу</button>`;
 
   function rebalanceHtml(x, ro) {
     if (x.status === "posted" || ro) {
-      const items = x.items || [], byPair = new Map();
-      for (const i of items) if (i.pair_no && i.side === 2) byPair.set(i.pair_no, i);
+      const items = x.items || [], byNo = new Map();
+      for (const i of items) if (i.pair_no) { if (!byNo.has(i.pair_no)) byNo.set(i.pair_no, []); byNo.get(i.pair_no).push(i); }
+      for (const l of byNo.values()) l.sort((p, q) => p.side - q.side);              // порядок цикла: место i-го получает от (i+1)-го
       const rows = items.filter((i) => !i.pair_no || i.side === 1).sort((p, q) => (p.pair_no ?? 1e9) - (q.pair_no ?? 1e9));
       const head = `<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th></th><th>Поменялось местами с</th><th>Статус</th><th>Плановая дата</th>`;
-      const cell = (i) => `<td>${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${stMoved(i.status_at_move || i.current_status, i.current_status)}</td><td>${moved(i.prev_plan ? ruDate(i.prev_plan) : "—", i.plan_now ? ruDate(i.plan_now) : "—")}</td>`;
-      const row = (i) => { const q = i.pair_no ? byPair.get(i.pair_no) : null; return `<tr><td>${i.pair_no ?? "—"}</td>${cell(i)}<td>${q ? "⇄" : ""}</td>${q ? cell(q) : `<td colspan="3" class="v2-muted">без обмена</td>`}</tr>`; };
-      const sum = (l) => [["пар", l.filter((i) => i.pair_no).length]];
+      const cell = (i, withContract) => `<td>${placeLine(i, withContract)}</td><td>${stMoved(i.status_at_move || i.current_status, i.current_status)}</td><td>${moved(i.prev_plan ? ruDate(i.prev_plan) : "—", i.plan_now ? ruDate(i.plan_now) : "—")}</td>`;
+      const row = (a) => {
+        if (!a.pair_no) return `<tr><td>—</td>${cell(a, true)}<td colspan="4" class="v2-muted">без обмена</td></tr>`;
+        const m = byNo.get(a.pair_no);
+        if (m.length === 2) return `<tr><td>${a.pair_no}</td>${cell(m[0], true)}<td>⇄</td>${cell(m[1], true)}</tr>`;
+        const key = `c${a.pair_no}`, open = chainOpen(x, key);
+        return `<tr class="v2-rb-chain"><td>${a.pair_no}</td><td colspan="7">${chainButton(x, key, m.length, open)}</td></tr>`
+          + (open ? m.map((i, t) => `<tr><td></td>${cell(i, true)}<td>←</td><td colspan="3">${placeLine(m[(t + 1) % m.length], true)}</td></tr>`).join("") : "");
+      };
+      const sum = (l) => { const ex = l.filter((i) => i.pair_no); return [["обменов", ex.length], ["изд.", ex.reduce((n, i) => n + byNo.get(i.pair_no).length, 0)]]; };
       const без = rows.filter((i) => !i.pair_no).length;
-      return `<h4>Изделия документа (${items.length})</h4>${items.length ? `${без ? `<label class="v2-role-check"><input type="checkbox" data-a="rb-singles" ${x.rbAll === true ? "checked" : ""}><span>Показывать и изделия без обмена (${без})</span></label>` : ""}${rbGrouped(x, rows, head, row, sum)}` : ""}${x.status === "posted" ? "" : `<p class="v2-muted">Пары, статусы и колонка «было» заполняются при проведении.</p>`}`;
+      return `<h4>Изделия документа (${items.length})</h4>${items.length ? `${без ? `<label class="v2-role-check"><input type="checkbox" data-a="rb-singles" ${x.rbAll === true ? "checked" : ""}><span>Показывать и изделия без обмена (${без})</span></label>` : ""}${rbGrouped(x, rows, head, row, sum)}` : ""}${x.status === "posted" ? "" : `<p class="v2-muted">Обмены, статусы и колонка «было» заполняются при проведении.</p>`}`;
     }
     if (!x.from) return `<p class="v2-muted">Выберите контракт (поставщика) и марку — или «Все контракты» / «Все марки» — ниже появится, какие изделия поменяются местами.</p>`;
     if (!x.mark) return `<p class="v2-muted">Выберите марку или «Все марки».</p>`;
@@ -645,26 +662,30 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     if (!items.length) return `<p class="v2-note">Подходящих изделий нет: нужны изделия на контракте, ещё не смонтированные (в том числе отгруженные и доставленные), с плановой датой поставки и такие, у которых обмен местами убирает просрочку.</p>`;
     const dl = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
     const byId = new Map(items.map((i) => [i.element_id, i]));
-    const rows = items.filter((i) => i.lead || !i.partner_id);
-    const single = rows.filter((i) => !i.partner_id).length;
+    const rows = items.filter((i) => i.pair_no ? i.chain_pos === 1 : true);          // представитель обмена (ведущее изделие) и изделия без обмена
+    const members = (a) => { const m = [a]; let q = byId.get(a.partner_id); while (q && q !== a) { m.push(q); q = byId.get(q.partner_id); } return m; };
     const head = `<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>`;
-    const cell = (i, other) => `<td>${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${other && other.contract_name !== i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${stMoved(i.status, i.status_new)}</td><td>${moved(ruDate(i.plan_old), ruDate(i.plan_new))}</td><td>${moved(dl(i.delay_old), dl(i.delay_new))}</td>`;
-    const row = (a) => { const q = a.partner_id ? byId.get(a.partner_id) : null;
-      return `<tr style="${q ? "font-weight:600" : ""}"><td>${a.pair_no ?? "—"}</td>${cell(a, null)}<td>${q ? "⇄" : ""}</td>${q ? cell(q, a) + `<td class="v2-rb-gain">${gainHtml(lateDays(a, q, "delay_old") - lateDays(a, q, "delay_new"))}</td>` : `<td colspan="5" class="v2-muted">без обмена</td>`}</tr>`; };
-    // Опоздание = плановая дата позже требуемой; «сокращено» — на сколько дней оно уменьшилось у обоих изделий пары
-    const late = (i, k) => Math.max(0, i?.[k] ?? 0);
-    const lateDays = (a, q, k) => late(a, k) + late(q, k);
-    const gainHtml = (d) => d > 0 ? `<b class="v2-good">−${d} дн.</b>` : d < 0 ? `<b class="v2-bad">+${-d} дн.</b>` : `<span class="v2-muted">0</span>`;
-    const gsum = (l) => { const pr = l.filter((i) => i.partner_id), all = l.flatMap((i) => i.partner_id ? [i, byId.get(i.partner_id)] : [i]);
+    const cell = (i, other) => `<td>${placeLine(i, false).replace(/<\/small>$/, "")}${other && other.contract_name !== i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${stMoved(i.status, i.status_new)}</td><td>${moved(ruDate(i.plan_old), ruDate(i.plan_new))}</td><td>${moved(dl(i.delay_old), dl(i.delay_new))}</td>`;
+    const gainOf = (l) => l.reduce((n, i) => n + late(i, "delay_old") - late(i, "delay_new"), 0);
+    const row = (a) => {
+      if (!a.pair_no) return `<tr><td>—</td>${cell(a, null)}<td colspan="6" class="v2-muted">без обмена</td></tr>`;
+      const m = members(a);
+      if (m.length === 2) return `<tr style="font-weight:600"><td>${a.pair_no}</td>${cell(m[0], null)}<td>⇄</td>${cell(m[1], m[0])}<td class="v2-rb-gain">${gainHtml(gainOf(m))}</td></tr>`;
+      const key = `c${a.pair_no}`, open = chainOpen(x, key);
+      return `<tr class="v2-rb-chain"><td>${a.pair_no}</td><td colspan="9">${chainButton(x, key, m.length, open)}</td><td class="v2-rb-gain">${gainHtml(gainOf(m))}</td></tr>`
+        + (open ? m.map((i, t) => `<tr><td></td>${cell(i, null)}<td>←</td><td colspan="4">${placeLine(m[(t + 1) % m.length], true)}</td><td class="v2-rb-gain">${gainHtml(late(i, "delay_old") - late(i, "delay_new"))}</td></tr>`).join("") : "");
+    };
+    const gsum = (l) => {
+      const all = l.flatMap((i) => i.pair_no ? members(i) : [i]), ex = l.filter((i) => i.pair_no);
       const dB = all.reduce((n, i) => n + late(i, "delay_old"), 0), dA = all.reduce((n, i) => n + late(i, "delay_new"), 0);
-      return [["пар", pr.length], ["просрочено изд.", `${all.filter((i) => i.delay_old > 0).length} → ${all.filter((i) => i.delay_new > 0).length}`],
+      return [["обменов", ex.length], ["изд.", all.filter((i) => i.pair_no).length], ["просрочено изд.", `${all.filter((i) => i.delay_old > 0).length} → ${all.filter((i) => i.delay_new > 0).length}`],
         ["опоздание, дн.", `${dB} → ${dA}`], ["сокращено", gainHtml(dB - dA)]]; };
     const tile = (k, v, sub = "") => `<div class="v2-rb-tile"><small>${k}</small><b>${v}</b>${sub ? `<span class="v2-muted">${sub}</span>` : ""}</div>`;
     const saved = sm.late_days_before - sm.late_days_after;
     return `<h4>Что изменится</h4>
-      <div class="v2-rb-tiles">${tile("Пар к обмену", sm.pairs, `${sm.pairs * 2} из ${sm.count} изд.`)}${tile("Просрочено изделий", `${sm.late_before} → ${sm.late_after}`, `−${sm.late_before - sm.late_after}`)}${tile("Суммарное опоздание", `${sm.late_days_before} → ${sm.late_days_after} дн.`, "сумма по изделиям")}${tile("Опоздание сокращено", `<span class="v2-good">−${saved} дн.</span>`, saved > 0 && sm.late_days_before ? `на ${Math.round(saved * 100 / sm.late_days_before)} %` : "")}${tile("Максимальное опоздание", `${sm.max_delay_before} → ${sm.max_delay_after} дн.`)}</div>
-      <p class="v2-muted">Изделия меняются местами: плановая дата, контракт и вся история статусов уходят к партнёру, текущий статус пересчитывается.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только партнёром.` : ""}</p>
-      <label class="v2-role-check"><input type="checkbox" data-a="rb-only" ${x.rbAll !== true ? "checked" : ""}><span>Показывать только изделия, поменявшиеся местами (скрыто без обмена: ${sm.count - sm.pairs * 2})</span></label>
+      <div class="v2-rb-tiles">${tile("Обменов", sm.pairs + sm.chains, `${sm.pairs} пар, ${sm.chains} цепочек · ${sm.moved} из ${sm.count} изд.`)}${tile("Просрочено изделий", `${sm.late_before} → ${sm.late_after}`, `−${sm.late_before - sm.late_after}`)}${tile("Суммарное опоздание", `${sm.late_days_before} → ${sm.late_days_after} дн.`, "сумма по изделиям")}${tile("Опоздание сокращено", `<span class="v2-good">−${saved} дн.</span>`, saved > 0 && sm.late_days_before ? `на ${Math.round(saved * 100 / sm.late_days_before)} %` : "")}${tile("Максимальное опоздание", `${sm.max_delay_before} → ${sm.max_delay_after} дн.`)}</div>
+      <p class="v2-muted">Изделия меняются местами: плановая дата, контракт и вся история статусов уходят к другому изделию, текущий статус пересчитывается. Обмен — пара или цепочка (каждое изделие получает от следующего по кругу).${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только источником даты.` : ""}</p>
+      <label class="v2-role-check"><input type="checkbox" data-a="rb-only" ${x.rbAll !== true ? "checked" : ""}><span>Показывать только изделия, поменявшиеся местами (скрыто без обмена: ${sm.count - sm.moved})</span></label>
       ${rbGrouped(x, rows, head, row, gsum)}`;
   }
 

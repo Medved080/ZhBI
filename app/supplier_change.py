@@ -531,59 +531,214 @@ def mark_contracts(
 # ------------------------------------------------- балансировка поставки (A4)
 
 def _rebalance_allocate(rows: list, need: dict) -> list:
-    """Раскладка внутри группы одинаковых изделий — ПАРНЫЕ обмены местами (2026-10-06, запрос пользователя: «по сути меняется место»).
+    """Раскладка внутри группы одинаковых изделий: какое изделие какое МЕСТО займёт (изделия меняются местами).
 
-    Просроченное изделие (плановая позже требуемой) меняется местом с изделием, у которого плановая дата раньше и подходит
-    просроченному, а само оно после обмена тоже в срок (выбирается самый «тугой» подходящий партнёр — запас остальных не тратим).
-    Каждое изделие участвует НЕ БОЛЕЕ ЧЕМ В ОДНОМ обмене: так у каждого есть один видимый партнёр, а проведение сводится к набору
-    независимых пар. Изделия без требуемой даты могут быть только партнёром — срочность у них не определена.
+    Из нескольких вариантов берётся лучший по (числу просроченных, максимальной просрочке, сумме дней опоздания, числу
+    затронутых изделий) — но только из тех, что НЕ ХУЖЕ прежнего итога (до перехода на обмен местами) сразу по первым трём
+    показателям. Варианты (плановые даты поставщика только переходят между изделиями группы):
 
-    При обмене к изделию переходят плановая дата, контракт и вся история статусов партнёра (как в «Обмене привязками»), поэтому
-    у строки результата есть и новая плановая дата, и новый статус. Результат детерминирован; повторный расчёт по уже
-    сбалансированному набору ничего не меняет. Предыдущий вариант «полная очередь» убран: общая перестановка не сводится к парам.
+    * **P — пары по выигрышу.** Непересекающиеся пары: просроченное изделие меняется с изделием, у которого дата раньше, если в сумме
+      по паре просрочка уменьшается (партнёр может стать чуть позже, если выигрыш больше потери). Пары выбираются по убыванию выигрыша.
+    * **C — строгие пары.** Просроченное меняется только с тем, кто после обмена тоже в срок (самый «тугой» партнёр).
+    * **A — минимум обменов, как раньше.** Последовательные обмены, одно изделие может участвовать в нескольких (получаются цепочки).
+    * **A2** — то же, но уже вставшее в срок изделие повторно не меняется.
+    * **B — полная очередь.** Изделия по возрастанию требуемой даты получают плановые даты по возрастанию. Оптимум по максимальной
+      просрочке и сумме дней, но сдвигает почти весь набор. Участвует только если прежний итог был ею (она была строго лучше «минимума
+      обменов» по (просроченным, максимуму)) или она строго лучше любого локального варианта (2026-10-06: результат не хуже прежнего).
+
+    Вариант задаёт, какие плановые даты где окажутся; по нему строится перестановка «место ← изделие» (`receives`): изделие, чья дата
+    досталась месту, переезжает на это место со СВОИМИ статусом, историей и контрактом (механика «Обмена привязками»). Перестановка
+    разбивается на циклы: цикл из двух — пара, из трёх и более — цепочка (каждое получает от следующего по кругу). Изделия без
+    требуемой даты срочностью не обладают и могут быть только источником ранней даты. Результат детерминирован; повторный расчёт по
+    уже сбалансированному набору ничего не меняет.
     """
     from datetime import date
 
-    def days(plan, req):
-        if not plan or not req:
-            return None
-        return (date.fromisoformat(str(plan)[:10]) - date.fromisoformat(str(req)[:10])).days
+    def ordinal(v):
+        return date.fromisoformat(str(v)[:10]).toordinal() if v else None
 
-    старые = {r["id"]: str(r["planned_delivery_date"])[:10] for r in rows}
+    ids = sorted(r["id"] for r in rows)
     by = {r["id"]: r for r in rows}
-    партнёр: dict = {}
-    просроченные = sorted((i for i in старые if (days(старые[i], need.get(i)) or 0) > 0),
-                          key=lambda i: (-(days(старые[i], need.get(i)) or 0), i))
-    for i in просроченные:
-        if i in партнёр:
+    old = {i: ordinal(by[i]["planned_delivery_date"]) for i in ids}
+    nd = {i: ordinal(need.get(i)) for i in ids}                        # требуемая дата (None — нет)
+
+    def late(plan_day, i):
+        return max(0, plan_day - nd[i]) if nd[i] is not None else 0
+
+    def key(plan):
+        lates = [late(plan[i], i) for i in ids]
+        return (sum(1 for x in lates if x > 0), max(lates, default=0), sum(lates), sum(1 for i in ids if plan[i] != old[i]))
+
+    def plan_min_swaps(skip_on_time):
+        plan = dict(old)
+        queue = sorted((i for i in ids if late(plan[i], i) > 0), key=lambda i: (-late(plan[i], i), i))
+        for i in queue:
+            if skip_on_time and late(plan[i], i) == 0:
+                continue
+            ni, best = nd[i], None
+            for j in ids:
+                pj = plan[j]
+                if j == i or pj >= plan[i] or pj > ni:
+                    continue        # партнёр: дата раньше, и просроченному она подходит
+                nj = nd[j]
+                if nj is not None and plan[i] > nj:
+                    continue        # после обмена партнёр сам бы опоздал
+                k = (10 ** 6 if nj is None else nj - plan[i], j)      # самый «тугой» подходящий — запас остальных не тратим
+                if best is None or k < best[0]:
+                    best = (k, j)
+            if best:
+                j = best[1]
+                plan[i], plan[j] = plan[j], plan[i]
+        return plan
+
+    def plan_strict_pairs():
+        plan, taken = dict(old), set()
+        for i in sorted((i for i in ids if late(old[i], i) > 0), key=lambda i: (-late(old[i], i), i)):
+            if i in taken:
+                continue
+            best = None
+            for j in ids:
+                if j == i or j in taken or old[j] >= old[i] or old[j] > nd[i]:
+                    continue
+                if nd[j] is not None and old[i] > nd[j]:
+                    continue
+                k = (10 ** 6 if nd[j] is None else nd[j] - old[i], j)
+                if best is None or k < best[0]:
+                    best = (k, j)
+            if best:
+                j = best[1]
+                taken.update((i, j))
+                plan[i], plan[j] = old[j], old[i]
+        return plan
+
+    def plan_gain_pairs():
+        cand = []
+        for i in ids:
+            li = late(old[i], i)
+            if li == 0:
+                continue
+            for j in ids:
+                if j == i or old[j] >= old[i]:
+                    continue
+                lj, li2, lj2 = late(old[j], j), late(old[j], i), late(old[i], j)
+                gc = (li > 0) + (lj > 0) - (li2 > 0) - (lj2 > 0)
+                gd = li + lj - li2 - lj2
+                if gc > 0 or (gc == 0 and gd > 0):
+                    cand.append((-gc, -gd, i, j))
+        cand.sort()
+        plan, taken = dict(old), set()
+        for _, _, i, j in cand:
+            if i in taken or j in taken:
+                continue
+            taken.update((i, j))
+            plan[i], plan[j] = old[j], old[i]
+        return plan
+
+    def plan_full_queue():
+        queue = sorted(ids, key=lambda i: (nd[i] is None, nd[i] or 0, old[i], i))
+        return dict(zip(queue, sorted(old.values())))
+
+    def derive(plan):
+        """Перестановка «место ← изделие» по плану дат: у места новая дата = старая дата изделия-источника; при одинаковых датах
+        изделие, чья дата и так на месте, остаётся (лишних обменов нет), остальные сопоставляются по номеру."""
+        sources: dict = {}
+        targets: dict = {}
+        for i in ids:
+            sources.setdefault(old[i], []).append(i)
+            targets.setdefault(plan[i], []).append(i)
+        got: dict = {}
+        for day, t_list in targets.items():
+            s_list = sources.get(day, [])
+            fixed = set(s_list) & set(t_list)
+            for t, src in zip([x for x in t_list if x not in fixed], [x for x in s_list if x not in fixed]):
+                got[t] = src
+        return got
+
+    def plan_of(got):
+        return {i: old[got.get(i, i)] for i in ids}
+
+    def prune(got):
+        """Убрать бесполезные участия: изделие x выбрасывается из цикла (оно остаётся на своём месте, а получавшее от него место берёт
+        у его источника), если от этого не растёт ни число просроченных, ни сумма дней, ни максимум. Так из «полной очереди» уходят
+        изделия, которые и так в срок и просто сдвигались по очереди: статусы и история у них зря не переезжают."""
+        got = dict(got)
+        given = {src: t for t, src in got.items()}
+        plan = plan_of(got)
+        cnt = sum(1 for i in ids if late(plan[i], i) > 0)
+        tot = sum(late(plan[i], i) for i in ids)
+        mx = max((late(plan[i], i) for i in ids), default=0)
+        changed = True
+        while changed:
+            changed = False
+            for x in sorted(got):
+                if x not in got:
+                    continue
+                t, src = given[x], got[x]                     # место t держит дату x, место x держит дату src
+                lt, lx = late(old[x], t), late(old[src], x)
+                lt2, lx2 = late(old[src], t), late(old[x], x)  # после выбрасывания: t берёт дату src, x остаётся при своей
+                n_cnt = cnt - (lt > 0) - (lx > 0) + (lt2 > 0) + (lx2 > 0)
+                n_tot = tot - lt - lx + lt2 + lx2
+                if n_cnt <= cnt and n_tot <= tot and lt2 <= mx and lx2 <= mx:
+                    cnt, tot = n_cnt, n_tot
+                    del got[x], given[x]
+                    if src == t:
+                        del got[t], given[t]
+                    else:
+                        got[t] = src
+                        given[src] = t
+                    changed = True
+        return got
+
+    def keyed(got):
+        return key(plan_of(got))
+
+    raw_variants = (plan_gain_pairs(), plan_strict_pairs(), plan_min_swaps(True), plan_min_swaps(False))
+    raw_full = plan_full_queue()
+    # Прежний итог (до перехода на обмен местами): «минимум обменов», а «полная очередь» — только если строго лучше по (просроченным, максимуму).
+    old_is_full = key(raw_full)[:2] < key(raw_variants[3])[:2]
+    reference = key(raw_full if old_is_full else raw_variants[3])
+    variants = [prune(derive(pl)) for pl in raw_variants]
+    full = prune(derive(raw_full))
+    best_local = min(variants, key=keyed)
+    candidates = list(variants)
+    if old_is_full or keyed(full)[:2] < keyed(best_local)[:2]:
+        candidates.append(full)        # полная очередь — только если прежний итог был ею или она строго лучше любого локального
+    # Результат не хуже прежнего ОДНОВРЕМЕННО по числу просроченных, максимальной просрочке и сумме дней опоздания; среди таких —
+    # лучший, а при равенстве — с меньшим числом затронутых изделий
+    feasible = [g for g in candidates if all(x <= y for x, y in zip(keyed(g)[:3], reference[:3]))]
+    receives = min(feasible, key=keyed)
+
+    seen: set = set()
+    cycles: list = []
+    for t in sorted(receives):
+        if t in seen:
             continue
-        ni = need[i]
-        лучший = None
-        for j, pj in старые.items():
-            if j == i or j in партнёр or pj >= старые[i] or pj > ni:
-                continue        # партнёр: дата раньше, и просроченному она подходит
-            nj = need.get(j)
-            if nj is not None and старые[i] > nj:
-                continue        # после обмена партнёр сам бы опоздал
-            запас = 10 ** 6 if nj is None else (date.fromisoformat(nj) - date.fromisoformat(старые[i])).days
-            ключ = (запас, j)
-            if лучший is None or ключ < лучший[0]:
-                лучший = (ключ, j)
-        if лучший:
-            партнёр[i] = лучший[1]
-            партнёр[лучший[1]] = i
-    ведущие = {i for i in партнёр if i in просроченные}      # ведущий в паре — тот, кого «спасаем» (был просрочен)
+        cyc, x = [], t
+        while x not in seen:
+            seen.add(x)
+            cyc.append(x)
+            x = receives[x]
+        lead = max(cyc, key=lambda i: (late(old[i], i), -i))             # ведущий — самое просроченное изделие цикла
+        k = cyc.index(lead)
+        cycles.append(cyc[k:] + cyc[:k])        # место i-го получает от (i+1)-го, последнее — от первого
+    pos = {x: (n + 1, len(c)) for c in cycles for n, x in enumerate(c)}
+
+    def iso(day):
+        return date.fromordinal(day).isoformat()
 
     out = []
-    for r in sorted(rows, key=lambda r: (need.get(r["id"]) is None, need.get(r["id"]) or "", старые[r["id"]], r["id"])):
-        i, req = r["id"], need.get(r["id"])
-        j = партнёр.get(i)
-        новая = старые[j] if j else старые[i]
+    for i in sorted(ids, key=lambda i: (nd[i] is None, nd[i] or 0, old[i], i)):
+        r, src = by[i], receives.get(i)
+        new_day = old[src] if src else old[i]
+        delay_old = (old[i] - nd[i]) if nd[i] is not None else None
+        delay_new = (new_day - nd[i]) if nd[i] is not None else None
         out.append({"element_id": i, "address": r["address"], "floor": r["floor"],
-                    "status": r["current_status"], "status_new": by[j]["current_status"] if j else r["current_status"],
-                    "need_date": req, "plan_old": старые[i], "plan_new": новая,
-                    "delay_old": days(старые[i], req), "delay_new": days(новая, req),
-                    "partner_id": j, "lead": bool(j) and i in ведущие})
+                    "status": r["current_status"], "status_new": by[src]["current_status"] if src else r["current_status"],
+                    "need_date": need.get(i), "plan_old": iso(old[i]), "plan_new": iso(new_day),
+                    "delay_old": delay_old, "delay_new": delay_new,
+                    # partner_id — изделие, от которого место получает дату, статус, историю и контракт (в паре — взаимный партнёр)
+                    "partner_id": src, "chain_pos": pos[i][0] if i in pos else None, "chain_size": pos[i][1] if i in pos else None,
+                    "lead": bool(src) and pos[i][0] == 1})
     return out
 
 
@@ -604,6 +759,30 @@ def _rebalance_eligible(e, contract_id: Optional[int], mark: str) -> Optional[st
 
 _REBALANCE_COLS = ("id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, is_current, "
                    "planned_delivery_date")
+
+
+def _history_consistent_ids(conn, ids) -> set:
+    """Изделия, у которых есть история статусов и кэш (текущий статус, фактическая дата поставки) с ней согласован.
+
+    В обмене местами история переезжает к другому изделию, а кэш потом ПЕРЕСЧИТЫВАЕТСЯ из истории (`recompute_status_and_actual_date`).
+    Без истории пересчёт невозможен (запись не из чего вывести), а при расхождении кэша с историей отмена проведения вернула бы
+    выведенное значение, а не прежнее. Такие изделия в обмен не берутся — иначе «вернуть всё как было» нельзя гарантировать."""
+    ids = list(ids)
+    ok: set = set()
+    for i in range(0, len(ids), 800):
+        chunk = ids[i:i + 800]
+        for r in conn.execute(
+            "SELECT e.id AS id, e.current_status AS st, e.actual_delivery_date AS ad, "
+            "(SELECT h.status FROM status_history h WHERE h.element_id = e.id ORDER BY h.changed_at DESC, h.id DESC LIMIT 1) AS latest, "
+            "(SELECT h.changed_at FROM status_history h WHERE h.element_id = e.id AND h.status = 'delivered' "
+            " ORDER BY h.changed_at DESC, h.id DESC LIMIT 1) AS delivered "
+            f"FROM elements e WHERE e.id IN ({','.join('?' * len(chunk))})", chunk):
+            if r["latest"] is None:
+                continue
+            derived = None if r["latest"] == "planned" else r["delivered"]
+            if r["st"] == r["latest"] and (r["ad"] or None) == (derived or None):
+                ok.add(r["id"])
+    return ok
 
 
 def _rebalance_groups(rows: list, pool: bool) -> dict:
@@ -637,6 +816,8 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
         sql += " AND LOWER(TRIM(COALESCE(mark, ''))) = LOWER(TRIM(?))"
         args.append(mark)
     rows = [r for r in conn.execute(sql, args).fetchall() if _rebalance_eligible(r, contract_id, mark) is None]
+    надёжные = _history_consistent_ids(conn, [r["id"] for r in rows])
+    rows = [r for r in rows if r["id"] in надёжные]      # без истории / с расхождением кэша — в обмен не берутся
     if element_ids is not None:
         wanted = set(element_ids)
         rows = [r for r in rows if r["id"] in wanted]
@@ -664,12 +845,16 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
             items.append(i)
     items.sort(key=lambda i: (str(i["counterparty"]).lower(), i["contract_name"], i["mark"].lower(),
                               i["need_date"] is None, i["need_date"] or "", i["element_id"]))
-    номер = 0                       # сквозной номер пары: ведущий и партнёр носят один
+    по_id_все = {i["element_id"]: i for i in items}
+    номер = 0                       # сквозной номер обмена (пары или цепочки): все изделия цикла носят один
     номера: dict = {}
     for i in items:
         if i["lead"]:
             номер += 1
-            номера[i["element_id"]] = номера[i["partner_id"]] = номер
+            x = i
+            for _ in range(i["chain_size"]):
+                номера[x["element_id"]] = номер
+                x = по_id_все[x["partner_id"]]
     for i in items:
         i["pair_no"] = номера.get(i["element_id"])
 
@@ -677,7 +862,9 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
         return [i[key] for i in items if i[key] is not None and i[key] > 0]
     return {"items": items, "summary": {
         "count": len(items), "changed": sum(1 for i in items if i["plan_old"] != i["plan_new"]),
-        "pairs": sum(1 for i in items if i["lead"]),
+        "pairs": sum(1 for i in items if i["lead"] and i["chain_size"] == 2),
+        "chains": sum(1 for i in items if i["lead"] and i["chain_size"] > 2),
+        "moved": sum(1 for i in items if i["pair_no"]),
         "late_before": len(late("delay_old")), "late_after": len(late("delay_new")),
         "max_delay_before": max(late("delay_old"), default=0), "max_delay_after": max(late("delay_new"), default=0),
         # Суммарное опоздание, дней (сумма положительных отклонений по изделиям) до и после — «насколько сокращено опоздание»
@@ -701,6 +888,8 @@ def _rebalance_candidates(conn, object_id: int) -> dict:
     имена = {c["id"]: c for c in _object_contracts(conn, object_id)}
     живые = {i for i, c in имена.items() if not c["is_archived"]}
     rows = [r for r in rows if r["contract_id"] in живые]
+    надёжные = _history_consistent_ids(conn, [r["id"] for r in rows])
+    rows = [r for r in rows if r["id"] in надёжные]
 
     def считать(pool: bool):
         по_контрактам: dict = {}
@@ -777,7 +966,7 @@ def rebalance_preview(object_id: int = Query(...), contract_id: Optional[int] = 
 
 
 def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
-    """Проведение балансировки: снимок «что было» → пересчёт раскладки по ТЕКУЩИМ данным → запись плановых дат.
+    """Проведение балансировки: снимок «что было» → пересчёт раскладки по ТЕКУЩИМ данным → обмен изделий местами (парами и цепочками).
 
     Раскладка считается заново при проведении, а не берётся из черновика: между сохранением и проведением могли
     измениться требуемые даты (новая актуализация) и состав. Пересчёт по тем же изделиям документа даёт ровно то, что
@@ -787,6 +976,7 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
     contract_id = None if doc["all_contracts"] else doc["from_contract_id"]
     марка = "" if doc["all_marks"] else (doc["mark"] or "").strip()
     elements, проблемы = [], []
+    надёжные = _history_consistent_ids(conn, [it["element_id"] for it in items])
     for it in items:
         e = conn.execute(
             "SELECT id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, "
@@ -795,6 +985,8 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
             else "изделия нет в актуальном чертеже объекта"
         if not причина and e["contract_id"] is None:
             причина = "у изделия нет контракта"
+        if not причина and e["id"] not in надёжные:
+            причина = "нет истории статусов или кэш статуса расходится с ней — обмен местами невозможен"
         if причина:
             проблемы.append(f"№{it['element_id']}" + (f" {e['mark']} · {e['address'] or ''}".rstrip(" ·") if e else "")
                             + f": {причина}")
@@ -817,49 +1009,94 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
             "element_type = ?, mark = ?, side = 1, pair_no = NULL WHERE id = ?",
             (e["current_status"], e["contract_id"], e["planned_delivery_date"], e["element_type"], e["mark"],
              by_item[e["id"]]["id"]))
-    пар = 0
+    пар = цепочек = затронуто = номер = 0
     for r in sorted(раскладка.values(), key=lambda r: r["element_id"]):
         if not r["lead"]:
             continue
-        пар += 1
-        a, b = by_e[r["element_id"]], by_e[r["partner_id"]]
-        for сторона, e in ((1, a), (2, b)):
+        номер += 1
+        цикл, x = [], r
+        for _ in range(r["chain_size"]):             # место i-го получает от (i+1)-го; последнее — от первого
+            цикл.append(by_e[x["element_id"]])
+            x = раскладка[x["partner_id"]]
+        for позиция, e in enumerate(цикл, start=1):
             conn.execute("UPDATE supplier_change_items SET side = ?, pair_no = ? WHERE id = ?",
-                         (сторона, пар, by_item[e["id"]]["id"]))
-        _swap_places(conn, doc, a, b, автор, user_id, комментарий)
-    return {"elements": len(elements), "pairs": пар, "moved": 2 * пар}
+                         (позиция, номер, by_item[e["id"]]["id"]))
+        _apply_cycle(conn, doc, цикл, автор, user_id, комментарий)
+        if len(цикл) == 2:
+            пар += 1
+        else:
+            цепочек += 1
+        затронуто += len(цикл)
+    return {"elements": len(elements), "pairs": пар, "chains": цепочек, "moved": затронуто}
 
 
-def _swap_places(conn, doc, a, b, автор, user_id, комментарий) -> None:
-    """Два изделия меняются МЕСТАМИ: плановая дата, контракт и ВСЯ история статусов уходят к партнёру (так же, как в обмене
-    привязками, `_post_link_swap`). Текущий статус и фактическая дата не переставляются отдельно — они производные от истории
-    и пересчитываются (`recompute_status_and_actual_date`). Записи истории выбираются по СПИСКУ id, снятому до первого UPDATE,
-    поэтому второй UPDATE не задевает уже переехавшие. Каждый переезд пишется в `supplier_change_history_moves` — им отменяется."""
-    записи_a = [r["id"] for r in conn.execute("SELECT id FROM status_history WHERE element_id = ?", (a["id"],)).fetchall()]
-    записи_b = [r["id"] for r in conn.execute("SELECT id FROM status_history WHERE element_id = ?", (b["id"],)).fetchall()]
-    for history_ids, откуда, куда in ((записи_a, a["id"], b["id"]), (записи_b, b["id"], a["id"])):
-        for history_id in history_ids:
-            conn.execute("UPDATE status_history SET element_id = ? WHERE id = ?", (куда, history_id))
+def _apply_cycle(conn, doc, цикл, автор, user_id, комментарий) -> None:
+    """Изделия цикла меняются МЕСТАМИ: место i-го изделия получает плановую дату, контракт и ВСЮ историю статусов (i+1)-го
+    (последнее — первого). Цикл из двух — обычный обмен, как в «Обмене привязками» (`_post_link_swap`). Текущий статус и фактическая
+    дата не переставляются отдельно — они производные от истории и пересчитываются (`recompute_status_and_actual_date`). Записи
+    истории выбираются по СНИМКУ id, сделанному до первого UPDATE, поэтому переезд одной записи не задевает другую. Каждый
+    переезд пишется в `supplier_change_history_moves` — им отменяется проведение."""
+    k = len(цикл)
+    история = {e["id"]: [r["id"] for r in conn.execute("SELECT id FROM status_history WHERE element_id = ?", (e["id"],)).fetchall()]
+               for e in цикл}
+    for n, место in enumerate(цикл):
+        источник = цикл[(n + 1) % k]
+        for history_id in история[источник["id"]]:
+            conn.execute("UPDATE status_history SET element_id = ? WHERE id = ?", (место["id"], history_id))
             conn.execute("INSERT INTO supplier_change_history_moves (doc_id, history_id, prev_element_id) VALUES (?, ?, ?)",
-                         (doc["id"], history_id, откуда))
-    conn.execute("UPDATE elements SET contract_id = ?, planned_delivery_date = ?, updated_at = datetime('now') WHERE id = ?",
-                 (b["contract_id"], b["planned_delivery_date"], a["id"]))
-    conn.execute("UPDATE elements SET contract_id = ?, planned_delivery_date = ?, updated_at = datetime('now') WHERE id = ?",
-                 (a["contract_id"], a["planned_delivery_date"], b["id"]))
-    for e, встречный in ((a, b), (b, a)):
-        статус, _ = recompute_status_and_actual_date(conn, e["id"])
+                         (doc["id"], history_id, источник["id"]))
+        conn.execute("UPDATE elements SET contract_id = ?, planned_delivery_date = ?, updated_at = datetime('now') WHERE id = ?",
+                     (источник["contract_id"], источник["planned_delivery_date"], место["id"]))
+    for n, место in enumerate(цикл):
+        источник = цикл[(n + 1) % k]
+        статус, _ = recompute_status_and_actual_date(conn, место["id"])
         conn.execute(
             "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, comment, contract_id) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (e["id"], статус, автор, user_id,
-             f"{комментарий}: изделие поменялось местами с №{встречный['id']} ({встречный['address'] or 'без адреса'})",
-             встречный["contract_id"]))
+            (место["id"], статус, автор, user_id,
+             f"{комментарий}: изделие {'поменялось местами с' if k == 2 else 'получило место (дату, статус, контракт) от'}"
+             f" №{источник['id']} ({источник['address'] or 'без адреса'})",
+             источник["contract_id"]))
         _remember_created_history(conn, doc["id"])
         activity.log("rebalance_swap", user_id=user_id, user_name=impersonation.plain_name(автор),
-                     entity_type="element", entity_id=e["id"],
-                     element_type=e["element_type"], subtype=e["subtype"], mark=e["mark"],
-                     old_value=e["planned_delivery_date"], new_value=встречный["planned_delivery_date"],
-                     details={"doc_id": doc["id"], "number": doc["number"], "pair_with": встречный["id"], "status": статус})
+                     entity_type="element", entity_id=место["id"],
+                     element_type=место["element_type"], subtype=место["subtype"], mark=место["mark"],
+                     old_value=место["planned_delivery_date"], new_value=источник["planned_delivery_date"],
+                     details={"doc_id": doc["id"], "number": doc["number"], "pair_with": источник["id"], "status": статус,
+                              "chain_size": k})
+
+
+def _rebalance_unpost_conflicts(conn, doc_id: int, items) -> list:
+    """Что изменилось у изделий обмена ПОСЛЕ проведения: плановая дата и контракт должны быть теми, что записало проведение (даты и
+    контракт источника по циклу), а последней записью истории — созданная самим документом. Иначе отмена перезатёрла бы чью-то
+    правку или вернула бы изделию не тот статус. Документы без пар (проведённые до перехода на обмен местами) не проверяются."""
+    created = {r["history_id"] for r in conn.execute(
+        "SELECT history_id FROM supplier_change_history_moves WHERE doc_id = ? AND prev_element_id IS NULL", (doc_id,))}
+    cycles: dict = {}
+    for it in items:
+        if it["pair_no"]:
+            cycles.setdefault(it["pair_no"], []).append(it)
+    problems: list = []
+    for members in cycles.values():
+        members.sort(key=lambda i: i["side"])
+        k = len(members)
+        for t, it in enumerate(members):
+            src = members[(t + 1) % k]
+            e = conn.execute("SELECT contract_id, planned_delivery_date, address, mark FROM elements WHERE id = ?",
+                             (it["element_id"],)).fetchone()
+            if e is None:
+                problems.append(f"№{it['element_id']}: изделия больше нет")
+                continue
+            label = f"№{it['element_id']} {e['mark'] or ''} · {e['address'] or ''}".rstrip(" ·")
+            if str(e["planned_delivery_date"] or "") != str(src["prev_planned_delivery_date"] or ""):
+                problems.append(f"{label}: плановая дата изменена после проведения")
+            if e["contract_id"] != src["prev_contract_id"]:
+                problems.append(f"{label}: контракт изменён после проведения")
+            last = conn.execute("SELECT id FROM status_history WHERE element_id = ? ORDER BY changed_at DESC, id DESC LIMIT 1",
+                                (it["element_id"],)).fetchone()
+            if last is None or last["id"] not in created:
+                problems.append(f"{label}: после проведения менялась история статусов (новый статус)")
+    return problems
 
 
 def _next_number(conn, object_id: int) -> str:
@@ -1500,6 +1737,14 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
         moves = conn.execute(
             "SELECT * FROM supplier_change_history_moves WHERE doc_id = ? ORDER BY id DESC", (doc_id,)
         ).fetchall()
+        if doc["kind"] == KIND_REBALANCE:
+            конфликты = _rebalance_unpost_conflicts(conn, doc_id, items)
+            if конфликты:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Отменить проведение нельзя: после него изделия менялись, и отмена затёрла бы эти изменения. "
+                           "Верните их или исправьте вручную:\n" + "\n".join(конфликты[:20])
+                           + (f"\n… и ещё {len(конфликты) - 20}" if len(конфликты) > 20 else ""))
 
         # Участники сверки — контракты шапки (симметрично проведению) плюс
         # прежний контракт каждой позиции (то самое значение, что возврат

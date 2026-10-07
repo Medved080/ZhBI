@@ -1442,3 +1442,7 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-st { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 12px; white-space: nowrap;
   background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
 .v2-st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
+
+/* Цепочка обмена в таблице балансировки: строка-заголовок с кнопкой разворота */
+.v2-rb-chain td { background: var(--surface); }
+.v2-rb-toggle.v2-rb-chainbtn { width: auto; max-width: 100%; text-align: left; }
