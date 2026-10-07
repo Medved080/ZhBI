@@ -8,7 +8,6 @@
 // считается на клиенте. Карта — отдельный ES-модуль map.js с ленивым import(); при уходе с экрана карта обязательно remove(): у
 // каждой карты свой graphics-контекст, и без этого карты в браузере перестают строиться (CLAUDE.md).
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const ruDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : ""; };
 const STATUS = { perspective: "Перспективный", active: "В работе", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
 const KIND = { zhbi: "Учёт ЖБИ по чертежу", mfr: "Учёт МФР по модели" };
 // Роли проектной команды — тот же список и порядок, что TEAM_ROLES в app/object_team.py.
@@ -41,7 +40,9 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
     // «Тип учёта» показываем, только когда он что-то значит: у МФР он ставится осознанно, а у ЖБИ по умолчанию стоит у ЛЮБОГО объекта
     // (колонка objects.kind NOT NULL DEFAULT 'zhbi'), поэтому без загруженного чертежа подпись «ЖБИ по чертежу» вводила бы в заблуждение.
     const kindText = o.kind === "mfr" || (o.kind === "zhbi" && o.current_source_file) ? (KIND[o.kind] || o.kind) : "";
-    const team = TEAM.map(([k, label]) => row(label, o.team?.[k]?.name ? esc(o.team[k].name) : "")).join("");
+    // Отв. подразделение и директор СМУ — в «Проектной команде», как в форме и в «Справочнике ОС WEB» (2026-10-07).
+    const team = row("Отв. подразделение", esc(o.smu_name)) + row("Директор СМУ", esc(o.smu_director_name))
+      + TEAM.map(([k, label]) => row(label, o.team?.[k]?.name ? esc(o.team[k].name) : "")).join("");
     const media = safeUrl(o.media_url);
     const links = LINKS.filter(([key]) => isAllowed?.(key)).map(([key, label]) => `<button type="button" class="v2-btn v2-primary" data-go="${esc(key)}">${esc(label)}</button>`).join("");
     page.innerHTML = `
@@ -63,8 +64,7 @@ export function mountObjectHome(el, { api, objectId, go, isAllowed }) {
           <section class="oh-card"><h3>Реквизиты</h3><dl class="oh-dl">
             ${row("Проект", esc(o.project_name))}${row("Статус", esc(STATUS[o.status] || o.status))}${row("Тип учёта", esc(kindText))}
             ${row("Адрес", esc(o.address))}${row("Координаты", coords ? `${esc(o.lat)}, ${esc(o.lon)}` : "")}
-            ${row("СМУ", esc(o.smu_name))}${row("Директор СМУ", esc(o.smu_director_name))}${row("Ответственный (ДП/РП)", esc(o.responsible_name))}
-            ${row("Старт СМР", esc(ruDate(o.smr_start_reported)))}${media ? row("Фото и видео", `<a href="${esc(media)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
+            ${media ? row("Фото и видео", `<a href="${esc(media)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
             ${row("Описание", esc(o.description))}</dl></section>
         </div>
         <div class="oh-col">

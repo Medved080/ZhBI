@@ -443,8 +443,8 @@ class ObjectOut(AddressFields):
     elements_current: int = 0
     elements_retired: int = 0
     # Реквизиты из внутреннего реестра заказчика (2026-09-08, импорт из
-    # Excel «Объекты на карте»). СМУ и физлица (директор СМУ, ответственный)
-    # — записи справочников (smu_catalog/individuals), а не свободный текст
+    # Excel «Объекты на карте»). СМУ (в карточке — «Отв. подразделение») и физлицо
+    # (директор СМУ) — записи справочников (smu_catalog/individuals), а не свободный текст
     # (живой запрос 2026-09-08: «сделай выбираемыми каждый из своего
     # справочника»); *_id — ссылка, *_name — имя для показа без второго
     # запроса, тем же способом, что project_id/project_name.
@@ -452,12 +452,8 @@ class ObjectOut(AddressFields):
     smu_name: Optional[str] = None
     smu_director_id: Optional[int] = None
     smu_director_name: Optional[str] = None
-    responsible_id: Optional[int] = None
-    responsible_name: Optional[str] = None
+    # «Ответственный (ДП/РП)» и «Старт СМР» убраны 2026-10-07 по «Справочнику ОС WEB» — полей в ответе больше нет.
     media_url: Optional[str] = None
-    # Дата начала СМР из того же реестра, строкой ГГГГ-ММ-ДД. Не путать со
-    # сводкой в форме — та считается по датам элементов и хранится не здесь.
-    smr_start_reported: Optional[str] = None
     # Проектная команда (2026-10-05, B1): {ключ роли: {"id", "name"}}; пустая роль — ключа нет (app/object_team.py).
     team: dict = {}
     # Есть ли превью — а не сама картинка: дерево справочника рисует
@@ -489,9 +485,7 @@ class ObjectPatchIn(AddressFields):
     # только если поле есть в body.model_fields_set (main.py).
     smu_id: Optional[int] = None
     smu_director_id: Optional[int] = None
-    responsible_id: Optional[int] = None
     media_url: Optional[str] = None
-    smr_start_reported: Optional[str] = None
     # Проектная команда: {ключ роли: id физлица | null}; меняются только присланные роли, null снимает назначение.
     team: Optional[dict] = None
     # V2: отпечаток, который форма видела при открытии (ObjectOut.version). Не передан — проверки нет (V1).

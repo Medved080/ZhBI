@@ -2977,7 +2977,8 @@
      первая уже отступила от шапки, а зазор между двумя рядами фильтров
      должен быть меньше, чем между поиском и деревом. */
   .catalog-tree-filters { padding-top: 0; flex-wrap: wrap; }
-  .catalog-tree-filters select { flex: 1 1 90px; max-width: none; min-width: 0; }
+  /* Каждый фильтр — на своей строке во всю ширину панели: подпись «Отв. подразделение: все» (2026-10-07) в половинке строки обрезалась. */
+  .catalog-tree-filters select { flex: 1 1 100%; max-width: none; min-width: 0; }
   .catalog-tree { flex: 1 1 auto; overflow-y: auto; padding: 0 0 8px; }
   .catalog-tree-foot { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--color-border); }
   /* Строка дерева — кнопка во всю ширину. Проект и объект различаются
@@ -6676,10 +6677,9 @@
         <!-- Отбор по реквизитам объекта (2026-09-08, живой запрос): пункты
              списка строит JS из значений, реально встречающихся среди
              загруженных объектов (populateCatalogFilterOptions) — готового
-             справочника СМУ или ответственных в системе нет. -->
+             справочника СМУ в системе нет. Фильтр «по ответственному» убран 2026-10-07. -->
         <div class="catalog-tree-tools catalog-tree-filters">
-          <select id="catalog-smu-filter" title="Отбор по СМУ"><option value="">СМУ: все</option></select>
-          <select id="catalog-responsible-filter" title="Отбор по ответственному"><option value="">Ответственный: все</option></select>
+          <select id="catalog-smu-filter" title="Отбор по ответственному подразделению"><option value="">Отв. подразделение: все</option></select>
           <select id="catalog-region-filter" title="Отбор по региону"><option value="">Регион: все</option></select>
         </div>
         <div id="catalog-tree" class="catalog-tree"></div>

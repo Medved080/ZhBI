@@ -687,7 +687,7 @@ s, e = USER2.patch(f"/individuals/{IID}", {"name": "Чужой"})
 check("D16 user2 переименовывает: 403", s == 403)
 s, e = ADMIN.post(f"/dictionaries/individual/{IID}/delete", {"replacements": {}, "mode": "replace"})
 check("D17 удаление неиспользуемого физлица: 200", s == 200 and q1("SELECT 1 x FROM individuals WHERE id=?", (IID,)) is None)
-used = q1("SELECT responsible_id r FROM objects WHERE responsible_id IS NOT NULL LIMIT 1")
+used = q1("SELECT smu_director_id r FROM objects WHERE smu_director_id IS NOT NULL LIMIT 1")   # «Ответственный (ДП/РП)» убран 2026-10-07 — занятость проверяем по директору СМУ
 if used:
     s, e = ADMIN.post(f"/dictionaries/individual/{used['r']}/delete", {"replacements": {}, "mode": "replace"})
     check("D17 удаление используемого физлица без замены: отказ, запись цела", s in (400, 409) and q1("SELECT 1 x FROM individuals WHERE id=?", (used["r"],)) is not None, f"{s}")

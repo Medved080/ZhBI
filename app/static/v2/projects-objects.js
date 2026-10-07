@@ -78,7 +78,7 @@ function geocodeQueryFromAddress(addr) {
 }
 
 // Роли проектной команды объекта (2026-10-05, B1) — ТОТ ЖЕ список и порядок, что TEAM_ROLES в app/object_team.py.
-// «Директор СМУ» сюда не входит: он стоит в «Реквизитах заказчика» рядом с СМУ (колонка objects.smu_director_id).
+// «Директор СМУ» сюда не входит: он стоит первым в «Проектной команде» рядом с «Отв. подразделением» (колонка objects.smu_director_id).
 const TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
   ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 const teamDraftOf = (rec) => Object.fromEntries(TEAM_ROLES.map(([k]) => ["team_" + k, rec?.team?.[k]?.id ?? ""]));
@@ -102,7 +102,7 @@ export function mountProjectsObjects(container, ctx) {
     loaded: false, loadError: null,
     selected: null, // {type:"project"|"object", id:number|null}
     expanded: new Set(),
-    query: "", status: "active", smu: "", responsible: "",
+    query: "", status: "active", smu: "",
     draft: null, dirty: false, isNew: false,
     status_msg: "", busy: false,
     // Координаты уже стоят (сохранены) или тронуты руками/пином — тогда
@@ -232,7 +232,6 @@ export function mountProjectsObjects(container, ctx) {
     if (state.status && rec.status !== state.status && !(state.status === "active" && !rec.status)) return false;
     if (rec.smu_id !== undefined) {
       if (state.smu && String(rec.smu_id || "") !== state.smu) return false;
-      if (state.responsible && String(rec.responsible_id || "") !== state.responsible) return false;
     }
     const q = state.query.trim().toLowerCase();
     if (!q) return true;
@@ -278,11 +277,11 @@ export function mountProjectsObjects(container, ctx) {
       state.draft = rec
         ? { name: rec.name, status: rec.status || "active", project_id: rec.project_id,
             kind: rec.kind || "zhbi", description: rec.description || "",
-            smu_id: rec.smu_id ?? "", smu_director_id: rec.smu_director_id ?? "", responsible_id: rec.responsible_id ?? "",
-            smr_start_reported: rec.smr_start_reported || "", media_url: rec.media_url || "", ...teamDraftOf(rec), ...addressFieldsOf(rec) }
+            smu_id: rec.smu_id ?? "", smu_director_id: rec.smu_director_id ?? "",
+            media_url: rec.media_url || "", ...teamDraftOf(rec), ...addressFieldsOf(rec) }
         : { name: "", status: "active", project_id: state.newObjectProjectId || (state.projects[0]?.id ?? ""),
-            kind: "zhbi", description: "", smu_id: "", smu_director_id: "", responsible_id: "",
-            smr_start_reported: "", media_url: "", ...teamDraftOf(null), ...addressFieldsOf(null) };
+            kind: "zhbi", description: "", smu_id: "", smu_director_id: "",
+            media_url: "", ...teamDraftOf(null), ...addressFieldsOf(null) };
     }
     // У уже сохранённой записи с координатами автопозиционирование по адресу
     // не трогает точку — вдруг она уточнена руками именно там, где нужно
@@ -406,8 +405,7 @@ export function mountProjectsObjects(container, ctx) {
         project_id: snapshot.project_id ? Number(snapshot.project_id) : null,
         kind: snapshot.kind, smu_id: snapshot.smu_id === "" ? null : Number(snapshot.smu_id),
         smu_director_id: snapshot.smu_director_id === "" ? null : Number(snapshot.smu_director_id),
-        responsible_id: snapshot.responsible_id === "" ? null : Number(snapshot.responsible_id),
-        smr_start_reported: snapshot.smr_start_reported || null, media_url: snapshot.media_url.trim() || null,
+        media_url: snapshot.media_url.trim() || null,
         team: Object.fromEntries(TEAM_ROLES.map(([k]) => [k, snapshot["team_" + k] === "" || snapshot["team_" + k] == null ? null : Number(snapshot["team_" + k])])),
       });
     }
@@ -428,7 +426,7 @@ export function mountProjectsObjects(container, ctx) {
         state.projects = r.projects; state.objects = r.objects; state.smuList = r.smuList; state.individualsList = r.individualsList;
         const list = type === "project" ? r.projects : r.objects;
         const norm = (v) => (v === undefined || v === null || v === "" ? null : String(v));
-        const cmp = ["name", "status", "description", "address", "address_note", "kind", "project_id", "smu_id", "smu_director_id", "responsible_id", "smr_start_reported", "media_url"];
+        const cmp = ["name", "status", "description", "address", "address_note", "kind", "project_id", "smu_id", "smu_director_id", "media_url"];
         found = wasNew
           ? list.find((r0) => r0.name === body.name && (type === "project" || String(r0.project_id) === String(body.project_id)))
           : list.find((r0) => r0.id === state.selected.id && cmp.every((k) => !(k in body) || norm(r0[k]) === norm(body[k])));
@@ -473,12 +471,12 @@ export function mountProjectsObjects(container, ctx) {
 
   function renderTree() {
     const rows = [];
-    const filterActive = !!(state.query || (state.status && state.status !== "active") || state.smu || state.responsible);
+    const filterActive = !!(state.query || (state.status && state.status !== "active") || state.smu);
     for (const p of state.projects) {
       const objs = objectsOf(p.id);
-      // СМУ и ответственный — реквизиты ОБЪЕКТА (у проекта их нет): при таком фильтре проект остаётся в дереве
+      // Отв. подразделение — реквизит ОБЪЕКТА (у проекта его нет): при таком фильтре проект остаётся в дереве
       // только вместе с подошедшими объектами, а не как пустая «оболочка» (иначе фильтр ничего не сужает).
-      const objectOnlyFilter = !!(state.smu || state.responsible);
+      const objectOnlyFilter = !!state.smu;
       const projectMatches = !objectOnlyFilter && matches(p, p.name);
       const matchingObjects = objs.filter((o) => matches(o, p.name));
       if (!projectMatches && !matchingObjects.length) continue;
@@ -492,7 +490,7 @@ export function mountProjectsObjects(container, ctx) {
           <span class="v2-tree-count">${p.objects_count} · ${p.elements_count}</span>
         </button></div>`);
       if (expanded) {
-        const toShow = state.query || state.smu || state.responsible || (state.status && state.status !== "active") ? matchingObjects : objs;
+        const toShow = state.query || state.smu || (state.status && state.status !== "active") ? matchingObjects : objs;
         for (const o of toShow) {
           const oSel = state.selected?.type === "object" && state.selected.id === o.id;
           rows.push(`<div class="v2-tree-row">
@@ -565,19 +563,13 @@ export function mountProjectsObjects(container, ctx) {
         ${type === "object" ? fieldRow("Тип учёта", `<select id="pf-kind">${Object.entries(KIND_LABELS).map(([k, l]) =>
           `<option value="${k}" ${d.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>`) : ""}
         <label class="v2-field v2-span">Описание<textarea id="pf-description" rows="2">${escapeHtml(d.description)}</textarea></label>
+        ${type === "object" ? `<label class="v2-field v2-span">Ссылка на фото/видео<input id="pf-media" value="${escapeHtml(d.media_url)}" placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"></label>` : ""}
       </div>
-      ${type === "object" ? `
-      <div class="v2-group">Реквизиты заказчика</div>
-      <div class="v2-fields">
-        ${fieldRow("СМУ", refSelect("pf-smu", state.smuList, d.smu_id, false, "— не выбрано —"))}
-        ${fieldRow("Директор СМУ", refSelect("pf-smu-director", state.individualsList, d.smu_director_id, false, "— не выбрано —"))}
-        ${fieldRow("Ответственный (ДП/РП)", refSelect("pf-responsible", state.individualsList, d.responsible_id, false, "— не выбрано —"))}
-        ${fieldRow("Старт СМР", `<input id="pf-smr-start" type="date" value="${escapeHtml(d.smr_start_reported)}">`)}
-        <label class="v2-field v2-span">Ссылка на фото/видео<input id="pf-media" value="${escapeHtml(d.media_url)}" placeholder="папка на Яндекс.Диске и т.п. — сервер её не скачивает"></label>
-      </div>` : ""}
       ${type === "object" ? `
       <div class="v2-group">Проектная команда</div>
       <div class="v2-fields">
+        ${fieldRow("Отв. подразделение", refSelect("pf-smu", state.smuList, d.smu_id, false, "— не выбрано —"))}
+        ${fieldRow("Директор СМУ", refSelect("pf-smu-director", state.individualsList, d.smu_director_id, false, "— не выбрано —"))}
         ${TEAM_ROLES.map(([k, label]) => fieldRow(label, refSelect("pf-team-" + k, state.individualsList, d["team_" + k], false, "— не назначен —"))).join("")}
       </div>` : ""}
       <div class="v2-group">Адрес и координаты</div>
@@ -599,8 +591,8 @@ export function mountProjectsObjects(container, ctx) {
     // только ставился признак «изменено», а сам черновик обновлялся лишь при
     // уходе фокуса — форма могла считаться изменённой при устаревшем черновике.
     const FIELD_KEYS = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
-      "pf-smu": "smu_id", "pf-smu-director": "smu_director_id", "pf-responsible": "responsible_id",
-      "pf-smr-start": "smr_start_reported", "pf-media": "media_url", "pf-description": "description",
+      "pf-smu": "smu_id", "pf-smu-director": "smu_director_id",
+      "pf-media": "media_url", "pf-description": "description",
       "pf-lat": "lat", "pf-lon": "lon",
       ...Object.fromEntries(TEAM_ROLES.map(([k]) => ["pf-team-" + k, "team_" + k])) };
     const syncDraftField = (elm) => { const key = FIELD_KEYS[elm.id]; if (key) state.draft[key] = elm.value; };
@@ -980,16 +972,13 @@ export function mountProjectsObjects(container, ctx) {
 
   function populateFilterOptions() {
     const smuSel = body.querySelector("#po-smu-filter");
-    const respSel = body.querySelector("#po-responsible-filter");
     if (!smuSel) return;
-    const usedSmu = new Map(), usedResp = new Map();
+    const usedSmu = new Map();
     for (const o of state.objects) {
       if (o.smu_id != null) usedSmu.set(o.smu_id, o.smu_name || String(o.smu_id));
-      if (o.responsible_id != null) usedResp.set(o.responsible_id, o.responsible_name || String(o.responsible_id));
     }
-    smuSel.innerHTML = `<option value="">СМУ — все</option>` + [...usedSmu].map(([id, name]) => `<option value="${id}">${escapeHtml(name)}</option>`).join("");
-    respSel.innerHTML = `<option value="">Ответственный — все</option>` + [...usedResp].map(([id, name]) => `<option value="${id}">${escapeHtml(name)}</option>`).join("");
-    smuSel.value = state.smu; respSel.value = state.responsible;
+    smuSel.innerHTML = `<option value="">Отв. подразделение — все</option>` + [...usedSmu].map(([id, name]) => `<option value="${id}">${escapeHtml(name)}</option>`).join("");
+    smuSel.value = state.smu;
   }
 
   async function render() {
@@ -1009,8 +998,7 @@ export function mountProjectsObjects(container, ctx) {
             ${[["active", "В работе"], ["perspective", "Перспективный"], ["suspended", "Приостановлен"], ["completed", "Завершён"], ["archived", "Архивный"], ["", "Все"]]
               .map(([v, l]) => `<option value="${v}" ${state.status === v ? "selected" : ""}>${l}</option>`).join("")}
           </select>
-          <select id="po-smu-filter" aria-label="Фильтр по СМУ"></select>
-          <select id="po-responsible-filter" aria-label="Фильтр по ответственному"></select>
+          <select id="po-smu-filter" aria-label="Фильтр по ответственному подразделению"></select>
           <div id="po-tree" class="v2-tree"></div>
           <div class="v2-tree-foot">${btn("+ Проект", 'id="po-add-project"')}${btn("+ Объект", 'id="po-add-object"')}</div>
         </aside>
@@ -1029,7 +1017,6 @@ export function mountProjectsObjects(container, ctx) {
     });
     body.querySelector("#po-status-filter").addEventListener("change", (e) => { state.status = e.target.value; renderTree(); });
     body.querySelector("#po-smu-filter").addEventListener("change", (e) => { state.smu = e.target.value; renderTree(); });
-    body.querySelector("#po-responsible-filter").addEventListener("change", (e) => { state.responsible = e.target.value; renderTree(); });
     body.querySelector("#po-add-project").addEventListener("click", () => selectNode("project", null));
     body.querySelector("#po-add-object").addEventListener("click", () => {
       const projectId = state.selected?.type === "project" ? state.selected.id

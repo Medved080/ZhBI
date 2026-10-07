@@ -154,7 +154,7 @@ class Snapshot:
                     self.catalog[name] = fields
                     self.guards[name] = list(guards)
             marks = ",".join("?" for _ in ids) or "NULL"
-            copy("objects", "id project_id name kind status address description smr_start_reported smu_id smu_director_id responsible_id", f"t.id IN ({marks})", ids, [(i, None) for i in ids])
+            copy("objects", "id project_id name kind status address description smu_id smu_director_id", f"t.id IN ({marks})", ids, [(i, None) for i in ids])
             copy("projects", "id name address description status", f"t.id IN (SELECT project_id FROM objects WHERE id IN ({marks}))", ids, [(i, None) for i in ids])
             for group, name, feature, columns, owner in TABLES:
                 if group not in groups and not (name == "counterparties" and "contracts" in groups):

@@ -251,9 +251,9 @@ console.log("Проекты и объекты: GET после POST, валида
   check(o0.length === 20 && o0.filter((o) => o.kind === "mfr").length === 1, "GET /objects: 20 объектов, один МФР");
   const o3 = o0.find((o) => o.id === 3);
   check(o3.has_avatar === true && o3.avatar_attachment_id === 1 && o3.smu_name === "QA-СМУ-2 Речное" && o3.smu_director_name === "QA-Кузнецов Сергей Николаевич", "объект 3: превью и имена справочников");
-  const no = await api.post("/objects", { name: "QA-Новый объект", project_id: 15, kind: "mfr", smu_id: 1, responsible_id: 2, status: "active",
-    description: null, smr_start_reported: "2026-01-01", media_url: null, lat: 55.1, lon: 37.1 });
-  check(no.id === 21 && no.kind === "mfr" && no.project_name === "QA-Новый проект 2" && no.smu_name === "QA-СМУ-1 Северное" && no.responsible_name === "QA-Петров Пётр Петрович" && no.has_avatar === false, "POST /objects: полный ObjectOut с агрегатами");
+  const no = await api.post("/objects", { name: "QA-Новый объект", project_id: 15, kind: "mfr", smu_id: 1, smu_director_id: 2, status: "active",
+    description: null, media_url: null, lat: 55.1, lon: 37.1 });
+  check(no.id === 21 && no.kind === "mfr" && no.project_name === "QA-Новый проект 2" && no.smu_name === "QA-СМУ-1 Северное" && no.smu_director_name === "QA-Петров Пётр Петрович" && no.has_avatar === false, "POST /objects: полный ObjectOut с агрегатами");
   check((await api.get("/projects")).find((p) => p.id === 15).objects_count === 1, "objects_count проекта вырос");
   check((await api.get("/projects-tree")).projects.some((p) => p.id === 15 && p.objects.some((o) => o.id === 21)), "объект появился в projects-tree");
   e = await rejects(api.post("/objects", { name: "QA-Без проекта" }));
@@ -262,7 +262,7 @@ console.log("Проекты и объекты: GET после POST, валида
   check(isApiError(await rejects(api.post("/objects", { name: "QA-Новый объект", project_id: 1 })), 409), "дубль объекта → 409");
   check(isApiError(await rejects(api.post("/objects", { name: "QA-Тип", project_id: 1, kind: "zzz" })), 400), "неизвестный тип учёта → 400");
   e = await rejects(api.post("/objects", { name: "QA-СМУ", project_id: 1, smu_id: 999 }));
-  check(isApiError(e, 404) && e.detail === "СМУ: запись справочника не найдена", "несуществующее СМУ → 404");
+  check(isApiError(e, 404) && e.detail === "Отв. подразделение: запись справочника не найдена", "несуществующее подразделение (СМУ) → 404");
   const mv = await api.patch("/objects/21", { project_id: 1, smu_id: null });
   check(mv.project_id === 1 && mv.smu_id === null && mv.smu_name === null, "PATCH объекта: перенос в проект, снятие СМУ");
   const pr = await api.get("/projects");

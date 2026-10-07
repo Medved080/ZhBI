@@ -410,7 +410,7 @@ const PROJECT_IN_SPEC = { ...ADDRESS_SPEC, name: S({ required: true }), status: 
 const PROJECT_PATCH_SPEC = { ...ADDRESS_SPEC, name: S({ nullable: true }), status: S({ nullable: true }), description: S({ nullable: true }) };
 const OBJECT_REFS = {
   smu_id: { type: "int", nullable: true }, smu_director_id: { type: "int", nullable: true },
-  responsible_id: { type: "int", nullable: true }, media_url: S({ nullable: true }), smr_start_reported: S({ nullable: true }),
+  media_url: S({ nullable: true }),
 };
 const OBJECT_CREATE_SPEC = {
   ...ADDRESS_SPEC, name: S({ required: true }), project_id: { type: "int", required: true },
@@ -563,7 +563,7 @@ function buildFixtures() {
     id, project_id, name, kind: "zhbi", status: "active", description: null,
     address: null, address_code: null, address_source: null, address_region: null, address_parts: null,
     postal_code: null, address_note: null, lat: null, lon: null,
-    smu_id: null, smu_director_id: null, responsible_id: null, media_url: null, smr_start_reported: null,
+    smu_id: null, smu_director_id: null, media_url: null,
     avatar_attachment_id: null, elements_current: 0, elements_retired: 0, revit_elements: 0, mounted: 0,
     // drawings: [{source_file, is_current, imported_at}] — «Версии чертежа» в delete-plan.
     drawings: [],
@@ -578,26 +578,26 @@ function buildFixtures() {
     // 1 — «тяжёлый»: изделия, зоны, договоры, чертежи, марки → delete-plan с blockers.
     O(1, 1, "QA-Корпус 1.1", { description: "Синтетический объект: есть изделия, зоны и договоры.",
       address: "г Тестоград, ул QA-Ленина, д 10, корпус 1", address_region: "Тестовая область", postal_code: "101000",
-      lat: 55.7512, lon: 37.6184, smu_id: 1, smu_director_id: 1, responsible_id: 2, elements_current: 1240, elements_retired: 12,
+      lat: 55.7512, lon: 37.6184, smu_id: 1, smu_director_id: 1, elements_current: 1240, elements_retired: 12,
       mounted: 612, drawings: [dwg("QA-корпус-1-1_v3.dxf"), dwg("QA-корпус-1-1_v2.dxf", false, "2026-08-10 09:00:00")],
       // agreements: 0 — «Договоры: 2» теперь даёт data.agreements (договоры 1 и 3); число в deps — только
       // ДОБАВКА к строкам таблицы (договоры без модели), см. agreementsOfObject.
       deps: { zones: 8, agreements: 0, marks: 15 }, cascade: { app_settings: 1, label_visibility: 0, zone_colors: 0, report_notes: 3, default_contracts: 0 },
-      media_url: "https://example.invalid/qa-media-1", smr_start_reported: "2026-02-15", smr_start: "2026-03-01", smr_end: "2027-06-30" }),
+      media_url: "https://example.invalid/qa-media-1", smr_start: "2026-03-01", smr_end: "2027-06-30" }),
     O(2, 1, "QA-Корпус 1.2", { address: "г Тестоград, ул QA-Ленина, д 10, корпус 2", lat: 55.7520, lon: 37.6200,
-      smu_id: 1, responsible_id: 3, elements_current: 860, mounted: 130, drawings: [dwg("QA-корпус-1-2_v1.dxf")],
+      smu_id: 1, elements_current: 860, mounted: 130, drawings: [dwg("QA-корпус-1-2_v1.dxf")],
       deps: { zones: 4, agreements: 0, marks: 6 }, smr_start: "2026-05-01", smr_end: "2027-09-30" }),
     // 3 — вложения (в т.ч. изображение) и назначенное превью.
     O(3, 1, "QA-Корпус 1.3 (вложения и превью)", { description: "Объект с вложениями и превью (вложение №1).",
       address: "г Тестоград, ул QA-Ленина, д 10, корпус 3", lat: 55.7530, lon: 37.6220, smu_id: 2, smu_director_id: 4,
-      responsible_id: 5, avatar_attachment_id: 1, elements_current: 300, drawings: [dwg("QA-корпус-1-3_v1.dxf")],
+      avatar_attachment_id: 1, elements_current: 300, drawings: [dwg("QA-корпус-1-3_v1.dxf")],
       deps: { zones: 0, agreements: 0, marks: 2 } }),
     O(4, 2, "QA-Секция 2.1", { address: "г Тестоград, наб QA-Речная, д 3, секция 1", lat: 55.7601, lon: 37.6302,
       smu_id: 2, elements_current: 150, drawings: [dwg("QA-секция-2-1_v1.dxf")] }),
     O(5, 2, "QA-Секция 2.2 (перспективная)", { status: "perspective", deps: { zones: 0, agreements: 0, marks: 2 } }),
     // 6 — единственный объект с типом учёта МФР.
     O(6, 2, "QA-МФР Корпус 2.3", { kind: "mfr", description: "Учёт по блокам из модели Revit.",
-      revit_elements: 640, deps: { zones: 0, agreements: 1, marks: 0 }, smu_id: 3, responsible_id: 1 }),
+      revit_elements: 640, deps: { zones: 0, agreements: 1, marks: 0 }, smu_id: 3 }),
     O(7, 3, "QA-Цех 3.1", { address: "г Тестоград, проезд QA-Заводской, д 7", lat: 55.6803, lon: 37.5902, elements_current: 90, drawings: [dwg("QA-цех-3-1_v1.dxf")] }),
     O(8, 3, "QA-Цех 3.2 (приостановлен)", { status: "suspended", elements_current: 40, drawings: [dwg("QA-цех-3-2_v1.dxf")] }),
     O(9, 4, "QA-Школа 4.1", { status: "perspective", deps: { zones: 1, agreements: 0, marks: 0 } }),
@@ -612,7 +612,7 @@ function buildFixtures() {
     O(16, 10, "QA-Корпус 10.1 — жилой дом переменной этажности со встроенно-пристроенными помещениями общественного "
       + "назначения и подземной автостоянкой (секции 1–6, этапы строительства 1 и 2)",
       { address: longAddress, address_note: "Строительная площадка №4, вход через КПП-2", elements_current: 45,
-        smu_id: 4, smu_director_id: 2, responsible_id: 4 }),
+        smu_id: 4, smu_director_id: 2 }),
     O(17, 11, "QA-Депо 11.1", { elements_current: 12, lat: 55.7101, lon: 37.6802 }),
     O(18, 12, "QA-Мост 12.1", { elements_current: 77 }),
     // 19 — пустой, но со «сквозными» настройками (уходят вместе с объектом).
@@ -1025,8 +1025,7 @@ function createServer(opts) {
       drawings: dr.map((d) => d.source_file), elements_current: o.elements_current || 0, elements_retired: o.elements_retired || 0,
       smu_id: o.smu_id ?? null, smu_name: nameOf(data.smu, o.smu_id),
       smu_director_id: o.smu_director_id ?? null, smu_director_name: nameOf(data.individuals, o.smu_director_id),
-      responsible_id: o.responsible_id ?? null, responsible_name: nameOf(data.individuals, o.responsible_id),
-      media_url: o.media_url ?? null, smr_start_reported: o.smr_start_reported ?? null,
+      media_url: o.media_url ?? null,
       has_avatar: !!o.avatar_attachment_id, avatar_attachment_id: o.avatar_attachment_id ?? null,
     };
   }
@@ -1094,13 +1093,12 @@ function createServer(opts) {
     }
     return out;
   }
-  const REQUISITE_COLS = ["media_url", "smr_start_reported"];
+  const REQUISITE_COLS = ["media_url"];
   function requisiteEdits(values, given) {
     return REQUISITE_COLS.filter((c) => given.has(c)).map((c) => [c, typeof values[c] === "string" ? (values[c].trim() || null) : values[c]]);
   }
   const REF_FIELDS = {
-    smu_id: ["smu", "СМУ"], smu_director_id: ["individuals", "Физлицо (директор СМУ)"],
-    responsible_id: ["individuals", "Физлицо (ответственный)"],
+    smu_id: ["smu", "Отв. подразделение"], smu_director_id: ["individuals", "Физлицо (директор СМУ)"],
   };
   function refEdits(values, given) {
     const out = [];
@@ -1562,7 +1560,7 @@ function createServer(opts) {
       id: takeId("objects"), project_id: b.project_id, name, kind, status, description: b.description,
       address: null, address_code: null, address_source: null, address_region: null, address_parts: null,
       postal_code: null, address_note: null, lat: null, lon: null,
-      smu_id: null, smu_director_id: null, responsible_id: null, media_url: null, smr_start_reported: null,
+      smu_id: null, smu_director_id: null, media_url: null,
       avatar_attachment_id: null, elements_current: 0, elements_retired: 0, revit_elements: 0, mounted: 0, drawings: [],
       deps: { zones: 0, agreements: 0, marks: 0 },
       cascade: { app_settings: 0, label_visibility: 0, zone_colors: 0, report_notes: 0, default_contracts: 0 },

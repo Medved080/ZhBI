@@ -217,8 +217,8 @@ const restoreCfg = () => ({
 
 // ---------------------------------------------------------------- справочник объектов: сверка → флажки → применение
 const OBJECTS_FIELD_LABELS = {
-  address: "Адрес", address_region: "Регион (по адресу)", smu_id: "СМУ", smu_director_id: "Директор СМУ", responsible_id: "Ответственный (ДП/РП)",
-  status: "Статус", lat: "Широта", lon: "Долгота", media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР", postal_code: "Почтовый индекс",
+  address: "Адрес", address_region: "Регион (по адресу)", smu_id: "Отв. подразделение", smu_director_id: "Директор СМУ",
+  status: "Статус", lat: "Широта", lon: "Долгота", media_url: "Ссылка на фото/видео", postal_code: "Почтовый индекс",
   // «Справочник ОС WEB» (2026-10-05, B1): проект и проектная команда (те же роли, что TEAM_ROLES в app/object_team.py)
   project: "Проект", project_id: "Проект", team_dir_project: "Директор проекта", team_head_project: "Руководитель проекта",
   team_pm_office: "Проектный офис", team_estimate: "Сметный отдел", team_pto: "ПТО", team_supply: "Снабжение",

@@ -3,9 +3,9 @@
 > Файл **генерируется** скриптом `scripts/gen_v2_coverage.py` из инвентаризации V1 (`scripts/inventory_v1_ui.py`) и
 > курируемого реестра `app/static/v2/screens.json`. Руками не править: правится `screens.json`, затем скрипт запускается заново.
 
-- Ветка: `main`, версия: `e257155` (на момент генерации), дата: 2026-10-07.
+- Ветка: `main`, версия: `d8fd2fb` (на момент генерации), дата: 2026-10-07.
 - Инвентаризация V1 (разбор разметки + токенизатор JS, а не регулярка): пунктов меню «Действия» — **71**, модальных экранов — **83**, кнопок панели вне меню и модалок — **40**, областей рабочих мест — **13**, обработчиков по id — **507**.
-- Самопроверка инвентаризации: `id` в разметке разбором 1191 = текстом 1191; `getElementById` токенами 1944 = текстом 1944; токенов JS 222294, функций верхнего уровня 1032.
+- Самопроверка инвентаризации: `id` в разметке разбором 1190 = текстом 1190; `getElementById` токенами 1944 = текстом 1944; токенов JS 222210, функций верхнего уровня 1032.
 - **СВЕРКА ПОЛНОТЫ НЕ ПРОЙДЕНА:**
   - НЕ ЗАКРЕПЛЁН за экраном V2: menu «menu-ai-settings»
   - НЕ ЗАКРЕПЛЁН за экраном V2: menu «menu-team-access»
@@ -186,19 +186,19 @@
 
 | Область | Строка index.html | Блоков в статической разметке | Закреплена за экраном |
 | --- | --- | --- | --- |
-| `workdate-box` | 5645 | 2 | ws-model |
-| `user-box` | 5658 | 1 | shell-context |
-| `picker-panel` | 5684 | 0 | ws-picker |
-| `foreman-panel` | 5692 | 0 | ws-foreman |
-| `picker-metrics` | 5701 | 0 | ws-picker |
-| `mfr-workspace` | 5707 | 44 | ws-mfr |
-| `chess-flat-overlay-root` | 6055 | 0 | chess-flat |
-| `stage` | 6056 | 3 | ws-model |
-| `stage-3d` | 6091 | 2 | ws-model |
-| `statusbar` | 6102 | 1 | ws-model |
-| `picker-contracts` | 6113 | 0 | ws-picker |
-| `sidebar` | 6123 | 23 | ws-model |
-| `ctx-menu` | 6258 | 0 | ws-model |
+| `workdate-box` | 5646 | 2 | ws-model |
+| `user-box` | 5659 | 1 | shell-context |
+| `picker-panel` | 5685 | 0 | ws-picker |
+| `foreman-panel` | 5693 | 0 | ws-foreman |
+| `picker-metrics` | 5702 | 0 | ws-picker |
+| `mfr-workspace` | 5708 | 44 | ws-mfr |
+| `chess-flat-overlay-root` | 6056 | 0 | chess-flat |
+| `stage` | 6057 | 3 | ws-model |
+| `stage-3d` | 6092 | 2 | ws-model |
+| `statusbar` | 6103 | 1 | ws-model |
+| `picker-contracts` | 6114 | 0 | ws-picker |
+| `sidebar` | 6124 | 23 | ws-model |
+| `ctx-menu` | 6259 | 0 | ws-model |
 
 ## Заблокировано внешней причиной (статус 6)
 

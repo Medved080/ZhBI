@@ -103,7 +103,8 @@ export const tests = [
       a.setValue(st, "archived");
       await a.settle(60);
       t.ok(a.$$("[data-project]").length < a.ctl.data.projects.length, "фильтр по статусу сужает список");
-      // СМУ / ответственный / комбинации: в дереве остаются ТОЛЬКО проекты с подошедшими объектами и сами эти объекты
+      // Отв. подразделение (СМУ) / статус / комбинации: в дереве остаются ТОЛЬКО проекты с подошедшими объектами и сами эти объекты
+      // (фильтр «по ответственному» убран 2026-10-07 вместе с полем «Ответственный (ДП/РП)»)
       a.setValue(st, "");
       const objs = a.ctl.data.objects;
       const ids = (list) => list.map((x) => String(x.id)).sort();
@@ -112,31 +113,32 @@ export const tests = [
       a.setValue(a.$("#po-smu-filter"), String(smuId));
       await a.settle(80);
       const bySmu = objs.filter((o) => o.smu_id === smuId);
-      t.eq(shown("[data-object]"), ids(bySmu), "СМУ: показаны ровно объекты этого СМУ");
-      t.eq(shown("[data-project]"), [...new Set(bySmu.map((o) => String(o.project_id)))].sort(), "СМУ: проекты без таких объектов из дерева ушли");
-      const respId = bySmu.find((o) => o.responsible_id != null).responsible_id;
-      a.setValue(a.$("#po-responsible-filter"), String(respId));
+      t.eq(shown("[data-object]"), ids(bySmu), "Отв. подразделение: показаны ровно объекты этого подразделения");
+      t.eq(shown("[data-project]"), [...new Set(bySmu.map((o) => String(o.project_id)))].sort(), "Отв. подразделение: проекты без таких объектов из дерева ушли");
+      t.ok(!a.$("#po-responsible-filter"), "фильтра по ответственному больше нет");
+      const stId = bySmu[0].status || "active";
+      a.setValue(st, stId);
       await a.settle(80);
-      const both = bySmu.filter((o) => o.responsible_id === respId);
-      t.eq(shown("[data-object]"), ids(both), "СМУ + ответственный: пересечение");
-      t.eq(shown("[data-project]"), [...new Set(both.map((o) => String(o.project_id)))].sort(), "СМУ + ответственный: проекты пересечения");
+      const both = bySmu.filter((o) => (o.status || "active") === stId);
+      t.eq(shown("[data-object]"), ids(both), "Отв. подразделение + статус: пересечение");
+      t.eq(shown("[data-project]"), [...new Set(both.map((o) => String(o.project_id)))].sort(), "Отв. подразделение + статус: проекты пересечения");
       // сочетание, которому не отвечает ни один объект: понятный пустой результат, а не «данных нет»
       let empty = null;
       for (const s1 of new Set(objs.map((o) => o.smu_id).filter((v) => v != null))) {
-        for (const r1 of new Set(objs.map((o) => o.responsible_id).filter((v) => v != null))) {
-          if (!objs.some((o) => o.smu_id === s1 && o.responsible_id === r1)) { empty = [s1, r1]; break; }
+        for (const st1 of ["active", "perspective", "suspended", "completed", "archived"]) {
+          if (!objs.some((o) => o.smu_id === s1 && (o.status || "active") === st1)) { empty = [s1, st1]; break; }
         }
         if (empty) break;
       }
-      t.ok(empty, "в данных стенда есть сочетание СМУ и ответственного без объектов");
+      t.ok(empty, "в данных стенда есть сочетание подразделения и статуса без объектов");
       a.setValue(a.$("#po-smu-filter"), String(empty[0]));
-      a.setValue(a.$("#po-responsible-filter"), String(empty[1]));
+      a.setValue(st, empty[1]);
       await a.settle(80);
       t.eq(a.$$("[data-project]").length, 0, "пустое сочетание: проектов нет");
       t.has(a.$("#po-tree").textContent, "Ничего не найдено", "пустое сочетание: «Ничего не найдено»");
       t.notHas(a.$("#po-tree").textContent, "заведите проект", "пустой результат фильтра не выдаётся за отсутствие данных");
       a.setValue(a.$("#po-smu-filter"), "");
-      a.setValue(a.$("#po-responsible-filter"), "");
+      a.setValue(st, "");
       await a.settle(80);
       t.eq(a.$$("[data-project]").length >= total, true, "сброс фильтров возвращает дерево");
     },

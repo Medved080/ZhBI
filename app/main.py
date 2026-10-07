@@ -4553,10 +4553,11 @@ def _адресные_правки(body) -> list:
 
 # Реквизиты из внутреннего реестра заказчика (2026-09-08) — только у
 # объекта. Та же логика «пишем только присланное», что у адресных полей.
-# СМУ/директор СМУ/ответственный сюда не входят — с 2026-09-08 это ссылки
+# Отв. подразделение (СМУ) и директор СМУ сюда не входят — с 2026-09-08 это ссылки
 # на справочники (smu_catalog/individuals), проверяются отдельно, см.
 # _справочные_правки: обычному тексту чужого id не проверить.
-_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("media_url", "smr_start_reported")
+# «Старт СМР» и «Ответственный (ДП/РП)» убраны 2026-10-07 («Справочник ОС WEB» их не ведёт): колонки остались, но не пишутся и не читаются.
+_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("media_url",)
 
 
 def _реквизитные_правки(body) -> list:
@@ -4571,14 +4572,13 @@ def _реквизитные_правки(body) -> list:
 
 # (таблица справочника, подпись для отказа) по каждому полю-ссылке.
 _СПРАВОЧНЫЕ_ПОЛЯ = {
-    "smu_id": ("smu_catalog", "СМУ"),
+    "smu_id": ("smu_catalog", "Отв. подразделение"),
     "smu_director_id": ("individuals", "Физлицо (директор СМУ)"),
-    "responsible_id": ("individuals", "Физлицо (ответственный)"),
 }
 
 
 def _справочные_правки(conn, body) -> list:
-    """Правки smu_id/smu_director_id/responsible_id — проверяет, что
+    """Правки smu_id/smu_director_id — проверяет, что
     присланный id реально есть в соответствующем справочнике, иначе объект
     сослался бы в никуда (тем же способом, что и project_id при создании)."""
     правки = []
@@ -4613,8 +4613,8 @@ def _адрес_из_строки(row) -> dict:
 # Отпечаток редактируемых полей записи справочника (2026-09-21, V2): форма шлёт его назад как `expected_version`, сервер откажет
 # 409, если запись за это время изменил кто-то другой. Аватар и служебные метки времени в него не входят: их меняет сама форма.
 _PROJECT_VERSION_COLS = ("name", "status", "description") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
-_OBJECT_VERSION_COLS = ("name", "status", "project_id", "kind", "description", "smu_id", "smu_director_id", "responsible_id",
-                        "media_url", "smr_start_reported") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
+_OBJECT_VERSION_COLS = ("name", "status", "project_id", "kind", "description", "smu_id", "smu_director_id",
+                        "media_url") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
 
 
 def _object_version(row, team) -> str:
@@ -4994,10 +4994,7 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 smu_name=смус.get(row["smu_id"] if "smu_id" in row.keys() else None),
                 smu_director_id=(row["smu_director_id"] if "smu_director_id" in row.keys() else None),
                 smu_director_name=физлица.get(row["smu_director_id"] if "smu_director_id" in row.keys() else None),
-                responsible_id=(row["responsible_id"] if "responsible_id" in row.keys() else None),
-                responsible_name=физлица.get(row["responsible_id"] if "responsible_id" in row.keys() else None),
                 media_url=row["media_url"] if "media_url" in row.keys() else None,
-                smr_start_reported=row["smr_start_reported"] if "smr_start_reported" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
                 avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
                 has_photo=(bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False) or row["id"] in картинки_вложений,
@@ -5034,9 +5031,7 @@ class ObjectCreateIn(AddressFields):
     kind: Optional[str] = None
     smu_id: Optional[int] = None
     smu_director_id: Optional[int] = None
-    responsible_id: Optional[int] = None
     media_url: Optional[str] = None
-    smr_start_reported: Optional[str] = None
     team: Optional[dict] = None   # проектная команда {ключ роли: id физлица | null}, см. app/object_team.py
 
 

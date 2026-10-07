@@ -655,21 +655,20 @@ def _migrate_smu_individuals(conn) -> str:
     механизм «найти по имени или завести», не три разных."""
     from app.reference_catalogs import find_or_create_individual, find_or_create_smu
 
+    # «Ответственный (ДП/РП)» с 2026-10-07 не ведётся («Справочник ОС WEB» его не знает) — текст responsible здесь больше не разносится:
+    # иначе на сервере, до которого эта обработка ещё не дошла, она завела бы лишних физлиц и заполнила responsible_id заново.
     затронуто = 0
     for row in conn.execute(
-        "SELECT id, smu, smu_director, responsible FROM objects "
+        "SELECT id, smu, smu_director FROM objects "
         "WHERE (smu IS NOT NULL AND smu_id IS NULL) "
-        "   OR (smu_director IS NOT NULL AND smu_director_id IS NULL) "
-        "   OR (responsible IS NOT NULL AND responsible_id IS NULL)"
+        "   OR (smu_director IS NOT NULL AND smu_director_id IS NULL)"
     ):
         smu_id = find_or_create_smu(conn, row["smu"])
         director_id = find_or_create_individual(conn, row["smu_director"])
-        responsible_id = find_or_create_individual(conn, row["responsible"])
         conn.execute(
             "UPDATE objects SET smu_id = COALESCE(smu_id, ?), "
-            "smu_director_id = COALESCE(smu_director_id, ?), "
-            "responsible_id = COALESCE(responsible_id, ?) WHERE id = ?",
-            (smu_id, director_id, responsible_id, row["id"]),
+            "smu_director_id = COALESCE(smu_director_id, ?) WHERE id = ?",
+            (smu_id, director_id, row["id"]),
         )
         затронуто += 1
     return f"объектов разнесено по справочникам СМУ/физлиц: {затронуто}"
@@ -770,6 +769,20 @@ def _drop_retired_features(conn) -> str:
     cur = conn.execute(f"DELETE FROM role_features WHERE feature_key IN ({','.join('?' * len(ключи))})", ключи)
     return (f"убрано строк прав на удалённые разделы: {cur.rowcount}" if cur.rowcount
             else "строк прав на удалённые разделы нет")
+
+
+def _clear_retired_object_fields(conn) -> str:
+    """Стереть значения полей объекта, убранных из карточки (2026-10-07, живой запрос: «приведём состав данных по проектам к файлу
+    „Справочник ОС WEB“» — «Ответственный (ДП/РП)» и «Старт СМР» в нём нет; ответ пользователя: «убрать везде и стереть значения»):
+    objects.responsible_id, objects.responsible (прежний текст, из которого responsible_id когда-то заполнялся) и objects.smr_start_reported.
+    Колонки остаются — релиз только добавляет, а удаление колонки не нужно, чтобы значения нигде не показывались. Физлица, созданные из
+    «ответственных», в справочнике остаются: тот же справочник ведёт «Директор СМУ» и проектную команду. Уборка — только по кнопке
+    администратора, перед ней снимается копия базы; повтор безвреден (стирать уже нечего)."""
+    cur = conn.execute(
+        "UPDATE objects SET responsible_id = NULL, responsible = NULL, smr_start_reported = NULL "
+        "WHERE responsible_id IS NOT NULL OR responsible IS NOT NULL OR smr_start_reported IS NOT NULL")
+    return (f"очищены «Ответственный (ДП/РП)» и «Старт СМР» у объектов: {cur.rowcount}" if cur.rowcount
+            else "стирать нечего: значений уже нет")
 
 
 RELEASE_TASKS = [
@@ -1147,6 +1160,16 @@ RELEASE_TASKS = [
                "строки их прав в ролях больше ничего не значат",
         "kind": KIND_CLEANUP,
         "run": _drop_retired_features,
+    },
+    {
+        "name": "2026-10-07-clear-retired-object-fields",
+        "version": "0.95",
+        "date": "2026-10-07",
+        "title": "Стереть «Ответственный (ДП/РП)» и «Старт СМР» у объектов",
+        "why": "состав данных объекта приведён к «Справочнику ОС WEB»: этих полей в нём нет, из карточки, обмена и ИИ они убраны; "
+               "накопленные значения стираются (перед уборкой снимается копия базы)",
+        "kind": KIND_CLEANUP,
+        "run": _clear_retired_object_fields,
     },
 ]
 

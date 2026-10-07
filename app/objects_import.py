@@ -66,7 +66,6 @@ app/element_bulk_edit.py («Семья B» из исследования арх�
 
 import io
 import json
-from datetime import date, datetime
 from typing import Optional
 
 from openpyxl import load_workbook
@@ -90,12 +89,10 @@ _COLUMN_LABELS = [
     ("smu", "СМУ"),
     ("smu", "Отв. подразделение"),         # в новом файле подразделение называется так
     ("smu_director", "Директор СМУ"),
-    ("responsible", "ДП / РП"),
     ("status_raw", "Статус ОС"),
     ("lat", "Широта"),
     ("lon", "Долгота"),
     ("media_url", "Фото/Видео"),
-    ("smr_start_reported", "Старт СМР"),
 ] + [("team_" + key, label) for key, label in TEAM_ROLES] + [
     ("team_site_chief", "Нач.участка"),    # в файле без пробела после точки
 ]
@@ -112,15 +109,13 @@ FIELD_LABELS = {
     "address_region": "Регион (по адресу)",
     # Ключ — реальная колонка objects (ссылка на справочник), а не то, как
     # поле называется в файле: apply() пишет по этому имени, см. _UPDATE_FIELDS.
-    "smu_id": "СМУ",
+    "smu_id": "Отв. подразделение",
     "smu_director_id": "Директор СМУ",
-    "responsible_id": "Ответственный (ДП/РП)",
     "status": "Статус",
     "project_id": "Проект",
     "lat": "Широта",
     "lon": "Долгота",
     "media_url": "Ссылка на фото/видео",
-    "smr_start_reported": "Старт СМР",
 }
 
 # Поля, которые apply() разрешено записывать UPDATE'ом. Имя поля приходит из
@@ -159,9 +154,8 @@ class ObjectsImportError(Exception):
 # (для предупреждения «будет создано»), а резолвит в id уже apply() — тем же
 # find_or_create_*, которым пользуется форма (см. докстрок модуля).
 _REFERENCE_FIELDS = {
-    "smu": ("smu_id", "smu_catalog", "СМУ"),
+    "smu": ("smu_id", "smu_catalog", "Отв. подразделение"),
     "smu_director": ("smu_director_id", "individuals", "Директор СМУ"),
-    "responsible": ("responsible_id", "individuals", "Ответственный (ДП/РП)"),
 }
 
 
@@ -202,30 +196,6 @@ def _parse_coord(raw) -> tuple:
         return round(float(raw), 6), None
     except (TypeError, ValueError):
         return None, "не число «%s»" % raw
-
-
-_DATE_FORMATS = ("%d.%m.%Y", "%d.%m.%y")
-
-
-def _parse_date_cell(raw) -> tuple:
-    """(дата ГГГГ-ММ-ДД | None, ошибка | None). Ячейка Excel с типом
-    даты приходит объектом datetime/date — тот же случай, что разбирает
-    app/history_import.normalize_changed_at."""
-    if raw is None:
-        return None, None
-    if isinstance(raw, datetime):
-        return raw.date().isoformat(), None
-    if isinstance(raw, date):
-        return raw.isoformat(), None
-    text = _clean_text(raw)
-    if text is None:
-        return None, None
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(text, fmt).date().isoformat(), None
-        except ValueError:
-            continue
-    return None, "не удалось разобрать дату «%s»" % text
 
 
 # ------------------------------------------------------------- чтение файла
@@ -377,12 +347,6 @@ def _build_create(conn, line_no: int, name: str, values: dict) -> tuple:
         elif значение is not None:
             fields[key] = значение
 
-    старт, ошибка_даты = _parse_date_cell(values.get("smr_start_reported"))
-    if ошибка_даты:
-        warnings.append({"line": line_no, "name": name, "reason": ошибка_даты})
-    elif старт:
-        fields["smr_start_reported"] = старт
-
     return {
         "kind": "create", "key": name, "object_id": None, "line": line_no,
         "field": "name", "field_label": "Новый объект", "was": None, "now": name,
@@ -513,14 +477,6 @@ def _build_update(conn, row, line_no: int, values: dict) -> tuple:
         if новое != старое_округл:
             changes.append(describe(key, старое, новое))
 
-    новый_старт, ошибка_даты = _parse_date_cell(values.get("smr_start_reported"))
-    if ошибка_даты:
-        warnings.append({"line": line_no, "name": name, "reason": ошибка_даты})
-    elif новый_старт is not None:
-        старый_старт = row["smr_start_reported"] if "smr_start_reported" in row.keys() else None
-        if новый_старт != старый_старт:
-            changes.append(describe("smr_start_reported", старый_старт, новый_старт))
-
     return changes, warnings
 
 
@@ -583,8 +539,6 @@ def apply_changes(conn, selections: list, admin) -> dict:
                 fields["smu_id"] = find_or_create_smu(conn, fields["smu_id"])
             if "smu_director_id" in fields:
                 fields["smu_director_id"] = find_or_create_individual(conn, fields["smu_director_id"])
-            if "responsible_id" in fields:
-                fields["responsible_id"] = find_or_create_individual(conn, fields["responsible_id"])
             # Проект — из колонки «Проект» файла; нет колонки или пусто — под тем же названием, что объект («один объект =
             # один проект»).
             project_id = _find_or_create_project(conn, admin, (creates[0].get("project") or "").strip() or name,
@@ -664,7 +618,7 @@ def apply_changes(conn, selections: list, admin) -> dict:
                     new = round(float(new), 6)
                 elif field == "smu_id":
                     new = find_or_create_smu(conn, new)
-                elif field in ("smu_director_id", "responsible_id"):
+                elif field == "smu_director_id":
                     new = find_or_create_individual(conn, new)
                 записать.append((field, new))
                 описание[field] = (sel.get("was"), new)

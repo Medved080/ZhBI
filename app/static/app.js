@@ -7540,7 +7540,9 @@ async function openObjectHome(objectId) {
   // «Тип учёта» — только когда он что-то значит: у МФР он ставится осознанно, у ЖБИ по умолчанию стоит у любого объекта (objects.kind
   // DEFAULT 'zhbi'), и без загруженного чертежа подпись «ЖБИ по чертежу» вводила бы в заблуждение.
   const типУчёта = o.kind === "mfr" || (o.kind === "zhbi" && o.current_source_file) ? (OBJECT_KIND_RU[o.kind] || o.kind) : "";
-  const команда = OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] ? e(o.team[ключ].name) : "")).join("");
+  // Отв. подразделение и директор СМУ — в «Проектной команде», как в форме и в «Справочнике ОС WEB» (2026-10-07).
+  const команда = строка("Отв. подразделение", e(o.smu_name)) + строка("Директор СМУ", e(o.smu_director_name))
+    + OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] ? e(o.team[ключ].name) : "")).join("");
   const медиа = safeHttpUrl(o.media_url);
   const закрыть = o.kind === "mfr" ? "Открыть модель МФР" : "Открыть схему";
   box.innerHTML = `
@@ -7565,8 +7567,6 @@ async function openObjectHome(objectId) {
         <section class="ohv-card"><h4>Реквизиты</h4><dl class="ohv-dl">
           ${строка("Проект", e(o.project_name))}${строка("Статус", e(OBJECT_STATUS_RU[o.status] || o.status))}${строка("Тип учёта", e(типУчёта))}
           ${строка("Адрес", e(o.address))}${строка("Координаты", есть ? `${e(o.lat)}, ${e(o.lon)}` : "")}
-          ${строка("СМУ", e(o.smu_name))}${строка("Директор СМУ", e(o.smu_director_name))}${строка("Ответственный (ДП/РП)", e(o.responsible_name))}
-          ${строка("Старт СМР", o.smr_start_reported ? formatDateRu(o.smr_start_reported) : "")}
           ${медиа ? строка("Фото и видео", `<a href="${escapeHtml(медиа)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
           ${строка("Описание", e(o.description))}</dl></section>
       </div>
@@ -11955,10 +11955,9 @@ const catalog = {
   status: "active",
   // Отбор по ключевым полям объекта (2026-09-08, живой запрос: «Добавь
   // возможность отбора объектов по ключевым полям — по ответственным,
-  // статусу, подразделению (СМУ), по региону»). Пусто — фильтр не действует.
+  // статусу, подразделению (СМУ), по региону»). Пусто — фильтр не действует. «По ответственному» убран 2026-10-07 вместе с полем.
   // У проекта этих полей нет — в catalogMatches он тогда просто не проверяется.
   smu: "",
-  responsible: "",
   region: "",
   dirty: false,
   // Координаты уже стоят (сохранены раньше) или человек тронул их сам
@@ -12092,12 +12091,11 @@ function catalogObjectsOf(projectId) {
 
 function catalogMatches(запись, имяПроекта) {
   if (catalog.status && (запись.status || "active") !== catalog.status) return false;
-  // СМУ/ответственный/регион — только у объекта ('smu_id' в записи отличает
+  // Подразделение/регион — только у объекта ('smu_id' в записи отличает
   // объект от проекта, у которого этих полей вовсе нет).
-  const объектныйФильтрАктивен = !!(catalog.smu || catalog.responsible || catalog.region);
+  const объектныйФильтрАктивен = !!(catalog.smu || catalog.region);
   if ("smu_id" in запись) {
     if (catalog.smu && String(запись.smu_id ?? "") !== catalog.smu) return false;
-    if (catalog.responsible && String(запись.responsible_id ?? "") !== catalog.responsible) return false;
     if (catalog.region && (запись.address_region || "") !== catalog.region) return false;
   } else if (объектныйФильтрАктивен) {
     // У проекта этих полей нет — сам по себе он «не подходит», пока
@@ -12218,7 +12216,7 @@ function renderCatalogTree() {
     // При поиске или отборе по реквизитам объекта группы раскрыты всегда —
     // искали объект, а не проект, и заставлять дораскрывать найденное было
     // бы лишним ходом.
-    const раскрыт = !!catalog.query || !!(catalog.smu || catalog.responsible || catalog.region)
+    const раскрыт = !!catalog.query || !!(catalog.smu || catalog.region)
       || catalog.expanded.has(проект.id);
     if (раскрыт) {
       свои.forEach((o) => {
@@ -12307,42 +12305,7 @@ function catalogFieldsHtml(запись, тип, редактируем) {
           </select></label>` : ""}
         <label class="object-field object-field-wide"><span>Описание</span>
           <input type="text" data-field="description" value="${з(запись && запись.description)}" ${выкл}/></label>
-      </div>
-    </div>`;
-
-  // Реквизиты внутреннего реестра заказчика (2026-09-08) — те же поля, что
-  // заполняет загрузка справочника объектов из Excel («Действия → Обмен
-  // данными → Загрузка справочника объектов из Excel»); руками правятся
-  // здесь же, импорт — не единственный способ их заполнить.
-  // СМУ и физлица — выпадашками из своих справочников (2026-09-08, живой
-  // запрос: «сделай реквизиты заказчика в карточке объекта выбираемыми
-  // каждый из своего справочника»), а не свободным текстом. Новую запись
-  // заводят в самом справочнике (Действия → Справочники → СМУ / Физлица)
-  // или загрузкой из Excel — та заводит недостающее сама.
-  const опцииСМУ = (catalog.smuList || []).map((s) =>
-    `<option value="${s.id}" ${запись && запись.smu_id === s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`
-  ).join("");
-  const опцииФизлиц = (текущийId) => (catalog.individualsList || []).map((p) =>
-    `<option value="${p.id}" ${текущийId === p.id ? "selected" : ""}>${escapeHtml(p.name)}</option>`
-  ).join("");
-  const реквизитыЗаказчика = тип === "object" ? `
-    <div class="form-card">
-      <h4>Реквизиты заказчика</h4>
-      <div class="object-fields">
-        <label class="object-field"><span>СМУ</span>
-          <select data-field="smu_id" ${выкл}>
-            <option value="">— не выбрано —</option>${опцииСМУ}
-          </select></label>
-        <label class="object-field"><span>Директор СМУ</span>
-          <select data-field="smu_director_id" ${выкл}>
-            <option value="">— не выбрано —</option>${опцииФизлиц(запись && запись.smu_director_id)}
-          </select></label>
-        <label class="object-field"><span>Ответственный (ДП/РП)</span>
-          <select data-field="responsible_id" ${выкл}>
-            <option value="">— не выбрано —</option>${опцииФизлиц(запись && запись.responsible_id)}
-          </select></label>
-        <label class="object-field"><span>Старт СМР</span>
-          <input type="date" data-field="smr_start_reported" value="${з(запись && запись.smr_start_reported)}" ${выкл}/></label>
+        ${тип === "object" ? `
         <label class="object-field object-field-wide"><span>Ссылка на фото/видео</span>
           <div class="field-with-link">
             <input type="text" data-field="media_url" id="catalog-media-url"
@@ -12352,10 +12315,21 @@ function catalogFieldsHtml(запись, тип, редактируем) {
                title="Открыть ссылку в новой вкладке"
                href="${escapeHtml(safeHttpUrl(запись && запись.media_url))}"
                ${safeHttpUrl(запись && запись.media_url) ? "" : "hidden"}>↗</a>
-          </div></label>
+          </div></label>` : ""}
       </div>
-    </div>` : "";
+    </div>`;
 
+  // Состав полей — по «Справочнику ОС WEB» (2026-10-07, живой запрос: «приведём состав данных по проектам к этому файлу»): блок
+  // «Реквизиты заказчика» убран — «Ссылка на фото/видео» стоит в «Реквизитах», «Отв. подразделение» (прежнее «СМУ») и «Директор СМУ» —
+  // в «Проектной команде»; «Ответственный (ДП/РП)» и «Старт СМР» убраны вовсе (в файле их нет).
+  // Подразделение и физлица — выпадашками из своих справочников (2026-09-08), а не свободным текстом. Новую запись
+  // заводят в самом справочнике (Действия → Справочники → СМУ / Физлица) или загрузкой из Excel — та заводит недостающее сама.
+  const опцииСМУ = (catalog.smuList || []).map((s) =>
+    `<option value="${s.id}" ${запись && запись.smu_id === s.id ? "selected" : ""}>${escapeHtml(s.name)}</option>`
+  ).join("");
+  const опцииФизлиц = (текущийId) => (catalog.individualsList || []).map((p) =>
+    `<option value="${p.id}" ${текущийId === p.id ? "selected" : ""}>${escapeHtml(p.name)}</option>`
+  ).join("");
   // Адрес рисует отдельный виджет (app/static/address.js): подсказки по
   // классификатору КЛАДР либо свободный ввод, если классификатор не
   // загружен. Сюда он монтируется после отрисовки формы.
@@ -12379,11 +12353,20 @@ function catalogFieldsHtml(запись, тип, редактируем) {
       <div class="catalog-pin-map" id="catalog-pin-map"></div>
     </div>`;
 
-  // Проектная команда: восемь ролей → физлицо из того же справочника (2026-10-05, B1).
+  // Проектная команда (2026-10-05, B1; 2026-10-07 — по «Справочнику ОС WEB»): отв. подразделение (СМУ), директор СМУ и восемь ролей → физлицо
+  // из того же справочника.
   const командаПроекта = тип === "object" ? `
     <div class="form-card">
       <h4>Проектная команда</h4>
       <div class="object-fields">
+        <label class="object-field"><span>Отв. подразделение</span>
+          <select data-field="smu_id" ${выкл}>
+            <option value="">— не выбрано —</option>${опцииСМУ}
+          </select></label>
+        <label class="object-field"><span>Директор СМУ</span>
+          <select data-field="smu_director_id" ${выкл}>
+            <option value="">— не выбрано —</option>${опцииФизлиц(запись && запись.smu_director_id)}
+          </select></label>
         ${OBJECT_TEAM_ROLES.map(([ключ, подпись]) => `
         <label class="object-field"><span>${подпись}</span>
           <select data-field="team_${ключ}" ${выкл}>
@@ -12391,7 +12374,7 @@ function catalogFieldsHtml(запись, тип, редактируем) {
           </select></label>`).join("")}
       </div>
     </div>` : "";
-  return реквизиты + реквизитыЗаказчика + командаПроекта + адрес;
+  return реквизиты + командаПроекта + адрес;
 }
 
 function catalogSummaryHtml(запись, тип) {
@@ -12835,7 +12818,7 @@ function readCatalogForm() {
   document.querySelectorAll("#catalog-form [data-field]").forEach((el) => {
     const поле = el.dataset.field;
     let значение = el.value;
-    if (поле === "project_id" || поле === "smu_id" || поле === "smu_director_id" || поле === "responsible_id") {
+    if (поле === "project_id" || поле === "smu_id" || поле === "smu_director_id") {
       значение = значение === "" ? null : Number(значение);
     } else if (поле === "lat" || поле === "lon") значение = значение === "" ? null : Number(значение);
     else if (значение === "") значение = null;
@@ -12967,20 +12950,18 @@ function catalogRegionLabel(код, объекты) {
 }
 
 // Списки строятся из значений, реально встречающихся в загруженных объектах
-// (готового справочника СМУ или ответственных в системе нет) — и делают это
+// (готового справочника СМУ в системе нет) — и делают это
 // заново при каждом refreshCatalog/openCatalog: импорт мог принести новые.
 // Текущий выбор сохраняется, если значение всё ещё встречается.
 function populateCatalogFilterOptions() {
   const объекты = catalog.objects;
-  // СМУ/ответственный фильтруются по id справочника (2026-09-08, вместе с
+  // Подразделение фильтруется по id справочника (2026-09-08, вместе с
   // переводом реквизитов на справочники) — точнее текста и не путается на
   // разном регистре одного и того же имени.
   const смуКарта = new Map();
-  const ответственныеКарта = new Map();
   const region = new Set();
   объекты.forEach((o) => {
     if (o.smu_id != null) смуКарта.set(String(o.smu_id), o.smu_name || "");
-    if (o.responsible_id != null) ответственныеКарта.set(String(o.responsible_id), o.responsible_name || "");
     if (o.address_region) region.add(o.address_region);
   });
 
@@ -12993,8 +12974,7 @@ function populateCatalogFilterOptions() {
     if (текущий && карта.has(текущий)) select.value = текущий;
     else catalog[поле] = "";
   };
-  заполнитьКарту("catalog-smu-filter", "smu", смуКарта, "СМУ");
-  заполнитьКарту("catalog-responsible-filter", "responsible", ответственныеКарта, "Ответственный");
+  заполнитьКарту("catalog-smu-filter", "smu", смуКарта, "Отв. подразделение");
 
   const selectРегион = document.getElementById("catalog-region-filter");
   const текущийРегион = catalog.region;
@@ -13005,7 +12985,7 @@ function populateCatalogFilterOptions() {
   else catalog.region = "";
 }
 
-["smu", "responsible", "region"].forEach((поле) => {
+["smu", "region"].forEach((поле) => {
   document.getElementById(`catalog-${поле}-filter`).addEventListener("change", (e) => {
     catalog[поле] = e.target.value;
     renderCatalogTree();
@@ -18538,9 +18518,9 @@ const OBJECTS_IMPORT_FIELD_LABELS = {
   address: "Адрес", address_region: "Регион (по адресу)",
   // Ключи — реальные колонки objects (ссылки на справочники), значение,
   // что течёт через diff, — имя текстом, не id (см. app/objects_import.py).
-  smu_id: "СМУ", smu_director_id: "Директор СМУ", responsible_id: "Ответственный (ДП/РП)",
+  smu_id: "Отв. подразделение", smu_director_id: "Директор СМУ",
   status: "Статус", lat: "Широта", lon: "Долгота",
-  media_url: "Ссылка на фото/видео", smr_start_reported: "Старт СМР",
+  media_url: "Ссылка на фото/видео",
   postal_code: "Почтовый индекс",
   // «Справочник ОС WEB» (2026-10-05, B1): проект и проектная команда
   project: "Проект", project_id: "Проект",
