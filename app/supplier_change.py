@@ -680,6 +680,8 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
         "pairs": sum(1 for i in items if i["lead"]),
         "late_before": len(late("delay_old")), "late_after": len(late("delay_new")),
         "max_delay_before": max(late("delay_old"), default=0), "max_delay_after": max(late("delay_new"), default=0),
+        # Суммарное опоздание, дней (сумма положительных отклонений по изделиям) до и после — «насколько сокращено опоздание»
+        "late_days_before": sum(late("delay_old")), "late_days_after": sum(late("delay_new")),
         "without_need": sum(1 for i in items if i["need_date"] is None)}}
 
 

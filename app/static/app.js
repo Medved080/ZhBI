@@ -19565,7 +19565,7 @@ function scdRbGrouped(всеСтроки, head, строка, сводка) {
       группы.get(ключ).список.push(i);
     }
     return [...группы.values()].map((g) => `<details class="scd-rb-grp"${глубина < уровни.length - 1 ? " open" : ""}>
-        <summary><small>${название}</small> <b>${escapeHtml(g.имя)}</b> <span class="hint-text">${сводка(g.список)}</span></summary>
+        <summary><small>${название}</small> <b>${escapeHtml(g.имя)}</b> <span class="scd-rb-cells">${сводка(g.список).map(([k, v]) => `<span class="scd-rb-m"><small>${k}</small>${v}</span>`).join("")}</span></summary>
         <div class="scd-rb-sub${глубина + 1 === уровни.length ? " scd-rb-leaf" : ""}">${уровень(g.список, глубина + 1)}</div></details>`).join("");
   }
   return `<div class="scd-rb-tools"><button type="button" class="btn btn-secondary" data-rb-fold="open">Развернуть всё</button>
@@ -19589,7 +19589,7 @@ function scdRenderRebalance() {
       return `<tr><td>${i.pair_no ?? "—"}</td>${ячейки(i)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q) : '<td colspan="3" class="hint-text">без обмена</td>'}</tr>`; };
     box.innerHTML = (без ? `<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
         <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? " checked" : ""}> Показывать и изделия без обмена (${без})</label>` : "")
-      + scdRbGrouped(rows, шапка, строка, (l) => `${l.filter((i) => i.pair_no).length} пар`);
+      + scdRbGrouped(rows, шапка, строка, (l) => [["пар", l.filter((i) => i.pair_no).length]]);
     const ф = document.getElementById("scd-rebal-all");
     if (ф) ф.addEventListener("change", (e) => { scdRebalAll = e.target.checked; scdRenderRebalance(); });
     scdBindRbFold(box);
@@ -19607,17 +19607,24 @@ function scdRenderRebalance() {
   const дн = (v) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}`;
   const byId = new Map(items.map((i) => [i.element_id, i]));
   const rows = items.filter((i) => i.lead || !i.partner_id);
-  const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th>";
+  const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>";
   const ячейки = (i, другой) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${другой && другой.contract_name !== i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
       <td>${перех(ст(i.status), ст(i.status_new))}</td><td>${перех(formatDateRu(i.plan_old), formatDateRu(i.plan_new))}</td>
       <td>${перех(дн(i.delay_old), дн(i.delay_new))}</td>`;
   const строка = (a) => { const q = a.partner_id ? byId.get(a.partner_id) : null;
-    return `<tr${q ? ' style="font-weight:600"' : ""}><td>${a.pair_no ?? "—"}</td>${ячейки(a, null)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q, a) : '<td colspan="4" class="hint-text">без обмена</td>'}</tr>`; };
+    return `<tr${q ? ' style="font-weight:600"' : ""}><td>${a.pair_no ?? "—"}</td>${ячейки(a, null)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q, a) + `<td style="white-space:nowrap;text-align:right">${выигрыш(опоздание(a, q, "delay_old") - опоздание(a, q, "delay_new"))}</td>` : '<td colspan="5" class="hint-text">без обмена</td>'}</tr>`; };
+  // Опоздание = плановая дата позже требуемой; «сокращено» — на сколько дней оно уменьшилось у обоих изделий пары
+  const поздно = (i, k) => Math.max(0, (i && i[k]) ?? 0);
+  const опоздание = (a, q, k) => поздно(a, k) + поздно(q, k);
+  const выигрыш = (d) => d > 0 ? `<b class="scd-good">−${d} дн.</b>` : d < 0 ? `<b class="scd-bad">+${-d} дн.</b>` : "0";
   const сводка = (l) => { const пары = l.filter((i) => i.partner_id), все = l.flatMap((i) => i.partner_id ? [i, byId.get(i.partner_id)] : [i]);
-    return `${пары.length} пар, просрочено ${все.filter((i) => i.delay_old > 0).length} → ${все.filter((i) => i.delay_new > 0).length}`; };
-  box.innerHTML = `<div class="hint-text">Пар к обмену: ${sm.pairs} (изделий: ${sm.pairs * 2} из ${sm.count}). Изделия меняются местами: плановая дата, контракт и вся история
-      статусов уходят к партнёру, текущий статус пересчитывается. Просрочка (плановая позже требуемой): изделий ${sm.late_before} → ${sm.late_after}, максимум
-      ${sm.max_delay_before} → ${sm.max_delay_after} дн.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только партнёром.` : ""}</div>
+    const dB = все.reduce((n, i) => n + поздно(i, "delay_old"), 0), dA = все.reduce((n, i) => n + поздно(i, "delay_new"), 0);
+    return [["пар", пары.length], ["просрочено изд.", `${все.filter((i) => i.delay_old > 0).length} → ${все.filter((i) => i.delay_new > 0).length}`],
+      ["опоздание, дн.", `${dB} → ${dA}`], ["сокращено", выигрыш(dB - dA)]]; };
+  const плитка = (k, v, sub = "") => `<div class="scd-rb-tile"><small>${k}</small><b>${v}</b>${sub ? `<span class="hint-text">${sub}</span>` : ""}</div>`;
+  const сэкономлено = sm.late_days_before - sm.late_days_after;
+  box.innerHTML = `<div class="scd-rb-tiles">${плитка("Пар к обмену", sm.pairs, `${sm.pairs * 2} из ${sm.count} изд.`)}${плитка("Просрочено изделий", `${sm.late_before} → ${sm.late_after}`, `−${sm.late_before - sm.late_after}`)}${плитка("Суммарное опоздание", `${sm.late_days_before} → ${sm.late_days_after} дн.`, "сумма по изделиям")}${плитка("Опоздание сокращено", `<span class="scd-good">−${сэкономлено} дн.</span>`, сэкономлено > 0 && sm.late_days_before ? `на ${Math.round(сэкономлено * 100 / sm.late_days_before)} %` : "")}${плитка("Максимальное опоздание", `${sm.max_delay_before} → ${sm.max_delay_after} дн.`)}</div>
+    <div class="hint-text">Изделия меняются местами: плановая дата, контракт и вся история статусов уходят к партнёру, текущий статус пересчитывается.${sm.without_need ? ` У ${sm.without_need} изд. нет требуемой даты (нет в актуализации графика) — они могут быть только партнёром.` : ""}</div>
     <label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
       <input type="checkbox" id="scd-rebal-all"${scdRebalAll ? "" : " checked"}> Показывать только изделия, поменявшиеся местами (скрыто без обмена: ${sm.count - sm.pairs * 2})</label>`
     + scdRbGrouped(rows, шапка, строка, сводка);
@@ -19761,7 +19768,7 @@ function scdUpdateSummary() {
   if (scdKind === SCD_KIND_REBALANCE) {
     const sm = scdRebalance && scdRebalance.summary;
     строка.textContent = scdRebalIds.length
-      ? `Изделий: ${scdRebalIds.length}${sm ? `, пар к обмену: ${sm.pairs}, просрочено ${sm.late_before} → ${sm.late_after}` : ""}`
+      ? `Изделий: ${scdRebalIds.length}${sm ? `, пар к обмену: ${sm.pairs}, просрочено ${sm.late_before} → ${sm.late_after}, опоздание сокращено на ${sm.late_days_before - sm.late_days_after} дн.` : ""}`
       : "Нет изделий для балансировки";
     провести.disabled = !scdRebalIds.length || scdPosted();
     return;

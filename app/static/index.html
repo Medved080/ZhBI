@@ -2772,6 +2772,17 @@
   .scd-head-row h2 { margin: 0; }
   .scd-head-actions { margin: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .scd-rb-tools { display: flex; gap: 8px; margin: 8px 0; }
+  /* Заголовок группы: название фиксированной ширины и сразу за ним метрики колонками, без пустоты посередине */
+  .scd-rb-grp > summary { justify-content: flex-start; gap: 6px 22px; }
+  .scd-rb-grp > summary > b { width: 260px; max-width: 100%; }
+  .scd-rb-cells { display: flex; gap: 6px 22px; flex-wrap: wrap; }
+  .scd-rb-m { display: inline-flex; flex-direction: column; align-items: flex-end; min-width: 96px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .scd-rb-m small { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; opacity: .7; }
+  .scd-good { color: #1f7a45; } .scd-bad { color: #b3392f; }
+  .scd-rb-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }
+  .scd-rb-tile { border: 1px solid var(--color-border); border-radius: 8px; padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .scd-rb-tile small { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; opacity: .7; }
+  .scd-rb-tile b { font-size: 16px; font-variant-numeric: tabular-nums; }
   .scd-rb-grp { border: 1px solid var(--border, #d6dce6); border-radius: 8px; margin-top: 6px; padding: 4px 8px; }
   .scd-rb-grp > summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .scd-rb-grp > summary small { text-transform: uppercase; letter-spacing: .04em; font-size: 10px; opacity: .7; }
