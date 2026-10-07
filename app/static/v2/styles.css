@@ -1437,3 +1437,8 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-rb-tile small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .v2-rb-tile b { font-size: 18px; font-variant-numeric: tabular-nums; }
 @media (max-width: 720px) { .v2-rb-toggle, .v2-rb-d1 .v2-rb-toggle, .v2-rb-d2 .v2-rb-toggle { width: 100%; } }
+
+/* Метка статуса изделия цветом статуса (supplier-docs.js, 2026-10-06) */
+.v2-st { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+  background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
+.v2-st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }

@@ -19576,6 +19576,10 @@ function scdRenderRebalance() {
   const box = document.getElementById("scd-rebalance");
   const ст = (c) => state.statusLabels[c] || c || "—";
   const перех = (x, y) => x === y ? escapeHtml(x) : `${escapeHtml(x)} → <b>${escapeHtml(y)}</b>`;
+  // Цветовая индикация статуса (2026-10-06): цвет — из настроек сервиса, тот же, что на схеме
+  const метка = (c) => { const цвет = /^#[0-9a-f]{3,8}$/i.test(colorFor(c)) ? colorFor(c) : "#999999";
+    return `<span class="scd-st" style="--c:${цвет}">${escapeHtml(ст(c))}</span>`; };
+  const статусы = (a, b) => a === b ? метка(a) : `${метка(a)} → ${метка(b)}`;
   if (scdPosted() && scdDoc) {
     const items = scdDoc.items, второй = new Map();
     for (const i of items) if (i.pair_no && i.side === 2) второй.set(i.pair_no, i);
@@ -19583,7 +19587,7 @@ function scdRenderRebalance() {
     const без = rows.filter((i) => !i.pair_no).length;
     const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th></th><th>Поменялось местами с</th><th>Статус</th><th>Плановая дата</th>";
     const ячейки = (i) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
-      <td>${перех(ст(i.status_at_move || i.current_status), ст(i.current_status))}</td>
+      <td>${статусы(i.status_at_move || i.current_status, i.current_status)}</td>
       <td>${перех(i.prev_plan ? formatDateRu(i.prev_plan) : "—", i.plan_now ? formatDateRu(i.plan_now) : "—")}</td>`;
     const строка = (i) => { const q = i.pair_no ? второй.get(i.pair_no) : null;
       return `<tr><td>${i.pair_no ?? "—"}</td>${ячейки(i)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q) : '<td colspan="3" class="hint-text">без обмена</td>'}</tr>`; };
@@ -19609,7 +19613,7 @@ function scdRenderRebalance() {
   const rows = items.filter((i) => i.lead || !i.partner_id);
   const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>";
   const ячейки = (i, другой) => `<td>${escapeHtml(i.address || "№" + i.element_id)}<br><span class="hint-text">этаж ${escapeHtml(i.floor ?? "—")}${другой && другой.contract_name !== i.contract_name ? " · " + escapeHtml(i.contract_name) : ""}</span></td>
-      <td>${перех(ст(i.status), ст(i.status_new))}</td><td>${перех(formatDateRu(i.plan_old), formatDateRu(i.plan_new))}</td>
+      <td>${статусы(i.status, i.status_new)}</td><td>${перех(formatDateRu(i.plan_old), formatDateRu(i.plan_new))}</td>
       <td>${перех(дн(i.delay_old), дн(i.delay_new))}</td>`;
   const строка = (a) => { const q = a.partner_id ? byId.get(a.partner_id) : null;
     return `<tr${q ? ' style="font-weight:600"' : ""}><td>${a.pair_no ?? "—"}</td>${ячейки(a, null)}<td>${q ? "⇄" : ""}</td>${q ? ячейки(q, a) + `<td style="white-space:nowrap;text-align:right">${выигрыш(опоздание(a, q, "delay_old") - опоздание(a, q, "delay_new"))}</td>` : '<td colspan="5" class="hint-text">без обмена</td>'}</tr>`; };

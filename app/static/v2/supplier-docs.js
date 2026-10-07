@@ -618,6 +618,10 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     return `<div class="v2-rb-tools"><button type="button" class="v2-btn" data-a="rb-expand" data-m="all">Развернуть всё</button><button type="button" class="v2-btn" data-a="rb-expand" data-m="none">Свернуть всё</button></div>${level(rows, 0, "")}`;
   }
   const stLabel = (c) => STATUS[c] || c || "—";
+  // Цветовая индикация статуса (2026-10-06): цвет — из настроек сервиса (/status-colors), тот же, что на схеме; нет цвета — нейтральный серый
+  const stChip = (c) => { const col = /^#[0-9a-f]{3,8}$/i.test(S.colors?.[c] || "") ? S.colors[c] : "#999999";
+    return `<span class="v2-st" style="--c:${col}">${esc(stLabel(c))}</span>`; };
+  const stMoved = (a, b) => a === b ? stChip(a) : `${stChip(a)} <span aria-hidden="true">→</span> ${stChip(b)}`;
   const moved = (a, b) => a === b ? esc(a) : `${esc(a)} → <b>${esc(b)}</b>`;
 
   function rebalanceHtml(x, ro) {
@@ -626,7 +630,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       for (const i of items) if (i.pair_no && i.side === 2) byPair.set(i.pair_no, i);
       const rows = items.filter((i) => !i.pair_no || i.side === 1).sort((p, q) => (p.pair_no ?? 1e9) - (q.pair_no ?? 1e9));
       const head = `<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th></th><th>Поменялось местами с</th><th>Статус</th><th>Плановая дата</th>`;
-      const cell = (i) => `<td>${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${moved(stLabel(i.status_at_move || i.current_status), stLabel(i.current_status))}</td><td>${moved(i.prev_plan ? ruDate(i.prev_plan) : "—", i.plan_now ? ruDate(i.plan_now) : "—")}</td>`;
+      const cell = (i) => `<td>${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${stMoved(i.status_at_move || i.current_status, i.current_status)}</td><td>${moved(i.prev_plan ? ruDate(i.prev_plan) : "—", i.plan_now ? ruDate(i.plan_now) : "—")}</td>`;
       const row = (i) => { const q = i.pair_no ? byPair.get(i.pair_no) : null; return `<tr><td>${i.pair_no ?? "—"}</td>${cell(i)}<td>${q ? "⇄" : ""}</td>${q ? cell(q) : `<td colspan="3" class="v2-muted">без обмена</td>`}</tr>`; };
       const sum = (l) => [["пар", l.filter((i) => i.pair_no).length]];
       const без = rows.filter((i) => !i.pair_no).length;
@@ -644,7 +648,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const rows = items.filter((i) => i.lead || !i.partner_id);
     const single = rows.filter((i) => !i.partner_id).length;
     const head = `<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>`;
-    const cell = (i, other) => `<td>${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${other && other.contract_name !== i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${moved(stLabel(i.status), stLabel(i.status_new))}</td><td>${moved(ruDate(i.plan_old), ruDate(i.plan_new))}</td><td>${moved(dl(i.delay_old), dl(i.delay_new))}</td>`;
+    const cell = (i, other) => `<td>${esc(i.address || "№" + i.element_id)}<br><small class="v2-muted">этаж ${esc(i.floor ?? "—")}${other && other.contract_name !== i.contract_name ? " · " + esc(i.contract_name) : ""}</small></td><td>${stMoved(i.status, i.status_new)}</td><td>${moved(ruDate(i.plan_old), ruDate(i.plan_new))}</td><td>${moved(dl(i.delay_old), dl(i.delay_new))}</td>`;
     const row = (a) => { const q = a.partner_id ? byId.get(a.partner_id) : null;
       return `<tr style="${q ? "font-weight:600" : ""}"><td>${a.pair_no ?? "—"}</td>${cell(a, null)}<td>${q ? "⇄" : ""}</td>${q ? cell(q, a) + `<td class="v2-rb-gain">${gainHtml(lateDays(a, q, "delay_old") - lateDays(a, q, "delay_new"))}</td>` : `<td colspan="5" class="v2-muted">без обмена</td>`}</tr>`; };
     // Опоздание = плановая дата позже требуемой; «сокращено» — на сколько дней оно уменьшилось у обоих изделий пары
