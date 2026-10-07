@@ -43,7 +43,9 @@ export function mountAssistant({getContext}) {
       <p class="ai-status" id="ai-status" role="status"></p></form>
     </section>`;
   document.body.append(host);
-  document.documentElement.classList.add("has-ai-launch");   // верхним панелям — место под кнопку (assistant.css)
+  // верхним панелям — место под кнопку (assistant.css); размер и положение кнопки подгоняются под верхнюю панель своего интерфейса
+  document.documentElement.classList.add("has-ai-launch");
+  document.documentElement.dataset.aiHost = document.getElementById("v2-root") ? "v2" : document.getElementById("precast-concept") ? "calc" : "v1";
   const $=s=>host.querySelector(s), form=$("#ai-form"), panel=$("#ai-panel"), launch=$(".ai-launch"), messages=$("#ai-messages"), status=$("#ai-status");
   let lastResultId=null, history=[], busy=false, requestId=null, generation=0, contextKey="", contextTimer;
   const evidenceDialogs=new Set();
@@ -128,7 +130,7 @@ export function mountAssistant({getContext}) {
     }catch(error){if(my===generation)say(error.message);}
     finally{if(my===generation){busy=false;requestId=null;controls();}}
   });
-  return {destroy(){for(const dialog of evidenceDialogs)dialog.close();generation++;void stop();clearInterval(contextTimer);window.removeEventListener("zhbi:assistant-open",open);document.documentElement.classList.remove("has-ai-launch");host.remove();}};
+  return {destroy(){for(const dialog of evidenceDialogs)dialog.close();generation++;void stop();clearInterval(contextTimer);window.removeEventListener("zhbi:assistant-open",open);document.documentElement.classList.remove("has-ai-launch");delete document.documentElement.dataset.aiHost;host.remove();}};
 }
 // V2 монтирует помощника из оболочки после входа. Вложенные сцены используют кнопку родителя.
 if(!document.getElementById("v2-root") && window.parent===window){
