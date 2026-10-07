@@ -33,6 +33,16 @@
       ],
       "port": 8010,
       "autoPort": true
+    },
+    {
+      "//": "ОБЕЗЛИЧЕННАЯ копия + МАКЕТ облачного роутера red_mad_robot (scripts/dev_rmr_stand.py): живая проверка «Интеграция с ИИ → Облачный роутер» без внешней сети. Настоящий роутер не вызывается.",
+      "name": "zhbi-server-anon-rmr",
+      "runtimeExecutable": ".venv312/bin/python",
+      "runtimeArgs": [
+        "scripts/dev_rmr_stand.py"
+      ],
+      "port": 8021,
+      "autoPort": true
     }
   ]
 }

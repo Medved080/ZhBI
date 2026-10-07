@@ -1,0 +1,1032 @@
+{
+ "source": "Прайс-лист_red_mad_router_RUB.docx",
+ "currency": "RUB",
+ "unit": "за 1 млн токенов",
+ "fx_date": "11.09.2026",
+ "fx_rate": 84.3508,
+ "markup_percent": 15,
+ "vat_percent": 22,
+ "vat_included": false,
+ "models": [
+  {
+   "id": "openai/gpt-5",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 121.26,
+   "output": 970.04,
+   "cache_read": 12.13,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5-pro",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 1455.06,
+   "output": 11640.42,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5-mini",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 24.26,
+   "output": 194.01,
+   "cache_read": 2.43,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5-nano",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 4.86,
+   "output": 38.81,
+   "cache_read": 0.49,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-4o-mini",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 14.56,
+   "output": 58.21,
+   "cache_read": 7.28,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-4.1-nano",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 9.71,
+   "output": 38.81,
+   "cache_read": 2.43,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "text-embedding-3-large",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 12.62,
+   "output": 0.0,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "embedding"
+  },
+  {
+   "id": "text-embedding-3-small",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 1.95,
+   "output": 0.0,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "embedding"
+  },
+  {
+   "id": "openai/gpt-image-1",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 970.04,
+   "output": 3880.14,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "openai/gpt-4o",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 242.51,
+   "output": 970.04,
+   "cache_read": 121.26,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-4.1",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 194.01,
+   "output": 776.03,
+   "cache_read": 48.51,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-4.1-mini",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 38.81,
+   "output": 155.21,
+   "cache_read": 9.71,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-4o-mini-search-preview",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 242.51,
+   "output": 970.04,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "search"
+  },
+  {
+   "id": "openai/gpt-4o-mini-search-preview",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 14.56,
+   "output": 58.21,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "search"
+  },
+  {
+   "id": "claude-sonnet-4-5",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 291.02,
+   "output": 1455.06,
+   "cache_read": 29.11,
+   "cache_write": 363.77,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-opus-4.1",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 1455.06,
+   "output": 7275.26,
+   "cache_read": 145.51,
+   "cache_write": 1818.82,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-haiku-4-5",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 97.01,
+   "output": 485.02,
+   "cache_read": 9.71,
+   "cache_write": 121.26,
+   "kind": "chat"
+  },
+  {
+   "id": "deepseek/deepseek-reasoner",
+   "provider": "Deepseek",
+   "tier": "",
+   "input": 27.17,
+   "output": 40.75,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "deepseek/deepseek-chat",
+   "provider": "Deepseek",
+   "tier": "",
+   "input": 27.17,
+   "output": 40.75,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-2.5-flash-preview",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 29.11,
+   "output": 242.51,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-2.5-flash",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 29.11,
+   "output": 242.51,
+   "cache_read": 2.92,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-2.5-pro",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 242.51,
+   "output": 1455.06,
+   "cache_read": 24.26,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/whisper-1",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 9.71,
+   "output": 0.0,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "gemini/gemini-2.5-flash-image",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 29.11,
+   "output": 2910.11,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "openai/gpt-5.1-codex",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 121.26,
+   "output": 970.04,
+   "cache_read": 12.13,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "claude/opus-4-5",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 485.02,
+   "output": 2425.09,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "claude/opus-4-6",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 485.02,
+   "output": 2425.09,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3-pro",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 388.02,
+   "output": 1746.07,
+   "cache_read": 38.81,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3-flash",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 48.51,
+   "output": 291.02,
+   "cache_read": 4.86,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5.2-codex",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 169.76,
+   "output": 1358.05,
+   "cache_read": 16.98,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/o3",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 194.01,
+   "output": 776.03,
+   "cache_read": 48.51,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/o3-pro",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 1940.07,
+   "output": 7760.28,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/veo-3.1-generate-preview",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 58.21,
+   "output": null,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "xai/grok-4.5",
+   "provider": "xAI",
+   "tier": "<200K Tokens",
+   "input": 194.01,
+   "output": 582.03,
+   "cache_read": 29.11,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "xai/grok-4.5",
+   "provider": "xAI",
+   "tier": ">200K Tokens",
+   "input": 388.02,
+   "output": 1164.05,
+   "cache_read": 58.21,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.2-pro",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 2037.08,
+   "output": 16296.58,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.2",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 169.76,
+   "output": 1358.05,
+   "cache_read": 16.98,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/sora-2",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 9.71,
+   "output": null,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "gpt-5.1",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 121.26,
+   "output": 970.04,
+   "cache_read": 12.13,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/veo-3.0-generate-preview",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 38.81,
+   "output": null,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "gemini/veo-3.0-fast-generate-preview",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 14.56,
+   "output": null,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "gpt-5.3",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 169.76,
+   "output": 1358.05,
+   "cache_read": 16.98,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.4",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 242.51,
+   "output": 1455.06,
+   "cache_read": 24.26,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.4-pro",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 2910.11,
+   "output": 17460.62,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3.1-pro",
+   "provider": "Gemini",
+   "tier": "<= 200k tokens",
+   "input": 194.01,
+   "output": 1164.05,
+   "cache_read": 19.41,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3.1-pro",
+   "provider": "Gemini",
+   "tier": "> 200k tokens",
+   "input": 388.02,
+   "output": 1746.07,
+   "cache_read": 38.81,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini-3-pro-image-preview",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 194.01,
+   "output": 11640.42,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "gemini-3.1-flash-image-preview",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 48.51,
+   "output": 5820.21,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "media"
+  },
+  {
+   "id": "claude-sonnet-4-6",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 291.02,
+   "output": 1455.06,
+   "cache_read": 29.11,
+   "cache_write": 363.77,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-sonnet-5",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 194.01,
+   "output": 970.04,
+   "cache_read": 19.41,
+   "cache_write": 242.51,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5.3-codex",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 169.76,
+   "output": 1358.05,
+   "cache_read": 16.98,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "claude/opus-4-7",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 485.02,
+   "output": 2425.09,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "claude/opus-4-8",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 485.02,
+   "output": 2425.09,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-fable-5",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 970.04,
+   "output": 4850.18,
+   "cache_read": 97.01,
+   "cache_write": 1212.55,
+   "kind": "chat"
+  },
+  {
+   "id": "deepseek-v4-flash",
+   "provider": "DeepSeek",
+   "tier": "",
+   "input": 13.59,
+   "output": 27.17,
+   "cache_read": 0.28,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "deepseek-v4-pro",
+   "provider": "DeepSeek",
+   "tier": "",
+   "input": 168.79,
+   "output": 337.58,
+   "cache_read": 1.41,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5.5",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 485.02,
+   "output": 2910.11,
+   "cache_read": 48.51,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5.5-pro",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 2910.11,
+   "output": 17460.62,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 97.01,
+   "output": 582.03,
+   "cache_read": 9.71,
+   "cache_write": 121.26,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "provider": "OpenAI",
+   "tier": ">272K tokens",
+   "input": 194.01,
+   "output": 873.04,
+   "cache_read": 19.41,
+   "cache_write": 242.51,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.6-sol",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 485.02,
+   "output": 2910.11,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.6-sol",
+   "provider": "OpenAI",
+   "tier": ">272K tokens",
+   "input": 970.04,
+   "output": 4365.16,
+   "cache_read": 97.01,
+   "cache_write": 1212.55,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 242.51,
+   "output": 1455.06,
+   "cache_read": 24.26,
+   "cache_write": 303.14,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "provider": "OpenAI",
+   "tier": ">272K tokens",
+   "input": 485.02,
+   "output": 2182.58,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-6-astra",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 970.04,
+   "output": 4850.18,
+   "cache_read": 97.01,
+   "cache_write": 1212.55,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini-3.5-flash",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 145.51,
+   "output": 873.04,
+   "cache_read": 14.56,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-4o-search-preview",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 242.51,
+   "output": 970.04,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "search"
+  },
+  {
+   "id": "openai/o4-mini-deep-research",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 194.01,
+   "output": 776.03,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "search"
+  },
+  {
+   "id": "gpt-5.4-mini",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 72.76,
+   "output": 436.52,
+   "cache_read": 7.28,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.4-nano",
+   "provider": "OpenAI",
+   "tier": "",
+   "input": 19.41,
+   "output": 121.26,
+   "cache_read": 1.95,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gpt-5.4",
+   "provider": "OpenAI",
+   "tier": ">272K tokens",
+   "input": 485.02,
+   "output": 2182.58,
+   "cache_read": 48.51,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "openai/gpt-5.5",
+   "provider": "OpenAI",
+   "tier": ">272K tokens",
+   "input": 970.04,
+   "output": 4365.16,
+   "cache_read": 97.01,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-sonnet-4",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 291.02,
+   "output": 1455.06,
+   "cache_read": 29.11,
+   "cache_write": 363.77,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-opus-5",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 485.02,
+   "output": 2425.09,
+   "cache_read": 48.51,
+   "cache_write": 606.28,
+   "kind": "chat"
+  },
+  {
+   "id": "claude-fable-5-1",
+   "provider": "Anthropic",
+   "tier": "",
+   "input": 970.04,
+   "output": 4850.18,
+   "cache_read": 24.26,
+   "cache_write": 1212.55,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-2.5-pro",
+   "provider": "Gemini",
+   "tier": "<= 200k tokens",
+   "input": 121.26,
+   "output": 970.04,
+   "cache_read": 12.13,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3-pro",
+   "provider": "Gemini",
+   "tier": "<= 200k tokens",
+   "input": 194.01,
+   "output": 1164.05,
+   "cache_read": 19.41,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3.7-flash",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 72.76,
+   "output": 363.77,
+   "cache_read": 7.28,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "gemini/gemini-3.8-flash",
+   "provider": "Gemini",
+   "tier": "",
+   "input": 72.76,
+   "output": 363.77,
+   "cache_read": 7.28,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "xai/grok-4.6",
+   "provider": "xAI",
+   "tier": "<200K Tokens",
+   "input": 194.01,
+   "output": 582.03,
+   "cache_read": 48.51,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "xai/grok-4.6",
+   "provider": "xAI",
+   "tier": ">200K Tokens",
+   "input": 388.02,
+   "output": 1164.05,
+   "cache_read": 97.01,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "moonshot/kimi-k2.6",
+   "provider": "Kimi",
+   "tier": "",
+   "input": 92.16,
+   "output": 388.02,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "moonshot/kimi-k2.7-code",
+   "provider": "Kimi",
+   "tier": "",
+   "input": 92.16,
+   "output": 388.02,
+   "cache_read": 18.44,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "moonshot/kimi-k2.7-code-highspeed",
+   "provider": "Kimi",
+   "tier": "",
+   "input": 184.31,
+   "output": 776.03,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "moonshot/kimi-k3",
+   "provider": "Kimi",
+   "tier": "",
+   "input": 291.02,
+   "output": 1455.06,
+   "cache_read": 29.11,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "minimax/minimax-m3",
+   "provider": "DeepInfra",
+   "tier": "",
+   "input": 27.17,
+   "output": 106.71,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.5",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 58.21,
+   "output": 213.41,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.5-air",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 19.41,
+   "output": 106.71,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.5-airx",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 106.71,
+   "output": 436.52,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.5-x",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 213.41,
+   "output": 863.34,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.6",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 58.21,
+   "output": 213.41,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.7",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 58.21,
+   "output": 213.41,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-4.7-flashx",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 6.8,
+   "output": 38.81,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-5",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 97.01,
+   "output": 310.42,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-5-turbo",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 116.41,
+   "output": 388.02,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-5.1",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 135.81,
+   "output": 426.82,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-5.2",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 135.81,
+   "output": 426.82,
+   "cache_read": 25.23,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "alibaba/qwen3.7-max",
+   "provider": "Alibaba",
+   "tier": "",
+   "input": 242.51,
+   "output": 727.53,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "alibaba/qwen3-coder-plus",
+   "provider": "Alibaba",
+   "tier": "<256K tokens",
+   "input": 291.02,
+   "output": 1455.06,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "alibaba/qwen3-coder-plus",
+   "provider": "Alibaba",
+   "tier": ">256K tokens",
+   "input": 582.03,
+   "output": 5820.21,
+   "cache_read": null,
+   "cache_write": null,
+   "kind": "chat"
+  },
+  {
+   "id": "alibaba/qwen3.8-max",
+   "provider": "Alibaba",
+   "tier": "",
+   "input": 194.01,
+   "output": 582.03,
+   "cache_read": 24.26,
+   "cache_write": 242.51,
+   "kind": "chat"
+  },
+  {
+   "id": "zai/glm-5.3-flash",
+   "provider": "Z.ai",
+   "tier": "",
+   "input": 14.56,
+   "output": 48.51,
+   "cache_read": 2.92,
+   "cache_write": null,
+   "kind": "chat"
+  }
+ ]
+}

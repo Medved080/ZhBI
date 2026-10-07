@@ -98,8 +98,13 @@ def _read_stream(request,config,progress,cancel=None,reasoning_guard=True):
     """Чтение ответа по мере поступления (SSE у OpenAI-совместимых API, NDJSON у Ollama). Тайм-аут сокета действует на КАЖДОЕ ожидание данных:
     это тайм-аут простоя (в том числе до первого токена), а не предел общей длительности ответа. Общий предел — 30 минут."""
     import http.client,threading
-    parsed=urlsplit(request.full_url);connection_class=http.client.HTTPSConnection if parsed.scheme=='https' else http.client.HTTPConnection
-    connection=connection_class(parsed.hostname,parsed.port,timeout=config.timeoutSeconds)
+    parsed=urlsplit(request.full_url)
+    if config.provider=='red_mad_router':
+        from app import rmr_router   # облачный роутер: HTTPS и, если нужно, туннель через корпоративный прокси
+        connection=rmr_router.open_connection(parsed,config.timeoutSeconds)
+    else:
+        connection_class=http.client.HTTPSConnection if parsed.scheme=='https' else http.client.HTTPConnection
+        connection=connection_class(parsed.hostname,parsed.port,timeout=config.timeoutSeconds)
     state={'done':False,'cancelled':False}
     def watcher():
         # Пауза/отмена должны останавливать модель СРАЗУ: закрытие соединения прерывает чтение (в том числе ожидание первого токена)
@@ -123,12 +128,17 @@ def _read_stream(request,config,progress,cancel=None,reasoning_guard=True):
         now_=time.time();info.update(fields);info['elapsed']=now_-started
         if progress and (force or now_-last_emit[0]>=0.5): last_emit[0]=now_;progress(dict(info))
     emit(True)
-    content=[];usage=None;finish=None;last_data=started;openai=config.provider=='openai';tail=''
+    content=[];usage=None;finish=None;last_data=started;openai=config.provider in {'openai','red_mad_router'};tail=''
     try:
         headers=dict(request.header_items())
         connection.request('POST',(parsed.path or '/')+('?'+parsed.query if parsed.query else ''),body=request.data,headers=headers)
         result=connection.getresponse()
-        if result.status>=300: raise HTTPError(request.full_url,result.status,result.reason,result.headers,result)
+        if result.status>=300:
+            # Тело ошибки читается ДО закрытия соединения: при keep-alive закрытие закрывает и ответ, и сервер модели
+            # (особенно облачный) приходил без объяснения — а подбор параметров запроса строится по тексту отказа.
+            try: error_body=result.read(4096)
+            except (OSError,http.client.HTTPException): error_body=b''
+            raise HTTPError(request.full_url,result.status,result.reason,result.headers,io.BytesIO(error_body))
         emit(True,state='waiting_first_token')
         ctype=result.headers.get('Content-Type','').lower()
         if openai and 'event-stream' not in ctype:

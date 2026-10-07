@@ -1,7 +1,8 @@
-"""Помощник: разрешённые отчёты → ограниченный контекст → локальная модель.
+"""Помощник: разрешённые отчёты → ограниченный контекст → модель (локальная либо облачный роутер).
 SQL модели ограничен разрешённым снимком в assistant_data; исходные БД и запись недоступны.
 """
 import json
+from contextlib import nullcontext
 from copy import deepcopy
 import logging
 import threading
@@ -17,6 +18,7 @@ from pydantic import Field, model_validator
 from app.access import accessible_object_ids, assert_object_access, has_feature
 from app.auth import get_current_user
 from app.db import get_connection
+from app import rmr_pricing, rmr_router
 from app.calc import qwen_client, runtime
 from app.calc.recovery_schema import StrictModel
 from app.ai_integration import gpu_slot, read_config
@@ -210,7 +212,7 @@ def collect_context(body, user, objects_override=None, connection=None):
 
 
 def _public(job):
-    public = {k: job[k] for k in ("id", "state", "answer", "sources", "warnings", "capturedAt", "period", "area", "model", "error", "progress") if k in job}
+    public = {k: job[k] for k in ("id", "state", "answer", "sources", "warnings", "capturedAt", "period", "area", "model", "provider", "error", "progress") if k in job}
     public["elapsedSeconds"] = round((job.get("finished", time.time()) - job["created"]), 1)
     return public
 
@@ -218,18 +220,31 @@ def _public(job):
 @router.get("/status")
 def status(user=Depends(get_current_user)):
     config = read_config()
-    return {"enabled": config.assistantEnabled, "configured": bool(config.assistantModel.strip())}
+    via = rmr_router.read_config()
+    model = via.model if via.enabled else config.assistantModel
+    return {"enabled": config.assistantEnabled, "configured": bool(model.strip())}
 
 
 def start_request(body, user, context_override=None):
     config = read_config()
-    if not config.assistantEnabled or not config.assistantModel.strip():
+    cloud = rmr_router.read_config()
+    model_name = cloud.model if cloud.enabled else config.assistantModel
+    if not config.assistantEnabled or not model_name.strip():
         raise HTTPException(422, "Помощник не настроен. Администратор выбирает модель в «Администрирование → Интеграция с ИИ».")
-    cfg = config.connection.model_copy(update={"model": config.assistantModel, "maxTokens": min(config.connection.maxTokens, 4096)})
-    try:
-        qwen_client.validate_endpoint(cfg, runtime.settings())
-    except ValueError as error:
-        raise HTTPException(422, str(error)) from error
+    if cloud.enabled:
+        # Облачный роутер вместо локальной модели: другой адрес, ключ и учёт токенов; GPU сервера он не занимает.
+        cfg = rmr_router.connection(cloud, 4096)
+        try:
+            rmr_router.check_ready(cloud)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+    else:
+        cfg = config.connection.model_copy(update={"model": config.assistantModel, "maxTokens": min(config.connection.maxTokens, 4096)})
+        try:
+            qwen_client.validate_endpoint(cfg, runtime.settings())
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+    meter = rmr_router.UsageMeter() if cloud.enabled else None
     previous = None
     missing_previous = False
     if body.previousRequestId:
@@ -253,7 +268,7 @@ def start_request(body, user, context_override=None):
             raise HTTPException(429, "Слишком много запросов. Повторите позже.")
         identifier = str(uuid4())
         job = {"id": identifier, "owner": user["id"], "state": "running", "created": time.time(),
-               "cancel": threading.Event(), "model": config.assistantModel, "guard": [],
+               "cancel": threading.Event(), "model": model_name, "provider": rmr_router.PROVIDER if cloud.enabled else "local", "guard": [],
                "progress": {"phase": "accepted", "label": "Вопрос принят", "steps": []}}
         _JOBS[identifier] = job
     # Отчёты считаются вне глобальной блокировки и без ожидания модели в HTTP-запросе.
@@ -265,12 +280,12 @@ def start_request(body, user, context_override=None):
         job["progress"] = {"phase": phase, "label": label, "steps": steps, **fields}
     def work():
         try:
-            stage("connection", "Подключаемся к локальной модели")
-            with gpu_slot(cfg, job["cancel"]) as lease_progress:
+            stage("connection", "Подключаемся к облачному роутеру" if cloud.enabled else "Подключаемся к локальной модели")
+            with (nullcontext(lambda info: None) if cloud.enabled else gpu_slot(cfg, job["cancel"])) as lease_progress:
                 def progress(info):
                     lease_progress(info)
                     job["progress"] = {**job["progress"], "modelState": info.get("state"), "chars": info.get("chars", 0), "reasoningChars": info.get("reasoningChars", 0), "modelElapsedSeconds": round(info.get("elapsed", 0), 1)}
-                dialogue = Dialogue(cfg, config.assistantContextTokens, job["cancel"].is_set, progress, stage)
+                dialogue = Dialogue(cfg, config.assistantContextTokens, job["cancel"].is_set, progress, stage, meter)
                 if context_override is not None:
                     data = context_override
                 elif previous and explains_sources(body.question):
@@ -345,6 +360,9 @@ def start_request(body, user, context_override=None):
             job["finished"] = time.time()
             if job["cancel"].is_set():
                 job.update(state="cancelled", error="Запрос остановлен")
+            if meter is not None:
+                # Токены платные и при отказе, и при остановке пользователем: учитывается всё, что роутер успел потратить.
+                rmr_pricing.record_usage(user, model_name, meter, request_id=identifier)
     threading.Thread(target=work, name="construction-assistant", daemon=True).start()
     return _public(job)
 

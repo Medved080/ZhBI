@@ -167,6 +167,6 @@ def dialog_test(user=Depends(admin)):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     now = datetime.now(ZoneInfo("Europe/Moscow"))
-    return start_request(Ask(question="Ответь одной фразой: подключение к локальной модели работает."), user,
+    return start_request(Ask(question="Ответь одной фразой: подключение к модели работает."), user,
                          {"capturedAt": now.isoformat(), "period": {"from": now.date().isoformat(), "to": now.date().isoformat()},
                           "scope": "connection-test", "objects": [], "sources": [], "warnings": [], "page": None})

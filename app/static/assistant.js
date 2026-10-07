@@ -78,7 +78,7 @@ export function mountAssistant({getContext}) {
     const name=document.createElement("strong");name.textContent=role==="user"?"Вы":"Помощник";
     const body=document.createElement("div");body.className="ai-answer";body.textContent=text;item.append(name,body);
     if(result){
-      const stamp=document.createElement("small");stamp.textContent=`Данные: ${new Date(result.capturedAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})} МСК${result.area?` · ${result.area}`:""} · ${displayDate(result.period.from)} → ${displayDate(result.period.to)}${result.period.label?` · ${result.period.label}`:""} · ${result.model}`;item.append(stamp);
+      const stamp=document.createElement("small");stamp.textContent=`Данные: ${new Date(result.capturedAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})} МСК${result.area?` · ${result.area}`:""} · ${displayDate(result.period.from)} → ${displayDate(result.period.to)}${result.period.label?` · ${result.period.label}`:""} · ${result.model}${result.provider==="red_mad_router"?" (облачный роутер)":""}`;item.append(stamp);
       for(const source of result.sources||[]){const a=document.createElement("a");a.textContent=`${source.title} · ${source.objectName}${source.scope==="page-filter"?" · отбор страницы":""}`;a.href=source.url;if(source.scope==="search")a.addEventListener("click",e=>{e.preventDefault();void showEvidence(source);});item.append(a);}
       for(const warning of result.warnings||[]){const p=document.createElement("small");p.className="ai-warning";p.textContent=warning;item.append(p);}
     }

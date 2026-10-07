@@ -165,9 +165,10 @@ _Ж = (KIND_ZHBI,)
 _М = (KIND_MFR,)
 
 FEATURES = [
-    Feature("ai_settings", "Администрирование", "Интеграция с локальным ИИ",
-            "Общий сервер, отдельные модели диалога и чтения чертежей.",
-            ["GET /ai/config", "PUT /ai/config", "POST /ai/models", "POST/GET /ai/drawing-test", "POST /ai/dialog-test"],
+    Feature("ai_settings", "Администрирование", "Интеграция с ИИ",
+            "Общий локальный сервер, отдельные модели диалога и чтения чертежей; облачный роутер red_mad_robot — только для помощника.",
+            ["GET /ai/config", "PUT /ai/config", "POST /ai/models", "POST/GET /ai/drawing-test", "POST /ai/dialog-test",
+             "GET/PUT /ai/router/config", "PUT/DELETE /ai/router/key", "POST /ai/router/models", "POST /ai/router/test", "GET /ai/router/billing"],
             SCOPE_SERVICE, _только_админ_сервиса()),
     # ------------------------------------------------------ Схема объекта
     Feature("plan", "Схема объекта", "Схема, карточка изделия, фильтры, 3D",
