@@ -2773,6 +2773,23 @@
   .scd-head-actions { margin: 0; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .scd-rb-tools { display: flex; gap: 8px; margin: 8px 0; }
   /* Заголовок группы: название фиксированной ширины и сразу за ним метрики колонками, без пустоты посередине */
+  /* Зона группировки (2026-10-07): у каждой группы своя рамка и цветная полоса слева, вложенные группы лежат внутри рамки родителя */
+  .scd-seg { display: inline-flex; border: 1px solid var(--color-text-muted); border-radius: 8px; overflow: hidden; }
+  .scd-seg-btn { border: 0; background: var(--color-surface); color: var(--color-text); padding: 5px 11px; font: inherit; font-size: 12px; cursor: pointer; }
+  .scd-seg-btn + .scd-seg-btn { border-left: 1px solid var(--color-text-muted); }
+  .scd-seg-btn[aria-pressed="true"] { background: var(--color-primary); color: #fff; }
+  .scd-rb-tools { align-items: center; flex-wrap: wrap; }
+  details.scd-rb-grp { --gc: #8a5a2b; border: 1px solid var(--color-text-muted); border-left: 6px solid var(--gc); border-radius: 8px; margin: 12px 0; padding: 0; overflow: hidden; background: var(--color-surface); }
+  details.scd-rb-g1 { --gc: #2f6f9f; } details.scd-rb-g2 { --gc: #5f8a2e; }
+  details.scd-rb-grp > summary { padding: 8px 12px; background: color-mix(in srgb, var(--gc) 15%, var(--color-surface)); }
+  details.scd-rb-grp[open] > summary { border-bottom: 1px solid color-mix(in srgb, var(--gc) 45%, transparent); }
+  details.scd-rb-grp > .scd-rb-sub { margin: 0; padding: 2px 12px 12px; }
+  details.scd-rb-grp details.scd-rb-grp { margin: 12px 0 0; }
+  .scd-shift { display: inline-block; margin-top: 4px; padding: 2px 7px; border-radius: 6px; font-size: 12px; line-height: 1.35; font-weight: 400;
+    background: rgba(47, 111, 159, .13); border: 1px solid rgba(47, 111, 159, .45); }
+  .scd-shift-sup { background: rgba(217, 119, 6, .15); border-color: rgba(217, 119, 6, .6); }
+  .scd-cross { color: #b45309; font-weight: 600; font-size: 12px; }
+  .scd-pos-table td.scd-rb-place { min-width: 220px; }
   .scd-rb-grp > summary { justify-content: flex-start; gap: 6px 22px; }
   .scd-rb-grp > summary > b { width: 260px; max-width: 100%; }
   .scd-rb-cells { display: flex; gap: 6px 22px; flex-wrap: wrap; }

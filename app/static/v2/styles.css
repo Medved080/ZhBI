@@ -1450,3 +1450,31 @@ button.ws-tile:hover { background: var(--surface); }
 /* Строка списка документов открывает документ целиком (supplier-docs.js, 2026-10-07) */
 .v2-table tr.v2-row-click { cursor: pointer; }
 .v2-table tr.v2-row-click:hover td, .v2-table tr.v2-row-click:focus-within td { background: var(--sel); }
+
+/* Зона группировки балансировки (2026-10-07): у каждой группы своя рамка и цветная полоса слева, вложенные группы лежат ВНУТРИ рамки родителя */
+.v2-rb-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+.v2-rb-tools-label { font-size: 13px; color: var(--muted); }
+.v2-rb-tools-sp { flex: 1; }
+.v2-rb-seg { display: inline-flex; border: 1px solid color-mix(in srgb, var(--ink) 40%, var(--bg)); border-radius: 8px; overflow: hidden; }
+.v2-rb-segbtn { border: 0; background: var(--bg); color: var(--ink); padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.v2-rb-segbtn + .v2-rb-segbtn { border-left: 1px solid color-mix(in srgb, var(--ink) 40%, var(--bg)); }
+.v2-rb-segbtn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.v2-rb-group { --gc: var(--accent); border: 1px solid color-mix(in srgb, var(--ink) 30%, var(--bg)); border-left: 6px solid var(--gc); border-radius: 10px;
+  margin: 14px 0; background: var(--bg); box-shadow: 0 1px 3px rgb(0 0 0 / .08); overflow: hidden; }
+.v2-rb-g1 { --gc: light-dark(#2f6f9f, #7fb4d9); }
+.v2-rb-g2 { --gc: light-dark(#5f8a2e, #a3c76a); }
+.v2-rb-group > .v2-rb-grp { margin: 0; border: 0; border-radius: 0; padding: 10px 14px; background: color-mix(in srgb, var(--gc) 16%, var(--bg)); }
+.v2-rb-group > .v2-rb-grp + .v2-rb-sub { border-top: 1px solid color-mix(in srgb, var(--gc) 45%, transparent); }
+.v2-rb-group > .v2-rb-sub { margin: 0; padding: 2px 14px 14px; }
+.v2-rb-group .v2-rb-group { margin: 12px 0 0; box-shadow: none; }
+.v2-rb-body { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0 0; max-height: 440px; overflow: auto; }
+.v2-rb-body.v2-rb-flat { max-height: 620px; }
+.v2-rb-body .v2-table { margin: 0; }
+.v2-rb-shift { display: inline-block; margin-top: 4px; padding: 2px 7px; border-radius: 6px; font-size: 12px; line-height: 1.35; font-weight: 400;
+  background: color-mix(in srgb, #2f6f9f 13%, transparent); border: 1px solid color-mix(in srgb, #2f6f9f 45%, transparent); }
+.v2-rb-shift-sup { background: color-mix(in srgb, #d97706 15%, transparent); border-color: color-mix(in srgb, #d97706 60%, transparent); }
+.v2-rb-cross { color: light-dark(#b45309, #f0b35a); font-weight: 600; font-size: 12px; }
+.v2-rb-arrow { text-align: center; white-space: nowrap; }
+.v2-rb-shift { max-width: 360px; overflow-wrap: anywhere; }
+.v2-table td.v2-rb-place { min-width: 230px; }
+.v2-rb-shift { overflow-wrap: break-word; }

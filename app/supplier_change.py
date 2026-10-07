@@ -1147,7 +1147,8 @@ def _doc_items(conn, doc_id: int) -> list:
         """,
         (doc_id,),
     ).fetchall()
-    метки = _contract_labels(conn, (r["contract_id_now"] for r in rows if r["contract_id_now"]))
+    метки = _contract_labels(conn, [r["contract_id_now"] for r in rows if r["contract_id_now"]]
+                             + [r["prev_contract_id"] for r in rows if r["prev_contract_id"]])
     return [
         {
             "element_id": r["element_id"], "side": r["side"], "pair_no": r["pair_no"],
@@ -1159,6 +1160,9 @@ def _doc_items(conn, doc_id: int) -> list:
             "prev_plan": r["prev_planned_delivery_date"], "plan_now": r["plan_now"],
             "counterparty": метки[r["contract_id_now"]][0] if r["contract_id_now"] in метки else None,
             "contract_name": метки[r["contract_id_now"]][1] if r["contract_id_now"] in метки else None,
+            # Контракт и поставщик ДО проведения (у балансировки места меняются вместе с контрактом): по ним группируется таблица
+            "prev_counterparty": метки[r["prev_contract_id"]][0] if r["prev_contract_id"] in метки else None,
+            "prev_contract_name": метки[r["prev_contract_id"]][1] if r["prev_contract_id"] in метки else None,
         }
         for r in rows
     ]
