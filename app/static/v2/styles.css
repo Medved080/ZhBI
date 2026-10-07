@@ -1446,3 +1446,7 @@ button.ws-tile:hover { background: var(--surface); }
 /* Цепочка обмена в таблице балансировки: строка-заголовок с кнопкой разворота */
 .v2-rb-chain td { background: var(--surface); }
 .v2-rb-toggle.v2-rb-chainbtn { width: auto; max-width: 100%; text-align: left; }
+
+/* Строка списка документов открывает документ целиком (supplier-docs.js, 2026-10-07) */
+.v2-table tr.v2-row-click { cursor: pointer; }
+.v2-table tr.v2-row-click:hover td, .v2-table tr.v2-row-click:focus-within td { background: var(--sel); }

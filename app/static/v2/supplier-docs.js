@@ -542,7 +542,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <p class="v2-muted">${esc(info.note)} Документ — черновик, пока его не проведут.</p>
       ${canAny ? "" : `<p class="v2-note" data-readonly-note>Только просмотр: на этом объекте у вас нет права изменять документы контрактации — создание, правка, подбор, проведение и отмена проведения недоступны.</p>`}
       ${rows.length ? `<table class="v2-table"><thead><tr><th>№</th><th>Дата</th><th>Состояние</th>${cols.map(([h]) => `<th>${esc(h)}</th>`).join("")}<th>Изделий</th><th>Создал</th></tr></thead><tbody>
-        ${rows.map((d) => `<tr><td><button type="button" class="v2-link" data-open="${d.id}">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.status_title)}</td>${cols.map(([, f]) => `<td>${esc(f(d))}</td>`).join("")}<td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов этого вида пока нет.</p>`}`;
+        ${rows.map((d) => `<tr class="v2-row-click" data-open="${d.id}"><td><button type="button" class="v2-link">${esc(d.number)}</button></td><td>${ruDate(d.doc_date)}</td><td>${esc(d.status_title)}</td>${cols.map(([, f]) => `<td>${esc(f(d))}</td>`).join("")}<td>${d.items}</td><td>${esc(d.created_by || "—")}</td></tr>`).join("")}</tbody></table>` : `<p class="v2-note">Документов этого вида пока нет.</p>`}`;
   }
 
   function positionsHtml(x, ro) {
@@ -773,7 +773,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function bind() {
     const x = f();
     for (const el of container.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset));
-    for (const el of inner.querySelectorAll("[data-open]")) el.addEventListener("click", () => openDoc(Number(el.dataset.open)));
+    // Документ открывается кликом по ЛЮБОЙ ячейке строки (2026-10-07, как в текущем интерфейсе); кнопка с номером остаётся для клавиатуры —
+    // её клик всплывает до строки, поэтому обработчик один и документ открывается один раз
+    for (const el of inner.querySelectorAll("tr[data-open]")) el.addEventListener("click", () => openDoc(Number(el.dataset.open)));
     // Выбор контракта и марки балансировки — списком с колонками (числа выровнены вправо), общий модуль column-select.js
     const colSelects = inner.querySelectorAll("select[data-cs-heads]");
     if (colSelects.length) import("/static/column-select.js").then((m) => { m.closeColumnSelectPopup(); colSelects.forEach((sel) => { if (sel.isConnected) m.attachColumnSelect(sel); }); });
