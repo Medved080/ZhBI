@@ -114,6 +114,7 @@ def main() -> int:
         print(f"\n=== {title}")
         before = snapshot(work)
         plan = sc._rebalance_plan(conn, oid, contract_id, mark, None, flags["pool"])
+        ok_before = sc._history_consistent_ids(conn, [i["element_id"] for i in plan["items"]])
         sm = plan["summary"]
         print(f"  план: изделий {sm['count']}, затронуто {sm['moved']} ({sm['pairs']} пар, {sm['chains']} цепочек), "
               f"просрочено {sm['late_before']} → {sm['late_after']}, дней {sm['late_days_before']} → {sm['late_days_after']}")
@@ -123,6 +124,13 @@ def main() -> int:
             element_ids=[i["element_id"] for i in plan["items"]], **flags)
         doc = sc.create_supplier_change(body, admin)
         done = sc.post_supplier_change(doc["id"], admin, None)
+        # пометки документа в истории не должны ломать согласованность кэша (статус, фактическая дата) с историей: иначе доставленное
+        # изделие после проведения выпадает из следующей балансировки, а при пересчёте факт поставки подменяется датой документа
+        ok_after = sc._history_consistent_ids(conn, list(ok_before))
+        broken = ok_before - ok_after
+        print(f"  согласованность истории после проведения: нарушена у {len(broken)} из {len(ok_before)} изделий")
+        if broken:
+            bad += 1
         mid = snapshot(work)
         changed_mid = diff(before, mid)
         print(f"  проведён: затронуто {done['moved']} изд. ({done['pairs']} пар, {done['chains']} цепочек); таблиц изменено: {len(changed_mid)}")

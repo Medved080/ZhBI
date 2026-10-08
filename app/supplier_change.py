@@ -1090,12 +1090,12 @@ def _apply_cycle(conn, doc, цикл, автор, user_id, комментари�
         источник = цикл[(n + 1) % k]
         статус, _ = recompute_status_and_actual_date(conn, место["id"])
         conn.execute(
-            "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, comment, contract_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, comment, contract_id, changed_at) "
+            f"VALUES (?, ?, ?, ?, ?, ?, {_MARKER_MOMENT_SQL})",
             (место["id"], статус, автор, user_id,
              f"{комментарий}: изделие {'поменялось местами с' if k == 2 else 'получило место (дату, статус, контракт) от'}"
              f" №{источник['id']} ({источник['address'] or 'без адреса'})",
-             источник["contract_id"]))
+             источник["contract_id"], место["id"]))
         _remember_created_history(conn, doc["id"])
         activity.log("rebalance_swap", user_id=user_id, user_name=impersonation.plain_name(автор),
                      entity_type="element", entity_id=место["id"],
@@ -1697,12 +1697,12 @@ def _post_supplier_change(conn, doc, items, автор, user_id) -> dict:
         # Запись истории — ТЕМ ЖЕ статусом: замена поставщика не двигает
         # изделие по жизненному циклу, но обязана быть в истории, иначе
         # снимок контракта в последней записи остался бы от прежнего
-        # поставщика. Момент — текущий, а не дата документа: запись задним
-        # числом перестала бы быть последней.
+        # поставщика. Момент — самой свежей записи изделия (_MARKER_MOMENT_SQL), а не дата документа и не «сейчас»: запись задним
+        # числом перестала бы быть последней, а «сейчас» подменило бы фактическую дату поставки доставленного изделия.
         conn.execute(
             "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, "
-            "comment, contract_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (e["id"], e["current_status"], автор, user_id, комментарий, doc["to_contract_id"]),
+            f"comment, contract_id, changed_at) VALUES (?, ?, ?, ?, ?, ?, {_MARKER_MOMENT_SQL})",
+            (e["id"], e["current_status"], автор, user_id, комментарий, doc["to_contract_id"], e["id"]),
         )
         _remember_created_history(conn, doc["id"])
         conn.execute(
@@ -1718,6 +1718,16 @@ def _post_supplier_change(conn, doc, items, автор, user_id) -> dict:
                      details={"doc_id": doc["id"], "number": doc["number"],
                               "status": e["current_status"]})
     return {"moved": len(подготовка)}
+
+
+# Момент записи-пометки документа в истории изделия (2026-10-09). НЕ «сейчас», а момент самой свежей записи изделия: пометка повторяет
+# текущий статус и остаётся последней (при равном моменте решает id), но не становится «новым переходом» — иначе у доставленного
+# изделия «последний переход в Доставлено» (по нему пересчитывается фактическая дата поставки, recompute_status_and_actual_date)
+# уезжал бы на момент проведения: кэш расходился с историей, изделие навсегда выпадало из балансировки (проверка согласованности),
+# а при первом же пересчёте факт поставки подменялся датой документа. Параметр — id изделия, вставляется в INSERT как значение
+# changed_at.
+_MARKER_MOMENT_SQL = ("COALESCE((SELECT h.changed_at FROM status_history h WHERE h.element_id = ? "
+                      "ORDER BY h.changed_at DESC, h.id DESC LIMIT 1), datetime('now'))")
 
 
 def _remember_created_history(conn, doc_id: int) -> None:
@@ -1825,10 +1835,10 @@ def _post_link_swap(conn, doc, items, автор, user_id) -> dict:
             статус, _ = recompute_status_and_actual_date(conn, e["id"])
             conn.execute(
                 "INSERT INTO status_history (element_id, status, changed_by, changed_by_user_id, "
-                "comment, contract_id) VALUES (?, ?, ?, ?, ?, ?)",
+                f"comment, contract_id, changed_at) VALUES (?, ?, ?, ?, ?, ?, {_MARKER_MOMENT_SQL})",
                 (e["id"], статус, автор, user_id,
                  f"{комментарий}: привязка получена от изделия №{встречный['id']}"
-                 f" ({встречный['address'] or 'без адреса'})", встречный["contract_id"]),
+                 f" ({встречный['address'] or 'без адреса'})", встречный["contract_id"], e["id"]),
             )
             _remember_created_history(conn, doc["id"])
             activity.log("link_swap", user_id=user_id, user_name=impersonation.plain_name(автор),
