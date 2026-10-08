@@ -9,7 +9,7 @@ _LAT = str.maketrans('ABCEHKMOPTXYabcehkmoptxy', 'АВСЕНКМОРТХУАВС
 DIAM_RE = re.compile(r'^[ØøОо]\s*(\d[\dОо]*)$')           # в цифрах диаметра буква «О» — неразличимый с нулём знак шрифта («Ø2О» = Ø20)
 
 
-_DIGITS = str.maketrans('ОоЗзйб', '003306')      # знаки шрифта, неотличимые от цифр: О, о — нуль, З, з — тройка, й — нуль, б — шестёрка («5,1З» = 5,13)
+_DIGITS = str.maketrans('ОоЗзйбг', '0033062')      # знаки шрифта, неотличимые от цифр: О, о — нуль, З, з — тройка, й — нуль, б — шестёрка, г — двойка («5,1З» = 5,13, «г8,9О» = 28,90)
 
 
 def num(s):
@@ -181,6 +181,51 @@ def mark_key(text):
     return re.sub(r'[\s.]', '', (text or '').translate(_LAT).upper())
 
 
+_FUZZY = str.maketrans('СО', '00')      # «с» и «О» в марке серии читаются как нуль и обратно («4с1» ↔ «401», «4сР8» ↔ «40Р8»)
+
+
+def fuzzy_key(text):
+    """Марка для сопоставления с учётом путаницы «с/О/нуль» шрифта: mark_key, у которого «С» и «О» заменены нулём."""
+    return mark_key(text).translate(_FUZZY)
+
+
+QTY_TAIL_RE = re.compile(r'L\s*[=·]\s*\S+\s+(\d{1,3})$')      # «Ø10 А500С ГОСТ 34028-2016, L=2810 2»: количество склеилось с длиной
+LENGTH_RE = re.compile(r'L\s*[=·]\s*(\d[\d\s]*\d|\d)')
+
+
+_LETTER_DIGITS = str.maketrans('АУ', '56')      # знаки шрифта в числах таблиц серий: «А» — пятёрка, «У» — шестёрка («L=1А40» = 1540, «Ø 2А» = Ø25; проверено суммой по массе марки)
+DIAM_LETTER_RE = re.compile(r'(?<=[ØИ])(\s*)(\d[АУ]|[АУ]\d)(?!\d)')
+LENGTH_LETTER_RE = re.compile(r'(L\s*[=·]\s*)([\dАУ\s]*\d[\dАУ\s]*)')
+
+
+def fix_digits(name):
+    """Название стержня с исправленными буквами-цифрами в диаметре и длине (только внутри «Ø…» и «L=…», класс «А500С» не трогается)."""
+    name = DIAM_LETTER_RE.sub(lambda m: m.group(1) + m.group(2).translate(_LETTER_DIGITS), name or '')
+    return LENGTH_LETTER_RE.sub(lambda m: m.group(1) + m.group(2).translate(_LETTER_DIGITS), name)
+
+
+def rod_mass_by_geometry(name):
+    """Масса одного стержня по названию «Ø d класс … L=мм», кг: 0,00617 · d² · L; нет диаметра или длина не прочитана — None."""
+    m = ROD_RE.search(name or '')
+    length = LENGTH_RE.search(name or '')
+    if not m or not length: return None
+    mm = int(re.sub(r'\s', '', length.group(1)))
+    d = int(m.group(1).replace(' ', ''))
+    return 0.00617 * d * d * mm / 1000.0 if mm >= 100 else None
+
+
+def row_qty_mass(row):
+    """(количество, масса единицы) строки спецификации с поправками чтения: количество, склеенное с длиной в ячейке наименования, и масса стержня строки серии без
+    столбца массы единицы (считается по диаметру и длине)."""
+    name = fix_digits(row.get('name', '') or '')
+    qty, mass = num(row.get('qty')), num(row.get('mass'))
+    if not qty:
+        m = QTY_TAIL_RE.search(name)
+        if m: qty = float(m.group(1))
+    if not mass and row.get('mark'): mass = rod_mass_by_geometry(name)
+    return qty, mass
+
+
 def node_mark(name):
     """Марка узла из его названия в спецификации: последний токен («Каркас К14» → «К14», «Сетка СВ6.6-1» → «СВ6.6-1»)."""
     tokens = (name or '').split()
@@ -227,19 +272,20 @@ class RebarAssembler:
         hits = []
         for q in self.pages(doc):
             rows = self.rows(doc, q) or []
-            if any(r.get('mark') and mark_key(r['mark']) == mark and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005 for r in rows):
+            if any(r.get('mark') and fuzzy_key(r['mark']) == fuzzy_key(mark) and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005 for r in rows):
                 hits.append(q)
         return hits[0] if len(hits) == 1 else None
 
     def pick_rows(self, rows, mark, mass):
-        marks = {mark_key(r.get('mark')) for r in rows if r.get('mark')}
+        marks = {fuzzy_key(r.get('mark')) for r in rows if r.get('mark')}
         if not marks: return rows, None
+        mark = fuzzy_key(mark)
         chosen = mark if mark in marks else None
         if chosen is None and mass:
-            hits = {mark_key(r['mark']) for r in rows if r.get('mark') and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005}
+            hits = {fuzzy_key(r['mark']) for r in rows if r.get('mark') and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005}
             if len(hits) == 1: chosen = next(iter(hits))
         if chosen is None: return [], None
-        picked = [r for r in rows if mark_key(r.get('mark')) == chosen]
+        picked = [r for r in rows if fuzzy_key(r.get('mark')) == chosen]
         total = next((num(r.get('mass_item') or r['note']) for r in picked if num(r.get('mass_item') or r.get('note'))), None)
         return picked, total
 
@@ -252,8 +298,14 @@ class RebarAssembler:
             if rows is None: out['issues'].append('лист %d не разобран' % page)
             self.cache[key] = out; return out
         rows, out['sheet_total'] = self.pick_rows(rows, mark, mass)
-        for r in rows:
-            name = r.get('name', '') or ''; qty = num(r.get('qty')); mass_e = num(r.get('mass'))
+        parsed = [row_qty_mass(r) for r in rows]
+        # строка серии, у которой масса единицы не считается (длина стержня не прочитана): остаток итога марки за вычетом остальных строк
+        lacking = [i for i, r in enumerate(rows) if r.get('mark') and parsed[i][0] and not parsed[i][1] and parse_rod(fix_digits(r.get('name')), None)]
+        if len(lacking) == 1 and out['sheet_total']:
+            rest = out['sheet_total'] - sum(q * m for (q, m) in parsed if q and m)
+            if rest > 0: parsed[lacking[0]] = (parsed[lacking[0]][0], rest / parsed[lacking[0]][0])
+        for r, (qty, mass_e) in zip(rows, parsed):
+            name = fix_digits(r.get('name', '') or '') if r.get('mark') else (r.get('name', '') or '')      # буквы-цифры правятся только в таблицах серий (там проверка суммой по массе марки)
             if re.match(r'^Масса', name) and mass_e: out['sheet_total'] = mass_e; continue
             kind = emb_kind(name)
             if kind:                                                  # закладная, труба, петля: количество и масса единицы с листа, без рекурсии
