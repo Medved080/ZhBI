@@ -269,7 +269,7 @@ export function createElementOps(ctx) {
       ${topExtra || ""}
       <div class="ws-actions"><button type="button" class="v2-btn" data-act="locate">Показать на схеме</button><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button>${R.fields ? `<button type="button" class="v2-btn" data-eo="ef-open">Форма элемента…</button>` : ""}</div>
       ${f.ef.done ? `<p class="ws-ok" role="status">${esc(f.ef.done)}</p>` : ""}
-      <h4>Размещение</h4><dl class="ws-dl">${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
+      <h4>Размещение</h4><dl class="ws-dl">${e.element_uid ? `<div class="ws-kv ws-guid"><dt>GUID</dt><dd>${esc(e.element_uid)}</dd></div>` : ""}${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
       <h4>Мини-карта</h4>${miniMapHtml(f)}
       <h4>Контрактация</h4><dl class="ws-dl">${contractBlock}</dl>
       ${canContract ? `<div class="ws-actions"><button type="button" class="v2-btn" data-eo="ct-pick" ${f.ct.busy ? "disabled" : ""}>${e.contract_id ? "Изменить контракт…" : "Назначить контракт…"}</button></div>` : ""}

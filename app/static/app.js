@@ -8329,6 +8329,7 @@ function cardSkeletonHtml(canEdit) {
         <div class="card-primary-mark" id="card-mark"></div>
       </div>
       <div class="card-calc-link" id="card-calc-link"></div>
+      <div class="card-guid" id="card-guid"></div>
       <div class="card-status-row">
         <span class="swatch" id="card-status-swatch"></span>
         <span class="card-status-label" id="card-status-label"></span>
@@ -8470,6 +8471,7 @@ async function showCard(element) {
     : escapeHtml(element.element_type);
   document.getElementById("card-mark").textContent = element.mark || "—";
   renderCalcLink(element);
+  document.getElementById("card-guid").innerHTML = element.element_uid ? `<span class="card-guid-k">GUID</span> <span class="card-guid-v">${escapeHtml(element.element_uid)}</span>` : "";
   document.getElementById("card-status-swatch").style.background = colorFor(element.current_status);
   document.getElementById("card-status-label").textContent =
     state.statusLabels[element.current_status] || element.current_status;

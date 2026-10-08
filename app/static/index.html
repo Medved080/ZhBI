@@ -2795,6 +2795,11 @@
     background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
   .scd-st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
   /* Подсветка обменов (2026-10-08): одна гамма — основной цвет темы; пары — лёгкая заливка с чередованием, цепочки плотнее */
+  /* GUID изделия в карточке (2026-10-08) */
+  .card-guid { margin: 4px 0 2px; font-size: 12px; }
+  .card-guid:empty { display: none; }
+  .card-guid-k { color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .04em; font-size: 10px; }
+  .card-guid-v { font-family: ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
   .scd-pair.scd-p1 td { background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface)); }
   .scd-pair.scd-p0 td { background: color-mix(in srgb, var(--color-primary) 12%, var(--color-surface)); }
   .scd-chain-head.scd-p1 td { background: color-mix(in srgb, var(--color-primary) 18%, var(--color-surface)); }

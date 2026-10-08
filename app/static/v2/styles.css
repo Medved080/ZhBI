@@ -1512,3 +1512,6 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-doc-state-draft { --dc: light-dark(#b45309, #f0b35a); }
 .v2-table tr.v2-doc-posted td:first-child { box-shadow: inset 4px 0 0 var(--good); }
 .v2-table tr.v2-doc-draft td:first-child { box-shadow: inset 4px 0 0 light-dark(#d97706, #f0b35a); }
+
+/* GUID изделия в панели свойств (2026-10-08): моноширинно, переносится по знакам, выделяется целиком одним щелчком */
+.ws-guid dd { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; user-select: all; }
