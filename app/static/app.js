@@ -8046,10 +8046,10 @@ function deliveryDatesHtml(element) {
     : plannedDatePart;
   return `
     <table>
-      <tr><td class="k">Начало СМР</td><td>${smrStartDate ? formatDateRu(smrStartDate) : "—"}</td></tr>
+      <tr><td class="k">Начало СМР (директивное)</td><td>${smrStartDate ? formatDateRu(smrStartDate) : "—"}</td></tr>
       <tr class="${plannedLate ? "date-row-late" : ""}"><td class="k">Плановая дата</td><td>${plannedText}</td></tr>
       <tr class="${actualLate ? "date-row-late" : ""}"><td class="k">Фактическая дата</td><td>${element.actual_delivery_date ? formatDateRu(element.actual_delivery_date) : "—"}</td></tr>
-      <tr><td class="k">Дата завершения СМР</td><td>${element.project_delivery_date ? formatDateRu(element.project_delivery_date) : "—"}</td></tr>
+      <tr><td class="k">Завершение СМР (директивное)</td><td>${element.project_delivery_date ? formatDateRu(element.project_delivery_date) : "—"}</td></tr>
       <!-- Прогноз приходит отдельным запросом карточки (GET /elements/{id}),
            как и история статусов: в /plan-data его нет — это лишний запрос
            на каждое из девяти тысяч изделий ради строки, которую смотрят у
@@ -8067,7 +8067,9 @@ function deliveryDatesHtml(element) {
 // Знак: плюс — позже директивной даты, то есть отставание (красным); минус —
 // опережение (зелёным). Ноль — «идём по графику».
 function forecastRowsHtml(f) {
-  if (!f) return "";
+  if (!f) return `
+      <tr><td class="k">Начало СМР (актуализация)</td><td>— <span class="hint-text">нет в актуализации</span></td></tr>
+      <tr><td class="k">Завершение СМР (актуализация)</td><td>— <span class="hint-text">нет в актуализации</span></td></tr>`;
   const дни = (n) => {
     if (n === null || n === undefined) return "—";
     const слово = plural(Math.abs(n), "день", "дня", "дней");
@@ -8080,9 +8082,9 @@ function forecastRowsHtml(f) {
   return `
       <tr><td class="k" colspan="2" style="padding-top:8px">
         <span class="hint-text">Прогноз · ${escapeHtml(заголовок)}</span></td></tr>
-      <tr><td class="k">Начало СМР (прогноз)</td><td>${f.forecast_start
+      <tr><td class="k">Начало СМР (актуализация)</td><td>${f.forecast_start
         ? formatDateRu(f.forecast_start) : "—"} ${дни(f.deviation_start)}</td></tr>
-      <tr><td class="k">Завершение (прогноз)</td><td>${f.forecast_end
+      <tr><td class="k">Завершение СМР (актуализация)</td><td>${f.forecast_end
         ? formatDateRu(f.forecast_end) : "—"} ${дни(f.deviation_end)}</td></tr>`;
 }
 

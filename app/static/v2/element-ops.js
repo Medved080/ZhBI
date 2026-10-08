@@ -251,6 +251,15 @@ export function createElementOps(ctx) {
   }
   const consText = (cons, target) => consequenceLines(cons, statusLabel(target));
 
+  // Даты последней актуализации графика (GET /elements/{id} → schedule_forecast) и отклонение от директивной: «+N дн.» — позже (отставание)
+  const fcText = (detail, err, key, dev) => {
+    if (err) return "—";
+    if (!detail) return "загрузка…";
+    const f = detail.schedule_forecast;
+    if (!f || !f[key]) return "— (нет в актуализации)";
+    const d = f[dev];
+    return `${fmtDate(f[key])}${d == null ? "" : d === 0 ? " · в срок" : ` · ${d > 0 ? "+" : ""}${d} дн.`}`;
+  };
   // ================================================================ ОДНО ИЗДЕЛИЕ: карточка
   function cardHtml(e, { detail, detailError, topExtra }) {
     const z = e.zones || {};
@@ -274,7 +283,7 @@ export function createElementOps(ctx) {
       <h4>Контрактация</h4><dl class="ws-dl">${contractBlock}</dl>
       ${canContract ? `<div class="ws-actions"><button type="button" class="v2-btn" data-eo="ct-pick" ${f.ct.busy ? "disabled" : ""}>${e.contract_id ? "Изменить контракт…" : "Назначить контракт…"}</button></div>` : ""}
       ${f.ct.error ? `<p class="ws-err" role="alert">${esc(f.ct.error)}</p>` : ""}${f.ct.done ? `<p class="ws-ok" role="status">${esc(f.ct.done)}</p>` : ""}
-      <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР", fmtDate(e.project_smr_start_date))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР", fmtDate(e.project_delivery_date))}</dl>
+      <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР (директивное)", fmtDate(e.project_smr_start_date))}${row("Начало СМР (актуализация)", fcText(detail, detailError, "forecast_start", "deviation_start"))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР (директивное)", fmtDate(e.project_delivery_date))}${row("Завершение СМР (актуализация)", fcText(detail, detailError, "forecast_end", "deviation_end"))}</dl>
       ${plannedHtml(e, f)}
       <h4>Комментарий</h4>${commentHtml(e, f)}
       <h4>Вложения</h4>${attachmentsHtml(f.at, { canUpload: R.attachments, canDelete: R.attachmentsDelete })}
