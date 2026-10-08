@@ -671,10 +671,10 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       const row = (a) => {
         if (!a.pair_no) return `<tr><td>—</td>${cell(a)}<td colspan="4" class="v2-muted">без обмена</td></tr>`;
         const m = byNo.get(a.pair_no), cross = crossText(m);
-        if (m.length === 2) return `<tr><td>${a.pair_no}</td>${cell(m[0])}${arrowCell(cross)}${cell(m[1])}</tr>`;
+        if (m.length === 2) return `<tr class="v2-rb-pair v2-rb-p${a.pair_no % 2}"><td>${a.pair_no}</td>${cell(m[0])}${arrowCell(cross)}${cell(m[1])}</tr>`;
         const key = `c${a.pair_no}`, open = chainOpen(x, key);
-        return `<tr class="v2-rb-chain"><td>${a.pair_no}</td><td colspan="7">${chainButton(key, m.length, open, cross)}</td></tr>`
-          + (open ? m.map((i, t) => `<tr><td></td>${cell(i)}<td>←</td><td colspan="3">${placeCell(m[(t + 1) % m.length], cross ? whereLine(m[(t + 1) % m.length]) : "")}</td></tr>`).join("") : "");
+        return `<tr class="v2-rb-chain v2-rb-p${a.pair_no % 2}"><td>${a.pair_no}</td><td colspan="7">${chainButton(key, m.length, open, cross)}</td></tr>`
+          + (open ? m.map((i, t) => `<tr class="v2-rb-chain-row v2-rb-p${a.pair_no % 2}"><td></td>${cell(i)}<td>←</td><td colspan="3">${placeCell(m[(t + 1) % m.length], cross ? whereLine(m[(t + 1) % m.length]) : "")}</td></tr>`).join("") : "");
       };
       const sum = (l) => { const ex = l.filter((i) => i.pair_no); return [["обменов", ex.length], ["изд.", ex.reduce((n, i) => n + byNo.get(i.pair_no).length, 0)]]; };
       const без = rows.filter((i) => !i.pair_no).length;
@@ -698,10 +698,10 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const row = (a) => {
       if (!a.pair_no) return `<tr><td>—</td>${cell(a)}<td colspan="6" class="v2-muted">без обмена</td></tr>`;
       const m = members(a), cross = crossText(m);
-      if (m.length === 2) return `<tr style="font-weight:600"><td>${a.pair_no}</td>${cell(m[0])}${arrowCell(cross)}${cell(m[1])}<td class="v2-rb-gain">${gainHtml(gainOf(m))}</td></tr>`;
+      if (m.length === 2) return `<tr class="v2-rb-pair v2-rb-p${a.pair_no % 2}" style="font-weight:600"><td>${a.pair_no}</td>${cell(m[0])}${arrowCell(cross)}${cell(m[1])}<td class="v2-rb-gain">${gainHtml(gainOf(m))}</td></tr>`;
       const key = `c${a.pair_no}`, open = chainOpen(x, key);
-      return `<tr class="v2-rb-chain"><td>${a.pair_no}</td><td colspan="9">${chainButton(key, m.length, open, cross)}</td><td class="v2-rb-gain">${gainHtml(gainOf(m))}</td></tr>`
-        + (open ? m.map((i, t) => `<tr><td></td>${cell(i)}<td>←</td><td colspan="4">${placeCell(m[(t + 1) % m.length], cross ? whereLine(m[(t + 1) % m.length]) : "")}</td><td class="v2-rb-gain">${gainHtml(late(i, "delay_old") - late(i, "delay_new"))}</td></tr>`).join("") : "");
+      return `<tr class="v2-rb-chain v2-rb-p${a.pair_no % 2}"><td>${a.pair_no}</td><td colspan="9">${chainButton(key, m.length, open, cross)}</td><td class="v2-rb-gain">${gainHtml(gainOf(m))}</td></tr>`
+        + (open ? m.map((i, t) => `<tr class="v2-rb-chain-row v2-rb-p${a.pair_no % 2}"><td></td>${cell(i)}<td>←</td><td colspan="4">${placeCell(m[(t + 1) % m.length], cross ? whereLine(m[(t + 1) % m.length]) : "")}</td><td class="v2-rb-gain">${gainHtml(late(i, "delay_old") - late(i, "delay_new"))}</td></tr>`).join("") : "");
     };
     const gsum = (l) => {
       const all = l.flatMap((i) => i.pair_no ? members(i) : [i]), ex = l.filter((i) => i.pair_no);

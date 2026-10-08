@@ -2775,9 +2775,9 @@
   .scd-seg-btn + .scd-seg-btn { border-left: 1px solid var(--color-text-muted); }
   .scd-seg-btn[aria-pressed="true"] { background: var(--color-primary); color: #fff; }
   .scd-rb-tools { align-items: center; flex-wrap: wrap; }
-  details.scd-rb-grp { --gc: #8a5a2b; border: 1px solid var(--color-text-muted); border-left: 6px solid var(--gc); border-radius: 8px; margin: 12px 0; padding: 0; overflow: hidden; background: var(--color-surface); }
-  details.scd-rb-g1 { --gc: #2f6f9f; } details.scd-rb-g2 { --gc: #5f8a2e; }
-  details.scd-rb-grp > summary { padding: 8px 12px; background: color-mix(in srgb, var(--gc) 15%, var(--color-surface)); }
+  details.scd-rb-grp { --gc: var(--color-primary); border: 1px solid var(--color-text-muted); border-left: 6px solid var(--gc); border-radius: 8px; margin: 12px 0; padding: 0; overflow: hidden; background: var(--color-surface); }
+  details.scd-rb-g1 { --gc: color-mix(in srgb, var(--color-primary) 72%, var(--color-surface)); } details.scd-rb-g2 { --gc: color-mix(in srgb, var(--color-primary) 48%, var(--color-surface)); }
+  details.scd-rb-grp > summary { padding: 8px 12px; background: color-mix(in srgb, var(--gc) 22%, var(--color-surface)); }
   details.scd-rb-grp[open] > summary { border-bottom: 1px solid color-mix(in srgb, var(--gc) 45%, transparent); }
   details.scd-rb-grp > .scd-rb-sub { margin: 0; padding: 2px 12px 12px; }
   details.scd-rb-grp details.scd-rb-grp { margin: 12px 0 0; }
@@ -2794,7 +2794,13 @@
   .scd-st { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 12px; white-space: nowrap;
     background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
   .scd-st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
-  .scd-chain-head td { background: rgba(127, 127, 127, .08); }
+  /* Подсветка обменов (2026-10-08): одна гамма — основной цвет темы; пары — лёгкая заливка с чередованием, цепочки плотнее */
+  .scd-pair.scd-p1 td { background: color-mix(in srgb, var(--color-primary) 6%, var(--color-surface)); }
+  .scd-pair.scd-p0 td { background: color-mix(in srgb, var(--color-primary) 12%, var(--color-surface)); }
+  .scd-chain-head.scd-p1 td { background: color-mix(in srgb, var(--color-primary) 18%, var(--color-surface)); }
+  .scd-chain-head.scd-p0 td { background: color-mix(in srgb, var(--color-primary) 24%, var(--color-surface)); }
+  .scd-chain-row td { background: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface)); }
+  .scd-chain-row td:first-child { box-shadow: inset 4px 0 0 color-mix(in srgb, var(--color-primary) 60%, var(--color-surface)); }
   .scd-chain-btn { padding: 2px 10px; font-size: 12px; }
   .scd-good { color: #1f7a45; } .scd-bad { color: #b3392f; }
   .scd-rb-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }

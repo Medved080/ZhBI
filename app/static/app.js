@@ -19676,9 +19676,9 @@ function scdRenderRebalance() {
     const строка = (a) => {
       if (!a.pair_no) return `<tr><td>—</td>${ячейки(a)}<td colspan="4" class="hint-text">без обмена</td></tr>`;
       const m = по_номеру.get(a.pair_no), cross = междуЧем(m);
-      if (m.length === 2) return `<tr><td>${a.pair_no}</td>${ячейки(m[0])}${стрелка(cross)}${ячейки(m[1])}</tr>`;
-      return `<tr class="scd-chain-head"><td>${a.pair_no}</td><td colspan="7">${заголовокЦепочки(a.pair_no, m.length, cross)}</td></tr>`
-        + m.map((i, t) => `<tr class="scd-chain-row" data-chain="${a.pair_no}" hidden><td></td>${ячейки(i)}<td>←</td><td colspan="3">${место(m[(t + 1) % m.length], cross ? гдеСтрока(m[(t + 1) % m.length]) : "")}</td></tr>`).join("");
+      if (m.length === 2) return `<tr class="scd-pair scd-p${a.pair_no % 2}"><td>${a.pair_no}</td>${ячейки(m[0])}${стрелка(cross)}${ячейки(m[1])}</tr>`;
+      return `<tr class="scd-chain-head scd-p${a.pair_no % 2}"><td>${a.pair_no}</td><td colspan="7">${заголовокЦепочки(a.pair_no, m.length, cross)}</td></tr>`
+        + m.map((i, t) => `<tr class="scd-chain-row scd-p${a.pair_no % 2}" data-chain="${a.pair_no}" hidden><td></td>${ячейки(i)}<td>←</td><td colspan="3">${место(m[(t + 1) % m.length], cross ? гдеСтрока(m[(t + 1) % m.length]) : "")}</td></tr>`).join("");
     };
     const сводкаПроведённого = (l) => { const ex = l.filter((i) => i.pair_no); return [["обменов", ex.length], ["изд.", ex.reduce((n, i) => n + по_номеру.get(i.pair_no).length, 0)]]; };
     box.innerHTML = (без ? `<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:6px 0">
@@ -19712,9 +19712,9 @@ function scdRenderRebalance() {
   const строка = (a) => {
     if (!a.pair_no) return `<tr><td>—</td>${ячейки(a)}<td colspan="6" class="hint-text">без обмена</td></tr>`;
     const m = участники(a), cross = междуЧем(m);
-    if (m.length === 2) return `<tr style="font-weight:600"><td>${a.pair_no}</td>${ячейки(m[0])}${стрелка(cross)}${ячейки(m[1])}${ячейкаВыигрыша(выигрышГруппы(m))}</tr>`;
-    return `<tr class="scd-chain-head"><td>${a.pair_no}</td><td colspan="9">${заголовокЦепочки(a.pair_no, m.length, cross)}</td>${ячейкаВыигрыша(выигрышГруппы(m))}</tr>`
-      + m.map((i, t) => `<tr class="scd-chain-row" data-chain="${a.pair_no}" hidden><td></td>${ячейки(i)}<td>←</td><td colspan="4">${место(m[(t + 1) % m.length], cross ? гдеСтрока(m[(t + 1) % m.length]) : "")}</td>${ячейкаВыигрыша(поздно(i, "delay_old") - поздно(i, "delay_new"))}</tr>`).join("");
+    if (m.length === 2) return `<tr class="scd-pair scd-p${a.pair_no % 2}" style="font-weight:600"><td>${a.pair_no}</td>${ячейки(m[0])}${стрелка(cross)}${ячейки(m[1])}${ячейкаВыигрыша(выигрышГруппы(m))}</tr>`;
+    return `<tr class="scd-chain-head scd-p${a.pair_no % 2}"><td>${a.pair_no}</td><td colspan="9">${заголовокЦепочки(a.pair_no, m.length, cross)}</td>${ячейкаВыигрыша(выигрышГруппы(m))}</tr>`
+      + m.map((i, t) => `<tr class="scd-chain-row scd-p${a.pair_no % 2}" data-chain="${a.pair_no}" hidden><td></td>${ячейки(i)}<td>←</td><td colspan="4">${место(m[(t + 1) % m.length], cross ? гдеСтрока(m[(t + 1) % m.length]) : "")}</td>${ячейкаВыигрыша(поздно(i, "delay_old") - поздно(i, "delay_new"))}</tr>`).join("");
   };
   const сводка = (l) => {
     const все = l.flatMap((i) => i.pair_no ? участники(i) : [i]), ex = l.filter((i) => i.pair_no);

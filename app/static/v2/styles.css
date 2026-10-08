@@ -1464,6 +1464,13 @@ button.ws-tile:hover { background: var(--surface); }
 
 /* Цепочка обмена в таблице балансировки: строка-заголовок с кнопкой разворота */
 .v2-rb-chain td { background: var(--surface); }
+/* Подсветка обменов (2026-10-08): одна гамма — акцент темы; пары — лёгкая заливка с чередованием, цепочки — плотнее, их строки — с полосой слева */
+.v2-rb-pair.v2-rb-p1 td { background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+.v2-rb-pair.v2-rb-p0 td { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+.v2-rb-chain.v2-rb-p1 td { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+.v2-rb-chain.v2-rb-p0 td { background: color-mix(in srgb, var(--accent) 24%, var(--bg)); }
+.v2-rb-chain-row td { background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+.v2-rb-chain-row td:first-child { box-shadow: inset 4px 0 0 color-mix(in srgb, var(--accent) 60%, var(--bg)); }
 .v2-rb-toggle.v2-rb-chainbtn { width: auto; max-width: 100%; text-align: left; }
 
 /* Строка списка документов открывает документ целиком (supplier-docs.js, 2026-10-07) */
@@ -1480,9 +1487,9 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-rb-segbtn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 .v2-rb-group { --gc: var(--accent); border: 1px solid color-mix(in srgb, var(--ink) 30%, var(--bg)); border-left: 6px solid var(--gc); border-radius: 10px;
   margin: 14px 0; background: var(--bg); box-shadow: 0 1px 3px rgb(0 0 0 / .08); overflow: hidden; }
-.v2-rb-g1 { --gc: light-dark(#2f6f9f, #7fb4d9); }
-.v2-rb-g2 { --gc: light-dark(#5f8a2e, #a3c76a); }
-.v2-rb-group > .v2-rb-grp { margin: 0; border: 0; border-radius: 0; padding: 10px 14px; background: color-mix(in srgb, var(--gc) 16%, var(--bg)); }
+.v2-rb-g1 { --gc: color-mix(in srgb, var(--accent) 72%, var(--bg)); }
+.v2-rb-g2 { --gc: color-mix(in srgb, var(--accent) 48%, var(--bg)); }
+.v2-rb-group > .v2-rb-grp { margin: 0; border: 0; border-radius: 0; padding: 10px 14px; background: color-mix(in srgb, var(--gc) 22%, var(--bg)); }
 .v2-rb-group > .v2-rb-grp + .v2-rb-sub { border-top: 1px solid color-mix(in srgb, var(--gc) 45%, transparent); }
 .v2-rb-group > .v2-rb-sub { margin: 0; padding: 2px 14px 14px; }
 .v2-rb-group .v2-rb-group { margin: 12px 0 0; box-shadow: none; }
