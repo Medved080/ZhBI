@@ -23447,3 +23447,9 @@ projects-objects, counterparties, styles), `scripts/v2_*`, `Docs/TZ.md`.
 «режимные» сценарии UA/PO/CP/SS; VIS-сцены «Проекты и объекты» нестабильны в безголовом Chrome (карта); `stats` штатной копии БД пуст при создании через API;
 `GET /settings/info-plate` для МФР даёт 403 (штатно). Файлы: `app/main.py`, `app/static/app.js`, `app/static/index.html`, `app/static/v2/*`,
 `scripts/v2_test_server.py`, `scripts/v2_tests/*`, `scripts/check_ui_routing.py`, `scripts/gen_v2_write_policy.mjs`, `scripts/v2_write_inventory.py`.
+
+## 2026-10-09 — V2: с экрана «Обмен данными» не открывался ни один пункт меню
+
+**Симптом.** Пока открыт экран «Обмен данными с другим сервером», пункты меню (например, «Документы контрактации») молча не открывались; в консоли `activeModule.guardLeave is not a function` (`main.js:604`).
+**Причина.** Оболочка V2 при уходе с экрана вызывает `guardLeave()` модуля, а общий с V1 `mountServerExchange` возвращал только `{hasUnsavedChanges, destroy}`; обёртка V2 отдавала его как есть.
+**Решение.** `app/static/v2/server-exchange-screen.js` добавляет `guardLeave`: если сверка проведена и не применена — подтверждение «Уйти с экрана?». **Проверка.** Стенд на копии БД: переход с экрана обмена на «Документы контрактации» кликом по меню — открывается, ошибок в консоли нет.

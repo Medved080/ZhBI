@@ -2,6 +2,7 @@
 // app/static/server-exchange.js. Запросы идут через api.js, то есть через шлюз записи (write-gate.js, записи `dx.*`).
 import { mountServerExchange } from "../server-exchange.js";
 import { statusChip } from "./registry.js";
+import { showConfirmDialog } from "./dialogs.js";
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -17,5 +18,14 @@ export function mountServerExchangeScreen(el, { screen, api, rights, groupTitle 
     if (method === "DELETE") return api.delete(path);
     return api.post(path, body);
   };
-  return mountServerExchange(el.querySelector("#sx-host"), { request, canWrite });
+  const mod = mountServerExchange(el.querySelector("#sx-host"), { request, canWrite });
+  // Оболочка V2 при уходе с экрана ОБЯЗАТЕЛЬНО зовёт guardLeave() модуля: общий с V1 модуль его не знает, и без этой
+  // обёртки любой пункт меню с экрана обмена молча не открывался («guardLeave is not a function»).
+  return {
+    ...mod,
+    async guardLeave() {
+      return !mod.hasUnsavedChanges?.()
+        || (await showConfirmDialog("Сверка обмена данными не применена — если уйти, её придётся провести заново. Уйти с экрана?", { confirmLabel: "Уйти" }));
+    },
+  };
 }
