@@ -1232,7 +1232,7 @@ def _posting_changes(conn, doc) -> dict:
     документ. «Стало» выводится из источника: у замены поставщика это контракт шапки, у обмена и балансировки — снимок изделия,
     чьё место получено (сторона-партнёр пары; в цепочке место i-го получает от (i+1)-го, последнее — от первого)."""
     items = conn.execute(
-        "SELECT i.*, e.address AS address, e.floor AS floor FROM supplier_change_items i "
+        "SELECT i.*, e.address AS address, e.floor AS floor, e.element_uid AS guid FROM supplier_change_items i "
         "LEFT JOIN elements e ON e.id = i.element_id WHERE i.doc_id = ? ORDER BY i.pair_no, i.side, i.id", (doc["id"],)).fetchall()
     moves = conn.execute("SELECT prev_element_id FROM supplier_change_history_moves WHERE doc_id = ?", (doc["id"],)).fetchall()
     ушло = {}
@@ -1278,7 +1278,7 @@ def _posting_changes(conn, doc) -> dict:
     for i in items:
         изделие = " · ".join(x for x in (i["element_type"], i["mark"]) if x) or f"№{i['element_id']}"
         адрес = i["address"] or ""
-        общее = {"element_id": i["element_id"], "element": изделие, "address": адрес}
+        общее = {"element_id": i["element_id"], "element": изделие, "address": адрес, "guid": i["guid"] or ""}
         прежний_контракт = i["prev_contract_id"] or (doc["from_contract_id"] if doc["kind"] == KIND_SUPPLIER else None)
         before = len(rows)
 
@@ -1327,7 +1327,7 @@ def _posting_changes_xlsx(протокол: dict) -> bytes:
     ws.append([])
     thin = Side(style="thin", color="D5D8DC")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    шапка = ["Изделие", "Адрес", "Что изменилось", "Было", "Стало"]
+    шапка = ["Изделие", "GUID", "Адрес", "Что изменилось", "Было", "Стало"]
     ws.append(шапка)
     for c in range(1, len(шапка) + 1):
         cell = ws.cell(row=4, column=c)
@@ -1336,15 +1336,15 @@ def _posting_changes_xlsx(протокол: dict) -> bytes:
         cell.border = border
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
     for r in протокол["rows"]:
-        ws.append([r["element"], r["address"], r["field"], r["before"], r["after"]])
-        for c in range(1, 6):
+        ws.append([r["element"], r["guid"], r["address"], r["field"], r["before"], r["after"]])
+        for c in range(1, 7):
             cell = ws.cell(row=ws.max_row, column=c)
             cell.border = border
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    for буква, ширина in zip("ABCDE", (28, 16, 24, 48, 60)):
+    for буква, ширина in zip("ABCDEF", (28, 36, 16, 24, 48, 60)):
         ws.column_dimensions[буква].width = ширина
     ws.freeze_panes = "A5"
-    ws.auto_filter.ref = f"A4:E{max(ws.max_row, 4)}"
+    ws.auto_filter.ref = f"A4:F{max(ws.max_row, 4)}"
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()

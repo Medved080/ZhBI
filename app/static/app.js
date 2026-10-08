@@ -20624,8 +20624,8 @@ document.getElementById("scd-changes").addEventListener("click", async () => {
       + `Изделий в документе: ${д.items}, без изменений: ${д.unchanged}, строк изменений: ${д.rows.length}. `
       + "Фактическая дата и текущий статус изделия производны от истории и пересчитываются сами.";
     body.innerHTML = д.rows.length
-      ? `<table id="scd-changes-table"><thead><tr><th>Изделие</th><th>Адрес</th><th>Что изменилось</th><th>Было</th><th>Стало</th></tr></thead><tbody>`
-        + д.rows.map(r => `<tr><td>${escapeHtml(r.element)}</td><td>${escapeHtml(r.address)}</td><td>${escapeHtml(r.field)}</td>`
+      ? `<table id="scd-changes-table"><thead><tr><th>Изделие</th><th>GUID</th><th>Адрес</th><th>Что изменилось</th><th>Было</th><th>Стало</th></tr></thead><tbody>`
+        + д.rows.map(r => `<tr><td>${escapeHtml(r.element)}</td><td class="scd-guid">${escapeHtml(r.guid)}</td><td>${escapeHtml(r.address)}</td><td>${escapeHtml(r.field)}</td>`
           + `<td>${escapeHtml(r.before)}</td><td>${escapeHtml(r.after)}</td></tr>`).join("")
         + "</tbody></table>"
       : '<div class="cmp-empty">Документ не изменил ни одного изделия.</div>';

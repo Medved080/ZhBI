@@ -889,8 +889,8 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     try {
       const d = await api.get(`/supplier-changes/${x.id}/changes`);
       const note = `Проведён ${d.posted_at ? ruDate(String(d.posted_at).slice(0, 10)) : "—"}${d.posted_by ? `, ${d.posted_by}` : ""}. Изделий в документе: ${d.items}, без изменений: ${d.unchanged}, строк изменений: ${d.rows.length}. Фактическая дата и текущий статус изделия производны от истории и пересчитываются сами.`;
-      const choice = await showTableDialog(`Протокол изменений — ${d.kind_title} № ${d.number}`, note, ["Изделие", "Адрес", "Что изменилось", "Было", "Стало"],
-        d.rows.map((r) => [r.element, r.address, r.field, r.before, r.after]),
+      const choice = await showTableDialog(`Протокол изменений — ${d.kind_title} № ${d.number}`, note, ["Изделие", "GUID", "Адрес", "Что изменилось", "Было", "Стало"],
+        d.rows.map((r) => [r.element, r.guid, r.address, r.field, r.before, r.after]),
         { empty: "Документ не изменил ни одного изделия.", extraChoices: [{ key: "xlsx", label: "Выгрузить в XLSX", primary: true }] });
       if (choice === "xlsx") {
         const blob = await api.download(`/supplier-changes/${x.id}/changes.xlsx`, null, { method: "GET" });
