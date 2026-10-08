@@ -65,17 +65,33 @@ def resolve(tok):
         out.append(ch)
     return ''.join(out)
 
-def numeric_fix(gl, tok, force=False):
+def numeric_fix(gl, tok, force=False, thr=None):
     """Числовой токен (в основном цифры, запятая, точка — масса, количество, ведомость стали): символы, не распознанные как цифры буквенным
     классификатором («1й5,·6» вместо «105,36»), перечитываются классификатором цифр; если он тоже не узнал символ — остаётся как есть."""
     if len(tok) > 3 and tok[0][0] == 'л' and tok[1][0] == '.':      # ссылка на лист «л.206»: цифры после «л.» читаются как число
         return tok[:2] + numeric_fix(gl, [x for x in tok[2:]], force=True)
     digits = sum(1 for x in tok if x[0].isdigit()); other = [x for x in tok if not x[0].isdigit() and x[0] not in ',.-']
-    if len(tok) < 3 or digits < max(2, 0.4 * len(tok)) or not other or not (force or (tok[0][0].isdigit() and tok[-1][0].isdigit())): return tok   # «А500С», «8КП84» — не числа
+    if not force and (len(tok) < 3 or digits < max(2, 0.4 * len(tok)) or not other or not (tok[0][0].isdigit() and tok[-1][0].isdigit())): return tok   # «А500С», «8КП84» — не числа
     out = []
     for ch, dg, c in tok:
-        if not ch.isdigit() and ch not in ',.-' and (dg is None or force): dg = cell_digit(gl, c, 45 if force else None) or dg   # в ссылке на лист («л.108») возможны только цифры: порог мягче
+        if not ch.isdigit() and ch not in ',.-' and (dg is None or force): dg = cell_digit(gl, c, thr or (45 if force else None)) or dg   # в ссылке на лист («л.108») возможны только цифры: порог мягче
         out.append((dg[0] if (dg is not None and not ch.isdigit() and ch not in ',.-') else ch, dg, c))
+    return out
+
+
+def rod_numeric_fix(gl, toks):
+    """Цифры в заданных числовых местах стержня: после Ø и L=; класс и ГОСТ остаются текстом."""
+    out = [list(t) for t in toks]
+    text = ' '.join(''.join(ch for ch, dg, c in t) for t in toks)
+    if not re.search(r'[АA]\s*\d{3}|Вр', text): return out
+    for i, tok in enumerate(toks):
+        chars = ''.join(ch for ch, dg, c in tok)
+        prefix = 1 if i == 0 and chars[:1] in ('Ø', 'ø', 'И') else 2 if chars.startswith('L=') else None
+        if prefix is None or len(tok) <= prefix or chars[prefix:].isdigit(): continue
+        digits = numeric_fix(gl, tok[prefix:], force=True, thr=DIGIT_THR)
+        if resolve(digits).isdigit():
+            out[i] = tok[:prefix] + digits
+            if prefix == 1: out[i][0] = ('Ø', None, tok[0][2])
     return out
 
 
@@ -91,7 +107,7 @@ def text_in_boxes(gl, lines, font, H, V):
             if ch == '·' and c['botrel'] < -0.12: ch = '/'      # слэш (шифр «77/113/114»): уходит под базовую линию, цифра — нет
             dg = cell_digit(gl, c) if ch in DIGLIKE else None
             groups[(round(l, 1), round(rr, 1), round(lo, 1), round(hi, 1))][(li, round(L['base']))].append((ch, c, r['cap'], dg))
-    out = {}
+    out = {}; cell_tokens = {}
     for box, byline in groups.items():
         rows = []
         # символы одной ячейки на близких базовых линиях («Ø» выступает над строкой цифр) — одна строка текста
@@ -105,9 +121,19 @@ def text_in_boxes(gl, lines, font, H, V):
             for ch, c, _, dg in items:
                 if prev is not None and c['x0'] - prev['x1'] > spc: toks.append([])
                 toks[-1].append((ch, dg, c)); prev = c
-            txt = ' '.join(resolve(numeric_fix(gl, t)) for t in toks)
+            txt = ' '.join(resolve(numeric_fix(gl, t)) for t in rod_numeric_fix(gl, toks))
+            cell_tokens[(box, base)] = toks
             rows.append((base, lx.fix_code(lx.snap_text(txt.replace('ь|', 'ы')))))
         rows.sort(key=lambda t: -t[0]); out[box] = [t for _, t in rows]
+    # В столбцах количества и массы даже одиночная «е» — число (8).
+    # Перечитываем только нечисловые ячейки под числовой шапкой, строгим порогом цифр.
+    numeric_cols = [(b, role_of(t)) for b, t in out.items() if role_of(t) in ('qty', 'mass', 'mass_item')]
+    for box, texts in out.items():
+        if re.fullmatch(r'\s*\d+(?:[.,]\d+)?\s*', ' '.join(texts)): continue
+        if any(box[3] <= hb[2] + 0.5 and box[0] >= hb[0] - 0.5 and box[1] <= hb[1] + 0.5 for hb, _ in numeric_cols):
+            replacements = [' '.join(resolve(numeric_fix(gl, t, force=True, thr=DIGIT_THR)) for t in toks)
+                            for (b, base), toks in sorted(cell_tokens.items(), key=lambda x: -x[0][1]) if b == box]
+            if replacements and all(re.fullmatch(r'\s*\d+(?:[.,]\d+)?\s*', t) for t in replacements): out[box] = replacements
     return out
 
 ROLES = [('mark', 'Марка'), ('pos', 'Поз'), ('oboz', 'Обозн'), ('name', 'Наимен'), ('qty', 'Кол'), ('mass', 'Масса ед'), ('mass', 'Масса 1 дет'), ('mass_item', 'Масса изд'), ('note', 'Прим')]

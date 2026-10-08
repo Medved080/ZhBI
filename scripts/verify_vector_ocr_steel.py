@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "prototypes" / "vector_ocr"))
 import steel  # noqa: E402
+import tables  # noqa: E402
 
 failed = []
 
@@ -52,6 +53,51 @@ series2 = [
 ]
 rest = steel.RebarAssembler(lambda d, p: series2, {}).assemble(1, 1, "К1", 30.0)
 check(abs(sum(rest["rods"].values()) - 30.0) < 0.01, "единственная строка без массы добирается остатком итога марки")
+
+# --- короткие числовые ячейки и ссылки, полностью прочитанные буквами
+original_digit = tables.cell_digit
+tables.cell_digit = lambda gl, cell, thr=None: ({"five": "5", "zero": "0", "eight": "8"}[cell], 3.0)
+ref = tables.resolve(tables.numeric_fix([], [("л", None, "unused"), (".", None, "unused"), ("в", None, "five"), ("й", None, "zero")]))
+qty = tables.resolve(tables.numeric_fix([], [("е", None, "eight")], force=True, thr=tables.DIGIT_THR))
+tables.cell_digit = original_digit
+check(ref == "л.50" and steel.ref_numbers(ref) == [50], "«л.вй» перечитана классификатором цифр как «л.50»")
+check(qty == "8", "одиночная «е» в числовой ячейке перечитана как 8")
+tables.cell_digit = lambda gl, cell, thr=None: (cell, 3.0)
+tokens = [[(ch, None, dg) for ch, dg in zip("И··", "025")],
+          [(ch, None, ch) for ch in "А500С"], [(ch, None, dg) for ch, dg in zip("L=·У·0", "003730")]]
+rod = " ".join(tables.resolve(t) for t in tables.rod_numeric_fix([], tokens))
+tables.cell_digit = original_digit
+check(rod == "Ø25 А500С L=3730", "диаметр и длина стержня перечитываются цифрами; класс остаётся текстом")
+
+# --- одиночный лист узла: имя в штампе и безымянная строка итога
+console = [{"pos": "1", "name": "Ø25 А500С ГОСТ 34028-2016 L=3360", "qty": "4", "mass": "12,95"},
+           {"pos": "2", "name": "Ø10 А240 ГОСТ 34028-2016 L=3060", "qty": "29", "mass": "1,89"}, {"mass": "106,61"}]
+parts = {(3, 119): [{"name": "консолей 6.6-1", "oboz": "л.49", "qty": "1", "mass": "106,61"}], (3, 72): console}
+asm = steel.RebarAssembler(lambda d, p: parts.get((d, p)), {3: 10}, pages=lambda d: [72, 119],
+                           marks=lambda d, p: ["К6.6-1"] if p == 72 else [])
+check(asm.sheet_masses(3, 72) == {106.61}, "безымянная строка массы участвует в поиске узла")
+check(asm.assemble(3, 119)["unresolved"] == 0, "консоль найдена вне окна по марке штампа и массе")
+check(asm.find_by_mark(3, "К6.6-2", 106.61) is None and asm.find_by_mark(3, "К6.6-1", 179.01) is None,
+      "чужая марка или масса не принимается при поиске по штампу")
+
+# --- соседний лист изделия не должен повторно добавлять его трубы к узлу арматуры
+parts = {(4, 113): [{"name": "Каркас КП1", "oboz": "л.41", "qty": "1", "mass": "10,00"},
+                   {"name": "Труба 50х5 L=600", "qty": "2", "mass": "3,33"}],
+         (4, 57): [{"name": "Каркас КП1", "oboz": "л.42", "qty": "1", "mass": "10,00"},
+                   {"name": "Труба 50х5 L=600", "qty": "2", "mass": "3,33"}, {"name": "Бетон кл. В40", "qty": "3,40", "mass": "м3"}],
+         (4, 58): [{"name": "Ø10 А500С ГОСТ 34028-2016 L=1620", "qty": "10", "mass": "1,00"}, {"name": "Масса", "qty": "10,00"}]}
+asm = steel.RebarAssembler(lambda d, p: parts.get((d, p)), {4: 16})
+tree = asm.assemble(4, 113)
+check(tree["unresolved"] == 0 and list(tree["emb"].values()) == [2], "ошибочная ссылка на лист бетонного изделия не удваивает трубы")
+
+# --- округление массы малой детали с 0,077 до 0,08; общий допуск 3% не меняется
+rows = [{"mark": "СК1", "name": "Ø6 А240 ГОСТ 34028-2016 L=345", "qty": "1", "mass": "0.077", "mass_item": "0.08"}]
+asm = steel.RebarAssembler(lambda d, p: rows, {})
+tree = asm.assemble(15, 75, "СК1", 0.08)
+check(tree["rods"] == {("А240", 6): 0.077} and asm.node_mass(tree, 0.08) == 0.08, "скоба: класс и диаметр сохранены, сверка учитывает округление итога до сотых")
+rows[0]["mass"] = "0.070"
+tree = steel.RebarAssembler(lambda d, p: rows, {}).assemble(15, 75, "СК1", 0.08)
+check(steel.RebarAssembler.node_mass(tree, 0.08) == 0.07, "расхождение вне половины шага округления не скрывается")
 
 print("\nпровалено: %d" % len(failed))
 sys.exit(1 if failed else 0)

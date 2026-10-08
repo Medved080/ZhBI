@@ -4,6 +4,7 @@
 
 Запуск (VOCR_REPARSE=1 перечитывает только листы без сошедшейся ведомости; процессов 8, меняется переменной VOCR_PROCS; нужны pypdfium2, Pillow, numpy; ~20 минут на все колонны, подъёмники и шахты; кэш разобранных листов ускоряет повторы):
     ZHBI_CALC_ASSETS_DIR=…/data/calc/assets .venv312/bin/python scripts/build_calc_readings.py out.json [--families Колонны,Подъёмники,Шахты лифтов]
+Для обновления хвоста без изменения прежних принятых значений: --preserve-accepted before.json (полная сборка всех групп).
 """
 import collections
 import json
@@ -32,9 +33,9 @@ def read_rows(args):
         boxes = tb.text_in_boxes(gl, Ls, FONT, H, V); sp = tb.parse_spec(boxes)
         sheet = steel.parse_steel(boxes)
         if sheet: sheet = steel.fill_strand(sheet, sp["rows"] if sp else None)
-        return (n, p, sp["rows"] if sp else None, _plain(sheet) if sheet else None)
+        return (n, p, sp["rows"] if sp else None, _plain(sheet) if sheet else None, steel.sheet_node_marks(boxes))
     except Exception as error:
-        return (n, p, None, None)
+        return (n, p, None, None, [])
 
 
 def _plain(sheet):
@@ -47,6 +48,21 @@ def load_cache():
 
 def save_cache(cache):
     CACHE.write_text(json.dumps({"%d:%d" % k: v for k, v in cache.items()}, ensure_ascii=False))
+
+
+def store_rows(cache, parsed):
+    n, p, rows, sheet, marks = parsed
+    cache[(n, p)] = {"rows": rows, "steel": sheet, "node_marks": marks, "numeric_version": 3}
+
+
+def needs_numeric_refresh(entry):
+    """Старый кэш: одиночная «е», буквенная ссылка/размер стержня или безымянный итог узла без штампа."""
+    if entry.get("numeric_version", 0) >= 3: return False
+    rows = entry.get("rows") or []
+    return any((r.get("qty") == "е" and r.get("pos") and r.get("name"))
+               or re.search(r"л\.\s*[\dйОо]*[вАУе]", r.get("oboz") or "")
+               or re.search(r"(?:^[ØИ][·АУ]+|L=\s*[·АУ])", r.get("name") or "")
+               or (set(r) == {"mass"} and steel.num(r["mass"])) for r in rows)
 
 
 def last_number(text):
@@ -76,13 +92,45 @@ def plate_table(models, cache):
     return out
 
 
-def main(out, families):
+def preserve_accepted(result, before):
+    """При обновлении хвоста сохраняем уже принятые разделы; новые чтения заполняют пробелы.
+
+    Перечитанный кандидат остаётся в кэше. Изменение принятой арматуры требует отдельной сверки,
+    поэтому не подменяет результат при консервативном обновлении файла чтений.
+    """
+    from verify_calc_readings_regression import accepted
+    retained = collections.Counter()
+    for key, item in result.items():
+        old = before.get(key)
+        if not old: continue
+        previous, current = accepted(old), accepted(item)
+        fields = []
+        for field, value in previous.items():
+            if value is not None and value != current[field]:
+                item[field] = old[field]
+                if field == "volume": item["volumeSource"] = old.get("volumeSource")
+                retained[field] += 1; fields.append(field)
+        if fields: item["retainedAccepted"] = fields
+    return dict(retained)
+
+
+def main(out, families, before_path=None):
     from app.calc import document_models as dm
     catalog = dm.catalog()
     models = {k: v for k, v in catalog.items() if v.get("family") in families and (v.get("source") or {}).get("id") and v["source"].get("productPage")}
     offset = steel.sheet_offsets(catalog.values())
     print("моделей:", len(models), "смещения листов:", offset)
     cache = load_cache()
+    refresh = [k for k, v in cache.items() if needs_numeric_refresh(v)]
+    if refresh:
+        print("перечитываем числовые ячейки и штампы узлов:", len(refresh), flush=True)
+        with Pool(int(os.environ.get("VOCR_PROCS", "8"))) as pool:
+            for i, parsed in enumerate(pool.imap_unordered(read_rows, refresh), 1):
+                store_rows(cache, parsed)
+                if i % 20 == 0:
+                    save_cache(cache)
+                    print("перечитано:", i, "из", len(refresh), flush=True)
+        save_cache(cache)
     if os.environ.get("VOCR_REPARSE"):
         # после правок разбора ведомости: перечитать только листы, где она не разобралась или не сошлись проверки (остальные остаются из кэша)
         stale = [k for k, v in cache.items() if v.get("steel") is None or not all(v["steel"]["checks"].values())
@@ -97,7 +145,7 @@ def main(out, families):
     todo = sorted(k for k in frontier if k not in cache)
     if todo:
         with Pool(int(os.environ.get("VOCR_PROCS", "8"))) as pool:
-            for n, p, rows, sheet in pool.map(read_rows, todo, chunksize=2): cache[(n, p)] = {"rows": rows, "steel": sheet}
+            for parsed in pool.map(read_rows, todo, chunksize=2): store_rows(cache, parsed)
         save_cache(cache)
     spec_next = {k for k in frontier if not (cache[k]["rows"] or []) and (k[0], k[1] + 1) not in product_pages}
     frontier |= {(d, p + 1) for d, p in spec_next}
@@ -109,7 +157,7 @@ def main(out, families):
         while frontier:
             todo = sorted(k for k in frontier if k not in cache)
             if todo:
-                for n, p, rows, sheet in pool.map(read_rows, todo, chunksize=2): cache[(n, p)] = {"rows": rows, "steel": sheet}
+                for parsed in pool.map(read_rows, todo, chunksize=2): store_rows(cache, parsed)
                 save_cache(cache)
             nxt = set()
             for key in frontier:
@@ -121,7 +169,8 @@ def main(out, families):
             print("слой: прочитано листов", len(todo), "следующий слой", len(nxt), flush=True)
             frontier = nxt
     def make_assembler():
-        return steel.RebarAssembler(lambda d, p: (cache.get((d, p)) or {}).get("rows"), offset, pages=lambda d: [p for (dd, p) in cache if dd == d])
+        return steel.RebarAssembler(lambda d, p: (cache.get((d, p)) or {}).get("rows"), offset, pages=lambda d: [p for (dd, p) in cache if dd == d],
+                                    marks=lambda d, p: (cache.get((d, p)) or {}).get("node_marks"))
 
     def assemble_all():
         asm = make_assembler()
@@ -133,7 +182,7 @@ def main(out, families):
     if extra:
         print("дочитываем окна вокруг неразрешённых ссылок:", len(extra), "листов", flush=True)
         with Pool(int(os.environ.get("VOCR_PROCS", "8"))) as pool:
-            for n, p, rows, sheet in pool.map(read_rows, sorted(extra), chunksize=2): cache[(n, p)] = {"rows": rows, "steel": sheet}
+            for parsed in pool.map(read_rows, sorted(extra), chunksize=2): store_rows(cache, parsed)
         save_cache(cache)
         assembler = assemble_all()
     result = {}
@@ -168,6 +217,13 @@ def main(out, families):
         if (entry.get("steel") or {}).get("embedded_total") is not None: item["embedded"]["sheetTotalKg"] = entry["steel"]["embedded_total"]
         if entry.get("steel"): item["rebar"]["fromSteelSheet"] = entry["steel"]["rods"]; item["rebar"]["steelSheetChecks"] = entry["steel"]["checks"]
         result[key] = item
+    if before_path:
+        before = json.loads(Path(before_path).read_text())
+        retained = preserve_accepted(result, before)
+        from verify_calc_readings_regression import compare
+        errors, _, _ = compare(before, result)
+        if errors: raise ValueError("Не сохранены принятые результаты: %s" % errors[:3])
+        print("сохранено прежних принятых разделов:", retained)
     Path(out).write_text(json.dumps(result, ensure_ascii=False, indent=1))
     print("записано:", out, len(result))
 
@@ -175,4 +231,5 @@ def main(out, families):
 if __name__ == "__main__":
     fam = ["Колонны", "Подъёмники", "Шахты лифтов", "Лестничные балки", "Ригели", "Плиты", "Цокольные панели"]
     if "--families" in sys.argv: fam = sys.argv[sys.argv.index("--families") + 1].split(",")
-    main(sys.argv[1], fam)
+    before = sys.argv[sys.argv.index("--preserve-accepted") + 1] if "--preserve-accepted" in sys.argv else None
+    main(sys.argv[1], fam, before)

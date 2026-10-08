@@ -229,7 +229,29 @@ def row_qty_mass(row):
 def node_mark(name):
     """Марка узла из его названия в спецификации: последний токен («Каркас К14» → «К14», «Сетка СВ6.6-1» → «СВ6.6-1»)."""
     tokens = (name or '').split()
-    return mark_key(tokens[-1]) if tokens else ''
+    mark = mark_key(tokens[-1]) if tokens else ''
+    if re.match(r'^консол', name or '', re.I) and re.match(r'^\d', mark): mark = 'К' + mark
+    return mark
+
+
+def sheet_node_marks(boxes):
+    """Марки одиночных узлов из названия в нижнем штампе, отдельно от ссылок спецификации."""
+    top = max((b[3] for b in boxes), default=0)
+    return sorted({node_mark(' '.join(text)) for box, text in boxes.items()
+                   if box[3] <= 0.2 * top and re.match(r'^(консол|Каркас|Сетка|Арматурный блок)', ' '.join(text), re.I)})
+
+
+def row_total(row):
+    """Итог спецификации: «Масса» или последняя строка с одной числовой ячейкой массы."""
+    if re.match(r'^Масса', row.get('name', '') or ''): return num(row.get('qty')) or num(row.get('mass'))
+    if set(row) == {'mass'}: return num(row['mass'])
+    return None
+
+
+def number_rounding(text):
+    """Полшага округления явно записанной дробной массы (0,08 → 0,005 кг)."""
+    m = re.fullmatch(r'\d+[.,](\d+)', re.sub(r'\s', '', text or ''))
+    return 0.5 * 10 ** -len(m.group(1)) if m else 0.0
 
 
 class RebarAssembler:
@@ -237,9 +259,10 @@ class RebarAssembler:
     assemble(doc, page, mark, mass) → {'rods': {(класс, диаметр): кг на 1 шт.}, 'unresolved': кг, 'issues': [...]}.
     Лист может быть спецификацией одного узла или серии марок (строки с полем 'mark', итог по марке — в 'note'): тогда берутся строки марки узла,
     а если марка прочитана с ошибкой — марка, чья масса изделия равна массе узла."""
-    def __init__(self, rows, offset, window=12, pages=None):
+    def __init__(self, rows, offset, window=12, pages=None, marks=None):
         self.rows, self.offset, self.cache, self.window = rows, offset, {}, window
         self.pages = pages      # pages(doc) → номера уже прочитанных листов альбома (для поиска листа узла по марке и массе, когда ссылка «л.NNN» прочитана неверно)
+        self.marks = marks      # marks(doc, page) → марки одиночных узлов из штампа
         self.problems = set()      # (альбом, страница) вокруг которых не удалось найти лист узла: сборщик слоя дочитывает окно и повторяет
 
     @staticmethod
@@ -250,13 +273,18 @@ class RebarAssembler:
         rods = sum(sub['rods'].values()) + sub['unresolved']
         withemb = rods + sum(k[2] * v for k, v in sub['emb'].items())
         target = expected or sub.get('sheet_total')
+        # 0,077 кг детали = 0,08 кг изделия при округлении до сотых.
+        # Проверяется прочитанный итог той же марки; массу стержней не округляем.
+        total = sub.get('sheet_total')
+        if not sub['unresolved'] and not sub['emb'] and total and target == total and abs(rods - total) <= sub.get('sheet_rounding', 0) + 1e-9:
+            return total
         if target and withemb and abs(withemb / target - 1) < abs(rods / target - 1 if rods else 9): return withemb
         return rods
 
     def sheet_masses(self, doc, page):
         """Массы, которыми лист может быть узлом: итог «Масса, кг» листа или массы изделий серии (колонка «Примечание» строк с маркой)."""
         rows = self.rows(doc, page) or []
-        out = {num(r.get('qty')) or num(r.get('mass')) for r in rows if re.match(r'^Масса', r.get('name', '') or '')}
+        out = {row_total(r) for r in rows}
         out |= {num(r.get('mass_item') or r.get('note')) for r in rows if r.get('mark') and num(r.get('mass_item') or r.get('note'))}
         return {m for m in out if m}
 
@@ -272,7 +300,8 @@ class RebarAssembler:
         hits = []
         for q in self.pages(doc):
             rows = self.rows(doc, q) or []
-            if any(r.get('mark') and fuzzy_key(r['mark']) == fuzzy_key(mark) and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005 for r in rows):
+            title_match = self.marks and any(fuzzy_key(m) == fuzzy_key(mark) for m in self.marks(doc, q) or []) and any(abs(m / mass - 1) <= 0.005 for m in self.sheet_masses(doc, q))
+            if title_match or any(r.get('mark') and fuzzy_key(r['mark']) == fuzzy_key(mark) and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005 for r in rows):
                 hits.append(q)
         return hits[0] if len(hits) == 1 else None
 
@@ -292,12 +321,18 @@ class RebarAssembler:
     def assemble(self, doc, page, mark=None, mass=None, depth=0, stack=()):
         key = (doc, page, mark if mass is None else (mark, round(mass, 2)))
         if key in self.cache: return self.cache[key]
-        out = {'rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'issues': [], 'sum': 0.0, 'emb': collections.Counter()}
+        out = {'rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'sheet_rounding': 0.0, 'issues': [], 'sum': 0.0, 'emb': collections.Counter()}
         rows = self.rows(doc, page)
+        # Лист бетонного изделия не может быть листом его арматурного узла.
+        # Иначе трубы этого изделия попадут в сборку повторно (ошибка ссылки на предыдущую страницу).
+        if depth and any(re.match(r'^[БВ]етон', r.get('name', '') or '') for r in rows or []): rows = []
         if not rows or depth > 5 or key in stack:
             if rows is None: out['issues'].append('лист %d не разобран' % page)
             self.cache[key] = out; return out
         rows, out['sheet_total'] = self.pick_rows(rows, mark, mass)
+        if out['sheet_total']:
+            out['sheet_rounding'] = next((number_rounding(r.get('mass_item') or r.get('note')) for r in rows
+                                           if num(r.get('mass_item') or r.get('note')) == out['sheet_total']), 0.0)
         parsed = [row_qty_mass(r) for r in rows]
         # строка серии, у которой масса единицы не считается (длина стержня не прочитана): остаток итога марки за вычетом остальных строк
         lacking = [i for i, r in enumerate(rows) if r.get('mark') and parsed[i][0] and not parsed[i][1] and parse_rod(fix_digits(r.get('name')), None)]
@@ -306,7 +341,11 @@ class RebarAssembler:
             if rest > 0: parsed[lacking[0]] = (parsed[lacking[0]][0], rest / parsed[lacking[0]][0])
         for r, (qty, mass_e) in zip(rows, parsed):
             name = fix_digits(r.get('name', '') or '') if r.get('mark') else (r.get('name', '') or '')      # буквы-цифры правятся только в таблицах серий (там проверка суммой по массе марки)
-            if re.match(r'^Масса', name) and mass_e: out['sheet_total'] = mass_e; continue
+            total = row_total(r)
+            if total:
+                out['sheet_total'] = total
+                out['sheet_rounding'] = number_rounding(r.get('qty') if num(r.get('qty')) else r.get('mass'))
+                continue
             kind = emb_kind(name)
             if kind:                                                  # закладная, труба, петля: количество и масса единицы с листа, без рекурсии
                 if qty and mass_e: out['emb'][(kind, emb_name(name), mass_e)] += qty
