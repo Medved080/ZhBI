@@ -84,6 +84,20 @@ def main() -> int:
         late = days(need, e["planned_delivery_date"])
         print(f"  просрочка плановой относительно требуемой: {('нет данных' if late is None else f'{late} дн.' if late > 0 else 'в срок (запас ' + str(-late) + ' дн.)')}")
         print(f"  входит в балансировку: {'ДА' if reason is None else 'НЕТ — ' + reason}")
+        if not consistent:
+            # подробности проверки согласованности: кэш (статус, фактическая дата) против истории статусов
+            hist = conn.execute("SELECT id, status, changed_at, changed_by, comment FROM status_history WHERE element_id = ? "
+                                "ORDER BY changed_at DESC, id DESC", (e["id"],)).fetchall()
+            latest = hist[0]["status"] if hist else None
+            delivered = next((h["changed_at"] for h in hist if h["status"] == "delivered"), None)
+            derived = None if latest == "planned" else delivered
+            print("  --- проверка согласованности (кэш изделия ↔ история статусов):")
+            print(f"      записей истории: {len(hist)}")
+            print(f"      статус в изделии: {e['current_status']!r}; последний по истории: {latest!r} — {'совпадает' if e['current_status'] == latest else 'РАСХОДИТСЯ'}")
+            print(f"      фактическая дата в изделии: {e['actual_delivery_date']!r}; по истории (последний «delivered»): {derived!r} — "
+                  f"{'совпадает' if (e['actual_delivery_date'] or None) == (derived or None) else 'РАСХОДИТСЯ'}")
+            for h in hist[:8]:
+                print(f"      · {h['changed_at']}  {h['status']:<12} {h['changed_by'] or ''} {('«' + h['comment'] + '»') if h['comment'] else ''}")
         infos.append({"need": need, "late": late, "reason": reason, "row": e, "cname": cname, "id": e["id"]})
 
     if len(infos) >= 2:
