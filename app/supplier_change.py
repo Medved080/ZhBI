@@ -1224,6 +1224,106 @@ def get_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_use
         conn.close()
 
 
+def _posting_changes(conn, doc) -> dict:
+    """Протокол проведения: что документ изменил в каждом изделии (строки «изделие / что менялось / было / стало»).
+
+    Берётся из снимка «что было» (`supplier_change_items.prev_*`, `status_at_move`) и из состава пар/цепочек документа, а НЕ из
+    текущего состояния изделий: после проведения изделия могли править дальше, а протокол обязан показывать то, что записал
+    документ. «Стало» выводится из источника: у замены поставщика это контракт шапки, у обмена и балансировки — снимок изделия,
+    чьё место получено (сторона-партнёр пары; в цепочке место i-го получает от (i+1)-го, последнее — от первого)."""
+    items = conn.execute(
+        "SELECT i.*, e.address AS address, e.floor AS floor FROM supplier_change_items i "
+        "LEFT JOIN elements e ON e.id = i.element_id WHERE i.doc_id = ? ORDER BY i.pair_no, i.side, i.id", (doc["id"],)).fetchall()
+    moves = conn.execute("SELECT prev_element_id FROM supplier_change_history_moves WHERE doc_id = ?", (doc["id"],)).fetchall()
+    ушло = {}
+    for m in moves:
+        if m["prev_element_id"] is not None:
+            ушло[m["prev_element_id"]] = ушло.get(m["prev_element_id"], 0) + 1
+    ids_контрактов = [i["prev_contract_id"] for i in items if i["prev_contract_id"]]
+    ids_контрактов += [c for c in (doc["from_contract_id"], doc["to_contract_id"]) if c]
+    метки = _contract_labels(conn, ids_контрактов)
+
+    def контракт(cid):
+        if not cid:
+            return "—"
+        cp, name = метки.get(cid, ("—", "—"))
+        return f"{cp} · {name}"
+
+    def дата(v):
+        return "—" if not v else ".".join(reversed(str(v)[:10].split("-")))
+
+    def статус(v):
+        return STATUS_TITLES.get(v, v) if v else "—"
+
+    источник = {}      # element_id -> строка изделия, чьё место он получил
+    if doc["kind"] == KIND_SWAP:
+        пары = {}
+        for i in items:
+            пары.setdefault(i["pair_no"], {})[i["side"]] = i
+        for стороны in пары.values():
+            if 1 in стороны and 2 in стороны:
+                источник[стороны[1]["element_id"]] = стороны[2]
+                источник[стороны[2]["element_id"]] = стороны[1]
+    elif doc["kind"] == KIND_REBALANCE:
+        циклы = {}
+        for i in items:
+            if i["pair_no"] is not None:
+                циклы.setdefault(i["pair_no"], []).append(i)
+        for цикл in циклы.values():
+            цикл.sort(key=lambda r: r["side"])
+            for n, i in enumerate(цикл):
+                источник[i["element_id"]] = цикл[(n + 1) % len(цикл)]
+
+    rows, без_изменений = [], 0
+    for i in items:
+        изделие = " · ".join(x for x in (i["element_type"], i["mark"]) if x) or f"№{i['element_id']}"
+        адрес = i["address"] or ""
+        общее = {"element_id": i["element_id"], "element": изделие, "address": адрес}
+        прежний_контракт = i["prev_contract_id"] or (doc["from_contract_id"] if doc["kind"] == KIND_SUPPLIER else None)
+        before = len(rows)
+
+        def добавить(поле, было, стало):
+            rows.append({**общее, "field": поле, "before": было, "after": стало})
+
+        if doc["kind"] == KIND_SUPPLIER:
+            добавить("Контракт", контракт(прежний_контракт), контракт(doc["to_contract_id"]))
+            добавить("История статусов", "записей не добавлялось",
+                     f"добавлена запись «{статус(i['status_at_move'])}» (замена поставщика), статус не менялся")
+        elif i["element_id"] in источник:
+            src = источник[i["element_id"]]
+            if src["prev_contract_id"] != i["prev_contract_id"]:
+                добавить("Контракт", контракт(i["prev_contract_id"]), контракт(src["prev_contract_id"]))
+            if src["prev_planned_delivery_date"] != i["prev_planned_delivery_date"]:
+                добавить("Плановая дата поставки", дата(i["prev_planned_delivery_date"]), дата(src["prev_planned_delivery_date"]))
+            if src["status_at_move"] != i["status_at_move"]:
+                добавить("Текущий статус", статус(i["status_at_move"]), статус(src["status_at_move"]))
+            адрес_src = src["address"] or f"№{src['element_id']}"
+            добавить("История статусов", f"собственная, записей: {ушло.get(i['element_id'], 0)}",
+                     f"получена от изделия №{src['element_id']} ({адрес_src}), записей: {ушло.get(src['element_id'], 0)}; "
+                     f"плюс запись о проведении")
+        if len(rows) == before:
+            без_изменений += 1
+    return {"id": doc["id"], "number": doc["number"], "kind": doc["kind"], "kind_title": KIND_TITLES.get(doc["kind"], doc["kind"]),
+            "doc_date": doc["doc_date"], "posted_at": doc["posted_at"], "posted_by": doc["posted_by"],
+            "items": len(items), "unchanged": без_изменений, "rows": rows}
+
+
+@router.get("/{doc_id}/changes")
+def get_posting_changes(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Протокол проведения документа: таблица «что изменил документ» (только проведённый)."""
+    conn = get_connection()
+    try:
+        doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "read")
+        if doc["status"] != POSTED:
+            raise HTTPException(status_code=409, detail="Документ не проведён: изменений ещё нет")
+        return _posting_changes(conn, doc)
+    finally:
+        conn.close()
+
+
 # ------------------------------------------------------- создание и правка
 
 def _load_elements(conn, ids: list, object_id: int) -> dict:

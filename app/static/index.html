@@ -1282,6 +1282,11 @@
   #dict-delete-backdrop { z-index: 120; }
   /* Окно справки открывается и поверх формы документа балансировки (в разметке оно стоит РАНЬШЕ формы — при общем z-index оказалось бы под ней). */
   #report-help-backdrop { z-index: 130; }
+  #scd-changes-backdrop { z-index: 130; }
+  /* Протокол проведения документа: плоская таблица «изделие / что менялось / было / стало» */
+  #scd-changes-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #scd-changes-table th, #scd-changes-table td { padding: 4px 8px; border: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+  #scd-changes-table th { background: var(--color-surface-2); font-weight: 600; position: sticky; top: 0; z-index: 1; }
   /* Форма контракта открывается ПОВЕРХ формы контрагента (2026-08-05):
      контракты показаны в её иерархии, и клик по контракту обязан открыть
      отдельное окно, а не спрятать его под уже открытым. Ниже диалога
@@ -9346,6 +9351,20 @@
   </div>
 </div>
 
+<!-- Протокол проведения документа контрактации: что документ изменил в изделиях -->
+<div class="modal-backdrop" id="scd-changes-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2 id="scd-changes-title">Протокол изменений</h2>
+      <div class="hint-text" id="scd-changes-note"></div>
+    </div>
+    <div class="modal-sticky-scroll" id="scd-changes-body"></div>
+    <div class="modal-sticky-foot">
+      <div class="actions"><button class="btn btn-secondary" id="scd-changes-close">Закрыть</button></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="counterparties-backdrop">
   <div class="modal wide">
     <h2>Контрагенты</h2>
@@ -9590,6 +9609,8 @@
                набирают и применять его рано. -->
           <button class="btn btn-secondary" id="scd-ok">ОК</button>
           <button class="btn btn-primary" id="scd-post">Провести</button>
+          <button class="btn btn-secondary" id="scd-changes" style="display:none"
+                  title="Что именно документ изменил в изделиях при проведении">Протокол изменений</button>
           <button class="btn btn-secondary" id="scd-unpost" style="display:none">Отменить проведение</button>
         </div>
       </div>

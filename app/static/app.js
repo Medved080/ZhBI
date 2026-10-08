@@ -19135,6 +19135,7 @@ function scdApplyMode() {
   document.getElementById("scd-ok").style.display = проведён ? "none" : "";
   document.getElementById("scd-post").style.display = проведён ? "none" : "";
   document.getElementById("scd-unpost").style.display = проведён ? "" : "none";
+  document.getElementById("scd-changes").style.display = проведён ? "" : "none";
   document.getElementById("scd-delete").style.display = (scdDoc && !проведён) ? "" : "none";
   document.getElementById("scd-help").style.display = перебал ? "" : "none";   // справка — у балансировки, в любом состоянии документа
   scdSyncPoolRow();
@@ -20465,6 +20466,34 @@ document.getElementById("scd-unpost").addEventListener("click", async () => {
     кнопка.disabled = false;
   }
 });
+
+// Протокол проведения: таблица «что документ изменил» (GET /supplier-changes/{id}/changes)
+document.getElementById("scd-changes").addEventListener("click", async () => {
+  if (!scdDoc) return;
+  const backdrop = document.getElementById("scd-changes-backdrop");
+  const body = document.getElementById("scd-changes-body");
+  document.getElementById("scd-changes-title").textContent = `Протокол изменений — ${scdDoc.kind_title} № ${scdDoc.number}`;
+  document.getElementById("scd-changes-note").textContent = "";
+  body.innerHTML = '<div class="hint-text">Загрузка…</div>';
+  backdrop.classList.add("open");
+  try {
+    const д = await api(`/supplier-changes/${scdDoc.id}/changes`);
+    document.getElementById("scd-changes-note").textContent =
+      `Проведён ${д.posted_at ? formatDateRu(String(д.posted_at).slice(0, 10)) : "—"}${д.posted_by ? ", " + д.posted_by : ""}. `
+      + `Изделий в документе: ${д.items}, без изменений: ${д.unchanged}, строк изменений: ${д.rows.length}. `
+      + "Фактическая дата и текущий статус изделия производны от истории и пересчитываются сами.";
+    body.innerHTML = д.rows.length
+      ? `<table id="scd-changes-table"><thead><tr><th>Изделие</th><th>Адрес</th><th>Что изменилось</th><th>Было</th><th>Стало</th></tr></thead><tbody>`
+        + д.rows.map(r => `<tr><td>${escapeHtml(r.element)}</td><td>${escapeHtml(r.address)}</td><td>${escapeHtml(r.field)}</td>`
+          + `<td>${escapeHtml(r.before)}</td><td>${escapeHtml(r.after)}</td></tr>`).join("")
+        + "</tbody></table>"
+      : '<div class="cmp-empty">Документ не изменил ни одного изделия.</div>';
+  } catch (e) {
+    body.innerHTML = `<div class="error-text">Не удалось загрузить протокол: ${escapeHtml(e.message)}</div>`;
+  }
+});
+document.getElementById("scd-changes-close")
+  .addEventListener("click", () => document.getElementById("scd-changes-backdrop").classList.remove("open"));
 
 document.getElementById("scd-delete").addEventListener("click", async () => {
   if (!scdDoc) return;

@@ -21,7 +21,7 @@
 // отдаёт только при «Изменении» — это материал для ПРАВКИ; просмотру хватает самого документа (GET /supplier-changes/{id}: названия
 // контрактов в шапке, состав с адресами и статусами), поэтому читателю они не запрашиваются вовсе. Изменяющие запросы по-прежнему
 // проверяет сервер (403) — здесь только не показываются кнопки, которые он всё равно отклонил бы.
-import { showUnsavedDialog, showConfirmDialog, showInfoDialog, showHelpDialog } from "./dialogs.js";
+import { showUnsavedDialog, showConfirmDialog, showInfoDialog, showHelpDialog, showTableDialog } from "./dialogs.js";
 import { ApiError } from "./api.js";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -775,7 +775,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   }
 
   // «Справка» — только у балансировки; доступна и проведённому документу, и читателю (она ничего не меняет)
-  const helpBtnHtml = (x) => (x && x.kind === "date_rebalance" ? `<button type="button" class="v2-btn" data-a="help">Справка</button>` : "");
+  // «Протокол изменений» — у проведённого документа любого вида: таблица «что именно он изменил в изделиях»
+  const helpBtnHtml = (x) => (x && x.kind === "date_rebalance" ? `<button type="button" class="v2-btn" data-a="help">Справка</button>` : "")
+    + (x && x.id && x.status === "posted" ? `<button type="button" class="v2-btn" data-a="changes">Протокол изменений</button>` : "");
 
   function footHtml() {
     if (S.view !== "doc" || !f()) return "";
@@ -881,12 +883,26 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     }
   }
 
+  // Протокол проведения: GET /supplier-changes/{id}/changes — тот же ответ, что в V1
+  async function showChanges(x) {
+    if (!x || !x.id) return;
+    try {
+      const d = await api.get(`/supplier-changes/${x.id}/changes`);
+      const note = `Проведён ${d.posted_at ? ruDate(String(d.posted_at).slice(0, 10)) : "—"}${d.posted_by ? `, ${d.posted_by}` : ""}. Изделий в документе: ${d.items}, без изменений: ${d.unchanged}, строк изменений: ${d.rows.length}. Фактическая дата и текущий статус изделия производны от истории и пересчитываются сами.`;
+      await showTableDialog(`Протокол изменений — ${d.kind_title} № ${d.number}`, note, ["Изделие", "Адрес", "Что изменилось", "Было", "Стало"],
+        d.rows.map((r) => [r.element, r.address, r.field, r.before, r.after]), { empty: "Документ не изменил ни одного изделия." });
+    } catch (err) {
+      await showInfoDialog(`Не удалось получить протокол: ${err?.detail || err?.message || "ошибка"}`);
+    }
+  }
+
   function onAction(a, d) {
     const x = f();
     if (a === "reload-list") { S.list.error = ""; loadList().then(paint); return; }
     if (a === "new-supplier_change" || a === "new-link_swap" || a === "new-date_rebalance") { newDoc(a.slice(4)); return; }
     if (a === "back") { backToList(false); return; }
     if (a === "help") { showDocHelp(x); return; }
+    if (a === "changes") { showChanges(x); return; }
     if (!x) return;
     // Документ вида, который изменять не дано: кнопок записи и подбора нет в разметке, но и прочие пути к ним закрыты здесь
     if (!can(x.kind) && a !== "toggle-pos" && a !== "rb-toggle" && a !== "rb-expand" && a !== "rb-singles" && a !== "rb-group") return;
