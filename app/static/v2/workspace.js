@@ -770,6 +770,16 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   }
   function contractsHtml() { return panels.contractsHtml(); }
 
+  // Подсветка отставания от графика (движок: timeline.js). Приоритет: просрочка монтажа выше просрочки доставки.
+  function hatchHtml() {
+    const opt = (v) => [["off", "не выделять"], ["plan", "по исходному графику"], ["forecast", "по прогнозу"]].map(([k, t]) => `<option value="${k}" ${v === k ? "selected" : ""}>${t}</option>`).join("");
+    return `<h4>Подсветка отставания от графика</h4>
+      <p class="v2-muted">К дате среза (в актуальном режиме — к концу сегодняшнего дня) изделия, у которых срок наступил, а статуса ещё нет, рисуются косой штриховкой: тонкие линии — цвет статуса «Смонтирован» или «Доставлен», широкие полосы — фактический статус.</p>
+      <label class="v2-wire-field"><span>Должны быть смонтированы (по окончанию СМР)</span><select data-hatch="mont">${opt(sc.hatch.mont)}</select></label>
+      <label class="v2-wire-field"><span>Должны быть доставлены (по началу СМР)</span><select data-hatch="deliv">${opt(sc.hatch.deliv)}</select></label>
+      <p class="v2-muted">Если изделие должно быть и доставлено, и смонтировано, приоритет у просрочки монтажа; если монтаж не просрочен, а просрочена доставка — штриховка цветом статуса «Доставлен».</p>`;
+  }
+
   function viewHtml() {
     const zones = sc?.zones || [];
     return `<div class="ws-pad"><h3 class="ws-h">Режим схемы</h3>
@@ -780,6 +790,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
       ${!mfr && sc?.labels?.length ? `<h4>Подписи</h4>${sc.labels.map((l) => `<label class="ws-check"><input type="checkbox" data-label-type="${esc(l.type)}" ${l.on ? "checked" : ""}> <span>${esc(l.type)}</span></label>${l.dates === null ? "" : `<label class="ws-check ws-check-sub"><input type="checkbox" data-label-dates="${esc(l.type)}" ${l.dates ? "checked" : ""} ${l.on ? "" : "disabled"}> <span>Даты</span></label>`}`).join("")}<p class="v2-muted">Как в V1: действует до перезагрузки схемы; с чего начинать — «Видимость подписей» в настройках.</p>` : ""}
       ${!mfr && sc?.external ? `<h4>Внешние 3D-модели (в 3D)</h4>${[["models", "Благоустройство"], ["facades", "Фасады из FBX"]].map(([k, t]) => `<label class="ws-check"><input type="checkbox" data-ext="${k}" ${sc.external[k] ? "checked" : ""}> <span>${t}</span></label>`).join("")}<p class="v2-muted">Если модели объекта загружены. Действует до перезагрузки схемы, как в V1.</p>` : ""}
+      ${!mfr && !picker && sc?.hatch ? hatchHtml() : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
   }
 
@@ -794,6 +805,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     }));
     body.querySelectorAll("[data-fside]").forEach((b) => b.addEventListener("click", () => setFiltersSide(b.dataset.fside)));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
+    body.querySelectorAll("select[data-hatch]").forEach((s) => s.addEventListener("change", () => send("setHatch", { kind: s.dataset.hatch, value: s.value })));
     body.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => send("setView", { mode: b.dataset.view })));
     body.querySelectorAll("input[data-pk]").forEach((c) => c.addEventListener("change", () => { let v; try { v = JSON.parse(c.dataset.v); } catch (e) { return; } send("pickerToggle", { key: c.dataset.pk, value: v }); }));
     body.querySelectorAll("[data-pkgroup]").forEach((b) => b.addEventListener("click", () => { const g = b.dataset.pkgroup; if (openGroups.has(g)) { openGroups.delete(g); closedGroups.add(g); } else { openGroups.add(g); closedGroups.delete(g); } paintPanel(); }));

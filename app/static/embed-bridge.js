@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setGuidFilter{text} · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setGuidFilter{text} · setHatch{kind:"mont"|"deliv",value:"off"|"plan"|"forecast"} · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -138,6 +138,8 @@
           planned_delivery_date: e.planned_delivery_date ?? null } : null;
       }).filter(Boolean) : null,
       excluded: excludedCount(),
+      // подсветка отставания от графика (правая панель «Вид»): off | plan | forecast отдельно для монтажа и доставки
+      hatch: window.zhbiTimeline ? zhbiTimeline.getHatch() : null,
       // Внешние 3D-модели объекта в сцене ЖБИ (флажки окна V1 «Внешний вид»: благоустройство, фасады из FBX)
       external: { models: extChecked("zhbi-show-external-models"), facades: extChecked("zhbi-show-external-facades") },
       // Сеансовые «Подписи» (окно V1 «Настройки → Вид»): по типу изделия — показ подписи и её допстроки «Даты»
@@ -673,6 +675,12 @@
       if (typeof resetChangeFilter === "function") resetChangeFilter();
       onPlacementFilterChange();
       scheduleState(); sendFilters();
+    },
+    // Подсветка отставания от графика: kind «mont» (должны быть смонтированы) | «deliv» (доставлены), value off | plan | forecast
+    setHatch(a) {
+      if (!["mont", "deliv"].includes(a.kind) || !["off", "plan", "forecast"].includes(a.value)) throw new Error("параметры подсветки");
+      if (window.zhbiTimeline) zhbiTimeline.setHatch(a.kind, a.value);
+      scheduleState();
     },
     // Отбор по GUID: текст со списком GUID или их частей (пусто — снять отбор)
     setGuidFilter(a) {

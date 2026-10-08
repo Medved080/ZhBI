@@ -380,11 +380,6 @@
         <span class="tl-chrono-only tl-sep"></span>
         <span class="tl-chrono-only" data-role="interval"></span>
         <button type="button" class="btn btn-sm btn-secondary tl-chrono-only" data-act="range-all" title="Проигрывать весь период">весь период</button>
-        <span class="tl-sep"></span>
-        <label title="Выделить штриховкой изделия, которые к моменту среза должны быть смонтированы (по окончанию СМР), а фактически ещё нет">Должны быть смонтированы
-          <select data-act="hatch-mont"><option value="off">не выделять</option><option value="plan">по исходному графику</option><option value="forecast">по прогнозу</option></select></label>
-        <label title="Выделить штриховкой изделия, которые к моменту среза должны быть доставлены (по началу СМР), а фактически ещё нет">Должны быть доставлены
-          <select data-act="hatch-deliv"><option value="off">не выделять</option><option value="plan">по исходному графику</option><option value="forecast">по прогнозу</option></select></label>
         <span class="tl-msg" data-role="msg"></span>
       </div>
       <div class="tl-chrono-only">
@@ -400,7 +395,40 @@
     area.insertBefore(bar, status || null);
     tl.bar = bar;
     bindBar(bar);
+    buildHatchPanel();
     return bar;
+  }
+
+  // «Подсветка отставания от графика» — в правой панели «Вид» (V1; в V2 те же два выбора рисует оболочка и шлёт setHatch).
+  // Приоритет: если изделие должно быть и смонтировано, и доставлено (и подсветка включена у обоих), побеждает просрочка монтажа;
+  // если монтаж не просрочен, а просрочена доставка — штриховка цветом статуса «Доставлен».
+  const HATCH_OPTIONS = '<option value="off">не выделять</option><option value="plan">по исходному графику</option><option value="forecast">по прогнозу</option>';
+  function buildHatchPanel() {
+    const host = document.getElementById("tab-view");
+    if (!host || document.getElementById("tl-hatch-panel")) return;
+    const box = document.createElement("div");
+    box.id = "tl-hatch-panel";
+    box.style.cssText = "margin-top:16px";
+    box.innerHTML = `<h4>Подсветка отставания от графика</h4>
+      <p class="hint-text" style="margin:0 0 8px">К дате среза (в актуальном режиме — к концу сегодняшнего дня) изделия, у которых срок наступил, а статуса ещё нет, рисуются косой штриховкой: тонкие линии — цвет статуса «Смонтирован» или «Доставлен», широкие полосы — фактический статус.</p>
+      <label style="display:block; margin-bottom:6px" title="По окончанию СМР: к моменту среза изделие должно быть смонтировано, а фактически ещё нет">Должны быть смонтированы<br>
+        <select data-hatch="mont" style="width:100%">${HATCH_OPTIONS}</select></label>
+      <label style="display:block" title="По началу СМР: к моменту среза изделие должно быть доставлено, а фактически ещё нет">Должны быть доставлены<br>
+        <select data-hatch="deliv" style="width:100%">${HATCH_OPTIONS}</select></label>
+      <p class="hint-text" style="margin:8px 0 0">Если изделие должно быть и доставлено, и смонтировано, приоритет у просрочки монтажа; если монтаж не просрочен, а просрочена доставка — штриховка цветом статуса «Доставлен».</p>`;
+    host.appendChild(box);
+    for (const sel of box.querySelectorAll("select")) sel.addEventListener("change", () => setHatch(sel.dataset.hatch, sel.value));
+  }
+  function paintHatchControls() {
+    for (const sel of document.querySelectorAll("#tl-hatch-panel select")) sel.value = sel.dataset.hatch === "mont" ? tl.hatchMont : tl.hatchDeliv;
+  }
+  const listeners = [];
+  function setHatch(which, value) {
+    if (!["off", "plan", "forecast"].includes(value)) return;
+    if (which === "mont") tl.hatchMont = value; else if (which === "deliv") tl.hatchDeliv = value; else return;
+    if (tl.data) applyCursor(true);
+    paintHatchControls();
+    for (const fn of listeners) { try { fn(); } catch (e) { /* подписчик не должен ломать показ */ } }
   }
 
   const q = (role) => tl.bar && tl.bar.querySelector(`[data-role="${role}"]`);
@@ -423,9 +451,6 @@
       const s = fromInput(e.target.value);
       if (s !== null) { stop(); setCursor(s); }
     });
-    const onHatch = (key) => (e) => { tl[key] = e.target.value; applyCursor(true); paintBar(); };
-    bar.querySelector('[data-act="hatch-mont"]').addEventListener("change", onHatch("hatchMont"));
-    bar.querySelector('[data-act="hatch-deliv"]').addEventListener("change", onHatch("hatchDeliv"));
 
     // перетаскивание: по ленте — срез; по ручкам — границы интервала
     let drag = null;
@@ -503,8 +528,7 @@
     for (const b of tl.bar.querySelectorAll(".tl-seg button")) b.classList.toggle("active", b.dataset.mode === tl.mode);
     const play = tl.bar.querySelector('[data-act="play"]');
     if (play) play.textContent = tl.playing ? "⏸ Пауза" : "▶ Пуск";
-    tl.bar.querySelector('[data-act="hatch-mont"]').value = tl.hatchMont;
-    tl.bar.querySelector('[data-act="hatch-deliv"]').value = tl.hatchDeliv;
+    paintHatchControls();
     if (tl.tMin !== null) {
       q("end-from").textContent = fmtDayRu(tl.tMin);
       q("end-to").textContent = fmtDayRu(tl.tMax);
@@ -573,6 +597,7 @@
   window.zhbiTimeline = {
     onPlanLoaded, onDelta, onZoom, setVisible, hatchFill, hatchColor3D, guardEdit, snapshot, restore,
     isChrono: () => tl.mode === "chrono",
+    setHatch, getHatch: () => ({ mont: tl.hatchMont, deliv: tl.hatchDeliv }), onChange: (fn) => listeners.push(fn),
     _state: tl, _step, _apply: applyCursor, _setCursor: setCursor, _play: play, _stop: stop, _setMode: setMode,
     stripe3D: HATCH_STRIPE_3D_MM,
   };
