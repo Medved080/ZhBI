@@ -20492,6 +20492,16 @@ document.getElementById("scd-changes").addEventListener("click", async () => {
     body.innerHTML = `<div class="error-text">Не удалось загрузить протокол: ${escapeHtml(e.message)}</div>`;
   }
 });
+document.getElementById("scd-changes-xlsx").addEventListener("click", async () => {
+  if (!scdDoc) return;
+  const res = await fetch(`/supplier-changes/${scdDoc.id}/changes.xlsx`, { credentials: "same-origin" });
+  if (!res.ok) { showToast("Не удалось выгрузить протокол", "warning"); return; }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = `Протокол изменений — ${scdDoc.kind_title} № ${scdDoc.number}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
 document.getElementById("scd-changes-close")
   .addEventListener("click", () => document.getElementById("scd-changes-backdrop").classList.remove("open"));
 

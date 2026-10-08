@@ -1308,6 +1308,73 @@ def _posting_changes(conn, doc) -> dict:
             "items": len(items), "unchanged": без_изменений, "rows": rows}
 
 
+def _posting_changes_xlsx(протокол: dict) -> bytes:
+    """Протокол проведения в XLSX: шапка документа и та же таблица, что на экране."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Протокол изменений"
+    ws.append([f"Протокол изменений — {протокол['kind_title']} № {протокол['number']}"])
+    ws["A1"].font = Font(bold=True, size=13)
+    posted = протокол["posted_at"] or ""
+    ws.append([f"Дата документа: {протокол['doc_date'] or '—'}. Проведён: {posted}"
+               + (f", {протокол['posted_by']}" if протокол["posted_by"] else "")
+               + f". Изделий в документе: {протокол['items']}, без изменений: {протокол['unchanged']}."])
+    ws.append([])
+    thin = Side(style="thin", color="D5D8DC")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    шапка = ["Изделие", "Адрес", "Что изменилось", "Было", "Стало"]
+    ws.append(шапка)
+    for c in range(1, len(шапка) + 1):
+        cell = ws.cell(row=4, column=c)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="EEF2F7")
+        cell.border = border
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+    for r in протокол["rows"]:
+        ws.append([r["element"], r["address"], r["field"], r["before"], r["after"]])
+        for c in range(1, 6):
+            cell = ws.cell(row=ws.max_row, column=c)
+            cell.border = border
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for буква, ширина in zip("ABCDE", (28, 16, 24, 48, 60)):
+        ws.column_dimensions[буква].width = ширина
+    ws.freeze_panes = "A5"
+    ws.auto_filter.ref = f"A4:E{max(ws.max_row, 4)}"
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@router.get("/{doc_id}/changes.xlsx")
+def get_posting_changes_xlsx(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    """Протокол проведения документа в Excel (те же права и тот же расчёт, что у экрана)."""
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    conn = get_connection()
+    try:
+        doc = conn.execute("SELECT * FROM supplier_change_docs WHERE id = ?", (doc_id,)).fetchone()
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        assert_object_feature(conn, user, doc["object_id"], _раздел(doc["kind"]), "read")
+        if doc["status"] != POSTED:
+            raise HTTPException(status_code=409, detail="Документ не проведён: изменений ещё нет")
+        протокол = _posting_changes(conn, doc)
+    finally:
+        conn.close()
+    имя = f"Протокол изменений — {протокол['kind_title']} № {протокол['number']}.xlsx"
+    return Response(
+        content=_posting_changes_xlsx(протокол),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"protocol.xlsx\"; filename*=UTF-8''{quote(имя)}"})
+
+
 @router.get("/{doc_id}/changes")
 def get_posting_changes(doc_id: int, user: sqlite3.Row = Depends(get_current_user)):
     """Протокол проведения документа: таблица «что изменил документ» (только проведённый)."""
