@@ -9,8 +9,8 @@ export async function renderLogin(root, { api, onSuccess }) {
   root.innerHTML = `
     <div class="v2-auth-screen">
       <div class="v2-auth-card">
-        <h2>ЖБИ — новый интерфейс</h2>
-        <small>Вход тем же паролем, что и в текущем интерфейсе.</small>
+        <h2>ЖБИ — интерфейс V2</h2>
+        <small>Вход тем же паролем, что и в интерфейсе V1.</small>
         <form id="v2-login-form">
           <label class="v2-field">Логин
             <input id="v2-login-user" name="domain_login" autocomplete="username" list="v2-login-users" required>
@@ -22,7 +22,7 @@ export async function renderLogin(root, { api, onSuccess }) {
           <div class="v2-auth-error" id="v2-login-error" role="alert"></div>
           <button type="submit" class="v2-btn v2-primary">Войти</button>
         </form>
-        <p class="v2-note"><a class="v2-link" href="/?ui=v1">← Открыть текущий интерфейс</a></p>
+        <p class="v2-note"><a class="v2-link" href="/?ui=v1">← Открыть интерфейс V1</a></p>
       </div>
     </div>`;
 

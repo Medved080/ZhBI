@@ -1269,7 +1269,7 @@ document.getElementById("menu-my-sessions").addEventListener("click", () => {
 });
 // Явный вход в экспериментальный V2 (2026-09-21, ограниченный выпуск). Раньше выбор запоминался cookie и корневой адрес
 // сам вёл в V2 (2026-09-16); теперь V1 — основной интерфейс всегда: пункт открывает `/v2` (с текущим объектом) и ничего
-// не запоминает, возврат — кнопка «← Текущий интерфейс» в V2 (`/?ui=v1`).
+// не запоминает, возврат — кнопка «← Интерфейс V1» в V2 (`/?ui=v1`).
 //
 // Пункт лежит в тулбарном меню "Действия", а любая открытая модалка (.modal-backdrop, z-index:100) перекрывает тулбар
 // целиком — то есть добраться до этого пункта, пока где-то открыта несохранённая форма, и так нельзя: сам факт клика уже
@@ -1285,7 +1285,7 @@ function goToNewInterface() {
   const wsRoute = { model: "ws-model", mfr: "ws-mfr", picker: "ws-picker", foreman: "ws-foreman" }[workspace];
   location.href = (state.objectId ? `/v2?object_id=${state.objectId}` : "/v2") + (wsRoute ? `#/${wsRoute}` : "");
 }
-// Два входа в новый интерфейс: пункт меню «Действия» и переключатель «Текущий | Новый» в верхней панели (2026-10-06).
+// Два входа в интерфейс V2: пункт меню «Действия» и переключатель «V1 | V2» в верхней панели (2026-10-06).
 document.getElementById("menu-ui-v2").addEventListener("click", goToNewInterface);
 document.getElementById("ui-switch-v2").addEventListener("click", goToNewInterface);
 document.getElementById("sessions-close").addEventListener("click", () =>
@@ -28677,7 +28677,7 @@ async function bootApp() {
   if (state.currentUser && state.currentUser.changelog_unseen && !переходИзV2 && !EMBED_SCENE) openChangelog();
 }
 
-// Переход из нового интерфейса (V2) к конкретной сущности V1 (2026-09-20, приёмка V2: PO-23, UA-C-08).
+// Переход из интерфейса V2 (V2) к конкретной сущности V1 (2026-09-20, приёмка V2: PO-23, UA-C-08).
 // Раньше V2 отправлял `/?ui=v1&object_id=…`, а V1 параметр не читал: человек попадал на прежний объект, а
 // ссылка «Диагностика и доступ к аккаунту» вела на главный экран. Параметры одноразовые — после разбора
 // стираются из адреса, перезагрузка страницы переход не повторяет. Права те же, что у обычного пути:

@@ -982,7 +982,7 @@ export const tests = [
     },
   },
   {
-    id: "CP-W-18", title: "Выход при открытом выборе замены (← Контрагент, раздел, «← Текущий интерфейс», закрытие страницы): подтверждение отмены; «Отмена» — пикер на месте, запроса удаления нет",
+    id: "CP-W-18", title: "Выход при открытом выборе замены (← Контрагент, раздел, «← Интерфейс V1», закрытие страницы): подтверждение отмены; «Отмена» — пикер на месте, запроса удаления нет",
     async run(t) {
       const a = await openApp();
       await openContract(a, 1, "lines");
@@ -997,7 +997,7 @@ export const tests = [
       await a.answerDialog("Отмена");
       t.ok(a.$("#ctr-replacement-select"), "раздел, «Отмена»: пикер на месте");
       t.eq(a.$(`${NAV}[data-section="counterparties"]`).getAttribute("aria-pressed"), "true", "раздел, «Отмена»: остались в «Контрагентах»");
-      // «← Текущий интерфейс»
+      // «← Интерфейс V1»
       a.click(a.$("#v2-back-btn"));
       await waitFor(() => a.dialog(), { what: "диалог при уходе в V1" });
       t.has(a.dialog().textContent, CONFIRM, "V1: сказано, что выбор замены не завершён");

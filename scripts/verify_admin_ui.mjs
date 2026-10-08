@@ -1075,7 +1075,7 @@ if (want("training")) {
 // ====================================================================== совместимость с V1 на том же сервере
 if (want("v1compat")) {
   console.log("== Совместимость с V1 (браузер, тот же сервер)");
-  // Данные, созданные через API как это делает V2, должны быть видны в текущем интерфейсе (V1).
+  // Данные, созданные через API как это делает V2, должны быть видны в интерфейсе V1 (V1).
   const mk = async (call) => (await call).data;
   const uid = (await admin.post("/users", { last_name: "ВПервый", first_name: "Тест", domain_login: "qa_v1_user", role: "user" })).data.id;
   const pj = await mk(admin.post("/projects", { name: "QA V1 Проект" }));
@@ -1089,7 +1089,7 @@ if (want("v1compat")) {
   const b = await session(BASE, "admin");
   await b.goto(BASE + "/?ui=v1", 1500);
   await b.waitFor("!!document.querySelector('#user-name') && document.querySelector('#user-name').innerText.length>0", 30000);
-  ok("V1-0 текущий интерфейс открывается на том же сервере под тем же входом", true);
+  ok("V1-0 интерфейс V1 открывается на том же сервере под тем же входом", true);
   const open = async (menuId) => { await b.eval(`document.getElementById('${menuId}').click()`); await b.sleep(4000); };
   await open("menu-users");
   ok("V1-1 «Пользователи»: созданный из V2 пользователь виден в таблице V1 с доступом «1 проект»", await b.eval(`(document.getElementById('users-table')||{}).innerText?.includes('qa_v1_user')`));

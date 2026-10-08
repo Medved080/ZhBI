@@ -198,14 +198,14 @@ export function mountUsersAccess(container, ctx) {
   // пилоте показываются по одному, второй незафиксированной формы рядом
   // одновременно быть не может (переход в другую всегда идёт через этот
   // же сторож). Используется и для внутренних переходов, и для кнопки
-  // "Текущий интерфейс" в шапке (guardLeave), и для beforeunload. ----------
+  // "Интерфейс V1" в шапке (guardLeave), и для beforeunload. ----------
 
   let currentDirty = null; // {message, save: async()=>void (throws при ошибке), discard: ()=>void}
   function setDirty(info) { currentDirty = info; }
   function clearDirtyState() { currentDirty = null; }
   // Черновик разрешений (state.rolesDraft) переживает переключение ролей и
   // не зависит от currentDirty — но если о нём забыть тут, закрытие вкладки
-  // или "Текущий интерфейс" молча стёрли бы несохранённые ячейки.
+  // или "Интерфейс V1" молча стёрли бы несохранённые ячейки.
   function hasUnsavedChanges() { return !!currentDirty || state.rolesDraft.size > 0; }
 
   // Форма переименования/создания роли отслеживается ОТДЕЛЬНО от

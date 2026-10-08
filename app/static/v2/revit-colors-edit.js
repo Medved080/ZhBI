@@ -42,7 +42,7 @@ export function mountRevitColorsEdit(el, { screen, structure, objectId, api, gro
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Схема правится в новом интерфейсе." : "Просмотр схемы."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Схема правится в интерфейсе V2." : "Просмотр схемы."}</strong>
         Цвета относятся к выбранному в шапке объекту и видны всем, кто смотрит его модель. Шаблон задаёт всю схему разом; любой цвет можно поправить отдельно — тогда схема считается своей.
         ${canWrite ? "Сохраняется схема целиком." : "У вас нет права изменять эту схему."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>

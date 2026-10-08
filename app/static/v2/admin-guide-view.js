@@ -31,7 +31,7 @@ export function mountAdminGuideView(el, { screen, structure, objectId, api, grou
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>Просмотр в новом интерфейсе.</strong> Текст подставлен под этот сервер; команды копируются в буфер обмена.
+      <div class="v2-callout" role="note"><strong>Просмотр в интерфейсе V2.</strong> Текст подставлен под этот сервер; команды копируются в буфер обмена.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}<button type="button" class="v2-btn" id="ag-download">Скачать .md</button><button type="button" class="v2-btn" id="ag-copy-all">Копировать всю памятку</button></div>
         <p class="v2-muted" id="ag-status" role="status" aria-live="polite" style="margin:6px 0 0"></p></div>
       <div id="ag-body"></div>

@@ -1,4 +1,4 @@
-// Экран «Обмен данными с другим сервером» нового интерфейса (2026-10-08): рамка V2 вокруг общего с V1 модуля
+// Экран «Обмен данными с другим сервером» интерфейса V2 (2026-10-08): рамка V2 вокруг общего с V1 модуля
 // app/static/server-exchange.js. Запросы идут через api.js, то есть через шлюз записи (write-gate.js, записи `dx.*`).
 import { mountServerExchange } from "../server-exchange.js";
 import { statusChip } from "./registry.js";

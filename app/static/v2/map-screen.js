@@ -240,7 +240,7 @@ export function mountMapScreen(el, { screen, objectId, api, go, switchObject }) 
     const parts = [`Объектов на карте: ${projectMap ? projectMap.объекты.length : 0}.`];
     if (state.withoutCoords) parts.push(`Без координат: ${state.withoutCoords} — список слева под картой.`);
     if (state.basemapProblem) parts.push(state.basemapProblem + " Объекты показаны на пустом фоне.");
-    else if (!state.hasBasemap) parts.push("Подложка не загружена: объекты показаны на пустом фоне. Настраивается в текущем интерфейсе («Действия → Администрирование → Карта: подложка и источник»).");
+    else if (!state.hasBasemap) parts.push("Подложка не загружена: объекты показаны на пустом фоне. Настраивается в интерфейсе V1 («Действия → Администрирование → Карта: подложка и источник»).");
     statusLine.textContent = parts.join(" ");
   }
 

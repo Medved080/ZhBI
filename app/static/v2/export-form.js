@@ -24,7 +24,7 @@ export function mountExportForm(el, { screen, structure, objectId, api, groupTit
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>Выгрузка в новом интерфейсе.</strong> ${kind === "pdf" ? "Отчёт со всей схемой (авто-масштаб), легендой статусов и местом для подписи." : "Файл строится по чертежу выбранного объекта. Можно ограничить выгрузку последним снимком отбора схемы."}
+      <div class="v2-callout" role="note"><strong>Выгрузка в интерфейсе V2.</strong> ${kind === "pdf" ? "Отчёт со всей схемой (авто-масштаб), легендой статусов и местом для подписи." : "Файл строится по чертежу выбранного объекта. Можно ограничить выгрузку последним снимком отбора схемы."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <p id="ex-source" class="v2-muted">${source ? `Чертёж объекта: <strong>${esc(source)}</strong>` : ""}</p>
       ${!objectId ? `<p class="v2-muted">Выберите объект в шапке — выгрузка относится к объекту.</p>`

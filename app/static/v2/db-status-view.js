@@ -28,7 +28,7 @@ export function mountDbStatusView(el, { screen, structure, objectId, api, groupT
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>Только просмотр.</strong> Структура базы, объём таблиц, описания полей и содержимое таблиц (секретные колонки скрыты сервером). Изменить данные отсюда нельзя — как и в текущем интерфейсе.
+      <div class="v2-callout" role="note"><strong>Только просмотр.</strong> Структура базы, объём таблиц, описания полей и содержимое таблиц (секретные колонки скрыты сервером). Изменить данные отсюда нельзя — как и в интерфейсе V1.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <div id="db-body"></div>
     </div>`;

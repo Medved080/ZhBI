@@ -45,7 +45,7 @@ export function mountExternalModels(el, ctx) {
   el.className = "v2-page";
   el.innerHTML = pageFrame({
     screen, groupTitle,
-    summary: "Внешние 3D-модели объекта (благоустройство, фасад). Видны как слой в 3D ЖБИ и «Модели МФР» — переключатель «Благоустройство» там же, во вкладке «Вид». «Совместить автоматически» (у фасада) считает положение по геометрии стен и показывает результат текстом — без предпросмотра на сцене, она только в текущем интерфейсе (V1), там же — визуальная калибровка перетаскиванием.",
+    summary: "Внешние 3D-модели объекта (благоустройство, фасад). Видны как слой в 3D ЖБИ и «Модели МФР» — переключатель «Благоустройство» там же, во вкладке «Вид». «Совместить автоматически» (у фасада) считает положение по геометрии стен и показывает результат текстом — без предпросмотра на сцене, она только в интерфейсе V1 (V1), там же — визуальная калибровка перетаскиванием.",
     body: `<div id="em-list"><p class="v2-muted" role="status">Загрузка…</p></div>
       <div id="em-list-status" class="v2-ex-status" role="status" aria-live="polite"></div>
       <details class="v2-collapsible" id="em-upload-details" style="margin-top:14px"><summary>Загрузить FBX</summary>
@@ -179,7 +179,7 @@ export function mountExternalModels(el, ctx) {
       const objData = await api.get(`/objects/${objectId}/external-models/geometry-features`);
       if (dead) return;
       if (objData.source === "none" || !objData.segments.length) {
-        listStatus.set("У объекта нет геометрии стен (модель Revit не загружена, или в ней нет категории «Стены») — автосовмещение невозможно, нужна ручная калибровка в текущем интерфейсе (V1).", "bad");
+        listStatus.set("У объекта нет геометрии стен (модель Revit не загружена, или в ней нет категории «Стены») — автосовмещение невозможно, нужна ручная калибровка в интерфейсе V1 (V1).", "bad");
         return;
       }
       const result = await autoAlignFacade({ fbxSegments, objectSegments: objData.segments });

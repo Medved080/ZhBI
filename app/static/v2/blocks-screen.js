@@ -132,7 +132,7 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
     const box = $("#bs-blocks");
     if (!box || tab !== "works") return;
     const list = visibleBlocks();
-    if (!st.blocks.length) { box.innerHTML = `<p class="v2-muted">Блоков ещё нет: их заводят на вкладке «Блоки» текущего интерфейса.</p>`; return; }
+    if (!st.blocks.length) { box.innerHTML = `<p class="v2-muted">Блоков ещё нет: их заводят на вкладке «Блоки» интерфейса V1.</p>`; return; }
     if (!list.length) { box.innerHTML = `<p class="v2-muted">Ничего не найдено по запросу «${esc(st.search)}».</p>`; return; }
     const bySection = new Map();
     for (const b of list) { const k = b.section_code || "—"; if (!bySection.has(k)) bySection.set(k, []); bySection.get(k).push(b); }

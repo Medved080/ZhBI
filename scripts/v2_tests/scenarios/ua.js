@@ -356,7 +356,7 @@ export const tests = [
       const a = await openApp();
       await openCard(a, "qa.noaccess", "security");
       await waitFor(() => a.$("#sec-impersonate"), { what: "кнопка отладки" });
-      t.ok(!a.$("#v2-content [data-v1-link]"), "ссылки «Открыть в текущем интерфейсе» больше нет: операции выполняются здесь");
+      t.ok(!a.$("#v2-content [data-v1-link]"), "ссылки «Открыть в интерфейсе V1» больше нет: операции выполняются здесь");
       t.has(lastText(a), "Зайти под пользователем", "есть отладка прав");
       t.ok(a.$("#sec-sessions"), "блок «Сеансы пользователя» есть");
       t.ok(a.$("#sec-pass") && a.$("#sec-pass2"), "форма пароля: новый и повтор");

@@ -34,7 +34,7 @@ export const tests = [
         t.ok(!a.$(".v2-callout-bad"), `${s.id}: нет ошибки загрузки`);
         const shown = a.$$("#rd-body tbody tr").length + a.$$("#rd-body dt").length + a.$$("#rd-body details").length;
         t.ok(shown > 0 || /нет|пуст|Записей нет|не найден/i.test(body(a).textContent), `${s.id}: показаны строки/поля или явное «пусто» (${shown})`);
-        t.ok(a.$(`a[data-v1-link]`), `${s.id}: есть переход в текущий интерфейс`);
+        t.ok(a.$(`a[data-v1-link]`), `${s.id}: есть переход в интерфейс V1`);
       };
       // экраны учёта по блокам есть только у объекта МФР: сначала всё, что доступно на исходном объекте, затем — на МФР
       const later = [];

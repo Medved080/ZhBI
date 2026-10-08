@@ -62,7 +62,7 @@ export function mountResetHistory(el, { screen, groupTitle, api, rights }) {
       let backupName = "";
       if (wantBackup) {
         setStatus("Снимаем резервную копию…");
-        try { backupName = (await api.post("/admin/backups", { comment: "перед сбросом истории статусов (новый интерфейс)" })).name; }
+        try { backupName = (await api.post("/admin/backups", { comment: "перед сбросом истории статусов (интерфейс V2)" })).name; }
         catch (e) { setStatus(`Копию снять не удалось — сброс НЕ выполнялся: ${errText(e)}`); return; }
       }
       setStatus("Сбрасываем историю…");

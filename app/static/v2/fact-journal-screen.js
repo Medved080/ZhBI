@@ -126,7 +126,7 @@ export function mountFactJournalScreen(el, { screen, structure, objectId, api, r
       const hint = m.body.querySelector("#nr-hint");
       if (!isRealDate(date)) { hint.textContent = "Укажите существующую дату отчёта"; return; }
       const b = st.blocks.find((x) => x.section_id === sec && x.level_id === lvl);
-      if (!b) { hint.textContent = "У этой пары секция/этаж ещё нет блока — заведите его на вкладке «Блоки» текущего интерфейса."; return; }
+      if (!b) { hint.textContent = "У этой пары секция/этаж ещё нет блока — заведите его на вкладке «Блоки» интерфейса V1."; return; }
       m.close();
       openFactDialog({ api, objectId, blockId: b.id, blockLabel: `${b.section_code} · ${b.level_name || b.floor + " этаж"}`, date, highlight: [...st.typeSel], canWrite, onChanged: load, onClosed: load });
     });

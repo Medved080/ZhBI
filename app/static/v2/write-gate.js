@@ -2,7 +2,7 @@
 //
 // Зачем. V1 — основной интерфейс; V2 показывается заказчику для оценки и не проходил полной приёмки. Операции записи,
 // которые не были проверены на настоящем backend (правильная цель и область, повторный клик, сохранение ввода при ошибке,
-// повторное чтение результата, неизвестный исход без автоповтора), в V2 ОТКЛЮЧЕНЫ: их надо выполнять в текущем интерфейсе.
+// повторное чтение результата, неизвестный исход без автоповтора), в V2 ОТКЛЮЧЕНЫ: их надо выполнять в интерфейсе V1.
 //
 // Как. Единственная точка, через которую V2 отправляет запросы, — `api.js` (`request`); он вызывает `checkWrite` ДО `fetch`.
 // Поэтому ограничение действует в обработчике действия, а не в разметке: Enter в поле, сохранение из диалога ухода,
@@ -25,7 +25,7 @@ import { statusBatchBodyProblem, plannedBatchBodyProblem, contractSetBodyProblem
   plannedRowsBodyProblem, statusRowsBodyProblem } from "./element-ops-rules.js";
 
 export const EXPERIMENTAL_NOTICE =
-  "Экспериментальный интерфейс. Часть функций ещё дорабатывается. Непроверенные операции выполняйте в текущем интерфейсе";
+  "Экспериментальный интерфейс. Часть функций ещё дорабатывается. Непроверенные операции выполняйте в интерфейсе V1";
 
 const ID = "[^/]+";
 // secrets.token_urlsafe(32) (Python) — base64 URL-safe без паддинга, для 32 случайных байт обычно 43 символа; допуск с запасом.
@@ -453,7 +453,7 @@ export const POLICY = [
   // ---- временно отключено (справочно: для пояснений на экранах и для документа; всё, чего нет в списке, отключено тоже) ----
   // Контракт по умолчанию (PUT /contracts/default-map), свёртка дублей справочника (POST /dictionaries/{counterparty|agreement|specification}/{id}/delete,
   // mode:merge), «Марки» и «Зоны» (POST /dictionaries/{mark|zone}/{key}/delete) — РАЗРЕШЕНЫ выше отдельными строками (свои путь/метод/форма побеждают этот общий отказ раньше, чем до него доходит проверка).
-  { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: групповая плановая дата поставки, прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/|mark/|zone/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в новом интерфейсе" },
+  { id: "counterparties.write", screen: "counterparties", action: "Прочие операции контрактации: групповая плановая дата поставки, прежние маршруты правки изделий (их заменили операции экрана «Операции над элементами»)", method: "POST/PATCH/PUT/DELETE", path: re(`/(counterparties|agreements|specifications|contracts|elements)(/.+)?|/dictionaries/(?!smu/|subtype/|mark_prefix/|mark/|zone/).+`), allowed: false, risk: "данные контрактации", why: "операции вне перечня разрешённых выше не проверялись в интерфейсе V2" },
 ];
 
 // ---- проверка ----
@@ -481,7 +481,7 @@ export function checkWrite(method, pathWithQuery, body) {
     problem,
     message: problem
       ? `Запрос не отправлен: ${problem}.`
-      : `Операция отключена в новом интерфейсе${known ? ` («${known.action}»)` : ""}. Выполните её в текущем интерфейсе.`,
+      : `Операция отключена в интерфейсе V2${known ? ` («${known.action}»)` : ""}. Выполните её в интерфейсе V1.`,
   };
 }
 

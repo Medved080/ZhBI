@@ -22,7 +22,7 @@ export function mountSettingEdit(el, { screen, structure, objectId, api, groupTi
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Настройка правится в новом интерфейсе." : "Просмотр настройки."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Настройка правится в интерфейсе V2." : "Просмотр настройки."}</strong>
         ${canWrite ? "Значение относится к выбранному в шапке объекту." : "У вас нет права изменять эту настройку."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <div id="se-body"></div>

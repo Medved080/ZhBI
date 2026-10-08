@@ -339,8 +339,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     } else if (sc && sc.loaded && !sc.loading && sc.hasDrawing === false) {
       // Паспорт объекта живёт на его заглавной странице (object-home.js); здесь — только сообщение и переход к ней.
       html = mfr
-        ? `<div class="ws-msg"><strong>У объекта нет загруженной модели.</strong><p>Загрузите выгрузку Revit в разделе «Обмен данными» текущего интерфейса.</p><button type="button" class="v2-btn v2-primary" data-act="home">Карточка объекта</button></div>`
-        : `<div class="ws-msg"><strong>У объекта нет загруженного чертежа.</strong><p>Схему показать нечем: загрузите чертёж в разделе «Обмен данными» текущего интерфейса.</p><button type="button" class="v2-btn v2-primary" data-act="home">Карточка объекта</button></div>`;
+        ? `<div class="ws-msg"><strong>У объекта нет загруженной модели.</strong><p>Загрузите выгрузку Revit в разделе «Обмен данными» интерфейса V1.</p><button type="button" class="v2-btn v2-primary" data-act="home">Карточка объекта</button></div>`
+        : `<div class="ws-msg"><strong>У объекта нет загруженного чертежа.</strong><p>Схему показать нечем: загрузите чертёж в разделе «Обмен данными» интерфейса V1.</p><button type="button" class="v2-btn v2-primary" data-act="home">Карточка объекта</button></div>`;
     } else if (sc && sc.loaded && !sc.loading && sc.total === 0 && !(mfr && sc.mfr?.blocks)) {
       html = mfr
         ? `<div class="ws-msg"><strong>По выбранному отбору элементов нет.</strong><p>${sc.mfr?.filtersActive ? "Снимите часть фильтров на вкладке «Фильтры»." : "Модель загружена, но элементов в ней нет."}</p>${sc.mfr?.filtersActive ? `<button type="button" class="v2-btn v2-primary" data-act="reset-filters">Сбросить отбор</button>` : ""}</div>`
@@ -634,7 +634,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       html += step(5, "Подтверждение", `<dl class="ws-dl">${row("Поставщик", al.supplier)}${row("Контракт", c.name)}${row("Позиция", `${plan.line.element_type}, ${plan.line.mark || "без марки"}`)}${row("Будет распределено", `${nf(plan.ok.length)} шт.`)}${row("Доступно по позиции", `${nf(rem)} → ${nf(rem - plan.ok.length)} шт.`)}${row("Статусы", `«Запланирован» → «Контрактация»: ${nf(plan.planned)} шт.; остальные сохраняются: ${nf(plan.kept)} шт.`)}</dl>
         <p class="v2-muted ws-fnote">Всё или ничего: сервер применяет пачку целиком и проверяет остаток под блокировкой. Если изделия за это время изменились, пачка не применится, придёт перечень расхождений. Историю статусов и прочие поля операция не переписывает.</p>
         <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-al="submit" ${plan.ok.length && !plan.badN && !plan.over && !al.busy && en ? "" : "disabled"}>${al.busy ? "Сохранение…" : `Распределить ${plan.ok.length ? nf(plan.ok.length) + " шт." : ""}`}</button></div>
-        ${en ? "" : `<p class="ws-warnbox" role="status">Распределение в новом интерфейсе отключено: ${esc(allocProbe().message || "операция не разрешена")} Выполните его в текущем интерфейсе — <a href="${esc(v1Link())}">открыть с этим объектом</a>.</p>`}`);
+        ${en ? "" : `<p class="ws-warnbox" role="status">Распределение в интерфейсе V2 отключено: ${esc(allocProbe().message || "операция не разрешена")} Выполните его в интерфейсе V1 — <a href="${esc(v1Link())}">открыть с этим объектом</a>.</p>`}`);
     }
     if (al.error) html += `<p class="ws-err" role="alert">${esc(al.error)}</p>`;
     if (al.warn) html += `<p class="ws-warnbox" role="status">${esc(al.warn)}</p>`;
@@ -937,8 +937,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   function capsChip() {
     const c = capabilities();
     return c.length
-      ? `<span class="ws-cap-chip" title="Операции, доступные вам на этом рабочем месте; остальное — в текущем интерфейсе">можно: ${esc(c.join(", "))}</span>`
-      : `<span class="ws-ro-chip" title="Изменения выполняются в текущем интерфейсе">только просмотр</span>`;
+      ? `<span class="ws-cap-chip" title="Операции, доступные вам на этом рабочем месте; остальное — в интерфейсе V1">можно: ${esc(c.join(", "))}</span>`
+      : `<span class="ws-ro-chip" title="Изменения выполняются в интерфейсе V1">только просмотр</span>`;
   }
 
   // МФР: шахматка, динамика и отбор работ блока — в строке состояния (их ведёт mfr-block-panel.js)

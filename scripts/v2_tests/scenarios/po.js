@@ -363,7 +363,7 @@ export const tests = [
         await a.settle(40);
         t.ok(a.$$(NAV).every((b) => b.disabled), `[${outcome}] вкладки разделов заблокированы`);
         t.has(a.$("#v2-nav-note").textContent, "Идёт сохранение", `[${outcome}] причина видна`);
-        t.ok(a.$("#v2-back-btn").disabled, `[${outcome}] «← Текущий интерфейс» заблокирована`);
+        t.ok(a.$("#v2-back-btn").disabled, `[${outcome}] «← Интерфейс V1» заблокирована`);
         a.click(a.$('[data-object="2"], [data-object="3"]') || a.$("[data-project]"));
         await a.settle(60);
         t.eq(a.$("#pf-name").value, a.ctl.data.objects.find((o) => o.id === 1).name, `[${outcome}] выбор записи во время закачки не сработал`);

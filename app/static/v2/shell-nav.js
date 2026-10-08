@@ -128,7 +128,7 @@ export function mountShellNav(el, {
     const active = s.id === currentKey;
     const v1 = screenOpensInV1(s);
     const hint = v1 ? ` <span class="v2-shellnav-hint" aria-hidden="true">↗</span>` : "";
-    const title = v1 ? `${esc(s.title)} — откроется в текущем интерфейсе` : esc(s.title);
+    const title = v1 ? `${esc(s.title)} — откроется в интерфейсе V1` : esc(s.title);
     return `<button type="button" class="v2-shellnav-item" data-section="${esc(s.id)}" aria-pressed="${active}" title="${title}">
       <span class="v2-shellnav-item-label">${esc(s.title)}</span>${hint}
     </button>`;

@@ -35,8 +35,8 @@ export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в новом интерфейсе." : "Просмотр справочника."}</strong>
-        ${canWrite ? esc(`Можно добавить, переименовать и удалить запись. Если на запись ссылаются объекты, при удалении нужно выбрать другую запись — ссылки будут переведены на неё.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в текущем интерфейсе.")}
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в интерфейсе V2." : "Просмотр справочника."}</strong>
+        ${canWrite ? esc(`Можно добавить, переименовать и удалить запись. Если на запись ссылаются объекты, при удалении нужно выбрать другую запись — ссылки будут переведены на неё.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в интерфейсе V1.")}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       ${canWrite ? `<form id="de-add" class="v2-bar" autocomplete="off">
         <input type="text" id="de-add-input" class="v2-search" placeholder="${esc(spec.addPlaceholder || "Название")}" aria-label="${esc(spec.addPlaceholder || "Название")}" maxlength="200">

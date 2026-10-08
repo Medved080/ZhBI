@@ -135,7 +135,7 @@ const contractingCfg = (ctx) => ({
   ]) + (r.foreign_agreement_rows ? `<div class="v2-callout v2-callout-bad">Пропущено строк: ${r.foreign_agreement_rows} — договор принадлежит другому объекту (номер договора нельзя переиспользовать на другом объекте).
       ${listHtml("Договоры", r.foreign_agreements || [], { cap: 5 })}</div>` : "")
     + listHtml("Тип не определён для марок", r.unresolved_type_marks || []) + listHtml("Предупреждения по датам", r.date_warnings || [])
-    + `<p class="v2-muted">Результат виден в разделе «Контракты» и в справочнике контрагентов (в том числе в текущем интерфейсе).</p>`,
+    + `<p class="v2-muted">Результат виден в разделе «Контракты» и в справочнике контрагентов (в том числе в интерфейсе V1).</p>`,
 });
 
 const scheduleCfg = () => ({

@@ -16,7 +16,7 @@ try {
   await openScreen(browser, "bulk-edit", "!!document.querySelector('#bk-modes')");
   check("Кнопка режима «⚠ Перенос базы» рядом с режимами правки", await browser.eval(
     "document.querySelector('#bk-transfer-mode')?.textContent === '⚠ Перенос базы' && !document.querySelector('#bk-modes #bk-transfer-mode')"));
-  check("Прежняя отсылка в текущий интерфейс убрана", await browser.eval("!document.body.innerText.includes('в новом интерфейсе не выполняется')"));
+  check("Прежняя отсылка в интерфейс V1 убрана", await browser.eval("!document.body.innerText.includes('в интерфейсе V2 не выполняется')"));
   await tap(browser, "#bk-transfer-mode");
   await browser.waitFor("/Сервер/.test(document.querySelector('#dt-current')?.innerText || '')", 15000);
   check("Режим показывает три шага и состояние этой базы, шаги Excel скрыты", await browser.eval(`(() => {

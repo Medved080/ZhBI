@@ -589,7 +589,7 @@
   .view-mode-btn:hover { background: var(--color-surface-2); }
   .view-mode-btn.active { background: var(--color-primary); color: #fff; }
   .view-mode-btn:disabled { opacity: .6; cursor: default; }
-  /* Переключатель интерфейсов «Текущий | Новый» — та же сегментная плашка, что у 2D/3D, но свои классы: на .view-mode-btn
+  /* Переключатель интерфейсов «V1 | V2» — та же сегментная плашка, что у 2D/3D, но свои классы: на .view-mode-btn
      повешены обработчики режимов схемы. */
   .ui-switch.toolbar-tile { padding: 0; overflow: hidden; align-items: stretch; }
   .ui-switch-btn { border: none; background: var(--color-surface); color: var(--color-text-muted); font-size: 13px; padding: 5px 12px;
@@ -5210,7 +5210,7 @@
                 <button id="menu-my-sessions">Мои сеансы</button>
                 <!-- Явный вход в V2 (2026-09-21, ограниченный выпуск): V1 остаётся основным интерфейсом, V2 — экспериментальный,
                      открывается только этим пунктом или прямым адресом /v2 и ничего не запоминает. Доступен всем ролям. -->
-                <button id="menu-ui-v2">Новый интерфейс</button>
+                <button id="menu-ui-v2">Интерфейс V2</button>
               </div>
             </div>
             <div class="submenu">
@@ -5674,10 +5674,10 @@
     </div>
   </div>
   <div id="toolbar-pinned">
-    <!-- Переключатель интерфейсов (2026-10-06): «Текущий» — этот, «Новый» — V2 (/v2). Тот же переход, что и пункт «Новый интерфейс» в меню. -->
+    <!-- Переключатель интерфейсов (2026-10-06): «V1» — этот, «V2» — /v2. Тот же переход, что и пункт «Интерфейс V2» в меню. -->
     <div class="ui-switch toolbar-tile" id="ui-switch" role="group" aria-label="Интерфейс">
-      <button type="button" class="ui-switch-btn active" id="ui-switch-v1" aria-pressed="true" title="Вы в текущем интерфейсе">Текущий</button>
-      <button type="button" class="ui-switch-btn" id="ui-switch-v2" aria-pressed="false" title="Перейти в новый интерфейс на том же объекте">Новый</button>
+      <button type="button" class="ui-switch-btn active" id="ui-switch-v1" aria-pressed="true" title="Вы в интерфейсе V1">V1</button>
+      <button type="button" class="ui-switch-btn" id="ui-switch-v2" aria-pressed="false" title="Перейти в интерфейс V2 на том же объекте">V2</button>
     </div>
     <div id="user-box" class="toolbar-tile">
       <span><b id="user-name"></b></span>

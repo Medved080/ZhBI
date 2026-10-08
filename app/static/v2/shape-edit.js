@@ -28,7 +28,7 @@ export function mountShapeEdit(el, { screen, structure, objectId, api, rights, g
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Форма правится в новом интерфейсе." : "Просмотр форм маркеров."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Форма правится в интерфейсе V2." : "Просмотр форм маркеров."}</strong>
         Настройка общая для всех объектов: пара «слой / тип элемента» рисуется одной и той же фигурой на любом чертеже.
         ${canWrite ? "Сохраняются только изменённые пары." : "У вас нет права изменять эту настройку."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>

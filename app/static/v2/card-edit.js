@@ -37,7 +37,7 @@ function shell(el, { screen, structure, objectId, groupTitle, canWrite, okNote, 
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка в новом интерфейсе." : "Просмотр."}</strong> ${esc(canWrite ? okNote : roNote)}
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка в интерфейсе V2." : "Просмотр."}</strong> ${esc(canWrite ? okNote : roNote)}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <div id="ce-body"></div>
       <p id="ce-status" class="v2-muted" role="status" aria-live="polite"></p>

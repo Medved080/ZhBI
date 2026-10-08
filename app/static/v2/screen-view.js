@@ -3,7 +3,7 @@
 // Каркас строится из статической разметки соответствующей формы V1 (scripts/inventory_v1_ui.py):
 // заголовки, вкладки, поля, таблицы (заголовки колонок), кнопки. Динамическое содержимое V1 (строки таблиц,
 // варианты списков) в разметке не видно и НЕ выдумывается. Все элементы каркаса неактивны, а над ним прямым
-// текстом сказано: функция работает только в текущем интерфейсе, здесь показан состав экрана — так что
+// текстом сказано: функция работает только в интерфейсе V1, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
 import { STATUS_LABEL, v1Href, statusChip } from "./registry.js";
 
@@ -19,7 +19,7 @@ const RISK_TEXT = {
   destructive: "необратимое удаление",
 };
 
-const BLOCKED_HINT = "Пока доступно только в текущем интерфейсе";
+const BLOCKED_HINT = "Пока доступно только в интерфейсе V1";
 
 function wireBlock(b) {
   switch (b.t) {
@@ -63,10 +63,10 @@ export function linkList(screen, structure, objectId) {
   if (menus.length) {
     for (const m of menus) {
       const href = v1Href({ ...screen, ws: screen.ws, view: screen.view }, { menu: [m] }, objectId);
-      items.push(`<a class="v2-btn v2-primary v2-link-btn" href="${esc(href)}" data-v1-link="${esc(m.id)}">Открыть в текущем интерфейсе${menus.length > 1 ? `: ${esc(m.label)}` : ""} →</a>`);
+      items.push(`<a class="v2-btn v2-primary v2-link-btn" href="${esc(href)}" data-v1-link="${esc(m.id)}">Открыть в интерфейсе V1${menus.length > 1 ? `: ${esc(m.label)}` : ""} →</a>`);
     }
   } else {
-    items.push(`<a class="v2-btn v2-primary v2-link-btn" href="${esc(v1Href(screen, structure, objectId))}" data-v1-link="main">Открыть в текущем интерфейсе →</a>`);
+    items.push(`<a class="v2-btn v2-primary v2-link-btn" href="${esc(v1Href(screen, structure, objectId))}" data-v1-link="main">Открыть в интерфейсе V1 →</a>`);
   }
   return items.join(" ");
 }
@@ -89,12 +89,12 @@ export function mountScreenView(el, { screen, structure, objectId, rights, group
       </div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note">
-        <strong>Эта функция пока работает только в текущем интерфейсе.</strong>
+        <strong>Эта функция пока работает только в интерфейсе V1.</strong>
         Здесь показан состав экрана по его форме в V1 — данные не загружаются, кнопки неактивны, ничего не сохраняется.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div>
       </div>
       <dl class="v2-facts">
-        <dt>Где в текущем интерфейсе</dt><dd>${[...menuPath.map(esc), ...toolbar.map((t) => `Панель: ${t}`)].join("<br>") || "—"}</dd>
+        <dt>Где в интерфейсе V1</dt><dd>${[...menuPath.map(esc), ...toolbar.map((t) => `Панель: ${t}`)].join("<br>") || "—"}</dd>
         <dt>Права</dt><dd>${feats.length ? esc(feats.join("; ")) : "без ограничения по разделам"}</dd>
         <dt>Что можно изменить</dt><dd>${esc(RISK_TEXT[screen.risk] || screen.risk)}${screen.ops ? ` — ${esc(screen.ops)}` : ""}</dd>
       </dl>
@@ -119,7 +119,7 @@ const inV1Only = (s) => s.impl === "v1" || (s.status || 0) <= 2;
 // Пометка — по статусу реестра, а не по типу реализации: прежняя проверка по префиксу `impl` помечала «в V1» два десятка разделов,
 // давно работающих в V2 (рабочие места, карта, контракты, документы контрактации, график СМР, служебные экраны).
 function homeChip(s) {
-  if (inV1Only(s)) return `<span class="v2-chip" title="Функции раздела пока работают в текущем интерфейсе">в V1</span>`;
+  if (inV1Only(s)) return `<span class="v2-chip" title="Функции раздела пока работают в интерфейсе V1">в V1</span>`;
   return "";   // статусные плашки «в V2 / не всё / заблокирован» убраны (2026-09-30)
 }
 

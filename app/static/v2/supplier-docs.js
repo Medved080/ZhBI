@@ -806,7 +806,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
   function bind() {
     const x = f();
     for (const el of container.querySelectorAll("[data-a]")) el.addEventListener("click", () => onAction(el.dataset.a, el.dataset));
-    // Документ открывается кликом по ЛЮБОЙ ячейке строки (2026-10-07, как в текущем интерфейсе); кнопка с номером остаётся для клавиатуры —
+    // Документ открывается кликом по ЛЮБОЙ ячейке строки (2026-10-07, как в интерфейсе V1); кнопка с номером остаётся для клавиатуры —
     // её клик всплывает до строки, поэтому обработчик один и документ открывается один раз
     for (const el of inner.querySelectorAll("tr[data-open]")) el.addEventListener("click", () => openDoc(Number(el.dataset.open)));
     // Выбор контракта и марки балансировки — списком с колонками (числа выровнены вправо), общий модуль column-select.js

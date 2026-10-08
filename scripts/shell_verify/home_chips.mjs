@@ -30,7 +30,7 @@ try {
       if (r) check(`${user}: «${byId[id].title}» — «${r.chip}»`, r.chip !== "в V1");
     }
     const intro = await b.eval(`document.querySelector('.v2-home-title + p').textContent.replace(/\\s+/g, " ")`);
-    check(`${user}: вводный текст с честными числами`, /в новом интерфейсе работают \d+, из них полностью — \d+/.test(intro), intro);
+    check(`${user}: вводный текст с честными числами`, /в интерфейсе V2 работают \d+, из них полностью — \d+/.test(intro), intro);
     check(`${user}: нет ошибок JavaScript`, b.exceptions.length === 0, JSON.stringify(b.exceptions.slice(0, 2)));
     await b.close();
   }

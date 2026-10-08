@@ -1,6 +1,6 @@
 // Точка входа V2. Логин-гейт → шапка (объект, возврат в V1) → левая навигация по ВСЕМ разделам сервиса
 // (реестр `screens.json`, Docs/v2-interface-coverage.md). Перенесены целиком «Пользователи и доступ», «Проекты и
-// объекты» и «Контрагенты»; остальные экраны показывают состав формы V1 и открывают её в текущем интерфейсе
+// объекты» и «Контрагенты»; остальные экраны показывают состав формы V1 и открывают её в интерфейсе V1
 // с контекстом объекта (screen-view.js), пока их операции не подключены.
 import { mountAssistant, pageSnapshot } from "../assistant.js";
 import { api, ApiError, getImpersonationToken, setImpersonationToken } from "./api.js";
@@ -93,7 +93,7 @@ let mountedObjectId = null; // объект, под который смонти�
 
 // Один переход за раз: пока идёт guardLeave (диалог «Несохранённые
 // изменения», возможное сохранение) и монтирование нового раздела, вторые и
-// третьи клики по вкладкам разделов и по «← Текущий интерфейс» игнорируются.
+// третьи клики по вкладкам разделов и по «← Интерфейс V1» игнорируются.
 let navBusy = false;
 
 // Контекст для перехода обратно в V1: выбранный в шапке объект и (если открыто рабочее место со схемой) само рабочее место.
@@ -167,7 +167,7 @@ function renderFatal(err) {
   root.innerHTML = `<div class="v2-note-page">
     <h3>Не удалось загрузить интерфейс</h3>
     <p class="v2-muted">${escapeHtml(err instanceof ApiError ? String(err.detail) : String(err))}</p>
-    <p><a class="v2-link" href="/?ui=v1">← Открыть текущий интерфейс</a></p>
+    <p><a class="v2-link" href="/?ui=v1">← Открыть интерфейс V1</a></p>
   </div>`;
 }
 
@@ -252,7 +252,7 @@ async function renderShell(user, permissions) {
   const activeObjects = tree.projects.flatMap((p) => (p.objects || []).map((o) => ({ ...o, project_name: p.name })))
     .filter((o) => (o.status || "active") !== "archived");
   const remembered = Number(readSession("v2.objectId")) || null;
-  // Переход из V1 («Новый интерфейс — экспериментальный») несёт текущий объект: `/v2?object_id=N`. Параметр разовый —
+  // Переход из V1 («Интерфейс V2 — экспериментальный») несёт текущий объект: `/v2?object_id=N`. Параметр разовый —
   // стирается из адреса; объект берётся только из списка доступных пользователю (как и остальные источники выбора).
   const fromV1 = Number(new URLSearchParams(location.search).get("object_id")) || null;
   if (fromV1) { try {
@@ -302,7 +302,7 @@ async function renderShell(user, permissions) {
       </div>
       <div class="v2-head-right">
         <button type="button" class="v2-objbtn" id="v2-object-btn" aria-haspopup="dialog"
-                title="Права и переходы в текущем интерфейсе считаются по выбранному объекту"></button>
+                title="Права и переходы в интерфейсе V1 считаются по выбранному объекту"></button>
         <!-- Скрытый совместимый хук (НЕ часть видимого интерфейса, aria-hidden, вне табуляции): пока выбор объекта
              был единственным select#v2-object, несколько браузерных проверок ДРУГИХ областей (обмен, МФР,
              ЖБИ-линии — scripts/v2_tests/exchange/*.mjs, scripts/verify_mfr_lib.mjs, scripts/verify_lines_ui.mjs)
@@ -317,8 +317,8 @@ async function renderShell(user, permissions) {
         <span class="v2-user-name">${escapeHtml(user.display_name)}</span>
         <button type="button" class="v2-back" id="v2-logout-btn" title="Завершить свой сеанс и вернуться на экран входа">Выйти</button>
         <div class="v2-ui-switch" role="group" aria-label="Интерфейс">
-          <button type="button" id="v2-back-btn" title="Перейти в текущий интерфейс на том же объекте" aria-pressed="false">Текущий</button>
-          <button type="button" class="active" aria-pressed="true" title="Вы в новом интерфейсе" tabindex="-1">Новый</button>
+          <button type="button" id="v2-back-btn" title="Перейти в интерфейс V1 на том же объекте" aria-pressed="false">V1</button>
+          <button type="button" class="active" aria-pressed="true" title="Вы в интерфейсе V2" tabindex="-1">V2</button>
         </div>
       </div>
     </header>
@@ -341,7 +341,7 @@ async function renderShell(user, permissions) {
     const el = document.getElementById("v2-build");
     if (!el || !b || !b.commit) return;
     el.textContent = `сборка ${String(b.commit).slice(0, 7)}`;
-    el.title = `Сборка нового интерфейса: код ${b.commit}${b.built ? `, опубликовано ${b.built}` : ""}`;
+    el.title = `Сборка интерфейса V2: код ${b.commit}${b.built ? `, опубликовано ${b.built}` : ""}`;
     el.hidden = false;
   }).catch(() => { /* индикатор вторичен */ });
   const backBtn = document.getElementById("v2-back-btn");
@@ -574,7 +574,7 @@ async function renderShell(user, permissions) {
   const WAIT_TEXT = "Идёт сохранение — переход временно недоступен";
   function syncPending(n) {
     backBtn.disabled = n > 0;
-    backBtn.title = n > 0 ? "Дождитесь завершения сохранения" : "Перейти в текущий интерфейс на том же объекте";
+    backBtn.title = n > 0 ? "Дождитесь завершения сохранения" : "Перейти в интерфейс V1 на том же объекте";
     objectBtn.disabled = n > 0 || !tree.projects.length;
     legacySelect.disabled = n > 0 || !activeObjects.length;
     shellNav.setBusy(n > 0);
@@ -630,7 +630,7 @@ async function renderShell(user, permissions) {
       // Для рабочих мест (v2-ws-mode) дублировать незачем: своя подпись уже есть в ws-top (workspace.js).
       headSection.textContent = key === "home" ? "" : (target ? target.title : "");
       if (key === "home") {
-        document.title = "ЖБИ — новый интерфейс";
+        document.title = "ЖБИ — интерфейс V2";
         // Скрытое делится на две причины: раздел не относится к типу текущего объекта (ЖБИ ↔ МФР) и нет прав. Администратору
         // «скрыто по правам» не бывает — у него остаётся только первая причина.
         const hiddenAll = registry.screens.filter((s) => !allowedScreen(s));
@@ -827,7 +827,7 @@ async function renderShell(user, permissions) {
     if (!off.length && !hit) { gateNote.hidden = true; gateNote.innerHTML = ""; return; }
     const link = target ? linkList(target, registry.structure[target.id], objectId) : "";
     gateNote.innerHTML = (hit ? `<strong>Не выполнено:</strong> ${escapeHtml(hit)} ` : "")
-      + (off.length ? `<strong>В этом разделе отключено в новом интерфейсе:</strong> ${off.map((r) => escapeHtml(r.action)).join("; ")}. Просмотр доступен. ` : "")
+      + (off.length ? `<strong>В этом разделе отключено в интерфейсе V2:</strong> ${off.map((r) => escapeHtml(r.action)).join("; ")}. Просмотр доступен. ` : "")
       + link;
     gateNote.hidden = false;
   }

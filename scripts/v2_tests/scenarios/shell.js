@@ -59,7 +59,7 @@ export const tests = [
     },
   },
   {
-    id: "SH-14", title: "«← Текущий интерфейс» при несохранённом: диалог, «Остаться» — остаёмся; быстрые клики — один диалог",
+    id: "SH-14", title: "«← Интерфейс V1» при несохранённом: диалог, «Остаться» — остаёмся; быстрые клики — один диалог",
     async run(t) {
       const a = await openApp();
       await makeUaDirty(a);
@@ -91,7 +91,7 @@ export const tests = [
       const a = await openApp({ home: true });
       await waitFor(() => a.$$(NAV).length > 3, { what: "навигация по разделам сервиса" });
       t.eq(pressed(a), ["home"], "открыта начальная страница");
-      t.has(a.$("#v2-content").innerText, "Новый интерфейс — экспериментальный", "заголовок начальной страницы");
+      t.has(a.$("#v2-content").innerText, "Интерфейс V2 — экспериментальный", "заголовок начальной страницы");
       const keys = a.$$(NAV).map((b) => b.dataset.section);
       for (const k of MODULE_KEYS) t.ok(keys.includes(k), `в навигации есть перенесённый раздел ${k}`);
       t.ok(keys.length >= 40, `в навигации много разделов сервиса (${keys.length})`);
@@ -211,13 +211,13 @@ export const tests = [
         await a.settle(40);
         t.ok(a.$$(NAV).every((b) => b.disabled), `[${outcome}] вкладки разделов заблокированы во время записи`);
         t.has(a.$("#v2-nav-note").textContent, "Идёт сохранение", `[${outcome}] причина написана рядом с вкладками`);
-        t.ok(a.$("#v2-back-btn").disabled, `[${outcome}] «← Текущий интерфейс» заблокирована`);
+        t.ok(a.$("#v2-back-btn").disabled, `[${outcome}] «← Интерфейс V1» заблокирована`);
         t.eq(a.click(a.$(`${NAV}[data-section="counterparties"]`)), false, `[${outcome}] клик по вкладке невозможен`);
         t.eq(pressed(a), ["users-access"], `[${outcome}] раздел не сменился`);
         if (outcome === "успех") hold.release(); else hold.fail(500, "Сервер недоступен");
         await waitFor(() => !a.$$(NAV).some((b) => b.disabled), { what: "снятие блокировки" });
         t.eq(a.$("#v2-nav-note").textContent, "", `[${outcome}] пояснение убрано`);
-        t.ok(!a.$("#v2-back-btn").disabled, `[${outcome}] «← Текущий интерфейс» доступна`);
+        t.ok(!a.$("#v2-back-btn").disabled, `[${outcome}] «← Интерфейс V1» доступна`);
         a.close();
       }
     },

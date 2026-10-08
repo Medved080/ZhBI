@@ -28,7 +28,7 @@ export function mountAddressClassifier(el, { screen, structure, objectId, api, r
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Загрузка классификатора в новом интерфейсе." : "Просмотр состояния."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Загрузка классификатора в интерфейсе V2." : "Просмотр состояния."}</strong>
         Подсказки по адресу открыты любому вошедшему и не раскрывают ничего о стройках предприятия; загрузка классификатора пишет сотни мегабайт на диск сервера и занимает минуты.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <div id="ac-body"></div>

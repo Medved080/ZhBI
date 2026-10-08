@@ -25,7 +25,7 @@ try {
   let req = await waitReq(b, /\/reports\/completion$/, from);
   await b.waitFor(`!!document.querySelector('#rd-report table.v2-cmp-pivot')`, 30000);
   check("user4: сводная строится (чтение разрешено) — 200", req.status === 200);
-  const allowed = new Set(["Обновить", "Открыть в текущем интерфейсе →", "Печать", "Выгрузить в XLSX", "Выгрузить в PDF", "Справка", "◀", "▶", "Учитывать текущий фильтр схемы", "Завод", "Договор", "Спецификация", "Тип", "Подтип", "Марка", "Статус", "Кран", "Стоянка"]);
+  const allowed = new Set(["Обновить", "Открыть в интерфейсе V1 →", "Печать", "Выгрузить в XLSX", "Выгрузить в PDF", "Справка", "◀", "▶", "Учитывать текущий фильтр схемы", "Завод", "Договор", "Спецификация", "Тип", "Подтип", "Марка", "Статус", "Кран", "Стоянка"]);
   let acts = await actions(b);
   const treeToggles = await b.eval(`document.querySelectorAll('#rd-report .v2-tree-toggle').length`);
   const extra = acts.filter((a) => !allowed.has(a) && !/^[▸▾]$/.test(a) && a !== "");

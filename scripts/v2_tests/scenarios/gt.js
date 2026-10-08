@@ -4,7 +4,7 @@
 import { openApp, waitFor } from "/tests/helpers.js";
 
 const NAV = ".v2-nav [data-section]";
-const NOTICE = "Экспериментальный интерфейс. Часть функций ещё дорабатывается. Непроверенные операции выполняйте в текущем интерфейсе";
+const NOTICE = "Экспериментальный интерфейс. Часть функций ещё дорабатывается. Непроверенные операции выполняйте в интерфейсе V1";
 // Изменяющие запросы к «серверу»: всё, кроме GET и POST-чтения отчётов (`/reports/*`).
 const writes = (a) => a.ctl.log.filter((e) => e.method !== "GET" && !/^\/reports\//.test(e.path));
 const gateIsReal = async () => { const g = await import("/static/v2/write-gate.js"); return g.POLICY.length > 0; };
@@ -23,7 +23,7 @@ export const tests = [
         await waitFor(() => a.$("#v2-back-btn"), { what: "шапка" });
         // 2026-09-30: пометка «экспериментальный интерфейс» снята по решению пользователя
         t.ok(!a.$("#v2-exp-banner") && !a.$(".v2-badge"), "пометок «экспериментальный» в оболочке нет");
-        t.ok(a.$("#v2-back-btn"), "кнопка возврата в текущий интерфейс в шапке на месте");
+        t.ok(a.$("#v2-back-btn"), "кнопка возврата в интерфейс V1 в шапке на месте");
         for (const key of ["dict-smu", "zones", "users-access"]) {
           a.click(a.$(`${NAV}[data-section="${key}"]`));
           await waitFor(() => a.$(`${NAV}[data-section="${key}"][aria-pressed="true"]`), { what: key });
@@ -100,7 +100,7 @@ export const tests = [
         ["PUT", "/settings/info-plate?object_id=2", { late_threshold_days: 2, other: 1 }],
       ]) t.ok(!ok(m, p, b), `отключено: ${m} ${p}${b && Object.keys(b).length ? " " + JSON.stringify(b) : ""}`);
       t.has(g.checkWrite("POST", "/counterparties", {}).message, "отключена в экспериментальном интерфейсе", "текст отказа");
-      t.has(g.checkWrite("POST", "/counterparties", {}).message, "текущем интерфейсе", "текст отказа ведёт в V1");
+      t.has(g.checkWrite("POST", "/counterparties", {}).message, "интерфейсе V1", "текст отказа ведёт в V1");
     },
   },
   {

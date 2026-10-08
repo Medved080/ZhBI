@@ -1,4 +1,4 @@
-/* Новый интерфейс (V2) — предпросмотр. Документ полностью отдельный от
+/* Интерфейс V2 (V2) — предпросмотр. Документ полностью отдельный от
    V1 (app/static/index.html): общего DOM нет, поэтому здесь не нужен
    scoping-префикс вроде #ua-concept из макета-прототипа. */
 
@@ -1436,7 +1436,7 @@ button.ws-tile:hover { background: var(--surface); }
 }
 
 
-/* Переключатель интерфейсов «Текущий | Новый» в верхней панели (2026-10-06); кнопка с id v2-back-btn — «Текущий» (main.js: onBackClick) */
+/* Переключатель интерфейсов «V1 | V2» в верхней панели (2026-10-06); кнопка с id v2-back-btn — «Текущий» (main.js: onBackClick) */
 .v2-ui-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex: none; }
 .v2-ui-switch button { border: 0; background: var(--bg); color: var(--muted); font: inherit; font-size: 0.8125rem; font-weight: 500; padding: 5px 12px; cursor: pointer; }
 .v2-ui-switch button + button { border-left: 1px solid var(--line); }

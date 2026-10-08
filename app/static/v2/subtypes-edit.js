@@ -37,7 +37,7 @@ export function mountSubtypesEdit(el, { screen, structure, objectId, api, groupT
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite || canWriteMarks ? "Правка в новом интерфейсе." : "Просмотр."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite || canWriteMarks ? "Правка в интерфейсе V2." : "Просмотр."}</strong>
         Подтипы и марки — свои у каждого объекта, наполняются сами при загрузке чертежа. Запись с изделиями здесь не удаляется без замены — план последствий откроет выбор записи-замены.
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <div id="sb-body"></div><p id="sb-status" class="v2-muted" role="status" aria-live="polite"></p>

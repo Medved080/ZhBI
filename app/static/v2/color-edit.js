@@ -26,7 +26,7 @@ export function mountColorEdit(el, { screen, structure, objectId, api, groupTitl
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Цвета правятся в новом интерфейсе." : "Просмотр цветов."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Цвета правятся в интерфейсе V2." : "Просмотр цветов."}</strong>
         ${esc(spec.scopeNote || "")} ${canWrite ? "Сохраняются только изменённые строки." : "У вас нет права изменять эти цвета."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       <div id="ce-body"></div>

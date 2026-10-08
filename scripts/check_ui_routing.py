@@ -18,7 +18,7 @@ def get(path, cookie=None):
 
 
 def which(html):
-    return "v2" if "новый интерфейс (предпросмотр)" in html.lower() or 'src="/static/v2/main.js"' in html else "v1"
+    return "v2" if "интерфейс v2 (предпросмотр)" in html.lower() or 'src="/static/v2/main.js"' in html else "v1"
 
 
 def check(cond, label):

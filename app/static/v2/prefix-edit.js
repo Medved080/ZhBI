@@ -20,7 +20,7 @@ export function mountPrefixEdit(el, { screen, structure, objectId, api, groupTit
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в новом интерфейсе." : "Просмотр справочника."}</strong>
+      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в интерфейсе V2." : "Просмотр справочника."}</strong>
         ${canWrite ? "Префикс определяет тип элемента по марке при импорте чертежа. Повторный префикс заменяет прежний тип — только после подтверждения." : "У вас нет права изменять этот справочник."}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       ${canWrite ? `<form id="pe-add" class="v2-bar" autocomplete="off">
@@ -120,7 +120,7 @@ export function mountPrefixEdit(el, { screen, structure, objectId, api, groupTit
       catch (e) { setStatus(`Не удалось получить план удаления: ${errText(e)}`); return; }
       setStatus("");
       if (plan.blockers?.length || plan.needs_replacement || (plan.refs || []).some((r) => r.count > 0)) {
-        await showInfoDialog(`Удалить «${prefix}» здесь нельзя: запись используется. Удаление с заменой — в текущем интерфейсе.`); return;
+        await showInfoDialog(`Удалить «${prefix}» здесь нельзя: запись используется. Удаление с заменой — в интерфейсе V1.`); return;
       }
       if (!(await showConfirmDialog(`Удалить префикс «${prefix} → ${rec.element_type}»?`, { confirmLabel: "Удалить", danger: true }))) return;
       try {

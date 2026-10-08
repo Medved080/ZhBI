@@ -120,7 +120,7 @@ try {
   await browser.waitFor("!!document.querySelector('.cz-v1-modal #cz-3d canvas')", 30000);
   const v1Switch3d = await browser.rect(".cz-v1-modal #cz-view-2d");
   assert.ok(Math.abs(v1Switch2d.x - v1Switch3d.x) < 1);
-  console.log("PASS V1: тот же 3D-редактор доступен в текущем интерфейсе");
+  console.log("PASS V1: тот же 3D-редактор доступен в интерфейсе V1");
   assert.equal(browser.exceptions.length, 0, browser.exceptions.join("\n"));
   assert.equal(browser.requests.filter((request) => /\/publish$/.test(request.url)).length, 0);
 } finally {
