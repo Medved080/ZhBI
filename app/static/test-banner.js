@@ -5,6 +5,8 @@
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (info) {
       if (!info || !info.test_server) return;
+      // В кадре (схема рабочего места V2 — страница V1 в iframe, встроенный калькулятор) плашка уже есть у оболочки: вторая не нужна
+      if (window.parent !== window) return;
       var HEIGHT = 34;
       var style = document.createElement("style");
       style.textContent =
@@ -13,6 +15,7 @@
         "background:#d9480f;color:#fff;font:600 14px/1.2 system-ui,sans-serif;text-align:center;" +
         "box-shadow:0 2px 6px rgba(0,0,0,.35);white-space:nowrap;overflow:hidden}" +
         "#test-server-banner a{color:#fff;text-decoration:underline}" +
+        "html.has-test-banner{--test-banner-h:" + HEIGHT + "px}" +
         "html.has-test-banner body{position:absolute;top:" + HEIGHT + "px;left:0;right:0;bottom:0;height:auto;min-height:0}" +
         // Полноэкранные слои (модалки, диалоги, Гант) — position:fixed от края окна, а не от смещённого body:
         // без сдвига плашка лежала бы поверх их верхней части и закрывала кнопки. Плашка ниже них по z-index,

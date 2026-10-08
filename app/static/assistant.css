@@ -4,8 +4,8 @@
 [data-assistant] button{cursor:pointer;border:1px solid var(--line,#dbe4ee);border-radius:8px;padding:7px 11px;background:var(--bg,#fff)}
 [data-assistant] button:disabled{opacity:.6;cursor:wait}
 [data-assistant] button:focus-visible,[data-assistant] input:focus-visible,[data-assistant] select:focus-visible,[data-assistant] textarea:focus-visible{outline:2px solid var(--accent,#0d4cd3);outline-offset:2px}
-[data-assistant] .ai-launch{position:fixed;top:14px;right:14px;z-index:19000;height:40px;background:var(--accent,#0d4cd3);color:var(--accent-ink,#fff);padding:0 13px;border-radius:12px;font-size:13px;font-weight:600;white-space:nowrap;box-shadow:none;border-color:transparent}
-[data-assistant] .ai-panel{position:fixed;z-index:19001;right:14px;top:62px;width:min(460px,calc(100vw - 28px));max-height:calc(100dvh - 76px);background:var(--bg,#fff);border:1px solid var(--line,#dbe4ee);border-radius:15px;box-shadow:0 12px 50px #0003;display:flex;flex-direction:column;overflow:hidden}
+[data-assistant] .ai-launch{position:fixed;top:calc(14px + var(--test-banner-h,0px));right:14px;z-index:19000;height:40px;background:var(--accent,#0d4cd3);color:var(--accent-ink,#fff);padding:0 13px;border-radius:12px;font-size:13px;font-weight:600;white-space:nowrap;box-shadow:none;border-color:transparent}
+[data-assistant] .ai-panel{position:fixed;z-index:19001;right:14px;top:calc(62px + var(--test-banner-h,0px));width:min(460px,calc(100vw - 28px));max-height:calc(100dvh - 76px - var(--test-banner-h,0px));background:var(--bg,#fff);border:1px solid var(--line,#dbe4ee);border-radius:15px;box-shadow:0 12px 50px #0003;display:flex;flex-direction:column;overflow:hidden}
 [data-assistant] .ai-heading{display:flex;align-items:center;justify-content:space-between;padding:15px 17px;border-bottom:1px solid var(--line,#dbe4ee);background:var(--surface,#f5f7fa)}
 [data-assistant] small{display:block;color:var(--muted,#61768a);font-size:11px;margin-top:5px}
 [data-assistant] .ai-heading button{font-size:24px;line-height:1}
@@ -50,13 +50,15 @@ html.has-ai-launch #toolbar,html.has-ai-launch .v2-head,html.has-ai-launch #prec
 
 /* Размер и положение кнопки — по верхней панели своего интерфейса (2026-10-07): у плиток текущего интерфейса высота 40 px и скругление 12,
    у кнопок нового — 35 px и 7, у панели калькулятора — 33 px и 5, в строке высотой 46 px. */
-html[data-ai-host="v2"] [data-assistant] .ai-launch{top:14px;height:35px;border-radius:7px;font-weight:500}
-html[data-ai-host="v2"] [data-assistant] .ai-panel{top:58px}
+html[data-ai-host="v2"] [data-assistant] .ai-launch{top:calc(14px + var(--test-banner-h,0px));height:35px;border-radius:7px;font-weight:500}
+html[data-ai-host="v2"] [data-assistant] .ai-panel{top:calc(58px + var(--test-banner-h,0px))}
 /* Рабочее место нового интерфейса (#v2-root.v2-ws-mode): шапка ужата до 46 px, кнопки в ней — 29 px и стоят на 8 px сверху, а правило
    `#v2-root.v2-ws-mode .v2-head { padding: 5px 14px }` сбрасывало отступ справа — кнопка ИИ закрывала переключатель «Текущий / Новый»
    (живая находка 2026-10-07: на экране отчёта шапка высокая, и там размер был подогнан верно, а здесь кнопка выходила на голову выше соседей). */
 html.has-ai-launch #v2-root.v2-ws-mode .v2-head{padding-right:88px}
-html[data-ai-host="v2"]:has(#v2-root.v2-ws-mode) [data-assistant] .ai-launch{top:8px;height:29px}
-html[data-ai-host="v2"]:has(#v2-root.v2-ws-mode) [data-assistant] .ai-panel{top:46px}
-html[data-ai-host="calc"] [data-assistant] .ai-launch{top:6px;height:33px;border-radius:5px;padding:0 11px}
-html[data-ai-host="calc"] [data-assistant] .ai-panel{top:48px}
+html[data-ai-host="v2"]:has(#v2-root.v2-ws-mode) [data-assistant] .ai-launch{top:calc(8px + var(--test-banner-h,0px));height:29px}
+html[data-ai-host="v2"]:has(#v2-root.v2-ws-mode) [data-assistant] .ai-panel{top:calc(46px + var(--test-banner-h,0px))}
+html[data-ai-host="calc"] [data-assistant] .ai-launch{top:calc(6px + var(--test-banner-h,0px));height:33px;border-radius:5px;padding:0 11px}
+html[data-ai-host="calc"] [data-assistant] .ai-panel{top:calc(48px + var(--test-banner-h,0px))}
+
+/* Тестовый сервер (test-banner.js): плашка высотой --test-banner-h занимает верх окна — кнопка и панель помощника опускаются под неё (2026-10-08) */
