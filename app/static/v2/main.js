@@ -770,6 +770,11 @@ async function renderShell(user, permissions) {
         // График СМР: версии, исходные данные расчёта, расчёт с предпросмотром, диаграмма Ганта
         document.title = `${target.title} — ЖБИ`;
         activeModule = mountSchedule(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
+      } else if (target.impl === "server-exchange") {
+        // Обмен данными с другим сервером: общий с V1 модуль app/static/server-exchange.js (server-exchange-screen.js — рамка V2)
+        document.title = `${target.title} — ЖБИ`;
+        const { mountServerExchangeScreen } = await import("./server-exchange-screen.js");
+        activeModule = mountServerExchangeScreen(content, { screen: target, api, rights, groupTitle: groupTitle(target.group) });
       } else if (target.impl === "calc-embed") {
         // Калькулятор: страница подсистемы /calc/ кадром внутри оболочки (calc-embed.js)
         document.title = `${target.title} — ЖБИ`;

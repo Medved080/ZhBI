@@ -29033,6 +29033,28 @@ document.getElementById("menu-bulk-edit").addEventListener("click", () => {
   bulkEditBackdrop.classList.add("open");
 });
 
+// ---------- Обмен данными с другим сервером (2026-10-08) ----------
+// Содержимое рисует ES-модуль server-exchange.js (общий с V2), подгружается при первом открытии; зависимости — явно.
+let dataExchangeModule = null;
+document.getElementById("menu-data-exchange").addEventListener("click", async () => {
+  const backdrop = document.getElementById("data-exchange-backdrop");
+  backdrop.classList.add("open");
+  if (dataExchangeModule) return;
+  try {
+    const module = await import("/static/server-exchange.js");
+    dataExchangeModule = module.mountServerExchange(document.getElementById("data-exchange-body"), {
+      canWrite: can("db_transfer", "write"),
+      request: (method, path, body) => api(path, body === undefined ? { method } : {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    });
+  } catch (e) {
+    showToast("Не удалось открыть обмен данными: " + e.message, "warning");
+  }
+});
+document.getElementById("data-exchange-close").addEventListener("click", () => {
+  document.getElementById("data-exchange-backdrop").classList.remove("open");
+});
+
 // Сколько строк уедет в файл при отмеченной галочке «Учитывать фильтр» —
 // то же число и та же функция отбора, что у выгрузки в XLS со схемы
 // (passesPlacementFilters): фильтры считаются на клиенте, и второго их

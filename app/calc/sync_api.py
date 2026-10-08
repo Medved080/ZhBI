@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.access import assert_feature, has_feature, is_system_admin
 from app.auth import SESSION_COOKIE, get_current_user
@@ -33,7 +33,7 @@ from app.features import READ, WRITE
 
 from . import auth, runtime
 from .database import PROJECT_ID, audit, connect, dumps, now, transaction
-from .sync import CHUNK, SyncError, Staging, apply_package, asset_manifest, collect_package, file_sha256, install_assets, needed
+from .sync import CHUNK, SHA_RE, SyncError, Staging, apply_package, asset_manifest, blob_path_for_row, collect_package, file_sha256, install_assets, needed, valid_asset_path
 
 _COMMIT_LOCK = threading.Lock()
 MIN_CHUNK = 32 * 1024
@@ -325,11 +325,9 @@ def size_text(n):
     return "%.1f МБ" % (n / 1048576) if n >= 1048576 else "%d КБ" % max(1, n // 1024)
 
 
-def run_push(settings, target, dry_run, job):
-    def note(text):
-        job["log"].append(text)
-        job["message"] = text
-
+def prepare_push(settings, remote, note):
+    """Сборка пакета, передача его описания и «план» принимающей стороны: что она создаст, обновит, пропустит и какие файлы ей нужны.
+    Ничего не применяет. Общая часть отправки на цель по токену и обмена данными между серверами (app/data_exchange_api.py)."""
     conn = connect(settings.database_path)
     try:
         from .document_models import ASSETS
@@ -341,8 +339,6 @@ def run_push(settings, target, dry_run, job):
     finally:
         conn.close()
     note("Пакет собран: изделий %d, файлов исходников %d, вложений %d" % (len(package["products"]), len(package["assets"]), len(package["blobs"])))
-    remote = Remote(target)
-    note("Согласование с сервером «%s»…" % target.name)
     import gzip
     import tempfile
     package_bytes = gzip.compress(json.dumps(package, ensure_ascii=False).encode("utf-8"), 6)
@@ -354,11 +350,14 @@ def run_push(settings, target, dry_run, job):
         note("Передача описания данных (%s)…" % size_text(len(package_bytes)))
         upload_file(remote, "package", package_id, stream.name, package_sha)
     plan = remote.call("POST", "/calc/api/sync/plan", {"packageId": package_id})
-    job["plan"] = plan
     note("Нужно передать: файлов исходников %d, вложений %d" % (len(plan["assetsNeeded"]), len(plan["blobsNeeded"])))
-    if dry_run:
-        job["result"] = {"dryRun": True, **plan}
-        return
+    return {"package": package, "blob_paths": blob_paths, "package_id": package_id, "plan": plan}
+
+
+def finish_push(settings, remote, ctx, job, note):
+    """Передача недостающих файлов и применение пакета на принимающей стороне (commit)."""
+    from .document_models import ASSETS
+    package, plan, package_id, blob_paths = ctx["package"], ctx["plan"], ctx["package_id"], ctx["blob_paths"]
     sizes = {a["path"]: a["size"] for a in package["assets"]}
     total = sum(sizes[p] for p in plan["assetsNeeded"]) + sum(next(b["size"] for b in package["blobs"] if b["sha256"] == s) for s in plan["blobsNeeded"])
     sent = [0]
@@ -371,7 +370,6 @@ def run_push(settings, target, dry_run, job):
     for sha in plan["blobsNeeded"]:
         note("Вложение %s…" % sha[:12])
         upload_file(remote, "blob", sha, blob_paths[sha], sha, progress)
-    from .document_models import ASSETS
     hashes = {a["path"]: a["sha256"] for a in package["assets"]}
     for relative in plan["assetsNeeded"]:
         note("Файл исходников %s…" % relative)
@@ -380,6 +378,22 @@ def run_push(settings, target, dry_run, job):
     result = remote.call("POST", "/calc/api/sync/commit", {"packageId": package_id}, timeout=900)
     job["result"] = result
     note("Готово")
+    return result
+
+
+def run_push(settings, target, dry_run, job):
+    def note(text):
+        job["log"].append(text)
+        job["message"] = text
+
+    remote = Remote(target)
+    note("Согласование с сервером «%s»…" % target.name)
+    ctx = prepare_push(settings, remote, note)
+    job["plan"] = ctx["plan"]
+    if dry_run:
+        job["result"] = {"dryRun": True, **ctx["plan"]}
+        return
+    finish_push(settings, remote, ctx, job, note)
 
 
 def _log(settings, direction, target, actor, status, summary, started):
@@ -389,6 +403,76 @@ def _log(settings, direction, target, actor, status, summary, started):
 
 
 # ------------------------------------------------------------------ маршруты
+def calc_assets_dir():
+    from .document_models import ASSETS
+    return Path(ASSETS)
+
+
+def blob_sources(staging, uploads, package, conn):
+    """Где лежит каждое вложение пакета: в очереди приёма или уже у нас (по SHA-256)."""
+    found = {}
+    for blob in package.get("blobs", []):
+        sha = blob["sha256"]
+        if staging.received("blob", sha):
+            found[sha] = staging.done("blob", sha)
+            continue
+        row = conn.execute("SELECT storage_name FROM project_files WHERE sha256=? LIMIT 1", (sha,)).fetchone()
+        if row and (uploads / row["storage_name"]).is_file():
+            found[sha] = uploads / row["storage_name"]
+    return found
+
+
+def commit_package(settings, staging, assets_dir, uploads, package, package_file, actor_id):
+    """Применение принятого пакета: общий путь и для приёма по токену, и для обмена данными между серверами.
+    Бросает SyncError (в том числе «не все файлы переданы» с перечнем недостающего)."""
+    started = now()
+    if not _COMMIT_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "На сервере уже выполняется другой приём пакета")
+    try:
+        conn = connect(settings.database_path)
+        try:
+            missing_assets, missing_blobs = needed(package, assets_dir, staging, conn)
+            if missing_assets or missing_blobs:
+                raise SyncError("Не все файлы переданы", 409, {"assetsNeeded": missing_assets, "blobsNeeded": missing_blobs})
+            sources = blob_sources(staging, uploads, package, conn)
+        finally:
+            conn.close()
+        try:
+            with transaction(settings.database_path) as conn:
+                report = apply_package(conn, package, actor_id, staged_blobs=sources, uploads_dir=uploads)
+                audit(conn, actor_id, "sync.received", PROJECT_ID, {"products": {k: (len(v) if isinstance(v, list) else v) for k, v in report["products"].items()}})
+            updated_assets = install_assets(assets_dir, staging, package.get("assets", []))
+        except SyncError as error:
+            _log(settings, "receive", None, actor_id, "error", {"error": str(error)}, started)
+            raise
+        if updated_assets:
+            from .commercial_references import reference_catalog
+            from .document_models import catalog
+            catalog.cache_clear()
+            from . import collisions
+            collisions.clear_cache()
+            reference_catalog.cache_clear()
+            with transaction(settings.database_path) as conn:
+                from .discrepancies import sync_catalog_issues
+                from .norms import get_norms
+                sync_catalog_issues(conn)
+                try:
+                    get_norms(conn)
+                except (FileNotFoundError, KeyError):
+                    pass  # каталог моделей в пакете не пришёл: нормы заведутся при следующей отправке
+                from .prices import get_prices
+                get_prices(conn)
+        for sha in {b["sha256"] for b in package.get("blobs", [])}:
+            staging.done("blob", sha).unlink(missing_ok=True)
+        if package_file is not None:
+            package_file.unlink(missing_ok=True)
+        result = {"report": report, "assetsUpdated": updated_assets}
+        _log(settings, "receive", None, actor_id, "ok", result, started)
+        return result
+    finally:
+        _COMMIT_LOCK.release()
+
+
 def build_sync_router(settings):
     router = APIRouter(prefix="/calc/api/sync", dependencies=[Depends(runtime.require_ready)])
     read = make_actor_dependency(settings, READ)
@@ -396,24 +480,10 @@ def build_sync_router(settings):
     staging = Staging(Path(settings.data_dir) / "sync-staging")
     uploads = Path(settings.data_dir) / "uploads"
 
-    def assets_dir():
-        from .document_models import ASSETS
-        return Path(ASSETS)
+    assets_dir = calc_assets_dir
 
     def fail(error):
         return JSONResponse({"detail": str(error), **error.extra}, status_code=error.status)
-
-    def blob_sources(package, conn):
-        found = {}
-        for blob in package.get("blobs", []):
-            sha = blob["sha256"]
-            if staging.received("blob", sha):
-                found[sha] = staging.done("blob", sha)
-                continue
-            row = conn.execute("SELECT storage_name FROM project_files WHERE sha256=? LIMIT 1", (sha,)).fetchone()
-            if row and (uploads / row["storage_name"]).is_file():
-                found[sha] = uploads / row["storage_name"]
-        return found
 
     @router.get("/state")
     def state(actor=Depends(read)):
@@ -474,52 +544,44 @@ def build_sync_router(settings):
     @router.post("/commit")
     async def commit(request: Request, actor=Depends(write)):
         package, package_file = load_package(await request.json())
-        started = now()
-        if not _COMMIT_LOCK.acquire(blocking=False):
-            raise HTTPException(409, "На сервере уже выполняется другой приём пакета")
         try:
+            return commit_package(settings, staging, assets_dir(), uploads, package, package_file, actor["id"])
+        except SyncError as error:
+            return fail(error)
+
+    # -------- чтение для обмена данными между серверами (app/data_exchange_api.py: «получить» калькулятор)
+    @router.get("/export")
+    def export_package(actor=Depends(read)):
+        """Пакет данных калькулятора ЭТОГО сервера (то же, что собирает отправка) — для получения другим сервером."""
+        conn = connect(settings.database_path)
+        try:
+            return collect_package(conn, assets_dir(), uploads)
+        finally:
+            conn.close()
+
+    @router.get("/download")
+    def download(kind: str, key: str, offset: int = 0, length: int = CHUNK, actor=Depends(read)):
+        """Кусок файла исходников (`asset`, по пути) или вложения (`blob`, по SHA-256) — для получения другим сервером."""
+        if kind not in {"asset", "blob"} or offset < 0 or length <= 0:
+            raise HTTPException(400, "Недопустимые параметры")
+        length = min(length, CHUNK)
+        if kind == "asset":
+            if not valid_asset_path(key):
+                raise HTTPException(400, "Недопустимый путь файла")
+            path = assets_dir() / key
+        else:
             conn = connect(settings.database_path)
             try:
-                missing_assets, missing_blobs = needed(package, assets_dir(), staging, conn)
-                if missing_assets or missing_blobs:
-                    return JSONResponse({"detail": "Не все файлы переданы", "assetsNeeded": missing_assets, "blobsNeeded": missing_blobs}, status_code=409)
-                sources = blob_sources(package, conn)
+                path = blob_path_for_row(uploads, conn, key) if SHA_RE.match(key) else None
             finally:
                 conn.close()
-            try:
-                with transaction(settings.database_path) as conn:
-                    report = apply_package(conn, package, actor["id"], staged_blobs=sources, uploads_dir=uploads)
-                    audit(conn, actor["id"], "sync.received", PROJECT_ID, {"products": {k: (len(v) if isinstance(v, list) else v) for k, v in report["products"].items()}})
-                updated_assets = install_assets(assets_dir(), staging, package.get("assets", []))
-            except SyncError as error:
-                _log(settings, "receive", None, actor["id"], "error", {"error": str(error)}, started)
-                return fail(error)
-            if updated_assets:
-                from .commercial_references import reference_catalog
-                from .document_models import catalog
-                catalog.cache_clear()
-                from . import collisions
-                collisions.clear_cache()
-                reference_catalog.cache_clear()
-                with transaction(settings.database_path) as conn:
-                    from .discrepancies import sync_catalog_issues
-                    from .norms import get_norms
-                    sync_catalog_issues(conn)
-                    try:
-                        get_norms(conn)
-                    except (FileNotFoundError, KeyError):
-                        pass  # каталог моделей в пакете не пришёл: нормы заведутся при следующей отправке
-                    from .prices import get_prices
-                    get_prices(conn)
-            for sha in {b["sha256"] for b in package.get("blobs", [])}:
-                staging.done("blob", sha).unlink(missing_ok=True)
-            if package_file is not None:
-                package_file.unlink(missing_ok=True)
-            result = {"report": report, "assetsUpdated": updated_assets}
-            _log(settings, "receive", None, actor["id"], "ok", result, started)
-            return result
-        finally:
-            _COMMIT_LOCK.release()
+        if path is None or not Path(path).is_file():
+            raise HTTPException(404, "Файл не найден")
+        total = Path(path).stat().st_size
+        with Path(path).open("rb") as stream:
+            stream.seek(offset)
+            data = stream.read(length)
+        return Response(content=data, media_type="application/octet-stream", headers={"X-Total-Size": str(total)})
 
     # -------- отправка
     @router.post("/push")

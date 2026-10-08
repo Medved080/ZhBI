@@ -5371,6 +5371,10 @@
                  границе — см. признак io в app/features.py. Шаги загрузки
                  внутри формы гасятся отдельно (applyBulkEditRights). -->
             <button id="menu-bulk-edit" class="menu-item-strong" data-feature="bulk_edit" data-feature-kind="read">Массовая правка через Excel</button>
+            <!-- Обмен выбранными разделами с другим (тестовым или рабочим) сервером, 2026-10-08: отдельно от «Переноса базы»
+                 (тот ЗАМЕНЯЕТ базу целиком, этот — со сверкой и выбором, ничего не удаляя). Тот же уровень доверия, что у
+                 переноса: право «Перенос базы целиком» (db_transfer), то есть администратор сервиса. -->
+            <button id="menu-data-exchange" data-feature="db_transfer" data-feature-kind="write">Обмен данными с другим сервером</button>
             <button id="btn-upload" data-feature="drawings" data-feature-kind="write">Загрузить чертёж</button>
             <!-- Внешние 3D-модели (благоустройство и т.п., 2026-09-10) —
                  принадлежат ОБЪЕКТУ (проект — только группировка объектов),
@@ -7765,6 +7769,15 @@
       <button class="btn btn-secondary" id="settings-io-close">Закрыть</button>
       <button class="btn btn-primary" id="settings-io-import">Загрузить настройки</button>
     </div>
+  </div>
+</div>
+
+<!-- Обмен данными с другим сервером (2026-10-08): содержимое рисует модуль app/static/server-exchange.js (один на V1 и V2) -->
+<div class="modal-backdrop" id="data-exchange-backdrop">
+  <div class="modal modal-sticky" style="max-width:1100px; width:94vw; max-height:90vh;">
+    <div class="modal-sticky-head"><h2>Обмен данными с другим сервером</h2></div>
+    <div class="modal-sticky-scroll" id="data-exchange-body" style="min-height:260px;"></div>
+    <div class="modal-sticky-foot"><button class="btn btn-secondary" id="data-exchange-close">Закрыть</button></div>
   </div>
 </div>
 

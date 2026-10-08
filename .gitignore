@@ -101,3 +101,4 @@ data/calc/
 
 # результаты прогонов прототипа vector_ocr (марки и числа заказчика)
 scripts/prototypes/vector_ocr/*_last.json
+data/exchange/

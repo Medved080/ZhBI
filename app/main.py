@@ -95,6 +95,7 @@ from app.crane_zone_versions import version_for_date as crane_zone_version_for_d
 from app.crane_zone_versions import business_date as crane_zone_business_date
 from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_api import router as crane_zone_versions_router
+from app.data_exchange_api import router as data_exchange_router
 from app import settings_import
 from app.db import (
     DB_PATH,
@@ -436,6 +437,7 @@ if CALC_AVAILABLE:
     app.include_router(ai_router)
     app.include_router(rmr_router_api)
     app.include_router(assistant_router)
+app.include_router(data_exchange_router)
 app.include_router(crane_zone_versions_router)
 from app.allocation import router as allocation_router, state_router as allocation_state_router  # noqa: E402
 app.include_router(allocation_router)
