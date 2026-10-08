@@ -3,12 +3,12 @@
 .rw-bad { color: var(--bad); font-weight: 600; }
 .rw-nowrap { white-space: nowrap; }
 .rw-center { text-align: center; }
-.rw-h4 { font-size: 13px; margin: 8px 0 4px; display: flex; align-items: center; gap: 8px; }
-.rw-mini { font-size: 12px; padding: 2px 8px; }
+.rw-h4 { font-size: 0.8125rem; margin: 8px 0 4px; display: flex; align-items: center; gap: 8px; }
+.rw-mini { font-size: 0.75rem; padding: 2px 8px; }
 .rw-inline { display: inline-flex; align-items: center; gap: 6px; }
 
 /* «Аналитическая справка»: вердикты-плашки и тон плиток (как .an-pill/.an-tile в V1) */
-.rw-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 12px; white-space: nowrap; color: #fff; background: #8a8f98; }
+.rw-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 0.75rem; white-space: nowrap; color: #fff; background: #8a8f98; }
 .rw-pill-started, .rw-pill-late, .rw-pill-no_contract { background: #b03a2e; }
 .rw-pill-in_time, .rw-pill-waiting_delivery { background: #d68910; color: #241a00; }
 .rw-pill-closed, .rw-pill-on_site { background: #2e7d4f; }
@@ -44,10 +44,10 @@ tr.rw-locatable:hover td { background: var(--sel); }
 .rw-locate { text-decoration: underline dotted; }
 
 /* «График работ по блокам»: группировка фишками, строки групп, Гант (как .bsch-* в V1) */
-.rw-gchip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 8px; font-size: 12px; }
+.rw-gchip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 8px; font-size: 0.75rem; }
 .rw-gchip.off { color: var(--muted); }
 .rw-gchip label { display: inline-flex; align-items: center; gap: 4px; }
-.rw-gmove { border: 0; background: none; color: var(--muted); padding: 0 3px; font-size: 11px; }
+.rw-gmove { border: 0; background: none; color: var(--muted); padding: 0 3px; font-size: 0.6875rem; }
 .rw-gmove:disabled { opacity: 0.3; }
 .rw-bsch td { padding: 5px 8px; }
 .rw-bsch tr.rw-bsch-group td { background: var(--surface); }

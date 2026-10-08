@@ -295,7 +295,7 @@ export function mountMapScreen(el, { screen, objectId, api, go, switchObject }) 
       if (dead) return;
       paintOverlay(`<div class="ws-msg ws-msg-bad" role="alert"><strong>Карту не удалось построить.</strong>
         <p>${esc(e?.message || "неизвестная ошибка")}</p>
-        <p class="v2-muted" style="font-size:12px">Возможно, в этом браузере или на этом рабочем месте недоступен WebGL.</p>
+        <p class="v2-muted" style="font-size:0.75rem">Возможно, в этом браузере или на этом рабочем месте недоступен WebGL.</p>
         <button type="button" class="v2-btn v2-primary" data-act="retry">Повторить</button></div>`);
       overlay.querySelector('[data-act="retry"]')?.addEventListener("click", () => {
         paintOverlay(`<div class="ws-msg ws-msg-load"><span class="ws-spin" aria-hidden="true"></span> Загрузка карты…</div>`);

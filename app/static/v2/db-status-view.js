@@ -48,7 +48,7 @@ export function mountDbStatusView(el, { screen, structure, objectId, api, groupT
     const b = d.database;
     const rows = d.tables.reduce((s, t) => s + (Number(t.rows) || 0), 0);
     const fact = (k, v) => `<dt class="v2-muted">${esc(k)}</dt><dd style="margin:0;font-family:ui-monospace,Menlo,Consolas,monospace">${v}</dd>`;
-    return `<dl id="db-summary" style="display:grid;grid-template-columns:auto 1fr;gap:3px 14px;margin:8px 0;font-size:13px">
+    return `<dl id="db-summary" style="display:grid;grid-template-columns:auto 1fr;gap:3px 14px;margin:8px 0;font-size:0.8125rem">
       ${fact("Файл базы", esc(b.path))}${fact("Размер файла", esc(fmtSize(b.file_bytes)))}
       ${fact("Страниц", `${esc(b.page_count)} × ${esc(b.page_size)} Б, свободно ${esc(fmtSize(b.free_bytes))}`)}
       ${fact("Всего записей", rows.toLocaleString("ru-RU"))}${fact("Таблиц", `${d.tables.length}, связей ${(d.relations || []).length}`)}
@@ -72,12 +72,12 @@ export function mountDbStatusView(el, { screen, structure, objectId, api, groupT
       <div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto auto auto;gap:12px;align-items:center;padding:6px 10px">
         <button type="button" class="v2-link" data-toggle="${esc(t.name)}" aria-expanded="${open}" style="text-align:left;min-width:0">
           <strong>${esc(t.name)}</strong> <span class="v2-muted">${esc(caption)}</span>${t.described ? "" : ` <span class="v2-chip" style="color:var(--bad);border-color:var(--bad)">не описана</span>`}</button>
-        <span class="num v2-muted" style="font-size:12px">${Number(t.rows).toLocaleString("ru-RU")} зап.</span>
-        <span class="num v2-muted" style="font-size:12px">${esc(fmtSize(t.bytes))}${t.index_bytes ? ` + ${esc(fmtSize(t.index_bytes))} индексы` : ""}</span>
+        <span class="num v2-muted" style="font-size:0.75rem">${Number(t.rows).toLocaleString("ru-RU")} зап.</span>
+        <span class="num v2-muted" style="font-size:0.75rem">${esc(fmtSize(t.bytes))}${t.index_bytes ? ` + ${esc(fmtSize(t.index_bytes))} индексы` : ""}</span>
         <span aria-hidden="true" style="width:90px;height:6px;border-radius:3px;background:var(--surface);overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:var(--accent)"></span></span>
         <button type="button" class="v2-btn" data-open="${esc(t.name)}">Содержимое…</button>
       </div>
-      ${open ? `<div class="v2-dbs-fields" style="border-top:1px dashed var(--line);padding:6px 10px 8px;font-size:12px">
+      ${open ? `<div class="v2-dbs-fields" style="border-top:1px dashed var(--line);padding:6px 10px 8px;font-size:0.75rem">
         ${(t.fields || []).map((f) => `<div style="display:grid;grid-template-columns:190px 90px 1fr;gap:8px;padding:2px 0">
           <div>${f.key ? `<strong>${esc(String(f.key).replace(",", "+"))}</strong> ` : ""}<code>${esc(f.name)}</code></div>
           <div class="v2-muted" style="font-family:ui-monospace,Menlo,Consolas,monospace">${esc(f.type)}</div>

@@ -2255,7 +2255,7 @@ export function mountCounterparties(container, ctx) {
           <p class="v2-muted" id="ctr-archived-note">${escapeHtml(archiveInfo.text)}</p>` : ""}
         </div>
       </details>
-      ${!isNew && archiveInfo.blocks ? `<p style="color:var(--bad);font-size:12px;margin:4px 0">${escapeHtml(archiveInfo.shortText)}</p>` : ""}
+      ${!isNew && archiveInfo.blocks ? `<p style="color:var(--bad);font-size:0.75rem;margin:4px 0">${escapeHtml(archiveInfo.shortText)}</p>` : ""}
       ${!isNew && canDeleteRecords ? `
       <details class="v2-collapsible" style="margin-top:2px">
         <summary>Действия</summary>
@@ -2869,8 +2869,8 @@ export function mountCounterparties(container, ctx) {
       <div class="v2-page-head"><div class="v2-container">
         <button type="button" class="v2-link" id="ctr-back">← ${escapeHtml(cp?.short_name || "Контрагент")} · Контрактация</button>
         <div class="v2-inline" style="align-items:baseline;flex-wrap:wrap;margin-top:2px">
-          <strong style="font-size:16px">${isNew ? "Новый контракт" : (contract?.theme ? `Контракт «${escapeHtml(contract.theme)}»` : `Контракт №${id}`)}</strong>
-          <span class="v2-muted" id="ctr-breadcrumb" style="font-size:13px">${escapeHtml(contractBreadcrumbShort(draft))}</span>
+          <strong style="font-size:1rem">${isNew ? "Новый контракт" : (contract?.theme ? `Контракт «${escapeHtml(contract.theme)}»` : `Контракт №${id}`)}</strong>
+          <span class="v2-muted" id="ctr-breadcrumb" style="font-size:0.8125rem">${escapeHtml(contractBreadcrumbShort(draft))}</span>
         </div>
       </div></div>
       <nav class="v2-nav" aria-label="Разделы контракта"><div class="v2-container">

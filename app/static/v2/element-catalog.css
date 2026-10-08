@@ -6,11 +6,11 @@
 .ec-split { display: flex; gap: 12px; align-items: stretch; height: calc(100vh - 330px); min-height: 260px; }
 .ec-table-wrap { flex: 1 1 auto; min-width: 0; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
 .ec-card { flex: 0 0 420px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-.ec-table { width: max-content; min-width: 100%; font-size: 12px; }
+.ec-table { width: max-content; min-width: 100%; font-size: 0.75rem; }
 .ec-table th, .ec-table td { padding: 5px 8px; max-width: 260px; }
 .ec-table thead tr:first-child th { top: 0; }
 .ec-table thead tr.ec-filters td { position: sticky; top: 34px; z-index: 1; background: var(--surface); padding: 3px 6px; border-bottom: 1px solid var(--line); }
-.ec-table thead tr.ec-filters select, .ec-table thead tr.ec-filters input { font-size: 11px; max-width: 150px; display: block; }
+.ec-table thead tr.ec-filters select, .ec-table thead tr.ec-filters input { font-size: 0.6875rem; max-width: 150px; display: block; }
 .ec-table thead tr.ec-filters input { margin-top: 2px; }
 .ec-sort { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--ink); white-space: nowrap; cursor: pointer; }
 .ec-table tbody tr { cursor: pointer; }

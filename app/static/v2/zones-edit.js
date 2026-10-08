@@ -212,7 +212,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
             <span role="group" aria-label="Вид предпросмотра" class="v2-inline" style="gap:4px">${[["2d", "2D"], ["3d", "3D"]].map(([m, t]) => `<button type="button" class="v2-btn${previewMode === m ? " v2-primary" : ""}" data-pmode="${m}" aria-pressed="${previewMode === m}">${t}</button>`).join("")}</span></div>
           <svg id="ze-preview" viewBox="0 0 400 300" style="width:100%;border:1px solid var(--v2-border,#3332);background:var(--v2-surface,transparent)${previewMode === "3d" ? ";display:none" : ""}"></svg>
           <div id="ze-preview3d" style="width:400px;height:300px;border:1px solid var(--line);background:var(--surface)${previewMode === "3d" ? "" : ";display:none"}"></div>
-          <p class="v2-muted" id="ze-preview-hint" style="font-size:12px"></p>
+          <p class="v2-muted" id="ze-preview-hint" style="font-size:0.75rem"></p>
         </div>
       </div>
       <div class="v2-inline" style="margin-top:12px">
@@ -274,7 +274,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       <div style="border:1px solid var(--v2-border,#3332);border-radius:6px;padding:8px;margin-bottom:8px${li === ed.activeLevel ? ";outline:2px solid var(--v2-accent,#2471a3)" : ""}">
         <div class="v2-inline"><label class="v2-field" style="margin:0">Отметка, мм<input type="number" data-elev="${li}" value="${level.elevation_mm ?? ""}" style="width:110px" ${ed.busy ? "disabled" : ""}></label>
           <button type="button" class="v2-btn" data-del-level="${li}" ${ed.levels.length === 1 || ed.busy ? "disabled" : ""}>Удалить ярус</button></div>
-        <table style="width:100%;font-size:12px;margin-top:6px"><thead><tr><th style="width:24px"></th><th>X, мм</th><th>Y, мм</th><th></th></tr></thead><tbody>
+        <table style="width:100%;font-size:0.75rem;margin-top:6px"><thead><tr><th style="width:24px"></th><th>X, мм</th><th>Y, мм</th><th></th></tr></thead><tbody>
           ${level.outline.map((p, pi) => `<tr><td class="v2-muted">${pi + 1}</td>
             <td><input type="number" step="1" data-pt="${li}:${pi}:0" value="${p[0]}" style="width:100%" ${ed.busy ? "disabled" : ""}></td>
             <td><input type="number" step="1" data-pt="${li}:${pi}:1" value="${p[1]}" style="width:100%" ${ed.busy ? "disabled" : ""}></td>

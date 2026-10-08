@@ -6,7 +6,7 @@
 .v2-shellnav-row .v2-shellnav-item { flex: 1; min-width: 0; }
 .v2-shellnav-tools { display: flex; align-items: center; gap: 0; flex: none; padding-right: 2px; }
 .v2-shellnav-fav, .v2-shellnav-move-btn {
-  border: 0; background: none; padding: 4px 5px; border-radius: 5px; color: var(--muted); font-size: 12px;
+  border: 0; background: none; padding: 4px 5px; border-radius: 5px; color: var(--muted); font-size: 0.75rem;
   line-height: 1; cursor: pointer;
 }
 .v2-shellnav-fav:hover, .v2-shellnav-move-btn:hover:not(:disabled) { background: var(--sel); color: var(--ink); }

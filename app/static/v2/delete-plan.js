@@ -97,7 +97,7 @@ function openReplacementDialog({ api, plan, title, lead, submit, mergeable = fal
         <label style="display:block"><input type="radio" name="dp-mode" value="replace" ${mode === "replace" ? "checked" : ""} ${busy ? "disabled" : ""}/>
           Заменить каждую запись по отдельности <span class="v2-muted">— годится, когда запись ошибочна и её содержимое не нужно</span></label></div>`;
       backdrop.innerHTML = `<div class="v2-dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}" style="width:720px;max-height:calc(100vh - 48px);overflow:auto">
-        <h3 style="margin:0 0 8px;font-size:16px">${esc(title)}</h3>
+        <h3 style="margin:0 0 8px;font-size:1rem">${esc(title)}</h3>
         <p style="white-space:pre-line">${esc(lead)}</p>
         ${modeChoice}
         <div id="dp-tree">${displayRows().map((r) => {

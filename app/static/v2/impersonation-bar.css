@@ -5,7 +5,7 @@
    страницы (перед шапкой) — вкладка обязана выглядеть как чужая уже на первый взгляд. */
 .v2-impersonation-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  background: #8a1c1c; color: #fff; padding: 6px 14px; font-size: 13px; font-weight: 600;
+  background: #8a1c1c; color: #fff; padding: 6px 14px; font-size: 0.8125rem; font-weight: 600;
 }
 .v2-impersonation-bar[hidden] { display: none; }
 .v2-impersonation-bar span { flex: 1 1 auto; min-width: 0; }
@@ -15,4 +15,4 @@
 .v2-impersonation-bar .v2-btn:hover { background: rgba(255,255,255,0.28); }
 /* компактная шапка, пока открыто рабочее место — та же логика, что у соседних полос (styles.css:
    .v2-exp-banner/.v2-gate-note в режиме v2-ws-mode) */
-#v2-root.v2-ws-mode .v2-impersonation-bar { padding: 3px 14px; font-size: 12px; }
+#v2-root.v2-ws-mode .v2-impersonation-bar { padding: 3px 14px; font-size: 0.75rem; }
