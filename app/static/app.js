@@ -6266,6 +6266,29 @@ function computeTooltipDateRows(element) {
   ];
 }
 
+// Строки подсказки с АКТУАЛИЗИРОВАННЫМИ датами (последняя актуализация графика СМР, поля forecast_smr_* из /plan-data) —
+// 2026-10-09, живой запрос: «подсказка при наведении не показывает актуализированные даты». Для смонтированных изделий
+// вместо прогноза стоит факт (forecast_smr_is_fact) — так и подписано. Красным — когда актуализация позже директивной.
+function computeForecastTooltipRows(element) {
+  const days = (a, b) => Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10))
+                                     - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000);
+  const rows = [];
+  for (const [title, planField, field] of [["Начало СМР", "project_smr_start_date", "forecast_smr_start_date"],
+                                           ["Завершение СМР", "project_delivery_date", "forecast_smr_end_date"]]) {
+    const value = element[field];
+    if (!value) continue;
+    const plan = element[planField];
+    let late = false, note = "";
+    if (plan) {
+      const d = days(String(plan).slice(0, 10), String(value).slice(0, 10));
+      late = d > 0 && !element.forecast_smr_is_fact;
+      note = d === 0 ? " · в срок" : ` · ${d > 0 ? "+" : ""}${d} дн. к директивной`;
+    }
+    rows.push({ cls: late ? "late" : "neutral", text: `${title} (актуализация${element.forecast_smr_is_fact ? ", факт" : ""}): ${formatDateRu(value)}${note}` });
+  }
+  return rows;
+}
+
 // Точечное обновление допстроки ОДНОГО элемента после смены статуса/
 // партии — без полного renderElements(). Создаёт/обновляет/удаляет DOM-
 // узел по необходимости; если элемент сейчас не отрисован на схеме
@@ -10136,6 +10159,12 @@ function show2DTooltip(element, clientX, clientY) {
     const line = document.createElement("div");
     line.className = "t2d-row neutral";
     line.textContent = "Начало СМР не задано";
+    tip.appendChild(line);
+  }
+  for (const row of computeForecastTooltipRows(element)) {
+    const line = document.createElement("div");
+    line.className = "t2d-row " + row.cls;
+    line.textContent = row.text;
     tip.appendChild(line);
   }
   tip.style.display = "block";
@@ -28524,6 +28553,12 @@ function show3DTooltip(element, clientX, clientY) {
       line.textContent = row.text;
       tip.appendChild(line);
     }
+  }
+  for (const row of computeForecastTooltipRows(element)) {
+    const line = document.createElement("div");
+    line.className = "t3d-row " + row.cls;
+    line.textContent = row.text;
+    tip.appendChild(line);
   }
   tip.style.display = "block";
   position3DTooltip(clientX, clientY);
