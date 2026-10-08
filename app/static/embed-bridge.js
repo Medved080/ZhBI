@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setGuidFilter{text} · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -47,6 +47,7 @@
     if (typeof DATE_FILTER_DEFS !== "undefined") for (const d of DATE_FILTER_DEFS) if (dateFilterIsActive(d.key)) n++;
     if (typeof LAG_FILTER_DEFS !== "undefined") for (const d of LAG_FILTER_DEFS) if (state.lagFilters[d.key]) n++;
     if (state.changeFilter && state.changeFilter.on) n++;
+    if (typeof guidFilterActive === "function" && guidFilterActive()) n++;
     return n;
   }
 
@@ -518,7 +519,11 @@
 
   function filterModel() {
     if (!state.elements.length) return { groups: [] };
+    const gi = guidFilterInfo();
+    let guidFound = 0;
+    if (gi.tokens.length) for (const e of state.elements) if (elementPassesGuidFilter(e)) guidFound++;
     return {
+      guid: { text: state.guidFilter.text, tokens: gi.tokens.length, ignored: gi.ignored, found: guidFound },
       groups: [
         flatGroup("zakhvatka", "Захватка", zoneLabelFor),
         craneGroup(),
@@ -669,6 +674,13 @@
       onPlacementFilterChange();
       scheduleState(); sendFilters();
     },
+    // Отбор по GUID: текст со списком GUID или их частей (пусто — снять отбор)
+    setGuidFilter(a) {
+      if (typeof a.text !== "string" || a.text.length > 20000) throw new Error("text");
+      state.guidFilter.text = a.text;
+      applyPlacementFilters(); renderLegend();
+      scheduleState(); sendFilters();
+    },
     setZoneVisible(a) {
       if (!["Захватка", "Кран"].includes(a.category) || typeof a.on !== "boolean") throw new Error("параметры зоны");
       state.zoneVisibility[a.category] = a.on;
@@ -700,11 +712,13 @@
     search(a) {
       if (typeof a.text !== "string" || a.text.length > 60) throw new Error("text");
       const q = a.text.trim().toLowerCase();
+      const qGuid = guidNormalize(q);   // GUID можно искать в той же строке, что марку и адрес
       const items = []; let total = 0;
       if (q) {
         for (const e of state.elements) {
           if (!passesPlacementFilters(e)) continue;
-          if (!(String(e.mark || "").toLowerCase().includes(q) || String(e.address || "").toLowerCase().includes(q))) continue;
+          if (!(String(e.mark || "").toLowerCase().includes(q) || String(e.address || "").toLowerCase().includes(q)
+            || (qGuid.length >= 4 && guidNormalize(e.element_uid).includes(qGuid)))) continue;
           total++;
           if (items.length < 30) items.push({ id: e.id, mark: e.mark, type: e.element_type, status: e.current_status, address: e.address });
         }

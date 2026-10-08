@@ -97,7 +97,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     <div class="ws-top">
       <div class="ws-title"><strong>${esc(WS_TITLE)}</strong><span class="ws-crumb" id="ws-crumb"></span></div>
       <div class="ws-seg" role="group" aria-label="Режим схемы" id="ws-modes">${views.map(([k, t]) => `<button type="button" data-view="${k}" aria-pressed="false">${t}</button>`).join("")}</div>
-      ${mfr ? "" : `<div class="ws-search"><input type="search" id="ws-q" placeholder="Найти марку или адрес" aria-label="Найти элемент по марке или адресу" autocomplete="off" maxlength="60"><div class="ws-found" id="ws-found" role="listbox" hidden></div></div>`}
+      ${mfr ? "" : `<div class="ws-search"><input type="search" id="ws-q" placeholder="Найти марку, адрес или GUID" aria-label="Найти элемент по марке, адресу или GUID" autocomplete="off" maxlength="60"><div class="ws-found" id="ws-found" role="listbox" hidden></div></div>`}
       <span class="ws-spacer"></span>
       <button type="button" class="ws-ibtn" id="ws-nav" title="Показать или скрыть общую навигацию" aria-pressed="true">☰ Навигация</button>
       <button type="button" class="ws-ibtn" id="ws-panel-toggle" title="Свернуть или показать правую панель" aria-pressed="true">Панель ▸</button>
@@ -159,7 +159,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     } else if (m.evt === "state" && m.state && typeof m.state === "object") {
       onScene(m.state);
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
-      filters = m.model; paintPanel();
+      filters = m.model;
+      if (guidDraft !== null && (m.model.guid?.text ?? "") === guidDraft) guidDraft = null;   // сцена приняла набранное — дальше показываем её значение
+      paintPanel();
       if (tab === "status" && sc?.loaded && m.model.groups.length) send("getReportIds");
       // Снимок «текущего фильтра схемы» для отчётов V2 (charts, scheme-filter-snapshot.js) — запрашивается ТОЛЬКО
       // здесь, когда сам отбор поменялся (не на каждый тик состояния), и только там, где есть эта модель фильтра
@@ -479,11 +481,24 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       <div class="ws-factions"><button type="button" data-chg-reset ${g.on ? "" : "disabled"}>Сбросить</button></div></div>`;
     return `<section class="ws-fgroup"><button type="button" class="ws-fh" data-group="${esc(g.id)}" aria-expanded="${open}"><span>${open ? "▾" : "▸"} ${esc(g.title)}</span>${g.on ? `<b class="ws-badge">включён</b>` : ""}</button>${body}</section>`;
   }
+  // Отбор по GUID: набранный текст держим локально (guidDraft), пока сцена не подтвердила его, — иначе ответ на прошлый ввод
+  // затирал бы то, что человек успел набрать дальше.
+  let guidDraft = null;
+  let guidTimer = 0;
+  function guidBoxHtml() {
+    const g = filters?.guid || {};
+    const text = guidDraft ?? g.text ?? "";
+    const info = g.tokens ? `Найдено изделий: ${g.found}${g.ignored ? `; коротких фрагментов пропущено: ${g.ignored}` : ""}`
+      : (g.ignored ? "Слишком короткие фрагменты (меньше 4 знаков) не учитываются" : "");
+    return `<div class="ws-guid"><label for="ws-guid-input"><strong>GUID изделия</strong></label>
+      <textarea id="ws-guid-input" class="ws-fsearch" data-guid="1" rows="2" spellcheck="false" placeholder="Один или несколько GUID (или их части от 4 знаков) — через пробел, запятую или с новой строки">${esc(text)}</textarea>
+      <div class="v2-muted" role="status">${esc(info)}</div></div>`;
+  }
   function filtersHtml() {
     if (!filters) return `<p class="v2-muted ws-pad">${sc?.loaded === false ? "Схема загружается…" : "Загрузка фильтров…"}</p>`;
     if (!filters.groups.length) return `<p class="v2-muted ws-pad">Нет данных для фильтрации.</p>`;
     const head = `<div class="ws-fhead"><span>${sc ? `Показано ${sc.shown} из ${sc.total}` : ""}</span><button type="button" class="v2-btn" data-act="reset-filters" ${sc?.excluded ? "" : "disabled"}>Сбросить все</button></div>`;
-    return head + filters.groups.map((g) => {
+    return head + guidBoxHtml() + filters.groups.map((g) => {
       if (g.kind === "dates") return datesGroupHtml(g);
       if (g.kind === "changes") return changesGroupHtml(g);
       const excluded = g.items.reduce((n, it) => n + (it.on ? 0 : 1) + (it.branches ? Object.values(it.branches).reduce((m, arr) => m + arr.filter((x) => !x.on).length, 0) : 0), 0);
@@ -775,7 +790,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       const a = b.dataset.act;
       if (a === "clear-all") send("clearSelection");
       else if (a === "locate" && sc?.selected) send("locate", { id: sc.selected.id });
-      else if (a === "reset-filters") { if (mfr) mbp?.resetAll?.(); send("resetFilters"); }
+      else if (a === "reset-filters") { guidDraft = null; if (mfr) mbp?.resetAll?.(); send("resetFilters"); }
     }));
     body.querySelectorAll("[data-fside]").forEach((b) => b.addEventListener("click", () => setFiltersSide(b.dataset.fside)));
     body.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => tool(b.dataset.tool)));
@@ -824,6 +839,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     body.querySelectorAll("[data-search]").forEach((i) => i.addEventListener("input", () => {
       groupSearch.set(i.dataset.search, i.value); const pos = i.selectionStart; paintPanel();
       const n = el.querySelector(`[data-search="${CSS.escape(i.dataset.search)}"]`); if (n) { n.focus(); n.setSelectionRange(pos, pos); }
+    }));
+    body.querySelectorAll("[data-guid]").forEach((t) => t.addEventListener("input", () => {
+      guidDraft = t.value;
+      clearTimeout(guidTimer);
+      guidTimer = setTimeout(() => send("setGuidFilter", { text: guidDraft ?? "" }), 450);
     }));
     body.querySelectorAll("[data-all]").forEach((b) => b.addEventListener("click", () => bulkGroup(b.dataset.all, b.dataset.on === "1")));
     body.querySelectorAll("input[data-key]").forEach((c) => c.addEventListener("change", () => toggleItem(c)));

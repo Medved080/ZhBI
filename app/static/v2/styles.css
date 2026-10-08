@@ -1074,6 +1074,8 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-fh:hover { background: var(--surface); }
 .ws-badge { font-weight: 400; font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 7px; }
 .ws-fbody { padding: 0 12px 10px; }
+.ws-guid { margin: 0 0 12px; }
+.ws-guid textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; resize: vertical; box-sizing: border-box; }
 .ws-fsearch { width: 100%; margin: 2px 0 6px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
 .side-plan-source { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .side-plan-source select { font-size: 12px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); margin-left: 4px; max-width: 100%; }

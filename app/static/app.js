@@ -239,6 +239,9 @@ let state = {
   // «Отставание» (группа «СМР», 2026-10-01): галочки «прогноз позже плана» отдельно по началу и по окончанию СМР.
   // Не диапазон и не перечисление — простой признак на элемент, см. LAG_FILTER_DEFS.
   lagFilters: { lagStart: false, lagEnd: false },
+  // Отбор по GUID (2026-10-08): текст со списком GUID (через пробел, запятую, перевод строки) или их частей — на схеме остаются
+  // изделия, у которых element_uid содержит любой из них. Разбор — guidFilterInfo().
+  guidFilter: { text: "" },
   // Отбор по ИЗМЕНЕНИЯМ (сайдбар → Фильтры → «Изменения», живой запрос
   // 2026-08-03): какие изделия рабочей области кто-то правил за период —
   // реквизиты или историю статуса.
@@ -2527,6 +2530,29 @@ function elementPassesDateFilters(element) {
 // state.changeFilter). Пока набора нет (первый запрос ещё не вернулся),
 // фильтр никого не прячет: показать пустую схему раньше ответа хуже, чем
 // показать полную на долю секунды.
+// ---- отбор по GUID: разбор текста, проверка изделия, счётчики для панели ----
+// GUID сравнивается без регистра и без дефисов/скобок: в базе он хранится слитно (32 знака), а из Revit/Excel приходит и с дефисами.
+// Токены короче 4 знаков не используются — по ним совпал бы почти каждый: панель сообщает, сколько их пропущено.
+const GUID_MIN_TOKEN = 4;
+let guidInfoCache = { text: null, info: null };
+function guidNormalize(v) { return String(v || "").toLowerCase().replace(/[^0-9a-zа-я]/g, ""); }
+function guidFilterInfo() {
+  const text = state.guidFilter.text;
+  if (guidInfoCache.text === text) return guidInfoCache.info;
+  const all = [...new Set(text.split(/[\s,;]+/).map(guidNormalize).filter(Boolean))];
+  const info = { tokens: all.filter(t => t.length >= GUID_MIN_TOKEN), ignored: all.filter(t => t.length < GUID_MIN_TOKEN).length };
+  guidInfoCache = { text, info };
+  return info;
+}
+function guidFilterActive() { return guidFilterInfo().tokens.length > 0; }
+function elementPassesGuidFilter(element) {
+  const tokens = guidFilterInfo().tokens;
+  if (!tokens.length) return true;
+  const uid = guidNormalize(element.element_uid);
+  return uid !== "" && tokens.some(t => uid.includes(t));
+}
+function resetGuidFilter() { state.guidFilter.text = ""; guidInfoCache = { text: null, info: null }; }
+
 function elementPassesChangeFilter(element) {
   const f = state.changeFilter;
   if (!f.on || !f.ids) return true;
@@ -2543,7 +2569,7 @@ function passesPlacementFilters(element) {
   for (const def of PLACEMENT_FILTER_DEFS) {
     if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
   }
-  return elementPassesDateFilters(element) && elementPassesChangeFilter(element);
+  return elementPassesDateFilters(element) && elementPassesChangeFilter(element) && elementPassesGuidFilter(element);
 }
 
 // Пары категорий, связанные UI-каскадом родитель→потомок (клик по крану
@@ -2575,7 +2601,7 @@ function elementPassesExceptKeys(element, exceptKeys) {
     if (exceptKeys.includes(def.key)) continue;
     if (state.placementFilters[def.key].has(def.valueFn(element))) return false;
   }
-  return elementPassesDateFilters(element) && elementPassesChangeFilter(element);
+  return elementPassesDateFilters(element) && elementPassesChangeFilter(element) && elementPassesGuidFilter(element);
 }
 
 // ПОЛНЫЙ список значений категории — НЕ зависит ни от одного текущего
@@ -3375,6 +3401,7 @@ function resetDateFilter(key) {
 }
 
 function resetAllDateFilters() {
+  resetGuidFilter();   // «сбросить все фильтры» и смена объекта сбрасывают и отбор по GUID — все три места уже вызывают эту функцию
   for (const def of DATE_FILTER_DEFS) resetDateFilter(def.key);
   for (const def of LAG_FILTER_DEFS) state.lagFilters[def.key] = false;
 }
@@ -3783,6 +3810,37 @@ const PLACEMENT_CATEGORY_INFO = [
   ["contract", "Контракт", contractLabelFor],
 ];
 
+// Блок «GUID» вверху вкладки «Фильтры»: отбор схемы по GUID изделий. Поле не пересобирается при вводе (иначе терялся бы
+// фокус), поэтому по вводу пересчитываются только схема, легенда и строка с количеством найденного.
+function buildGuidFilterBox() {
+  const box = document.createElement("div");
+  box.className = "guid-filter-box";
+  box.style.cssText = "margin-bottom:14px";
+  box.innerHTML = `<label style="display:block; font-weight:600; margin-bottom:4px" for="guid-filter-input">GUID изделия</label>
+    <textarea id="guid-filter-input" rows="2" spellcheck="false" style="width:100%; box-sizing:border-box; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px"
+      placeholder="Один или несколько GUID (или их части от 4 знаков) — через пробел, запятую или с новой строки"></textarea>
+    <div class="hint-text" id="guid-filter-info" style="margin-top:3px"></div>`;
+  const input = box.querySelector("textarea");
+  const info = box.querySelector("#guid-filter-info");
+  input.value = state.guidFilter.text;
+  const paintInfo = () => {
+    const i = guidFilterInfo();
+    if (!i.tokens.length) { info.textContent = i.ignored ? `Слишком короткие фрагменты (меньше ${GUID_MIN_TOKEN} знаков) не учитываются` : ""; return; }
+    let found = 0;
+    for (const e of state.elements) if (elementPassesGuidFilter(e)) found++;
+    info.textContent = `Найдено изделий: ${found}${i.ignored ? `; коротких фрагментов пропущено: ${i.ignored}` : ""}`;
+  };
+  paintInfo();
+  let timer = 0;
+  input.addEventListener("input", () => {
+    state.guidFilter.text = input.value;
+    paintInfo();
+    clearTimeout(timer);
+    timer = setTimeout(() => { applyPlacementFilters(); renderLegend(); }, 350);
+  });
+  return box;
+}
+
 function renderPlacementFilters() {
   const container = document.getElementById("placement-filters");
   container.innerHTML = "";
@@ -3805,6 +3863,7 @@ function renderPlacementFilters() {
     onPlacementFilterChange();
   });
   container.appendChild(resetBtn);
+  container.appendChild(buildGuidFilterBox());
 
   container.appendChild(buildFilterGroup(
     "Захватка", "zakhvatka", allValuesFor("zakhvatka"), state.placementFilters.zakhvatka, zoneLabelFor, enabledFor("zakhvatka"), onPlacementFilterChange
@@ -7771,6 +7830,7 @@ function uiStateSnapshot() {
     mode: v3.active ? (state.lowSpec ? "3d-light" : "3d") : "2d",
   };
   if (window.zhbiTimeline) snap.tl = zhbiTimeline.snapshot();
+  if (state.guidFilter.text.trim()) snap.guid = state.guidFilter.text;
   if (state.view) snap.view2d = { x: state.view.x, y: state.view.y, w: state.view.w, h: state.view.h };
   if (v3.camera && v3.controls) {
     const p = v3.camera.position, t = v3.controls.target;
@@ -7797,6 +7857,7 @@ function uiStateApplyFilters(saved) {
     for (const [cat, on] of Object.entries(saved.zones)) if (cat in state.zoneVisibility) state.zoneVisibility[cat] = !!on;
   }
   if (Array.isArray(saved.stances)) saved.stances.forEach((k) => state.stanceZoneVisible.add(k));
+  if (typeof saved.guid === "string") state.guidFilter.text = saved.guid.slice(0, 20000);
 }
 
 async function uiStateApplyView(saved) {
