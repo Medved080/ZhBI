@@ -39,7 +39,7 @@ def read_rows(args):
 
 
 def _plain(sheet):
-    return {"rods": [[c, d, kg] for (c, d), kg in sheet["rods"].items()], "rebar_total": sheet["rebar_total"], "checks": sheet["checks"], "embedded_total": sheet.get("embedded_total")}
+    return {"rods": [[c, d, kg] for (c, d), kg in sheet["rods"].items()], "rebar_total": sheet["rebar_total"], "checks": sheet["checks"], "embedded_total": sheet.get("embedded_total"), "element_mark": sheet.get("element_mark")}
 
 
 def load_cache():
@@ -52,23 +52,47 @@ def save_cache(cache):
 
 def store_rows(cache, parsed):
     n, p, rows, sheet, marks = parsed
-    cache[(n, p)] = {"rows": rows, "steel": sheet, "node_marks": marks, "numeric_version": 3}
+    cache[(n, p)] = {"rows": rows, "steel": sheet, "node_marks": marks, "numeric_version": 4}
 
 
 def needs_numeric_refresh(entry):
-    """Старый кэш: одиночная «е», буквенная ссылка/размер стержня или безымянный итог узла без штампа."""
-    if entry.get("numeric_version", 0) >= 3: return False
+    """Перечитать числовые столбцы с новой гарнитурой, соседние таблицы серий и штампы узлов."""
+    if entry.get("numeric_version", 0) >= 4: return False
     rows = entry.get("rows") or []
-    return any((r.get("qty") == "е" and r.get("pos") and r.get("name"))
+    total = (entry.get("steel") or {}).get("embedded_total")
+    direct = sum((steel.num(r.get("qty")) or 0) * (steel.num(r.get("mass")) or 0) for r in rows
+                 if steel.emb_kind(r.get("name")) in ("embedded", "pipe"))
+    return (bool(total and abs(direct / total - 1) > 0.02)
+            or any((r.get("qty") == "е" and r.get("pos") and r.get("name"))
+               or any("г" in (r.get(field) or "") and re.fullmatch(r"[\dОоЗзйбг,.\s]+", r.get(field) or "") for field in ("qty", "mass", "mass_item"))
                or re.search(r"л\.\s*[\dйОо]*[вАУе]", r.get("oboz") or "")
-               or re.search(r"(?:^[ØИ][·АУ]+|L=\s*[·АУ])", r.get("name") or "")
-               or (set(r) == {"mass"} and steel.num(r["mass"])) for r in rows)
+               or re.search(r"(?:^[ØИ]\s*[·АУ]+|L=\s*[·АУ])", r.get("name") or "")
+               or (r.get("mark") and steel.num(r.get("mass_item")))
+               or (set(r) == {"mass"} and steel.num(r["mass"])) for r in rows))
 
 
 def last_number(text):
     """Последнее число в марке для порядка плит одной таблицы: «4Пд-14» → 14, «Пл2.1» → 2.1."""
     found = re.findall(r"\d+(?:\.\d+)?", (text or "").replace(" ", ""))
     return float(found[-1]) if found else 0.0
+
+
+def verified_rebar_page(model, cache):
+    """Для изделия без найденного чертежа: единственная ведомость той же полной марки с проверенным общим итогом."""
+    source = model.get("source") or {}
+    if source.get("pageVerified") is not False: return None
+    def code(text):
+        found = re.search(r"[А-ЯA-Z]+\d[\d.,-]*", (text or "").upper())
+        return steel.mark_key(found.group()) if found else None
+    wanted = code(model.get("mark"))
+    if not wanted: return None
+    doc = int(source["id"][3:])
+    hits = [p for (d, p), entry in cache.items() if d == doc
+            and code((entry.get("steel") or {}).get("element_mark")) == wanted
+            and (entry.get("steel") or {}).get("rebar_total")
+            and (entry.get("steel") or {}).get("checks", {}).get("total")
+            and all(entry["steel"]["checks"].values())]
+    return hits[0] if len(hits) == 1 else None
 
 
 def plate_table(models, cache):
@@ -92,7 +116,7 @@ def plate_table(models, cache):
     return out
 
 
-def preserve_accepted(result, before):
+def preserve_accepted(result, before, assembly_loops=None):
     """При обновлении хвоста сохраняем уже принятые разделы; новые чтения заполняют пробелы.
 
     Перечитанный кандидат остаётся в кэше. Изменение принятой арматуры требует отдельной сверки,
@@ -111,6 +135,19 @@ def preserve_accepted(result, before):
                 if field == "volume": item["volumeSource"] = old.get("volumeSource")
                 retained[field] += 1; fields.append(field)
         if fields: item["retainedAccepted"] = fields
+        # Старое чтение прочих материалов сохраняется дословно. Если оно
+        # не содержало петель, а арматура появляется впервые, петли учитываются в ней,
+        # с классами/диаметрами из листов петель, без второй позиции материала.
+        loops = (assembly_loops or {}).get(key)
+        if (loops and previous["rebar"] is None and previous["embedded"] is not None
+                and not any(r["id"] == "loopParts" for r in previous["embedded"]) and "embedded" in fields):
+            from app.calc.readings import rebar_of
+            _, source = rebar_of(item)
+            if source == "сборка по каркасам и сеткам":
+                rods = collections.Counter({(c, d): kg for c, d, kg in item["rebar"]["fromAssembly"]})
+                rods.update(loops)
+                item["rebar"]["fromAssembly"] = [[c, d, round(kg, 3)] for (c, d), kg in sorted(rods.items())]
+                item["rebar"]["assemblyIncludesLoops"] = True
     return dict(retained)
 
 
@@ -172,9 +209,15 @@ def main(out, families, before_path=None):
         return steel.RebarAssembler(lambda d, p: (cache.get((d, p)) or {}).get("rows"), offset, pages=lambda d: [p for (dd, p) in cache if dd == d],
                                     marks=lambda d, p: (cache.get((d, p)) or {}).get("node_marks"))
 
+    def model_page(model):
+        source = model["source"]
+        doc = int(source["id"][3:])
+        fallback = verified_rebar_page(model, cache)
+        return (doc, fallback) if fallback else spec_page(doc, int(source["productPage"]))
+
     def assemble_all():
         asm = make_assembler()
-        for v in models.values(): asm.assemble(*spec_page(int(v["source"]["id"][3:]), int(v["source"]["productPage"])), None, None)
+        for v in models.values(): asm.assemble(*model_page(v), None, None)
         return asm
     assembler = assemble_all()
     # узлы, чьи листы не нашлись по ссылке: дочитываем окно страниц вокруг ожидаемой и повторяем сборку (ссылка «л.108» могла быть прочитана с ошибкой)
@@ -186,12 +229,16 @@ def main(out, families, before_path=None):
         save_cache(cache)
         assembler = assemble_all()
     result = {}
+    assembly_loops = {}
     plates = plate_table(models, cache)
     for key, v in models.items():
-        doc, page = spec_page(int(v["source"]["id"][3:]), int(v["source"]["productPage"]))
+        doc, page = model_page(v)
+        partial = v["source"].get("pageVerified") is False and verified_rebar_page(v, cache) == page
         entry = cache.get((doc, page)) or {}; rows = entry.get("rows") or []
         item = {"sheet": {"doc": doc, "page": page}, "method": "vector_ocr", "confirmed": False}
-        if page != int(v["source"]["productPage"]): item["sheet"]["drawingPage"] = int(v["source"]["productPage"])
+        if partial:
+            item["sheet"].update({"drawingMissing": True, "registerPage": int(v["source"]["productPage"])})
+        elif page != int(v["source"]["productPage"]): item["sheet"]["drawingPage"] = int(v["source"]["productPage"])
         mass_total = None
         for r in rows:
             m = re.match(r"^[БВ]етон", r.get("name", "") or "")
@@ -207,10 +254,13 @@ def main(out, families, before_path=None):
         if plate and plate["mass"]: mass_total = mass_total or plate["mass"]
         # масса изделия в проекте = объём бетона × 2500 кг/м³ (у колонн, подъёмников, шахт, лестничных балок и панелей сходится на 100%, у ригелей на ±3%):
         # где объём не прочитан, а масса есть, объём — масса ÷ 2500
-        if not item.get("volume") and mass_total and mass_total > 300:
+        if not partial and not item.get("volume") and mass_total and mass_total > 300:
             item["volume"] = round(mass_total / 2500, 3); item["volumeSource"] = "масса ÷ 2500"
-        if mass_total: item["massKg"] = mass_total
+        if mass_total and not partial: item["massKg"] = mass_total
         tree = assembler.assemble(doc, page, steel.mark_key(v.get("alias")) or None, None)
+        loop_mass = sum(mass * qty for (kind, name, mass), qty in tree["emb"].items() if kind == "loop")
+        if loop_mass and abs(sum(tree["loop_rods"].values()) / loop_mass - 1) <= 0.005:
+            assembly_loops[key] = tree["loop_rods"]
         rods = {k: v2 for k, v2 in tree["rods"].items()}
         item["rebar"] = {"fromAssembly": [[c, d, round(kg, 3)] for (c, d), kg in sorted(rods.items())], "unresolvedKg": round(tree["unresolved"], 3), "issues": tree["issues"][:6]}
         item["embedded"] = {"items": [[kind, name, mass, qty, steel.pipe_size(name) if kind == "pipe" else None, steel.pipe_length_m(name, qty) if kind == "pipe" else None] for (kind, name, mass), qty in sorted(tree["emb"].items())], "issues": [i for i in tree["issues"] if "нет количества" in i][:6]}
@@ -219,7 +269,7 @@ def main(out, families, before_path=None):
         result[key] = item
     if before_path:
         before = json.loads(Path(before_path).read_text())
-        retained = preserve_accepted(result, before)
+        retained = preserve_accepted(result, before, assembly_loops)
         from verify_calc_readings_regression import compare
         errors, _, _ = compare(before, result)
         if errors: raise ValueError("Не сохранены принятые результаты: %s" % errors[:3])

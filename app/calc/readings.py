@@ -112,7 +112,7 @@ def apply_readings(models, directory):
                                   for c, d, kg in sorted(rods)]
             added += [r["id"] for r in model["resources"]]
             applied.append("арматура (" + source + ")")
-            steel_counts_loops = source == "ведомость расхода стали"      # ведомость считает петли в арматурных изделиях, сборка по узлам — нет
+            steel_counts_loops = source == "ведомость расхода стали" or bool((reading.get("rebar") or {}).get("assemblyIncludesLoops"))
         # закладные, трубы, петли: каждый вид добавляется, только если у модели нет ресурсов этого вида (у двух исходных колонн Excel трубы уже есть)
         present = {r["id"] for r in model.get("resources") or []}
         # закладные накладываются, только если не нарушена сверка с итогом ведомости листа (нет итога — принимаются как не подтверждённые)

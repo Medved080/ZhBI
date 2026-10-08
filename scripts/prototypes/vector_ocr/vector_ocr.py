@@ -60,7 +60,7 @@ def rot(lines,deg):
 def load_protos():
     """Эталоны цифр: основной набор (гарнитура альбомов doc01…) и дополнительный (digit_protos_alt.json — вторая гарнитура, например doc14); классификатор ищет по обоим."""
     out={}
-    for name in ('digit_protos.json','digit_protos_alt.json'):
+    for name in ('digit_protos.json','digit_protos_alt.json','digit_protos_tail.json'):
         path=os.path.join(HERE,name)
         if os.path.exists(path):
             for ch,pl in json.load(open(path)).items(): out.setdefault(ch,[]).extend(np.array(p) for p in pl)

@@ -87,10 +87,15 @@ def rod_numeric_fix(gl, toks):
     for i, tok in enumerate(toks):
         chars = ''.join(ch for ch, dg, c in tok)
         prefix = 1 if i == 0 and chars[:1] in ('Ø', 'ø', 'И') else 2 if chars.startswith('L=') else None
-        if prefix is None or len(tok) <= prefix or chars[prefix:].isdigit(): continue
-        digits = numeric_fix(gl, tok[prefix:], force=True, thr=DIGIT_THR)
+        if prefix is None: continue
+        target = i + 1 if len(tok) == prefix else i
+        start = 0 if target != i else prefix
+        if target >= len(toks): continue
+        suffix = toks[target][start:]
+        if not suffix or ''.join(ch for ch, dg, c in suffix).isdigit(): continue
+        digits = numeric_fix(gl, suffix, force=True, thr=DIGIT_THR)
         if resolve(digits).isdigit():
-            out[i] = tok[:prefix] + digits
+            out[target] = toks[target][:start] + digits
             if prefix == 1: out[i][0] = ('Ø', None, tok[0][2])
     return out
 
@@ -133,6 +138,9 @@ def text_in_boxes(gl, lines, font, H, V):
         if any(box[3] <= hb[2] + 0.5 and box[0] >= hb[0] - 0.5 and box[1] <= hb[1] + 0.5 for hb, _ in numeric_cols):
             replacements = [' '.join(resolve(numeric_fix(gl, t, force=True, thr=DIGIT_THR)) for t in toks)
                             for (b, base), toks in sorted(cell_tokens.items(), key=lambda x: -x[0][1]) if b == box]
+            # Буквенное «О» и «З» без кандидата цифры имеют прежнее однозначное
+            # числовое чтение; они не должны мешать восстановить «г» как 8.
+            replacements = [t.translate(str.maketrans('ОоЗз', '0033')) for t in replacements]
             if replacements and all(re.fullmatch(r'\s*\d+(?:[.,]\d+)?\s*', t) for t in replacements): out[box] = replacements
     return out
 
@@ -157,18 +165,35 @@ def parse_spec(boxes):
     hdr = [(b, t) for b, t in boxes.items() if short(t)]
     # в таблицах серий сеток и каркасов («Марка изделия | Поз. дет. | Обозначение | Кол. | Масса 1 дет. | Масса изделия») столбца «Наименование» нет:
     # описание стержня («ø 12 А500С ГОСТ …, L=2130») стоит в «Обозначении» — для шапки с «Марка» достаточно столбца «Обозначение»
+    def header_band(b):
+        same = sorted([(b2, t2) for b2, t2 in boxes.items() if abs(b2[2] - b[2]) < 1 and abs(b2[3] - b[3]) < 1])
+        groups = []
+        for pair in same:
+            if groups and pair[0][0] <= max(x[0][1] for x in groups[-1]) + 0.5: groups[-1].append(pair)
+            else: groups.append([pair])
+        return next((g for g in groups if any(b2 == b for b2, t2 in g)), [])
     def has_name(b, t):
-        roles = {role_of(t2) for b2, t2 in boxes.items() if abs(b2[2] - b[2]) < 1 and abs(b2[3] - b[3]) < 1}
+        roles = {role_of(t2) for b2, t2 in header_band(b)}
         return 'name' in roles or ('oboz' in roles and ' '.join(t).startswith('Марка'))
     hdr = [(b, t) for b, t in hdr if has_name(b, t)]
     if not hdr: return None
-    hb = max(hdr, key=lambda bt: bt[0][3])[0]
+    # Две спецификации рядом (например 2КИ3 и 2КИ3.1…2КИ7.1) имеют
+    # одинаковые шапки. Разбираем каждую связанную полосу столбцов отдельно.
+    bands = {tuple(b for b, t in header_band(hb)): header_band(hb) for hb, ht in hdr}
+    tables = [_parse_spec_table(boxes, band) for band in bands.values()]
+    tables = [table for table in tables if table]
+    if not tables: return None
+    return {'columns': list(dict.fromkeys(r for table in tables for r in table['columns'])),
+            'rows': [row for table in tables for row in table['rows']]}
+
+
+def _parse_spec_table(boxes, header):
+    hb = header[0][0]
     ylo, top = hb[2], hb[3]
     cols = {}
-    for b, t in boxes.items():
-        if abs(b[2] - ylo) < 1 and abs(b[3] - top) < 1:
-            r = role_of(t)
-            if r and r not in cols.values(): cols[(b[0], b[1])] = r
+    for b, t in header:
+        r = role_of(t)
+        if r and r not in cols.values(): cols[(b[0], b[1])] = r
     if 'name' not in cols.values():
         oboz = [k for k, r in cols.items() if r == 'oboz']
         if not oboz: return None

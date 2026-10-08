@@ -55,7 +55,9 @@ def parse_steel(boxes):
     rods = collections.Counter(); class_totals = {}; rebar_total = embedded_total = None; grand = None; ok = False
     for bb, t in row:
         value = num(' '.join(t)); cx = (bb[0] + bb[1]) / 2
-        path = [' '.join(t2) for b2, t2 in sorted(((b2, t2) for b2, t2 in boxes.items() if b2[0] <= cx <= b2[1] and b2[2] >= bb[3] - 0.5 and b2 != bb), key=lambda x: x[0][2])
+        path = [' '.join(t2) for b2, t2 in sorted(((b2, t2) for b2, t2 in boxes.items()
+                if b2[0] <= cx <= b2[1] and b2[0] >= mb[1] - 1 and b2[2] >= bb[3] - 0.5
+                and b2[3] <= mb[3] + 1 and b2 != bb), key=lambda x: x[0][2])
                 if len(' '.join(t2)) < 40][:6]
         text = ' '.join(path)
         section = 'rebar' if ('арматурные' in text.lower() or 'напрягаемая' in text.lower()) else 'embedded' if 'закладные' in text.lower() else None
@@ -70,7 +72,15 @@ def parse_steel(boxes):
             if m: rods[(cls, int(m.group(1).replace('О', '0').replace('о', '0')))] += value; ok = True
             elif head.startswith('Итого'): class_totals[cls] = value
     if not ok: return None
+    # Ведомость только арматуры может завершаться «Общий расход» без «Всего».
+    # У таблицы с закладными этот общий итог использовать для арматуры нельзя.
+    if rebar_total is None and grand is not None and embedded_total is None and not any('закладные' in ' '.join(t).lower() for b, t in boxes.items()
+            if b[0] >= mb[1] - 1 and b[3] <= mb[3] + 1 and b[2] >= mb[2]):
+        rebar_total = grand
+    element_mark = next((' '.join(t) for b, t in boxes.items() if abs(b[0] - mb[0]) < 1
+                         and abs(b[3] - mb[2]) < 1.5), None)
     return {'rods': dict(rods), 'class_totals': class_totals, 'rebar_total': rebar_total, 'embedded_total': embedded_total, 'grand_total': grand,
+            'element_mark': element_mark,
             'checks': compute_checks(rods, class_totals, rebar_total)}
 
 
@@ -138,14 +148,14 @@ def pipe_length_m(name, qty):
 
 STRAND_RE = re.compile(r'^\s*К\s?-?\s?7\s?-\s?(\d+(?:[.,]\d+)?)\s?-')
 STANDARD_DIAMETERS = (6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 32, 36, 40)
-INFER_RE = re.compile(r'([АA]\s?\d{3}\s?[СC]?)\s*ГОСТ[^L]*L\s*=\s*(\d[\d\s]*\d|\d)')      # «Ø ·· А600С ГОСТ 34028-2016, L= 10030»: цифры диаметра не прочитаны
+INFER_RE = re.compile(r'([АA]\s?\d{3}\s?[СC]?|Вр\S*)\s*ГОСТ[^L]*L\s*=\s*(\d[\d\s]*\d|\d)')      # цифры диаметра не прочитаны
 
 
-def infer_diameter(mass_kg, length_mm):
+def infer_diameter(mass_kg, length_mm, diameters=STANDARD_DIAMETERS):
     """Диаметр стержня по массе единицы и длине: масса погонного метра = 0,00617 · d² (d, мм). Ближайший стандартный диаметр, если сходится в пределах 3%; иначе None."""
     if not mass_kg or not length_mm or length_mm < 100: return None
     d = (mass_kg / (length_mm / 1000.0) / 0.00617) ** 0.5
-    nearest = min(STANDARD_DIAMETERS, key=lambda s: abs(s - d))
+    nearest = min(diameters, key=lambda s: abs(s - d))
     return nearest if abs(d / nearest - 1) <= 0.03 else None
 
 
@@ -161,7 +171,7 @@ def parse_rod(name, mass=None):
     m = INFER_RE.search(name or '')
     if m and mass:
         cls = class_of(m.group(1).replace(' ', ''))
-        d = infer_diameter(mass, int(re.sub(r'\s', '', m.group(2))))
+        d = infer_diameter(mass, int(re.sub(r'\s', '', m.group(2))), (3, 4, 5) if cls == 'ВрI' else STANDARD_DIAMETERS)
         if cls and d: return (cls, d)
     return None
 
@@ -321,7 +331,7 @@ class RebarAssembler:
     def assemble(self, doc, page, mark=None, mass=None, depth=0, stack=()):
         key = (doc, page, mark if mass is None else (mark, round(mass, 2)))
         if key in self.cache: return self.cache[key]
-        out = {'rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'sheet_rounding': 0.0, 'issues': [], 'sum': 0.0, 'emb': collections.Counter()}
+        out = {'rods': collections.Counter(), 'loop_rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'sheet_rounding': 0.0, 'issues': [], 'sum': 0.0, 'emb': collections.Counter()}
         rows = self.rows(doc, page)
         # Лист бетонного изделия не может быть листом его арматурного узла.
         # Иначе трубы этого изделия попадут в сборку повторно (ошибка ссылки на предыдущую страницу).
@@ -347,8 +357,17 @@ class RebarAssembler:
                 out['sheet_rounding'] = number_rounding(r.get('qty') if num(r.get('qty')) else r.get('mass'))
                 continue
             kind = emb_kind(name)
-            if kind:                                                  # закладная, труба, петля: количество и масса единицы с листа, без рекурсии
-                if qty and mass_e: out['emb'][(kind, emb_name(name), mass_e)] += qty
+            if kind:                                                  # прочие материалы — отдельно; состав петли читается только для её классификации
+                if qty and mass_e:
+                    out['emb'][(kind, emb_name(name), mass_e)] += qty
+                    # Состав петли нужен отдельно, если при сохранении прежнего
+                    # раздела закладных она войдёт в новую арматуру.
+                    refs = ref_numbers(r.get('oboz', '') or '') if kind == 'loop' else []
+                    if refs:
+                        sub = self.assemble(doc, refs[-1] + self.offset.get(doc, 0), node_mark(name), mass_e, depth + 1, stack + (key,))
+                        got = sum(sub['rods'].values())
+                        if not sub['unresolved'] and got and abs(got / mass_e - 1) <= 0.03:
+                            for k, v in sub['rods'].items(): out['loop_rods'][k] += v * qty
                 else: out['issues'].append('«%s»: нет количества или массы' % emb_name(name)[:40])
                 continue
             if not name or SKIP_RE.match(name) or not qty or not mass_e: continue
@@ -372,6 +391,7 @@ class RebarAssembler:
             out['issues'] += sub['issues']
             for k, v in sub['rods'].items(): out['rods'][k] += v * qty
             for k, v in sub['emb'].items(): out['emb'][k] += v * qty
+            for k, v in sub['loop_rods'].items(): out['loop_rods'][k] += v * qty
             out['unresolved'] += sub['unresolved'] * qty
         self.cache[key] = out
         return out
