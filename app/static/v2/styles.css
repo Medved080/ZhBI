@@ -1232,6 +1232,34 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-ex-changes { max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 4px; }
 .v2-ex-changes .v2-read-tbl td { max-width: 320px; }
 .v2-ex-changes tr.v2-ex-off td { opacity: .55; }
+/* Шаги «Выгрузить → Выбрать файл → Сверить» (массовая правка через Excel, 2026-10-08): три карточки в ряд, как в V1.
+   Текущий шаг обведён, недоступный — приглушён; кнопки шагов — «мягкие» (светлая заливка, цвет акцента), главная — сплошная. */
+.v2-steps { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; margin: 4px 0 12px; }
+.v2-step { flex: 1 1 12rem; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bg); min-width: 0; }
+.v2-step.v2-step-file { flex: 1.4 1 16rem; }
+.v2-step.v2-step-current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.v2-step.v2-step-pending { opacity: .6; }
+.v2-page .v2-step-title { display: flex; align-items: center; margin: 0 0 10px; font-size: 0.8125rem; font-weight: 600; }
+.v2-step-num { display: inline-flex; align-items: center; justify-content: center; width: 1.375rem; height: 1.375rem; margin-right: 8px; border-radius: 50%; flex: none; background: var(--accent); color: var(--accent-ink); font-size: 0.75rem; font-weight: 700; }
+.v2-step-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.v2-step-hint { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+.v2-step-scope { display: flex; flex-direction: column; gap: 4px; font-size: 0.8125rem; }
+.v2-btn-soft, .v2-step input[type="file"]::file-selector-button { border: 1px solid transparent; border-radius: 10px; background: var(--sel); color: var(--accent); font-weight: 600; padding: 9px 16px; cursor: pointer; }
+.v2-btn-soft:hover:not(:disabled), .v2-step input[type="file"]::file-selector-button:hover { background: var(--sel); border-color: var(--accent); }
+.v2-step input[type="file"] { font-size: 0.8125rem; max-width: 100%; }
+.v2-step input[type="file"]::file-selector-button { margin-right: 10px; }
+.v2-bk-foot { justify-content: space-between; }
+.v2-bk-foot .v2-btn { border-radius: 10px; padding: 9px 18px; font-weight: 600; }
+.v2-bk-foot-info { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 0.8125rem; }
+/* Таблица подтверждения: колонки Excel, у правленого поля — парная «→ станет» с флажком (как в V1) */
+.v2-bk-wrap { max-height: 52vh; }
+.v2-bk-tbl { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.v2-bk-tbl th { position: sticky; top: 0; z-index: 1; background: var(--surface); text-align: left; font-weight: 500; color: var(--muted); padding: 7px 8px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.v2-bk-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.v2-bk-tbl .v2-bk-new { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.v2-bk-tbl td.v2-bk-changed { font-weight: 600; }
+.v2-bk-tbl td.v2-bk-was { color: var(--muted); text-decoration: line-through; }
+.v2-bk-tbl label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .v2-ex-tplbox { margin: 10px 0 0; }
 .v2-ex-tpl-body { padding: 4px 4px 10px; font-size: 0.8125rem; }
 .v2-ex-tpl-body h4 { margin: 12px 0 6px; }

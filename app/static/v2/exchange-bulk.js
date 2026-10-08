@@ -15,7 +15,7 @@ import { filterSnapshotFor, describeFilterSnapshot } from "./scheme-filter-snaps
 import { mountDbTransfer } from "./db-transfer.js";
 import {
   esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, mountTemplates, makeStatus, unknownOutcomeHtml, verifyOutcome, saveBlob,
-  factsHtml, valueText, changesTableHtml, wireChangesTable, applyIndeterminate,
+  factsHtml, valueText, applyIndeterminate,
 } from "./exchange-common.js";
 
 const MODES = {
@@ -53,53 +53,90 @@ export function mountBulkEdit(el, ctx) {
     body: `<div class="v2-bk-modes"><div class="v2-seg" role="group" aria-label="Режим правки" id="bk-modes">${Object.entries(MODES).map(([k, m]) => `<button type="button" data-mode="${k}" aria-pressed="${k === mode}">${esc(m.label)}</button>`).join("")}</div>${canTransfer ? `<button type="button" class="v2-bk-transfer-mode" id="bk-transfer-mode" aria-pressed="false" data-tooltip="Полная замена базы снимком другого сервера">⚠ Перенос базы</button>` : ""}</div>
       <div id="bk-transfer" hidden></div>
       <div id="bk-excel">
-      <p class="v2-muted" id="bk-intro"></p>
-      <h3 class="v2-report-h">1. Выгрузить снимок</h3>
-      <div id="bk-scope"></div>
-      <div class="v2-bar"><button type="button" class="v2-btn" id="bk-export">Выгрузить в Excel</button></div>
-      ${canWrite ? `<h3 class="v2-report-h">2. Выбрать правленый файл и сверить с базой</h3>
-        <form id="bk-form" autocomplete="off" novalidate>
-          <label class="v2-wire-field v2-field-wide"><span>Файл .xlsx</span><input type="file" id="bk-file" accept=".xlsx"></label>
-          <div class="v2-bar"><button type="submit" class="v2-btn" id="bk-analyze">Сверить с базой</button><span class="v2-muted">Ничего не изменит — только покажет расхождения.</span></div>
-        </form>` : `<div class="v2-callout v2-callout-bad" role="note"><strong>Только выгрузка.</strong> Загрузка правленого файла требует уровня «Изменение» по разделу «Массовая правка через Excel». Обратитесь к администратору сервиса.</div>`}
+      <div class="v2-steps" id="bk-steps">
+        <section class="v2-step" id="bk-step-1">
+          <h4 class="v2-step-title"><span class="v2-step-num">1</span>Выгрузить снимок</h4>
+          <div class="v2-step-controls"><button type="button" class="v2-btn v2-btn-soft" id="bk-export">Выгрузить в Excel</button></div>
+          <div id="bk-scope"></div>
+        </section>
+        ${canWrite ? `<section class="v2-step v2-step-file" id="bk-step-2">
+          <h4 class="v2-step-title"><span class="v2-step-num">2</span>Выбрать правленый файл</h4>
+          <div class="v2-step-controls"><input type="file" id="bk-file" accept=".xlsx" aria-label="Правленый файл .xlsx"></div>
+        </section>
+        <section class="v2-step" id="bk-step-3">
+          <h4 class="v2-step-title"><span class="v2-step-num">3</span>Сверить с базой</h4>
+          <div class="v2-step-controls"><button type="button" class="v2-btn v2-btn-soft" id="bk-analyze" disabled>Сверить с базой</button></div>
+          <div class="v2-step-hint" id="bk-analyze-hint">Сначала выберите файл. Ничего не изменит — только покажет расхождения.</div>
+        </section>` : `<section class="v2-step" id="bk-step-ro" role="note">
+          <h4 class="v2-step-title">Только выгрузка</h4>
+          <div class="v2-step-hint">Загрузка правленого файла требует уровня «Изменение» по разделу «Массовая правка через Excel». Обратитесь к администратору сервиса.</div>
+        </section>`}
+      </div>
       <div id="bk-status" class="v2-ex-status" role="status" aria-live="polite"></div>
+      <div id="bk-intro-box"><p class="v2-muted" id="bk-intro"></p><div id="bk-tpl" class="v2-ex-tplbox"></div></div>
       <div id="bk-rejected"></div>
       <div id="bk-chips" class="v2-ex-chips"></div>
       <div id="bk-table"></div>
-      <div id="bk-summary" class="v2-muted"></div>
-      <div class="v2-bar v2-ex-stickybar" id="bk-applybar" hidden>
-        <label class="v2-wire-field" id="bk-datebox" hidden><span>Дата статуса «Контрактация» для запланированных элементов</span><input type="date" id="bk-date"></label>
-        <button type="button" class="v2-btn v2-primary" id="bk-apply">Применить отмеченное</button>
-      </div>
       <div id="bk-result"></div>
-      <div id="bk-tpl" class="v2-ex-tplbox"></div>
+      ${canWrite ? `<div class="v2-bar v2-ex-stickybar v2-bk-foot" id="bk-applybar">
+        <div class="v2-bk-foot-info"><span class="v2-muted" id="bk-summary"></span>
+          <label class="v2-wire-field" id="bk-datebox" hidden><span>Дата статуса «Контрактация» для запланированных элементов</span><input type="date" id="bk-date"></label></div>
+        <button type="button" class="v2-btn v2-primary" id="bk-apply" disabled>Применить отмеченное</button>
+      </div>` : ""}
       </div>`,
   });
   const $ = (s) => el.querySelector(s);
   const status = makeStatus($("#bk-status"));
 
   // ---- режим и вспомогательные тексты
+  let exported = false;
+  // Пошаговость как в V1: шаг, до которого ещё не дошли, приглушён и его кнопка недоступна; текущий шаг обведён.
+  // 1 — выгрузка (всегда доступна), 2 — выбор файла, 3 — сверка (после выбора файла); после сверки ждёт применение внизу.
+  function updateSteps() {
+    const hasFile = !!$("#bk-file")?.files?.length;
+    const hasAnalysis = !!analysis;
+    const current = hasAnalysis ? 0 : hasFile ? 3 : exported ? 2 : 1;
+    [1, 2, 3].forEach((n) => {
+      const card = $(`#bk-step-${n}`); if (!card) return;
+      card.classList.toggle("v2-step-current", current === n);
+      card.classList.toggle("v2-step-pending", n === 3 && !hasFile && !hasAnalysis);
+    });
+    const btn = $("#bk-analyze");
+    if (btn) btn.disabled = busy || !hasFile;
+    const hint = $("#bk-analyze-hint");
+    if (hint) hint.textContent = hasFile ? "Ничего не изменит — только покажет расхождения." : "Сначала выберите файл. Ничего не изменит — только покажет расхождения.";
+  }
   function renderMode() {
     $("#bk-intro").textContent = MODES[mode].intro;
     el.querySelectorAll("#bk-modes [data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
     const scope = $("#bk-scope");
     if (mode === "contracting") {
-      scope.innerHTML = `<p class="v2-muted">Все позиции всех контрактов — одним файлом.</p>`;
+      scope.innerHTML = `<p class="v2-step-hint">Все позиции всех контрактов — одним файлом.</p>`;
     } else {
       const filter = obj ? filterSnapshotFor(obj.id) : null;
       const filterNote = obj ? describeFilterSnapshot(obj.id).text : "Сначала выберите объект в шапке.";
-      scope.innerHTML = `<fieldset class="v2-fieldset"><legend>Что выгрузить</legend>
+      scope.innerHTML = `<div class="v2-step-scope" role="radiogroup" aria-label="Что выгрузить">
         <label class="v2-wire-check"><input type="radio" name="bk-scope" value="all" checked> Все элементы всех объектов</label>
         <label class="v2-wire-check"><input type="radio" name="bk-scope" value="object" ${obj ? "" : "disabled"}> Только выбранный объект${obj ? `: ${esc(obj.name)}` : " (выберите объект в шапке)"}</label>
-        <label class="v2-wire-check"><input type="radio" name="bk-scope" value="filter" ${filter ? "" : "disabled"}> По последнему отбору схемы выбранного объекта</label>
-        <span class="v2-muted">${esc(filterNote)} Это сохранённый снимок отбора, а не живая синхронизация.</span></fieldset>`;
+        <label class="v2-wire-check"><input type="radio" name="bk-scope" value="filter" ${filter ? "" : "disabled"}> По последнему отбору схемы</label>
+        <div class="v2-step-hint">${esc(filterNote)} Это сохранённый снимок отбора, а не живая синхронизация.</div></div>`;
     }
     mountTemplates($("#bk-tpl"), api, [MODES[mode].tpl], () => dead);
+    updateSteps();
   }
   function resetAnalysis() {
     analysis = null; file = null; checked = new Set(); contractingDate = "";
-    $("#bk-rejected").innerHTML = ""; $("#bk-chips").innerHTML = ""; $("#bk-table").innerHTML = ""; $("#bk-summary").textContent = ""; $("#bk-applybar").hidden = true; $("#bk-result").innerHTML = "";
+    $("#bk-rejected").innerHTML = ""; $("#bk-chips").innerHTML = ""; $("#bk-table").innerHTML = ""; $("#bk-result").innerHTML = "";
+    $("#bk-intro-box").hidden = false;
     const f = $("#bk-file"); if (f) f.value = "";
+    updateFoot(); updateSteps();
+  }
+  // Нижняя панель: сводка отмеченного, дата статуса «Контрактация» (только когда она нужна) и «Применить отмеченное».
+  function updateFoot() {
+    const ch = analysis?.changes || [];
+    const sum = $("#bk-summary"); if (sum) sum.textContent = ch.length ? `Отмечено ${checked.size} из ${ch.length} правок` : "";
+    const box = $("#bk-datebox"); if (box) box.hidden = !ch.some((c, i) => checked.has(i) && c.needs_contracting);
+    const ap = $("#bk-apply"); if (ap) ap.disabled = busy || checked.size === 0;
   }
   const dirty = () => !!analysis && analysis.changes.length > 0;
 
@@ -150,6 +187,7 @@ export function mountBulkEdit(el, ctx) {
       const { blob, filename } = await api.fetchFile("/elements/bulk-edit/export", { method: "POST", body });
       if (dead) return;
       saveBlob(blob, filename || "zhbi_elements.xlsx");
+      exported = true; updateSteps();
       status.set(`Файл «${filename || "zhbi_elements.xlsx"}» выгружен (${fmtSize(blob.size)}). Поправьте его в Excel и загрузите обратно.`, "ok");
     } catch (err) { if (!dead) status.set(`Не удалось выгрузить: ${errText(err)}`, "bad"); }
     finally { exporting = false; if (!dead) $("#bk-export").disabled = false; }
@@ -164,29 +202,81 @@ export function mountBulkEdit(el, ctx) {
     if (mode === "statuses") return `${esc(item)}<br><span class="v2-muted">${esc(v.status || "")} · ${esc(valueText(v.changed_at))}</span>`;
     return `${esc(item)}<br><span class="v2-muted">${esc(v.object_name || "")}${c.uid ? ` · ${esc(String(c.uid).slice(0, 8))}` : ""}</span>`;
   }
+  // Таблица подтверждения — как в V1: те же колонки, что в Excel, а у каждого правленого поля сразу за исходным значением —
+  // парная колонка «→ станет» с флажком; флажок есть и у строки, и у колонки, и общий.
+  const RENDER_LIMIT = 800;
+  const rowId = (x) => String(rowKey(x));
   function renderAnalysis() {
     const ch = analysis?.changes || [];
     const box = $("#bk-table");
-    if (!ch.length) { box.innerHTML = ""; $("#bk-chips").innerHTML = ""; $("#bk-summary").textContent = ""; $("#bk-applybar").hidden = true; return; }
-    const rows = ch.map((c, i) => ({
-      i, cells: [String(c.line ?? ""), rowLabel(c), esc(c.field_label), esc(valueText(c.was)),
-        `${esc(valueText(c.now))}${c.needs_contracting ? `<div class="v2-ex-warn">+ статус «Контрактация»</div>` : ""}${c.warning ? `<div class="v2-ex-warn">⚠ ${esc(c.warning)}</div>` : ""}`],
-    }));
-    box.innerHTML = changesTableHtml({ head: ["Стр.", mode === "contracting" ? "Позиция" : mode === "statuses" ? "Запись истории" : "Элемент", "Поле", "Было", "Станет"], rows, checkedSet: checked });
+    $("#bk-intro-box").hidden = ch.length > 0;
+    if (!ch.length) { box.innerHTML = ""; $("#bk-chips").innerHTML = ""; updateFoot(); updateSteps(); return; }
+    const byRow = new Map(), changedCols = new Set();
+    ch.forEach((c, i) => { changedCols.add(c.column); const k = rowId(c); if (!byRow.has(k)) byRow.set(k, new Map()); byRow.get(k).set(c.column, i); });
+    const columns = [];
+    (analysis.columns || []).forEach((col) => { columns.push({ ...col, kind: "value" }); if (changedCols.has(col.key)) columns.push({ ...col, kind: "new" }); });
+    const inColumn = (key) => ch.map((c, i) => (c.column === key ? i : -1)).filter((i) => i >= 0);
+    const allOn = checked.size === ch.length, someOn = !allOn && checked.size > 0;
+    const head = columns.map((col) => {
+      if (col.kind !== "new") return `<th>${esc(col.label)}</th>`;
+      const idx = inColumn(col.key), on = idx.length > 0 && idx.every((i) => checked.has(i)), some = !on && idx.some((i) => checked.has(i));
+      return `<th class="v2-bk-new"><label><input type="checkbox" data-col="${esc(col.key)}" aria-label="Отметить все правки колонки «${esc(col.label)}»" ${on ? "checked" : ""} ${some ? 'data-indet="1"' : ""}> → станет (${idx.length})</label></th>`;
+    }).join("");
+    const rows = (analysis.elements || []).filter((r) => byRow.has(rowId(r)));
+    const shown = rows.slice(0, RENDER_LIMIT);
+    const body = shown.map((row) => {
+      const marks = byRow.get(rowId(row));
+      const rowOn = [...marks.values()].every((i) => checked.has(i));
+      const cells = columns.map((col) => {
+        const idx = marks.get(col.key);
+        if (col.kind === "new") {
+          if (idx === undefined) return `<td class="v2-bk-new"></td>`;
+          const c = ch[idx];
+          return `<td class="v2-bk-new v2-bk-changed"><label><input type="checkbox" data-i="${idx}" ${checked.has(idx) ? "checked" : ""}> ${esc(valueText(c.now))}</label>${c.needs_contracting ? `<div class="v2-ex-warn">+ статус «Контрактация»</div>` : ""}${c.warning ? `<div class="v2-ex-warn">⚠ ${esc(c.warning)}</div>` : ""}</td>`;
+        }
+        return `<td class="${idx !== undefined ? "v2-bk-was" : ""}">${esc(valueText(row.values?.[col.key]))}</td>`;
+      }).join("");
+      return `<tr data-row="${esc(rowId(row))}"><td><input type="checkbox" data-row-all="${esc(rowId(row))}" aria-label="Отметить все правки этой строки" ${rowOn ? "checked" : ""}></td>${cells}</tr>`;
+    }).join("");
+    const keepTop = box.firstElementChild?.scrollTop || 0, keepLeft = box.firstElementChild?.scrollLeft || 0;
+    box.innerHTML = `<div class="v2-ex-changes v2-bk-wrap"><table class="v2-bk-tbl"><thead><tr><th><input type="checkbox" data-all aria-label="Отметить все правки" ${allOn ? "checked" : ""} ${someOn ? 'data-indet="1"' : ""}></th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      ${rows.length > shown.length ? `<p class="v2-muted">В таблице показаны первые ${shown.length} строк из ${rows.length} — применятся все отмеченные, включая непоказанные.</p>` : ""}`;
     applyIndeterminate(box);
+    if (box.firstElementChild) { box.firstElementChild.scrollTop = keepTop; box.firstElementChild.scrollLeft = keepLeft; }
     // Переключатели по полю: одним движением отметить/снять все правки поля (сотни правок по одной снимать нельзя)
+    renderChips();
+    updateFoot(); updateSteps();
+  }
+  function renderChips() {
+    const ch = analysis?.changes || [];
     const counts = new Map();
     ch.forEach((c, i) => { const e = counts.get(c.field_label) || { n: 0, on: 0 }; e.n++; if (checked.has(i)) e.on++; counts.set(c.field_label, e); });
     $("#bk-chips").innerHTML = [...counts].map(([label, e]) => `<label class="v2-ex-chip"><input type="checkbox" data-field="${esc(label)}" ${e.on === e.n ? "checked" : ""}> ${esc(label)} (${e.n})</label>`).join("");
-    $("#bk-summary").textContent = `Отмечено ${checked.size} из ${ch.length} правок`;
-    const needs = ch.some((c, i) => checked.has(i) && c.needs_contracting);
-    $("#bk-datebox").hidden = !needs;
-    $("#bk-applybar").hidden = false;
-    $("#bk-apply").disabled = busy || checked.size === 0;
   }
-  wireChangesTable($("#bk-table"), {
-    onToggle: (i, on) => { if (on) checked.add(i); else checked.delete(i); renderAnalysis(); },
-    onToggleAll: (on) => { checked = on ? new Set(analysis.changes.map((_, i) => i)) : new Set(); renderAnalysis(); },
+  // Флажки заголовка («все» и «→ станет» по колонке) пересчитываются от текущих отметок, не перерисовывая таблицу.
+  function syncHeaderChecks() {
+    const ch = analysis?.changes || [];
+    const set = (cb, idx) => { const on = idx.length > 0 && idx.every((i) => checked.has(i)); cb.checked = on; cb.indeterminate = !on && idx.some((i) => checked.has(i)); };
+    const all = $("#bk-table [data-all]"); if (all) set(all, ch.map((_, i) => i));
+    $("#bk-table").querySelectorAll("[data-col]").forEach((cb) => set(cb, ch.map((c, i) => (c.column === cb.dataset.col ? i : -1)).filter((i) => i >= 0)));
+  }
+  // Одна отметка в ячейке не перерисовывает таблицу (до 800 строк): обновляются сводка, переключатели по полю и флажок строки.
+  $("#bk-table").addEventListener("change", (e) => {
+    const t = e.target, ch = analysis?.changes || [];
+    if (!analysis) return;
+    if (t.matches("[data-i]")) {
+      const i = Number(t.dataset.i); if (t.checked) checked.add(i); else checked.delete(i);
+      const tr = t.closest("tr"), rowCb = tr?.querySelector("[data-row-all]");
+      if (rowCb) rowCb.checked = [...tr.querySelectorAll("[data-i]")].every((x) => x.checked);
+      syncHeaderChecks(); renderChips(); updateFoot();
+    } else if (t.matches("[data-all]")) {
+      checked = t.checked ? new Set(ch.map((_, i) => i)) : new Set(); renderAnalysis();
+    } else if (t.matches("[data-col]")) {
+      ch.forEach((c, i) => { if (c.column === t.dataset.col) { if (t.checked) checked.add(i); else checked.delete(i); } }); renderAnalysis();
+    } else if (t.matches("[data-row-all]")) {
+      const key = t.dataset.rowAll;
+      ch.forEach((c, i) => { if (rowId(c) === key) { if (t.checked) checked.add(i); else checked.delete(i); } }); renderAnalysis();
+    }
   });
   $("#bk-chips").addEventListener("change", (e) => {
     const label = e.target.dataset?.field; if (label === undefined || !analysis) return;
@@ -194,6 +284,7 @@ export function mountBulkEdit(el, ctx) {
     renderAnalysis();
   });
   $("#bk-date")?.addEventListener("input", (e) => { contractingDate = e.target.value; });
+  $("#bk-file")?.addEventListener("change", () => { updateSteps(); });
 
   const rejectedHtml = (rej) => (rej?.length ? `<div class="v2-callout v2-callout-bad"><strong>Не может быть применено (${rej.length}):</strong><ul class="v2-ex-list">${rej.slice(0, 100).map((r) => `<li>стр. ${esc(r.line)}: ${esc(r.reason)}${r.element_type || r.mark ? ` — ${esc(`${r.element_type || ""} ${r.mark || ""}`.trim())}` : ""}</li>`).join("")}${rej.length > 100 ? `<li class="v2-muted">…и ещё ${rej.length - 100}</li>` : ""}</ul></div>` : "");
 
@@ -209,13 +300,12 @@ export function mountBulkEdit(el, ctx) {
     renderAnalysis();
   }
 
-  $("#bk-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
+  $("#bk-analyze")?.addEventListener("click", async () => {
     if (busy) return;
     const f = $("#bk-file").files[0];
     const problem = checkFile(f, { ext: ["xlsx"] });
     if (problem) { status.set(problem, "bad"); return; }
-    busy = true; $("#bk-analyze").disabled = true; status.set("Сверяем файл с базой…", "busy"); $("#bk-result").innerHTML = "";
+    busy = true; updateSteps(); updateFoot(); status.set("Сверяем файл с базой…", "busy"); $("#bk-result").innerHTML = "";
     try {
       const data = await analyzeFile(f, mode);
       if (dead) return;
@@ -224,7 +314,7 @@ export function mountBulkEdit(el, ctx) {
       if (dead) return;
       analysis = null; renderAnalysis(); $("#bk-rejected").innerHTML = "";
       status.set(`Сверка не удалась: ${errText(err)}`, "bad");
-    } finally { busy = false; if (!dead) { $("#bk-analyze").disabled = false; $("#bk-apply").disabled = !analysis || checked.size === 0; } }
+    } finally { busy = false; if (!dead) { updateSteps(); updateFoot(); } }
   });
 
   // ---- применение
@@ -236,7 +326,7 @@ export function mountBulkEdit(el, ctx) {
     return factsHtml(facts) + (skipped.length ? `<div class="v2-callout v2-callout-bad"><strong>Пропущено при применении (${skipped.length}):</strong> остальные правки применены.<ul class="v2-ex-list">${skipped.slice(0, 50).map((s) => `<li>${esc(s.reason || JSON.stringify(s))}</li>`).join("")}${skipped.length > 50 ? `<li class="v2-muted">…и ещё ${skipped.length - 50}</li>` : ""}</ul></div>` : "");
   };
 
-  $("#bk-apply").addEventListener("click", async () => {
+  $("#bk-apply")?.addEventListener("click", async () => {
     if (busy || !analysis) return;
     const idx = [...checked].sort((a, b) => a - b);
     if (!idx.length) return;
@@ -244,7 +334,7 @@ export function mountBulkEdit(el, ctx) {
     const needs = selected.filter((c) => c.needs_contracting).length;
     if (needs && !contractingDate) { status.set("Укажите дату статуса «Контрактация» — часть отмеченных элементов сейчас «Запланирован», и назначение контракта добавит им статус.", "bad"); return; }
     if (needs && !isRealDate(contractingDate)) { status.set("Дата статуса «Контрактация» — не существующая дата.", "bad"); return; }
-    busy = true; $("#bk-apply").disabled = true; $("#bk-analyze") && ($("#bk-analyze").disabled = true);
+    busy = true; updateSteps(); updateFoot();
     let sentAt = null;
     try {
       const m = MODES[mode];
@@ -272,8 +362,9 @@ export function mountBulkEdit(el, ctx) {
       status.set(`Готово.${res.lines_inserted !== undefined ? ` Позиций добавлено: ${res.lines_inserted}, изменено: ${res.lines_updated}.` : ` Обновлено элементов: ${res.elements_updated}.`}${skippedN ? ` Пропущено: ${skippedN}.` : ""}`, "ok");
       $("#bk-result").innerHTML = resultHtml(res);
       analysis = null; file = null; checked = new Set();
-      $("#bk-table").innerHTML = ""; $("#bk-chips").innerHTML = ""; $("#bk-summary").textContent = ""; $("#bk-applybar").hidden = true; $("#bk-rejected").innerHTML = "";
+      $("#bk-table").innerHTML = ""; $("#bk-chips").innerHTML = ""; $("#bk-rejected").innerHTML = ""; $("#bk-intro-box").hidden = false;
       const f = $("#bk-file"); if (f) f.value = "";
+      exported = false;
     } catch (err) {
       if (dead) return;
       if (err.blockedByPolicy) status.set(errText(err), "bad");
@@ -282,7 +373,7 @@ export function mountBulkEdit(el, ctx) {
         const box = $("#bk-status");
         box.querySelector("[data-verify]")?.addEventListener("click", () => verifyOutcome(api, box, { action: MODES[mode].journal, entityId: null, sinceMs: sentAt || Date.now(), what: MODES[mode].what }));
       } else status.set(`Не удалось применить: ${errText(err)}. Отмеченное осталось на месте.`, "bad");
-    } finally { busy = false; if (!dead) { $("#bk-analyze") && ($("#bk-analyze").disabled = false); if (analysis) $("#bk-apply").disabled = checked.size === 0; } }
+    } finally { busy = false; if (!dead) { updateSteps(); updateFoot(); } }
   });
 
   renderMode();
