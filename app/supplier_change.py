@@ -692,6 +692,41 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     def keyed(got):
         return key(plan_of(got))
 
+    def polish(got):
+        """Дожим: пока какой-то обмен датами ПАРЫ изделий строго улучшает (число просроченных, максимум, сумму дней, затем сумму квадратов опозданий), он делается.
+        Нужен потому, что варианты выше — эвристики и оставляют «инверсии»: изделию, которому нужно раньше, досталась дата позже,
+        чем изделию, которому нужно позже (при той же сумме дней опоздания выравниваются — парный выигрыш этого не видел). Ключ строго
+        убывает, поэтому цикл конечен; результат не хуже выбранного."""
+        plan = plan_of(got)
+        lates = {i: late(plan[i], i) for i in ids}
+        cnt, tot, sq = sum(1 for x in lates.values() if x > 0), sum(lates.values()), sum(x * x for x in lates.values())
+        mx = max(lates.values(), default=0)
+        order = sorted((i for i in ids if nd[i] is not None), key=lambda i: (nd[i], i))   # улучшает только обмен «инверсии»: раньше нужное — позже получает
+        improved = True
+        while improved:
+            improved = False
+            for p, a in enumerate(order):
+                for b in order[p + 1:]:
+                    if plan[a] <= plan[b]:
+                        continue
+                    la2, lb2 = late(plan[b], a), late(plan[a], b)
+                    n_cnt = cnt - (lates[a] > 0) - (lates[b] > 0) + (la2 > 0) + (lb2 > 0)
+                    n_tot = tot - lates[a] - lates[b] + la2 + lb2
+                    if n_cnt > cnt or (n_cnt == cnt and n_tot > tot):
+                        continue
+                    n_sq = sq - lates[a] ** 2 - lates[b] ** 2 + la2 ** 2 + lb2 ** 2
+                    if (n_cnt, n_tot, n_sq) >= (cnt, tot, sq) and n_cnt == cnt and n_tot == tot and n_sq >= sq:
+                        continue
+                    lates[a], lates[b] = la2, lb2
+                    n_mx = max(lates.values(), default=0)
+                    if (n_cnt, n_mx, n_tot, n_sq) >= (cnt, mx, tot, sq):
+                        lates[a], lates[b] = late(plan[a], a), late(plan[b], b)     # максимум вырос — откат
+                        continue
+                    plan[a], plan[b] = plan[b], plan[a]
+                    cnt, tot, sq, mx = n_cnt, n_tot, n_sq, n_mx
+                    improved = True
+        return derive(plan)
+
     raw_variants = (plan_gain_pairs(), plan_strict_pairs(), plan_min_swaps(True), plan_min_swaps(False))
     raw_full = plan_full_queue()
     # Прежний итог (до перехода на обмен местами): «минимум обменов», а «полная очередь» — только если строго лучше по (просроченным, максимуму).
@@ -707,6 +742,7 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     # лучший, а при равенстве — с меньшим числом затронутых изделий
     feasible = [g for g in candidates if all(x <= y for x, y in zip(keyed(g)[:3], reference[:3]))]
     receives = min(feasible, key=keyed)
+    receives = polish(prune(receives))
 
     seen: set = set()
     cycles: list = []
