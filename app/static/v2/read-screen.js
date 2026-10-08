@@ -141,6 +141,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
     ...sec,
     controls: [
       ...(sec.controls || []),
+      { param: "only_overdue", label: "Только с просрочкой", type: "check", showWhen: { view: "list" } },
       { param: "date_from", label: "Период с", type: "date", showWhen: { view: "pivot" } },
       { param: "date_to", label: "По", type: "date", showWhen: { view: "pivot" } },
       { label: "Весь срок", type: "button", resets: ["date_from", "date_to"], showWhen: { view: "pivot" } },
@@ -437,6 +438,9 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
         const names = (s.userOptions || []).map((u) => `<option value="${u.id}" ${String(u.id) === val ? "selected" : ""}>${esc(u.display_name)}</option>`).join("");
         return `<label class="v2-wire-field"><span>${esc(c.label)}</span><select data-user-select="1"><option value="" ${val === "" ? "selected" : ""}>Я</option><option value="__all__" ${val === "__all__" ? "selected" : ""}>Все</option>${names}</select></label>`;
       }
+      if (c.type === "check") {
+        return `<label class="v2-wire-field"><span><input type="checkbox" data-check-param="${esc(c.param)}" ${s.params[c.param] ? "checked" : ""}> ${esc(c.label)}</span></label>`;
+      }
       if (c.type === "select") {
         const opts = c.options || pick(s.data, c.optionsFrom) || [];   // options — фиксированный набор из реестра экранов (шаг, масштаб)
         const val = cur !== "" ? cur : pick(s.data, c.currentFrom || "") ?? sec.body?.[c.param] ?? c.default ?? "";
@@ -508,6 +512,10 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       inp.addEventListener("blur", flush);
       inp.addEventListener("keydown", (e) => { if (e.key === "Enter") flush(); });
     });
+    bodyEl.querySelectorAll("[data-check-param]").forEach((cb) => cb.addEventListener("change", () => {
+      s.params[cb.dataset.checkParam] = cb.checked;
+      load(active);
+    }));
     bodyEl.querySelectorAll("[data-reset]").forEach((btn) => btn.addEventListener("click", () => {
       for (const p of btn.dataset.reset.split(",").filter(Boolean)) s.params[p] = null;
       load(active);

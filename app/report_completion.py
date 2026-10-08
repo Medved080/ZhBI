@@ -160,8 +160,14 @@ def delivery_delay_days(plan_date, need_date) -> Optional[int]:
 
 def build_completion_report(conn, source_file: Optional[str],
                             element_ids: Optional[list] = None,
-                            object_id: Optional[int] = None) -> dict:
-    """element_ids — необязательное сужение до конкретных элементов (тот же
+                            object_id: Optional[int] = None,
+                            only_overdue: bool = False) -> dict:
+    """only_overdue — оставить только строки с просрочкой (плановая поставка
+    позже требуемой: «Отклонение, дней» > 0). Строки без любой из двух дат
+    просрочкой не считаются. Отбор делается здесь, а не на клиенте: экран,
+    Excel и PDF обязаны показывать одно и то же.
+
+    element_ids — необязательное сужение до конкретных элементов (тот же
     приём, что у остальных отчётов и XLS-экспорта: фильтры схемы живут на
     клиенте, сервер получает готовый список id).
 
@@ -267,6 +273,8 @@ def build_completion_report(conn, source_file: Optional[str],
         "delay_days": deadline_cells(r["plan_date"], r["need_date"])[1],
         "guid": r["guid"] or None,
     } for r in rows]
+    if only_overdue:
+        out = [row for row in out if row["delay_days"] is not None and row["delay_days"] > 0]
     out.sort(key=lambda row: tuple(_sort_key(row[k]) for k in SORT_KEYS))
 
     report = {

@@ -21736,6 +21736,9 @@ function reportRequestBody() {
     // Вид — в запрос, а не только в отрисовку: тот же запрос собирают
     // выгрузки XLSX и PDF, и файл обязан показывать выбранное на экране.
     body.view = completionView;
+    if (completionView === "list") {
+      body.only_overdue = document.getElementById("cmp-overdue").checked;
+    }
     if (completionView === "pivot") {
       body.date_scale = document.getElementById("cmp-scale").value;
       // Шаг не отправляем, пока пользователь его не выбрал: на первом
@@ -22488,6 +22491,7 @@ function updateCompletionControls() {
   for (const id of ["cmp-scale-box", "cmp-step-box", "cmp-groups-box"]) {
     document.getElementById(id).style.display = сводная ? "" : "none";
   }
+  document.getElementById("cmp-overdue-box").style.display = сводная ? "none" : "";
   if (сводная) completionGroupChooser.render();
 }
 
@@ -22552,6 +22556,7 @@ document.getElementById("cmp-view").addEventListener("change", (e) => {
 });
 // Шкала дат и шаг меняют САМ РАСЧЁТ (в какую колонку попадёт изделие), а
 // не вид уже посчитанного, — значит перезапрос, а не перерисовка.
+document.getElementById("cmp-overdue").addEventListener("change", () => loadReport());
 document.getElementById("cmp-scale").addEventListener("change", () => {
   // Новая шкала — новый разброс дат, и прежний шаг может ей не подойти
   // (у требуемой даты период вдвое шире планового). Пусть подберёт сервер,

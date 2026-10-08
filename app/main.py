@@ -1704,6 +1704,9 @@ class ReportRequestIn(BaseModel):
     # отчёт в двух видах, а не два отчёта: данные, права и галочка «учитывать
     # фильтр схемы» у них общие. Пусто = перечень.
     view: Optional[str] = None
+    # «Статус комплектации», вид «перечень»: только строки с просрочкой
+    # (плановая поставка позже требуемой). В сводной не действует.
+    only_overdue: bool = False
     # Шкала дат сводной: "plan" / "fact" / "need" — одна на всю таблицу.
     # Названа не `scale`, потому что `scale` выше уже занят масштабом оси
     # «Графика контрактации»; два разных смысла в одном поле однажды
@@ -1935,7 +1938,8 @@ def _completion(conn, user, body: "ReportRequestIn") -> dict:
     # из чертежа.
     object_id = _report_object_id(conn, body)
     if normalize_view(body.view) != VIEW_PIVOT:
-        return build_completion_report(conn, body.source_file, body.element_ids, object_id)
+        return build_completion_report(conn, body.source_file, body.element_ids, object_id,
+                                       only_overdue=body.only_overdue)
     try:
         # Только группировка по крану/стоянке зависит от редакции зон.
         # Сводная без этой группировки сохраняет прежний режим «весь срок».
