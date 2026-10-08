@@ -199,13 +199,14 @@ def build_template(conn):
         volume = float(values.get("volume", row["volume"]) or 0)
         klass = values.get("concreteClass") or row["concrete_class"]
         no_class = not (klass or "").strip() or (klass or "").strip().lower() == "не указан"
+        own_class = next((c for c in (row["concrete_class"], (doc or {}).get("concreteClass")) if (c or "").strip().lower() not in ("", "не указан")), None)      # собственный класс изделия; класс типа сюда не подставляется
         source = (doc or {}).get("source") or {}
         sheet = ("%s, стр. %s" % (source.get("id"), source.get("productPage"))) if source.get("id") else ""
         name = (doc or {}).get("alias") or row["name"]
         if volume <= 0 or no_class:
             gap_rows += 1
             ws_p.append([row["id"], name, family, sheet, ("объём и класс" if volume <= 0 and no_class else "объём" if volume <= 0 else "класс"),
-                         volume if volume > 0 else None, None if no_class else klass])
+                         volume if volume > 0 else None, own_class])      # класс из таблицы типов в строку не пишем: иначе повторная загрузка файла закрепит старый класс типа за изделиями
         mark = verified.get(row["id"])
         ws_v.append([row["id"], name, family, _status(values, doc, bool(mark), confirmed), "да" if mark else "нет", mark["note"] if mark else None])
     _mark_inputs(ws_p, (6, 7), gap_rows)
