@@ -54,7 +54,7 @@ from app.reports import (
     MAX_PERIOD_COLUMNS, STEP_LABELS, STEPS, auto_step, bucket_start,
     build_period_columns, natural_key, parse_iso_date, pdf_text,
 )
-from app.schedule_versions import FORECAST_JOIN, FORECAST_START
+from app.schedule_versions import FORECAST_JOIN, NEED_START
 
 TITLE = "Статус комплектации"
 
@@ -77,7 +77,7 @@ NONE_KEY = "none"
 SCALES = [
     {"key": "plan", "label": "Плановая дата поставки", "expr": "e.planned_delivery_date"},
     {"key": "fact", "label": "Фактическая дата поставки", "expr": "e.actual_delivery_date"},
-    # Требуемая — «Начало СМР (прогноз)» из АКТУАЛИЗИРОВАННОГО графика, а не
+    # С 2026-10-08 требуемая — директивное «Начало СМР», а при его отсутствии актуализация (NEED_START). Прежнее правило (08-30): «Начало СМР (прогноз)» из АКТУАЛИЗИРОВАННОГО графика, а не
     # директивное поле изделия (живой запрос 2026-08-30, см.
     # app/report_completion.py). Перечень и сводная — два ВИДА одного отчёта,
     # и дату они обязаны брать одну: разойдись источники, одно и то же
@@ -86,7 +86,7 @@ SCALES = [
     # незаполненной плановой, и предупреждение под заголовком считает их так
     # же. Не `smr_end_date`: та означает ЗАВЕРШЕНИЕ работ по фронту (см.
     # app/schedule_import.py) и к поставке отношения не имеет.
-    {"key": "need", "label": "Требуемая дата поставки", "expr": FORECAST_START},
+    {"key": "need", "label": "Требуемая дата поставки", "expr": NEED_START},
 ]
 SCALE_KEYS = [s["key"] for s in SCALES]
 # По умолчанию — плановая: именно по ней собрана сводная заказчика.

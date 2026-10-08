@@ -132,6 +132,19 @@ FORECAST_JOIN = """
 # имя алиаса своими строками.
 FORECAST_START = "f.smr_start_date"
 
+# ТРЕБУЕМАЯ дата поставки (правило пользователя 2026-10-08, действует во всём сервисе): директивное «Начало СМР» изделия, а если его
+# нет — начало СМР последней актуализации графика. Раньше (08-30/08-31) во всех отчётах брали только актуализацию; теперь она лишь
+# запасной источник. SQL-выражение требует в запросе алиасов `e` (elements) и `f` (FORECAST_JOIN).
+NEED_START = "COALESCE(NULLIF(TRIM(e.project_smr_start_date), ''), f.smr_start_date)"
+
+
+def need_start_dates(conn: sqlite3.Connection, object_id: Optional[int] = None) -> dict:
+    """element_id -> требуемая дата поставки (YYYY-MM-DD) или None: директивное начало СМР, при его отсутствии — начало СМР
+    последней актуализации (для не смонтированных; факт смонтированных требуемой датой не считается)."""
+    where, params = ("e.object_id = ?", [object_id]) if object_id is not None else ("e.is_current = 1", [])
+    return {r["id"]: (r["d"] or None) for r in conn.execute(
+        f"SELECT e.id AS id, substr({NEED_START}, 1, 10) AS d FROM elements e {FORECAST_JOIN} WHERE {where}", params)}
+
 
 # Смонтированные изделия (2026-10-01): в актуализацию графика они НЕ входят (прогноз пересчитывается только для не смонтированных),
 # и «прогнозных» дат у них нет. Чтобы фильтры и выгрузка по прогнозным датам их не теряли, вместо прогноза подставляется ФАКТ.

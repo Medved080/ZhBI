@@ -841,7 +841,7 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
     contract_id None — по всем контрактам объекта, mark пустая — по всем маркам. Расчёт ведётся по группам (контракт, марка),
     при `pool` — по маркам через контракты (даты переходят между контрактами). Строки отдаются сгруппированными: поставщик →
     контракт → марка. При охвате «все» группы, где ничего не меняется, не показываются — как и в списках выбора."""
-    from app.schedule_versions import forecast_dates
+    from app.schedule_versions import need_start_dates
 
     sql = f"SELECT {_REBALANCE_COLS} FROM elements WHERE object_id = ? AND is_current = 1 AND contract_id IS NOT NULL"
     args: list = [object_id]
@@ -857,8 +857,8 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
     if element_ids is not None:
         wanted = set(element_ids)
         rows = [r for r in rows if r["id"] in wanted]
-    прогноз = forecast_dates(conn, object_id)
-    need = {r["id"]: (прогноз[r["id"]][0] if r["id"] in прогноз and not прогноз[r["id"]][2] else None) for r in rows}
+    требуемые = need_start_dates(conn, object_id)
+    need = {r["id"]: требуемые.get(r["id"]) for r in rows}
     широкий = contract_id is None or not mark
     метки = _contract_labels(conn, (r["contract_id"] for r in rows))
     items: list = []
@@ -914,13 +914,13 @@ def _rebalance_candidates(conn, object_id: int) -> dict:
     «Есть что балансировать» — расчёт (`_rebalance_allocate`) меняет плановую дату хотя бы у одного изделия группы. Контракты и
     марки без изменений в списки не попадают: предлагать их в форме значило бы вести человека к документу, который ничего не
     сделает. Один проход по изделиям объекта, а не расчёт на каждую пару."""
-    from app.schedule_versions import forecast_dates
+    from app.schedule_versions import need_start_dates
 
     rows = conn.execute(
         f"SELECT {_REBALANCE_COLS} FROM elements WHERE object_id = ? AND is_current = 1 AND contract_id IS NOT NULL "
         "AND planned_delivery_date IS NOT NULL", (object_id,)).fetchall()
     rows = [r for r in rows if _rebalance_eligible(r, r["contract_id"], "") is None]
-    прогноз = forecast_dates(conn, object_id)
+    требуемые = need_start_dates(conn, object_id)
     имена = {c["id"]: c for c in _object_contracts(conn, object_id)}
     живые = {i for i, c in имена.items() if not c["is_archived"]}
     rows = [r for r in rows if r["contract_id"] in живые]
@@ -933,7 +933,7 @@ def _rebalance_candidates(conn, object_id: int) -> dict:
         for (contract_id, _), изделия in _rebalance_groups(rows, pool).items():
             if len(изделия) < 2:
                 continue
-            need = {r["id"]: (прогноз[r["id"]][0] if r["id"] in прогноз and not прогноз[r["id"]][2] else None) for r in изделия}
+            need = {r["id"]: требуемые.get(r["id"]) for r in изделия}
             раскладка = _rebalance_allocate(изделия, need)
             изменится = sum(1 for i in раскладка if i["plan_old"] != i["plan_new"])
             if not изменится:
@@ -1007,7 +1007,7 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
     Раскладка считается заново при проведении, а не берётся из черновика: между сохранением и проведением могли
     измениться требуемые даты (новая актуализация) и состав. Пересчёт по тем же изделиям документа даёт ровно то, что
     человек увидел бы в предпросмотре сейчас. Группы: (контракт, марка), при общем пуле — марка через контракты."""
-    from app.schedule_versions import forecast_dates
+    from app.schedule_versions import need_start_dates
 
     contract_id = None if doc["all_contracts"] else doc["from_contract_id"]
     марка = "" if doc["all_marks"] else (doc["mark"] or "").strip()
@@ -1030,8 +1030,8 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
             elements.append(e)
     if проблемы:
         raise HTTPException(status_code=409, detail="Провести нельзя:\n" + "\n".join(проблемы[:20]))
-    прогноз = forecast_dates(conn, doc["object_id"])
-    need = {e["id"]: (прогноз[e["id"]][0] if e["id"] in прогноз and not прогноз[e["id"]][2] else None) for e in elements}
+    требуемые = need_start_dates(conn, doc["object_id"])
+    need = {e["id"]: требуемые.get(e["id"]) for e in elements}
     раскладка: dict = {}
     for изделия in _rebalance_groups(elements, bool(doc["pool"]) and bool(doc["all_contracts"])).values():
         раскладка.update({i["element_id"]: i for i in _rebalance_allocate(изделия, need)})

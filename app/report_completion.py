@@ -28,7 +28,9 @@
 (см. app/report_delivery.py (удалён 2026-10-07, история в git)):
   Плановая дата поставки    — `planned_delivery_date` (контракт/логистика);
   Фактическая дата поставки — `actual_delivery_date` (переход в «Доставлено»);
-  Требуемая дата поставки   — «Начало СМР (прогноз)» из АКТУАЛИЗИРОВАННОГО
+  Требуемая дата поставки   — С 2026-10-08 (правило пользователя для всего сервиса): директивное «Начало СМР»
+      изделия, а при его отсутствии — актуализация (см. NEED_START в schedule_versions). Текст ниже описывает
+      прежнее правило 08-30 и сохранён как история: «Начало СМР (прогноз)» из АКТУАЛИЗИРОВАННОГО
       графика: к этому числу изделие обязано быть на площадке, из него и
       раскладывается потребность. С 2026-08-30 (живой запрос) это прогноз
       последней актуализации объекта, а НЕ директивное поле
@@ -58,7 +60,7 @@ from app.contracts import build_document_label
 from app.db import visible_elements_clause
 from app.models import STATUS_LABELS_RU, STATUS_ORDER, Status
 from app.reports import natural_key, pdf_text
-from app.schedule_versions import FORECAST_JOIN, FORECAST_START
+from app.schedule_versions import FORECAST_JOIN, NEED_START
 
 TITLE = "Статус комплектации"
 
@@ -209,7 +211,7 @@ def build_completion_report(conn, source_file: Optional[str],
                sp.number AS sp_number, sp.specification_date AS sp_date,
                e.planned_delivery_date AS plan_date,
                e.actual_delivery_date AS fact_date,
-               {FORECAST_START} AS need_date,
+               {NEED_START} AS need_date,
                e.element_uid AS guid,
                e.current_status AS status
         FROM elements e
@@ -307,11 +309,9 @@ def forecast_warning(report: dict) -> str:
     без = sum(1 for r in report["rows"] if not r["need_date"])
     if not всего or not без:
         return ""
-    return (f"Требуемая дата поставки — «Начало СМР (прогноз)» из последней "
+    return (f"Требуемая дата поставки — директивное «Начало СМР» изделия, а если его нет — начало СМР из последней "
             f"актуализации графика СМР; она заполнена у {всего - без} позиций из "
-            f"{всего}. У остальных {без} прогноза нет (по объекту не загружен "
-            f"актуализированный график, изделие уже смонтировано либо не "
-            f"привязано к крану, стоянке и этажу) — у них ячейка пустая.")
+            f"{всего}. У остальных {без} нет ни директивной даты, ни записи в актуализации — у них ячейка пустая.")
 
 
 # ---------- выгрузка того же отчёта в файлы ----------

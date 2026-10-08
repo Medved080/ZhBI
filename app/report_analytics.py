@@ -23,7 +23,9 @@
 
   **Потребность** — изделия МОДЕЛИ, разложенные по дате начала СМР: к ней
       изделие обязано быть на площадке (дата ЗАВЕРШЕНИЯ СМР к поставке
-      отношения не имеет, см. app/schedule_import.py). С 2026-08-31 дата
+      отношения не имеет, см. app/schedule_import.py). С 2026-10-08 (правило пользователя для всего сервиса) дата —
+      директивное начало СМР, а при его отсутствии актуализация (NEED_START); у смонтированных даты нет по-прежнему.
+      Прежнее правило, сохранённое как история: с 2026-08-31 дата
       берётся из АКТУАЛИЗИРОВАННОГО графика («Начало СМР (прогноз)»,
       `FORECAST_JOIN` в app/schedule_versions.py), а не из директивного поля
       `project_smr_start_date` — решение пользователя, та же правка, что
@@ -76,7 +78,10 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.capacity import CapacityBook
-from app.schedule_versions import FORECAST_JOIN, FORECAST_START
+from app.schedule_versions import FORECAST_JOIN, INSTALLED_STATUSES, NEED_START
+
+# Смонтированные изделия потребности не создают (их нет в «Потребности», как и раньше): даты им в отчёте не нужны
+_УЖЕ_СМОНТИРОВАНО = ", ".join(f"'{s}'" for s in INSTALLED_STATUSES)
 from app.models import Status
 from app.reports import natural_key, pdf_text
 from app.settings import get_notes_for_date
@@ -329,7 +334,7 @@ def build_analytics_report(conn: sqlite3.Connection, object_id: int,
     изделия = [dict(r) for r in conn.execute(
         f"""
         SELECT e.id, e.element_type, e.mark, e.floor, e.contract_id, e.current_status,
-               {FORECAST_START} AS need_date,
+               CASE WHEN e.current_status IN ({_УЖЕ_СМОНТИРОВАНО}) THEN NULL ELSE {NEED_START} END AS need_date,
                e.planned_delivery_date, e.actual_delivery_date,
                e.zone_crane_id, e.zone_stance_id, e.zone_stance_level_id,
                zc.number AS crane_number, zc.name AS crane_name,
@@ -880,12 +885,11 @@ def _build_conclusions(строки_горизонта: list, фронт: list, 
     if неразмечено_дата or неразмечено_ярус:
         выводы.append({
             "severity": "data",
-            "text": (f"Не размечено: без прогнозной даты начала СМР — "
+            "text": (f"Не размечено: без даты начала СМР — "
                      f"{len(неразмечено_дата)} шт., без привязки к ярусу — "
                      f"{len(неразмечено_ярус)} шт. В расчёт горизонта, критического "
-                     f"пути и очереди завода они не входят. Дата берётся из последней "
-                     f"актуализации графика СМР; чаще всего её нет у уже смонтированных "
-                     f"изделий — пересчёт графика от факта исключает их намеренно."),
+                     f"пути и очереди завода они не входят. Дата — директивное начало СМР, при его отсутствии — "
+                     f"актуализация графика СМР; у уже смонтированных изделий её нет намеренно."),
         })
     if not book.average:
         выводы.append({
@@ -1127,7 +1131,7 @@ def build_analytics_report_pdf(report: dict) -> bytes:
     неразмечено = report.get("unmapped") or {}
     if неразмечено.get("no_smr_date") or неразмечено.get("no_level"):
         story.append(Paragraph(
-            f"Не размечено: без прогнозной даты начала СМР — "
+            f"Не размечено: без даты начала СМР — "
             f"{неразмечено.get('no_smr_date', 0)} шт., без привязки к ярусу — "
             f"{неразмечено.get('no_level', 0)} шт. В расчёт горизонта, критического "
             f"пути и очереди завода они не входят.", мелкий))
