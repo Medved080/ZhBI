@@ -453,7 +453,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   function itemHtml(g, it, branchKey) {
     const key = branchKey || g.key;
     const dis = it.enabled ? "" : " ws-dim";
-    return `<label class="ws-check${dis}"><input type="checkbox" data-g="${esc(g.id)}" data-key="${esc(key)}" data-v="${esc(JSON.stringify(it.v))}" ${it.on ? "checked" : ""}> <span>${esc(it.label)}</span><em>${it.count}</em></label>`;
+    // «частично включён»: родитель дерева включён, но часть его подтипов/марок исключена
+    const partial = !branchKey && it.on && it.branches && Object.values(it.branches).some((arr) => arr.some((x) => !x.on));
+    return `<label class="ws-check${dis}"><input type="checkbox" data-g="${esc(g.id)}" data-key="${esc(key)}" data-v="${esc(JSON.stringify(it.v))}" ${it.on ? "checked" : ""} ${partial ? 'data-indet="1"' : ""}> <span>${esc(it.label)}</span><em>${it.count}</em></label>`;
   }
   // Диапазоны дат («СМР», «Поставка», в том числе прогнозные) и «Изменения» — группы особого вида: не список значений, а поля (2026-09-30)
   const EMPTY_MODES = [["show", "с датой и без даты"], ["hide", "только с датой"], ["only", "только без даты"]];
@@ -859,6 +861,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     }));
     body.querySelectorAll("[data-all]").forEach((b) => b.addEventListener("click", () => bulkGroup(b.dataset.all, b.dataset.on === "1")));
     body.querySelectorAll("input[data-key]").forEach((c) => c.addEventListener("change", () => toggleItem(c)));
+    body.querySelectorAll("input[data-indet]").forEach((c) => { c.indeterminate = true; });
     // диапазоны дат: любая правка подгруппы отправляет её состояние целиком
     body.querySelectorAll("[data-dfield]").forEach((box) => box.querySelectorAll("input").forEach((i) => i.addEventListener("change", () => {
       const val = (b) => box.querySelector(`[data-bound="${b}"]`).value || "";
@@ -890,6 +893,18 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     if (g.kind === "tree" && key === g.key) {
       const it = g.items.find((x) => JSON.stringify(x.v) === c.dataset.v);
       for (const [bk, arr] of Object.entries(it?.branches || {})) if (arr.length) changes.push({ key: bk, values: arr.map((x) => x.v), on });
+    }
+    // Отметили подтип/марку внутри типа: тип включается (иначе изделие не пройдёт фильтр), а соседняя ветка того же типа,
+    // если она выключена ЦЕЛИКОМ, — включается целиком: изделие проходит, только если не исключены И его подтип, И его марка
+    // (то же правило, что в V1: app.js, включитьТипИСоседей).
+    if (g.kind === "tree" && key !== g.key && on) {
+      const parent = g.items.find((it) => (it.branches?.[key] || []).some((x) => JSON.stringify(x.v) === c.dataset.v));
+      if (parent) {
+        if (!parent.on) changes.push({ key: g.key, values: [parent.v], on: true });
+        for (const [bk, arr] of Object.entries(parent.branches || {})) {
+          if (bk !== key && arr.length && arr.every((x) => !x.on)) changes.push({ key: bk, values: arr.map((x) => x.v), on: true });
+        }
+      }
     }
     send("setFilter", { changes });
   }

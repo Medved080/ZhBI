@@ -3556,6 +3556,22 @@ function buildTypeTreeFilterGroup(types, subtypesByType, marksByType, onChange) 
   const { wrap, body, btnAll, btnNone } = filterGroupShell("Тип элемента / Подтип · Марка", "elementType");
   const typeExcluded = state.placementFilters.elementType;
   const все = [];   // {input, value, excludedSet} — для кнопок «все»/«ничего» группы
+  const разделыПоТипу = new Map();   // тип -> разделы («Подтипы», «Марки») — для снятия блокировки соседней ветки
+
+  // Отметили значение (марку/подтип) или целый раздел внутри типа: тип включается и становится «частично включённым». Если
+  // соседняя ветка того же типа выключена ЦЕЛИКОМ (типичный случай — «Ничего» на всей группе, потом одна марка), она включается
+  // целиком: изделие проходит фильтр, только если не исключены И его подтип, И его марка, и выключенные подтипы спрятали бы
+  // отмеченную марку (2026-10-08, живой репорт: «ставлю галочку на марке — на схеме ничего нет»). Включение подтипов ничего не
+  // сужает — отбор остаётся по выбранной марке.
+  function включитьТипИСоседей(тип, excludedSet) {
+    typeExcluded.delete(тип);
+    for (const другой of (разделыПоТипу.get(тип) || [])) {
+      if (другой.excludedSet === excludedSet || !другой.чекбоксы.length) continue;
+      if (другой.чекбоксы.every(({ value }) => другой.excludedSet.has(value))) {
+        другой.чекбоксы.forEach(({ input, value }) => { другой.excludedSet.delete(value); input.checked = true; });
+      }
+    }
+  }
 
   // Раздел внутри типа: заголовок с разворотом и галочкой на весь раздел,
   // плюс список значений. Возвращает элементы раздела и свои чекбоксы —
@@ -3604,8 +3620,9 @@ function buildTypeTreeFilterGroup(types, subtypesByType, marksByType, onChange) 
           excludedSet.delete(v);
           // Включили значение при выключенном типе — включаем и тип: иначе
           // элемент всё равно не пройдёт фильтр (passesPlacementFilters —
-          // это И по всем категориям). Остальных значений не трогаем.
-          typeExcluded.delete(тип);
+          // это И по всем категориям). Остальных значений не трогаем (кроме
+          // целиком выключенной соседней ветки — см. включитьТипИСоседей).
+          включитьТипИСоседей(тип, excludedSet);
         } else {
           excludedSet.add(v);
         }
@@ -3631,6 +3648,7 @@ function buildTypeTreeFilterGroup(types, subtypesByType, marksByType, onChange) 
         input.checked = секция.checked;
         if (секция.checked) excludedSet.delete(value); else excludedSet.add(value);
       });
+      if (секция.checked) включитьТипИСоседей(тип, excludedSet);
       onChange();
     });
     return { row, box, чекбоксы, excludedSet };
@@ -3694,7 +3712,10 @@ function buildTypeTreeFilterGroup(types, subtypesByType, marksByType, onChange) 
       ));
     }
     разделы.forEach(({ row, box }) => { tBox.appendChild(row); tBox.appendChild(box); });
+    разделыПоТипу.set(тип, разделы);
     body.appendChild(tBox);
+    // «Частично включён»: тип не выключен, но часть его подтипов или марок исключена
+    tInput.indeterminate = tInput.checked && разделы.some(({ чекбоксы, excludedSet }) => чекбоксы.some(({ value }) => excludedSet.has(value)));
 
     tInput.addEventListener("change", () => {
       // Клик по типу каскадом ставит/снимает ОБЕ ветки разом — и подтипы, и
