@@ -110,9 +110,11 @@ def main() -> int:
         same_contract = ea["contract_id"] == eb["contract_id"]
         print(f"  одна марка: {'да' if same_mark else 'НЕТ — группа обмена строится по марке'} ({ea['mark']} / {eb['mark']})")
         print(f"  один контракт: {'да' if same_contract else 'НЕТ — без общего пула даты не переходят между контрактами'}")
-        if a["need"] and b["need"] and ea["planned_delivery_date"] and eb["planned_delivery_date"]:
-            before = (days(a["need"], ea["planned_delivery_date"]), days(b["need"], eb["planned_delivery_date"]))
-            after = (days(a["need"], eb["planned_delivery_date"]), days(b["need"], ea["planned_delivery_date"]))
+        eff = lambda e: (e["actual_delivery_date"] if e["current_status"] == "delivered" and e["actual_delivery_date"]  # noqa: E731
+                         else e["planned_delivery_date"])        # дата изделия для расчёта: у привезённого — факт
+        if a["need"] and b["need"] and eff(ea) and eff(eb):
+            before = (days(a["need"], eff(ea)), days(b["need"], eff(eb)))
+            after = (days(a["need"], eff(eb)), days(b["need"], eff(ea)))
             pos = lambda v: max(v, 0)  # noqa: E731
             print(f"  просрочка сейчас: {before[0]} / {before[1]} дн.; после обмена датами: {after[0]} / {after[1]} дн.")
             gain = (pos(before[0]) + pos(before[1])) - (pos(after[0]) + pos(after[1]))

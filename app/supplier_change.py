@@ -562,7 +562,11 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
 
     ids = sorted(r["id"] for r in rows)
     by = {r["id"]: r for r in rows}
-    old = {i: ordinal(by[i]["planned_delivery_date"]) for i in ids}
+    # ДАТА ИЗДЕЛИЯ для расчёта опоздания: у привезённого (статус «Доставлен», фактическая дата известна) — ФАКТ поставки, у остальных —
+    # плановая (2026-10-09, решение пользователя «учитывай факт по привезённым»). Изделие переезжает с местом целиком (дата, статус,
+    # история), поэтому факт переходит вместе с ним: привезённое изделие может занять место соседа, которому оно нужно раньше.
+    is_fact = {i: bool(by[i]["current_status"] == "delivered" and by[i]["actual_delivery_date"]) for i in ids}
+    old = {i: ordinal(by[i]["actual_delivery_date"] if is_fact[i] else by[i]["planned_delivery_date"]) for i in ids}
     nd = {i: ordinal(need.get(i)) for i in ids}                        # требуемая дата (None — нет)
 
     def late(plan_day, i):
@@ -773,7 +777,9 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
         delay_new = (new_day - nd[i]) if nd[i] is not None else None
         out.append({"element_id": i, "address": r["address"], "floor": r["floor"],
                     "status": r["current_status"], "status_new": by[src]["current_status"] if src else r["current_status"],
+                    # plan_old / plan_new — ДАТА ИЗДЕЛИЯ для расчёта (у привезённого — факт); fact_* говорят, что это факт, а не план
                     "need_date": need.get(i), "plan_old": iso(old[i]), "plan_new": iso(new_day),
+                    "fact_old": is_fact[i], "fact_new": is_fact[src] if src else is_fact[i],
                     "delay_old": delay_old, "delay_new": delay_new,
                     # partner_id — изделие, от которого место получает дату, статус, историю и контракт (в паре — взаимный партнёр)
                     "partner_id": src, "chain_pos": pos[i][0] if i in pos else None, "chain_size": pos[i][1] if i in pos else None,
@@ -797,7 +803,7 @@ def _rebalance_eligible(e, contract_id: Optional[int], mark: str) -> Optional[st
 
 
 _REBALANCE_COLS = ("id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, is_current, "
-                   "planned_delivery_date")
+                   "planned_delivery_date, actual_delivery_date")
 
 
 def _history_consistent_ids(conn, ids) -> set:
@@ -1019,7 +1025,7 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
     for it in items:
         e = conn.execute(
             "SELECT id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, "
-            "is_current, planned_delivery_date FROM elements WHERE id = ?", (it["element_id"],)).fetchone()
+            "is_current, planned_delivery_date, actual_delivery_date FROM elements WHERE id = ?", (it["element_id"],)).fetchone()
         причина = _rebalance_eligible(e, contract_id, марка) if e is not None and e["object_id"] == doc["object_id"] \
             else "изделия нет в актуальном чертеже объекта"
         if not причина and e["contract_id"] is None:

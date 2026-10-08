@@ -19736,10 +19736,10 @@ function scdRenderRebalance() {
   const byId = new Map(items.map((i) => [i.element_id, i]));
   const rows = items.filter((i) => i.pair_no ? i.chain_pos === 1 : true);        // представитель обмена (ведущее изделие) и изделия без обмена
   const участники = (a) => { const m = [a]; let q = byId.get(a.partner_id); while (q && q !== a) { m.push(q); q = byId.get(q.partner_id); } return m; };
-  const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>";
+  const шапка = "<th>№</th><th>Изделие</th><th>Статус</th><th title='У привезённого изделия вместо плановой берётся фактическая дата поставки'>Плановая дата (у привезённых — факт)</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th title='У привезённого изделия вместо плановой берётся фактическая дата поставки'>Плановая дата (у привезённых — факт)</th><th>Откл., дн.</th><th>Опоздание сокращено</th>";
   // место получает дату, статус и контракт изделия-источника (partner_id): если контракт другой — «было → станет» в строке
   const ячейки = (i) => `<td class="scd-rb-place">${место(i, смена(i, byId.get(i.partner_id)))}</td>
-      <td>${статусы(i.status, i.status_new)}</td><td>${перех(formatDateRu(i.plan_old), formatDateRu(i.plan_new))}</td>
+      <td>${статусы(i.status, i.status_new)}</td><td>${перех(formatDateRu(i.plan_old) + (i.fact_old ? " (факт)" : ""), formatDateRu(i.plan_new) + (i.fact_new ? " (факт)" : ""))}</td>
       <td>${перех(дн(i.delay_old), дн(i.delay_new))}</td>`;
   const выигрышГруппы = (l) => l.reduce((n, i) => n + поздно(i, "delay_old") - поздно(i, "delay_new"), 0);
   const ячейкаВыигрыша = (d) => `<td style="white-space:nowrap;text-align:right">${выигрыш(d)}</td>`;

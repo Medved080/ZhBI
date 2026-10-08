@@ -705,9 +705,9 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     const byId = new Map(items.map((i) => [i.element_id, i]));
     const rows = items.filter((i) => i.pair_no ? i.chain_pos === 1 : true);          // представитель обмена (ведущее изделие) и изделия без обмена
     const members = (a) => { const m = [a]; let q = byId.get(a.partner_id); while (q && q !== a) { m.push(q); q = byId.get(q.partner_id); } return m; };
-    const head = `<th>№</th><th>Изделие</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th>Плановая дата</th><th>Откл., дн.</th><th>Опоздание сокращено</th>`;
+    const head = `<th>№</th><th>Изделие</th><th>Статус</th><th title="У привезённого изделия вместо плановой берётся фактическая дата поставки">Плановая дата (у привезённых — факт)</th><th>Откл., дн.</th><th></th><th>Поменяется местами с</th><th>Статус</th><th title="У привезённого изделия вместо плановой берётся фактическая дата поставки">Плановая дата (у привезённых — факт)</th><th>Откл., дн.</th><th>Опоздание сокращено</th>`;
     // место получает дату, статус и контракт изделия-источника (partner_id): если контракт другой — «было → станет» в строке
-    const cell = (i) => `<td class="v2-rb-place">${placeCell(i, shiftHtml(i, byId.get(i.partner_id)))}</td><td>${stMoved(i.status, i.status_new)}</td><td>${moved(ruDate(i.plan_old), ruDate(i.plan_new))}</td><td>${moved(dl(i.delay_old), dl(i.delay_new))}</td>`;
+    const cell = (i) => `<td class="v2-rb-place">${placeCell(i, shiftHtml(i, byId.get(i.partner_id)))}</td><td>${stMoved(i.status, i.status_new)}</td><td>${moved(ruDate(i.plan_old) + (i.fact_old ? " (факт)" : ""), ruDate(i.plan_new) + (i.fact_new ? " (факт)" : ""))}</td><td>${moved(dl(i.delay_old), dl(i.delay_new))}</td>`;
     const gainOf = (l) => l.reduce((n, i) => n + late(i, "delay_old") - late(i, "delay_new"), 0);
     const row = (a) => {
       if (!a.pair_no) return `<tr><td>—</td>${cell(a)}<td colspan="6" class="v2-muted">без обмена</td></tr>`;
