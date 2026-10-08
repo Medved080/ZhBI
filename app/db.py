@@ -406,6 +406,9 @@ _COLUMN_MIGRATIONS = [
     ("training_attempts", "current_options", "TEXT"),
     ("training_attempts", "asked_at", "TEXT"),
     ("objects", "kind", "TEXT NOT NULL DEFAULT 'zhbi'"),
+    # Сквозной идентификатор объекта (2026-10-08): по нему объект находят друг у друга серверы при обмене данными; название для этого
+    # не годится — его переименовывают. Заполняет _migrate_object_uid, новым объектам выдаёт триггер trg_objects_uid.
+    ("objects", "object_uid", "TEXT"),
     ("training_answers", "feature_key", "TEXT"),
     ("training_answers", "spent_ms", "INTEGER"),
     # Привязка секции к осям здания для геометрии блока (Docs/TZ.md,
@@ -1812,6 +1815,32 @@ def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
     )
 
 
+# Пространство имён для первичной выдачи object_uid существующим объектам.
+_OBJECT_UID_NAMESPACE = uuid.UUID("6f1d0b6e-3b0c-5c52-9a53-7a1c6d2e9a10")
+
+
+def _migrate_object_uid(conn: sqlite3.Connection, changes: list) -> None:
+    """Сквозной идентификатор объекта (2026-10-08). Серверы обмениваются данными (app/data_exchange.py) и должны находить объект друг
+    у друга не по названию (его переименовывают), а по неизменному идентификатору.
+
+    Существующим объектам идентификатор выдаётся ДЕТЕРМИНИРОВАННО — из названия и момента создания (`uuid5`). Серверы, у которых
+    база произошла из одной (полный перенос базы, резервная копия), хранят у объекта одинаковые название и `created_at`, поэтому
+    получают ОДИН И ТОТ ЖЕ идентификатор без всякого согласования между ними. Новым объектам идентификатор выдаёт триггер
+    (случайный, формата uuid4); он же страхует любое место кода, которое вставляет объект без идентификатора. Идемпотентно."""
+    rows = conn.execute("SELECT id, name, created_at FROM objects WHERE object_uid IS NULL OR object_uid = ''").fetchall()
+    for r in rows:
+        conn.execute("UPDATE objects SET object_uid = ? WHERE id = ?",
+                     (str(uuid.uuid5(_OBJECT_UID_NAMESPACE, f"{r['name']}|{r['created_at']}")), r["id"]))
+    if rows:
+        changes.append(f"выданы сквозные идентификаторы объектам: {len(rows)}")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_uid ON objects (object_uid)")
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS trg_objects_uid AFTER INSERT ON objects WHEN NEW.object_uid IS NULL OR NEW.object_uid = '' "
+        "BEGIN UPDATE objects SET object_uid = lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) "
+        "|| '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))) "
+        "WHERE id = NEW.id; END")
+
+
 def _ensure_activity_category_index(conn: sqlite3.Connection) -> None:
     """Категория события в журнале (2026-08-20). «Покажи ошибки за неделю»
     — самый частый повод открыть журнал после того, как в него стали
@@ -2613,6 +2642,7 @@ def init_db() -> list:
         _ensure_element_uid_index(conn)
         _ensure_activity_category_index(conn)
         _bootstrap_default_object(conn, changes)
+        _migrate_object_uid(conn, changes)   # ПОСЛЕ бутстрапа: ему тоже нужен идентификатор
         # Строго ПОСЛЕ бутстрапа объекта: проекту нужны объекты, которые он
         # подхватит, а бутстрап объекта заводит их на накопленной БД.
         _bootstrap_default_project(conn, changes)

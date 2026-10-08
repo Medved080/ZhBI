@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import secrets
 import socket
@@ -144,7 +145,8 @@ def _summary(aid: str, analysis: dict, meta: dict) -> dict:
     kinds = sorted({r["kind"] for r in analysis["entities"]}, key=lambda k: order[k])
     return {"analysis_id": aid, "direction": meta["direction"], "sections": meta.get("sections"), "groups": groups,
             "same": {k: same.get(k, 0) for k in kinds}, "kinds": [{"kind": k, "title": dx.KIND_TITLES[k], "section": dx.KIND_SECTION[k]} for k in kinds],
-            "source": analysis.get("source"), "created_at": meta.get("created_at")}
+            "source": analysis.get("source"), "created_at": meta.get("created_at"),
+            "objects_by_name": analysis.get("objects_by_name") or []}
 
 
 def _items(analysis: dict, group: str, offset: int, limit: int) -> dict:
@@ -170,8 +172,9 @@ class ExportIn(BaseModel):
 def info(user: sqlite3.Row = Depends(_read)):
     conn = get_connection()
     try:
-        names = [r["name"] for r in conn.execute("SELECT name FROM objects ORDER BY name")]
-        return {"server": dx.server_info(conn), "objects": names,
+        # Объект — пара (сквозной идентификатор, название): отбор и сопоставление идут по идентификатору, название — для людей
+        objs = [{"uid": r["object_uid"], "name": r["name"]} for r in conn.execute("SELECT object_uid, name FROM objects ORDER BY name")]
+        return {"server": dx.server_info(conn), "format": dx.FORMAT, "objects": objs,
                 "sections": [{"key": k, "title": v["title"], "hint": v["hint"]} for k, v in dx.SECTIONS.items()],
                 "user": audit_display_name(user)}
     finally:
@@ -459,15 +462,102 @@ def _public(cid: str, c: "_Conn") -> dict:
 
 
 # ----------------------------------------------------------------------------- маршруты инициатора
+# ----------------------------------------------------------------------------- запомненные подключения
+# По явной просьбе человека («запомнить») адрес, логин и пароль другого сервера лежат в отдельном файле рядом с базой
+# (`<база>.exchange-saved.json`, права 0600) — не в БД: файл не попадает ни в резервные копии, ни в перенос базы, ни в обезличенную
+# копию. Записи — по пользователям: чужие подключения человек не видит и не использует. Пароль браузеру не возвращается никогда:
+# подключение по запомненному делает сервер сам.
+_saved_lock = threading.Lock()
+
+
+def _saved_path() -> Path:
+    from app import db as _db
+    return _db.DB_PATH.with_name(_db.DB_PATH.name + ".exchange-saved.json")
+
+
+def _saved_read() -> dict:
+    try:
+        data = json.loads(_saved_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _saved_write(data: dict) -> None:
+    path = _saved_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)      # права заданы при создании: окна «читаем всеми» нет
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _saved_id(url: str, login: str) -> str:
+    return hashlib.sha1(f"{url}\x1f{login}".encode("utf-8")).hexdigest()[:16]
+
+
+def _saved_remember(user_id, url: str, login: str, password: str, insecure_tls: bool) -> None:
+    with _saved_lock:
+        data = _saved_read()
+        mine = data.setdefault(str(user_id), {})
+        mine[_saved_id(url, login)] = {"url": url, "login": login, "password": password, "insecure_tls": bool(insecure_tls),
+                                       "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        _saved_write(data)
+
+
+def _saved_public(user_id) -> list:
+    mine = _saved_read().get(str(user_id)) or {}
+    return [{"id": k, "url": v["url"], "login": v["login"], "insecure_tls": bool(v.get("insecure_tls")), "saved_at": v.get("saved_at"),
+             "host": urlsplit(v["url"]).hostname} for k, v in sorted(mine.items(), key=lambda kv: kv[1].get("saved_at") or "", reverse=True)]
+
+
+@router.get("/saved")
+def saved_list(user: sqlite3.Row = Depends(_read)):
+    return {"saved": _saved_public(user["id"])}
+
+
+@router.delete("/saved/{sid}")
+def saved_forget(sid: str, user: sqlite3.Row = Depends(_write)):
+    with _saved_lock:
+        data = _saved_read()
+        mine = data.get(str(user["id"])) or {}
+        if sid not in mine:
+            raise HTTPException(404, "Запомненное подключение не найдено")
+        entry = mine.pop(sid)
+        _saved_write(data)
+    activity.log("data_exchange_connect", user=user, new_value=entry["url"], details={"результат": "забыто", "логин": entry["login"]})
+    return {"forgotten": sid}
+
+
 class ConnectIn(BaseModel):
     url: str
     login: str
     password: str
     insecure_tls: bool = False
+    remember: bool = False      # запомнить подключение (после УСПЕШНОГО входа)
+
+
+class ConnectSavedIn(BaseModel):
+    saved_id: str
+
+
+@router.post("/connect-saved")
+def connect_saved(body: ConnectSavedIn, user: sqlite3.Row = Depends(_write)):
+    entry = (_saved_read().get(str(user["id"])) or {}).get(body.saved_id)
+    if not entry:
+        raise HTTPException(404, "Запомненное подключение не найдено — введите данные заново")
+    return _connect(user, entry["url"], entry["login"], entry["password"], bool(entry.get("insecure_tls")), remember=False)
 
 
 @router.post("/connect")
 def connect(body: ConnectIn, user: sqlite3.Row = Depends(_write)):
+    return _connect(user, body.url, body.login, body.password, body.insecure_tls, body.remember)
+
+
+def _connect(user, url: str, login: str, password: str, insecure_tls: bool, remember: bool):
+    body = ConnectIn(url=url, login=login, password=password, insecure_tls=insecure_tls)
     base = check_remote_url(body.url)
     session = RemoteSession(base, body.insecure_tls)
     try:
@@ -484,6 +574,9 @@ def connect(body: ConnectIn, user: sqlite3.Row = Depends(_write)):
         # НЕ 401: этот код для браузера означает «ваш сеанс на ЭТОМ сервере закончился» и выбрасывает человека в окно входа
         # (2026-10-08: неверный пароль чужого сервера так и делал). Отказ чужого сервера — обычная ошибка формы.
         raise HTTPException(400 if e.status == 401 else 502, f"Не удалось подключиться: {e}")
+    if info.get("format") != dx.FORMAT:
+        raise HTTPException(409, f"На том сервере другая версия обмена данными (формат {info.get('format') or 1}, здесь {dx.FORMAT}): "
+                                 "обновите оба сервера до одной версии")
     cid = secrets.token_hex(16)
     _prune()
     with _CONNS_LOCK:
@@ -491,7 +584,10 @@ def connect(body: ConnectIn, user: sqlite3.Row = Depends(_write)):
         for k in mine[:-4]:
             _close(_CONNS.pop(k))
         _CONNS[cid] = _Conn(user["id"], base, session, body.login, info)
+    if remember:
+        _saved_remember(user["id"], base, body.login, body.password, body.insecure_tls)
     activity.log("data_exchange_connect", user=user, new_value=base, details={"результат": "подключено", "логин": body.login,
+                                                                              "запомнено": bool(remember),
                                                                               "роль сервера": (info.get("server") or {}).get("role")})
     return _public(cid, _CONNS[cid])
 

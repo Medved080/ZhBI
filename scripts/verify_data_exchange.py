@@ -92,6 +92,25 @@ def prepare(directory, source, port, perturb):
         c.execute("DELETE FROM status_history WHERE id IN (SELECT id FROM status_history WHERE status='installed' LIMIT 50)")
         c.execute("UPDATE status_colors SET color='#000000' WHERE status='planned'")
         c.execute("UPDATE mark_type_prefixes SET element_type='Балка' WHERE prefix='КН'")
+    # графики СМР (2026-10-08): у A есть базовый график, темпы и поток кранов; у B — только две первые актуализации без части дат
+    els = [r["id"] for r in c.execute("SELECT id FROM elements WHERE object_id=1 AND element_uid IS NOT NULL AND is_current=1 ORDER BY id LIMIT 60")]
+    if not perturb:
+        vid = c.execute("INSERT INTO schedule_versions (object_id, kind, title, source_file, origin, loaded_at) "
+                        "VALUES (1, 'baseline', 'Базовый график', 'base.xlsx', 'import', '2026-07-01 10:00:00')").lastrowid
+        for i, e in enumerate(els):
+            start, end = f"2026-09-{i % 28 + 1:02d}", f"2026-10-{i % 28 + 1:02d}"
+            c.execute("INSERT INTO schedule_version_dates (version_id, element_id, smr_start_date, smr_end_date) VALUES (?, ?, ?, ?)", (vid, e, start, end))
+            c.execute("UPDATE elements SET project_smr_start_date=?, project_delivery_date=? WHERE id=?", (start, end, e))
+        for i, t in enumerate(("Колонна", "Балка", "Плита")):
+            c.execute("INSERT INTO schedule_work_kinds (object_id, element_type, subtype, rate_per_day, order_no) VALUES (1, ?, NULL, ?, ?)", (t, 10 + i, i + 1))
+        for i in range(3):
+            c.execute("INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) VALUES (1, 'Кран 1', ?, ?, ?)", (f"Стоянка {i + 1}", i + 1, i + 1))
+    else:
+        c.execute("DELETE FROM schedule_version_dates WHERE version_id IN (SELECT id FROM schedule_versions WHERE object_id=1 AND id > 2)")
+        c.execute("DELETE FROM schedule_versions WHERE object_id=1 AND id > 2")
+        c.execute("DELETE FROM schedule_version_dates WHERE version_id=1 AND element_id IN (SELECT element_id FROM schedule_version_dates WHERE version_id=1 LIMIT 100)")
+        c.execute("UPDATE elements SET project_smr_start_date=NULL, project_delivery_date=NULL WHERE object_id=1")
+        c.execute("UPDATE elements SET manual_fields='[\"project_smr_start_date\"]' WHERE id=?", (els[0],))
     c.commit()
     c.close()
     env = {**os.environ, "ZHBI_DB_PATH": str(path), "PYTHONPATH": str(ROOT)}
@@ -156,8 +175,20 @@ def main():
         path_b, env_b = prepare(work / "b", source, 18952, perturb=True)
         # B: объект переименован — изделия и справочники объекта A для него «недоступны»
         cb = db(path_b)
-        # объект 2 (его справочники и настройки) на B «не найден»; объект 1 — с договорами — остаётся
-        cb.execute("UPDATE objects SET name = name || ' (переименован)' WHERE id = 2")
+        # объект 2 (его справочники и настройки) на B «не найден» ни по идентификатору, ни по названию; объект 1 — с договорами — остаётся;
+        # объект 3 на B только ПЕРЕИМЕНОВАН (идентификатор тот же) — обмену это мешать не должно; у объекта 4 на B другой идентификатор
+        # при том же названии (базы заводились порознь) — находится по названию с предупреждением
+        cb.execute("UPDATE objects SET name = name || ' (переименован)', object_uid = '00000000-0000-4000-8000-000000000002' WHERE id = 2")
+        cb.execute("UPDATE objects SET name = name || ' (переименован на B)' WHERE id = 1")
+        # объект «по названию»: заведён и на A, и на B порознь — одно название, разные идентификаторы; марки только у A
+        for conn_, uid_ in ((cb, "00000000-0000-4000-8000-000000000004"),):
+            conn_.execute("INSERT INTO objects (name, object_uid) VALUES ('Объект по названию', ?)", (uid_,))
+        ca_ = db(path_a)
+        ca_.execute("INSERT INTO objects (name) VALUES ('Объект по названию')")
+        oid_ = ca_.execute("SELECT id FROM objects WHERE name='Объект по названию'").fetchone()[0]
+        for i in range(3):
+            ca_.execute("INSERT INTO marks (object_id, element_type, name) VALUES (?, 'Колонна', ?)", (oid_, f"М-{i}"))
+        ca_.commit(); ca_.close()
         cb.commit()
         cb.close()
         login = db(path_a).execute("SELECT domain_login FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()["domain_login"]
@@ -190,7 +221,7 @@ def main():
         check(st == 200 and sm["direction"] == "send", "отправка: сверка на B готова (%s)" % st)
         g = counts(sm)
         print("   группы:", {k: v for k, v in g.items()})
-        check(g.get("mark:new") == 40 and g.get("contract_line:new", 0) >= 25 and g.get("counterparty:new") == 1, "отправка: новые марки, позиции, контрагент найдены")
+        check(g.get("mark:new") == 43 and g.get("contract_line:new", 0) >= 25 and g.get("counterparty:new") == 1, "отправка: новые марки, позиции, контрагент найдены")
         check(g.get("status_color:changed") == 1 and g.get("mark_prefix:changed") == 1, "отправка: изменённый цвет и изменённый префикс найдены")
         check(any(k.endswith(":blocked") for k in g), "отправка: есть недоступные (объект не найден на B) — %s" % [k for k in g if k.endswith(":blocked")][:3])
         blocked = next(x for x in sm["groups"] if x["state"] == "blocked")
@@ -321,14 +352,80 @@ def main():
 
         # ---- повреждённый пакет (пришёл с другого сервера): отклоняется на сверке, а не падает при записи
         import hashlib
-        for label, payload in (("запись неверной длины ключа", {"format": 1, "entities": [{"kind": "mark", "key": ["a"], "fields": {}, "refs": {}, "label": "x"}]}),
-                               ("неизвестный вид записи", {"format": 1, "entities": [{"kind": "drop_table", "key": ["a"], "fields": {}, "refs": {}}]}),
+        for label, payload in (("запись неверной длины ключа", {"format": 2, "entities": [{"kind": "mark", "key": ["a"], "fields": {}, "refs": {}, "label": "x"}]}),
+                               ("неизвестный вид записи", {"format": 2, "entities": [{"kind": "drop_table", "key": ["a"], "fields": {}, "refs": {}}]}),
                                ("неверный формат пакета", {"format": 99, "entities": []})):
             raw = json.dumps(payload).encode()
             pid = os.urandom(16).hex()
             st, _ = B.req("PUT", f"/admin/data-exchange/upload?id={pid}&offset=0&size={len(raw)}&sha256={hashlib.sha256(raw).hexdigest()}", raw)
             st2, r = B.req("POST", "/admin/data-exchange/analyze", {"package_id": pid})
             check(st == 200 and st2 == 422, "повреждённый пакет отклонён на сверке: %s (%s)" % (label, st2))
+
+        # ---- ОБЪЕКТ — ПО СКВОЗНОМУ ИДЕНТИФИКАТОРУ (2026-10-08): переименование не мешает, запасной путь — по названию
+        ca = db(path_a)
+        uid3 = ca.execute("SELECT object_uid FROM objects WHERE id=1").fetchone()[0]      # на B этот объект переименован
+        uid4 = ca.execute("SELECT object_uid FROM objects WHERE name='Объект по названию'").fetchone()[0]
+        ca.close()
+        st, sm = A.req("POST", "/admin/data-exchange/push", {"connection_id": cid, "sections": ["dict_types"], "objects": [uid3]})
+        blocked_msgs = [x for g in sm["groups"] if g["state"] == "blocked" for x in g["reasons"]]
+        check(st == 200 and not blocked_msgs and not sm["objects_by_name"],
+              "переименованный на B объект найден по идентификатору: недоступного нет, предупреждения о названии нет (%s)" % blocked_msgs[:1])
+        st, sm = A.req("POST", "/admin/data-exchange/push", {"connection_id": cid, "sections": ["dict_types"], "objects": [uid4]})
+        blocked_msgs = [x for g in sm["groups"] if g["state"] == "blocked" for x in g["reasons"]]
+        check(st == 200 and len(sm["objects_by_name"]) == 1 and not blocked_msgs,
+              "объект с другим идентификатором найден по названию — с предупреждением (%s)" % sm.get("objects_by_name"))
+        st, sm = A.req("POST", "/admin/data-exchange/push", {"connection_id": cid, "sections": ["dict_types"], "objects": ["00000000-0000-4000-8000-0000000000ff"]})
+        check(st == 200 and {g["kind"] for g in sm["groups"]} <= {"mark_prefix"}, "несуществующий идентификатор в отборе — записей объектов нет (остались только общие префиксы марок)")
+
+        # ---- ГРАФИКИ СМР: версии и даты (базовый — ещё и в реквизиты изделий), исходные данные расчёта
+        cp_ = db(path_a); n_ver_a = cp_.execute("SELECT count(*) FROM schedule_versions WHERE object_id=1").fetchone()[0]
+        n_dat_a = cp_.execute("SELECT count(*) FROM schedule_version_dates").fetchone()[0]; cp_.close()
+        st, sm = A.req("POST", "/admin/data-exchange/push", {"connection_id": cid, "sections": ["schedules"], "objects": [uid_obj1 := db(path_a).execute("SELECT object_uid FROM objects WHERE id=1").fetchone()[0]]})
+        g = counts(sm)
+        check(st == 200 and g.get("schedule_version:new") == n_ver_a - 2 and g.get("schedule_date:new", 0) > 60,
+              "графики: новые версии (%d) и даты найдены (%s)" % (n_ver_a - 2, {k: v for k, v in g.items() if "schedule" in k}))
+        st, r = A.req("POST", f"/admin/data-exchange/remote/{cid}/apply", {"analysis_id": sm["analysis_id"],
+                      "selection": {"groups": [x["id"] for x in sm["groups"] if x["state"] == "new"]}, "confirm": {"step1": True, "typed": "ОТПРАВИТЬ"}})
+        check(st == 200 and r["applied"].get("schedule_version", {}).get("new") == n_ver_a - 2, "графики: применено на B (%s)" % (r.get("applied") if st == 200 else r))
+        cb = db(path_b)
+        check(cb.execute("SELECT count(*) FROM schedule_versions WHERE object_id=1").fetchone()[0] == n_ver_a, "графики: число версий на B совпало с A")
+        check(cb.execute("SELECT count(*) FROM schedule_version_dates").fetchone()[0] == n_dat_a, "графики: число дат версий на B совпало с A (%d)" % n_dat_a)
+        bl_b = cb.execute("SELECT count(*) FROM elements WHERE object_id=1 AND project_smr_start_date IS NOT NULL").fetchone()[0]
+        check(bl_b == 59, "графики: даты базового графика записаны в реквизиты изделий, кроме правленной вручную (%d из 60)" % bl_b)
+        check(cb.execute("SELECT count(*) FROM elements WHERE object_id=1 AND project_delivery_date IS NOT NULL").fetchone()[0] == 60,
+              "графики: дата завершения у всех 60 (вручную правилась только дата начала)")
+        cb.close()
+        check(any("правился вручную" in x["reason"] for x in r["skipped"]), "графики: ручную правку реквизита не затёрли, и это сказано (%s)" % (r["skipped"][:1],))
+        st, sm = A.req("POST", "/admin/data-exchange/push", {"connection_id": cid, "sections": ["schedules"], "objects": [uid_obj1]})
+        check(not any(v for k, v in counts(sm).items() if k.endswith(":new")), "графики: повторная сверка — новых нет")
+        st, sm = A.req("POST", "/admin/data-exchange/push", {"connection_id": cid, "sections": ["schedule_calc"]})
+        g = counts(sm)
+        check(g.get("schedule_work_kind:new") == 3 and g.get("schedule_flow:new") == 3, "расчёт графика: темпы и поток кранов найдены (%s)" % {k: v for k, v in g.items() if "schedule" in k})
+        st, r = A.req("POST", f"/admin/data-exchange/remote/{cid}/apply", {"analysis_id": sm["analysis_id"],
+                      "selection": {"groups": ["schedule_work_kind:new", "schedule_flow:new"]}, "confirm": {"step1": True, "typed": "ОТПРАВИТЬ"}})
+        cb = db(path_b)
+        check(st == 200 and cb.execute("SELECT count(*) FROM schedule_work_kinds").fetchone()[0] == 3 and cb.execute("SELECT count(*) FROM schedule_flow").fetchone()[0] == 3,
+              "расчёт графика: применено на B")
+        cb.close()
+
+        # ---- ЗАПОМНЕННЫЕ ПОДКЛЮЧЕНИЯ
+        st, r = A.req("POST", "/admin/data-exchange/connect", {"url": base_b, "login": login, "password": PASSWORD, "remember": True})
+        check(st == 200, "запомнить подключение: вход выполнен")
+        st, lst = A.req("GET", "/admin/data-exchange/saved")
+        check(st == 200 and len(lst["saved"]) == 1 and "password" not in json.dumps(lst), "запомненное подключение в списке, пароль браузеру не отдаётся")
+        sid = lst["saved"][0]["id"]
+        saved_file = Path(str(path_a) + ".exchange-saved.json")
+        check(saved_file.exists() and (saved_file.stat().st_mode & 0o777) == 0o600, "файл запомненных подключений создан с правами 0600")
+        st, r2 = A.req("POST", "/admin/data-exchange/connect-saved", {"saved_id": sid})
+        check(st == 200 and r2.get("connection_id"), "подключение по запомненному без ввода пароля")
+        st, r3 = B.req("GET", "/admin/data-exchange/saved")
+        check(st == 200 and r3["saved"] == [], "чужой список запомненного (другой сервер/пользователь) пуст")
+        st, _ = A.req("POST", "/admin/data-exchange/connect-saved", {"saved_id": "0" * 16})
+        check(st == 404, "несуществующее запомненное подключение — 404")
+        st, _ = A.req("DELETE", f"/admin/data-exchange/saved/{sid}")
+        st2, lst = A.req("GET", "/admin/data-exchange/saved")
+        check(st == 200 and lst["saved"] == [], "«забыть» стирает запись")
+        check("password" not in saved_file.read_text(encoding="utf-8"), "после «забыть» пароля в файле нет")
 
         # ---- закрытие подключения
         st, _ = A.req("DELETE", f"/admin/data-exchange/connections/{cid}")

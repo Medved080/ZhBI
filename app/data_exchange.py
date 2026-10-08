@@ -40,7 +40,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-FORMAT = 1
+FORMAT = 2   # 2: объект в ключах и ссылках — сквозной идентификатор objects.object_uid, а не название (2026-10-08)
 
 # ----------------------------------------------------------------------------- разделы
 # Состав разделов — решение пользователя 2026-10-08: справочники, статусы (справочник и история — отдельно),
@@ -76,6 +76,17 @@ SECTIONS = {
         "hint": "Роли сервиса и права ролей по разделам (учётные записи и пароли НЕ передаются).",
         "kinds": ["role", "role_feature"],
     },
+    "schedules": {
+        "title": "Графики СМР: базовый и актуализированные",
+        "hint": "Версии графика (базовый и все актуализации) и даты начала/завершения СМР по изделиям; изделие находится по UID. "
+                "Даты базового графика записываются и в реквизиты изделий, как при загрузке графика.",
+        "kinds": ["schedule_version", "schedule_date"],
+    },
+    "schedule_calc": {
+        "title": "Графики СМР: исходные данные расчёта (темпы, поток кранов)",
+        "hint": "Темп монтажа и порядок по видам изделий; очередь фронтов крана (кран, стоянка, этаж).",
+        "kinds": ["schedule_work_kind", "schedule_flow"],
+    },
     "contracting": {
         "title": "Документы: контрактация",
         "hint": "Контрагенты, договоры, спецификации, контракты и их позиции, контракты по умолчанию.",
@@ -92,6 +103,8 @@ KIND_TITLES = {
     "role": "Роли", "role_feature": "Права ролей",
     "counterparty": "Контрагенты", "agreement": "Договоры", "specification": "Спецификации",
     "contract": "Контракты", "contract_line": "Позиции контрактов", "default_contract": "Контракты по умолчанию",
+    "schedule_version": "Версии графиков СМР", "schedule_date": "Даты графиков СМР по изделиям",
+    "schedule_work_kind": "Темпы монтажа по видам изделий", "schedule_flow": "Поток кранов",
 }
 # Порядок применения: родители раньше потомков.
 KIND_ORDER = [
@@ -99,6 +112,7 @@ KIND_ORDER = [
     "allowed_subtype", "mark", "planning_track", "work_type",
     "counterparty", "agreement", "specification", "contract", "contract_line", "default_contract",
     "status_record",
+    "schedule_work_kind", "schedule_flow", "schedule_version", "schedule_date",
 ]
 KIND_SECTION = {k: s for s, d in SECTIONS.items() for k in d["kinds"]}
 # Внешние сущности: обменом не создаются, ищутся на приёмнике.
@@ -150,7 +164,11 @@ class _Ctx:
     def __init__(self, conn, objects_filter: Optional[set] = None):
         self.conn = conn
         self.flt = objects_filter
-        self.obj = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM objects")}
+        rows = conn.execute("SELECT id, name, object_uid FROM objects").fetchall()
+        # id → СКВОЗНОЙ идентификатор объекта (он и есть «имя» объекта в ключах и ссылках: название переименовывают);
+        # название нужно только подписям
+        self.obj = {r["id"]: r["object_uid"] for r in rows}
+        self.oname = {r["object_uid"]: r["name"] for r in rows}
         self.cp = {r["id"]: (r["short_name"], r["inn"]) for r in conn.execute("SELECT id, short_name, inn FROM counterparties")}
         self.agr = {r["id"]: (*self._cpk(r["counterparty_id"]), r["number"])
                     for r in conn.execute("SELECT id, counterparty_id, number FROM agreements")}
@@ -163,8 +181,12 @@ class _Ctx:
         short, inn = self.cp.get(cp_id, ("", ""))
         return (short, inn or "")
 
-    def obj_ok(self, name) -> bool:
-        return self.flt is None or name in self.flt
+    def obj_ok(self, uid) -> bool:
+        return self.flt is None or uid in self.flt
+
+    def on(self, uid) -> str:
+        """Название объекта по идентификатору — для подписей."""
+        return self.oname.get(uid, uid or "")
 
     def agr_ok(self, agreement_id) -> bool:
         """Договор попадает в выгрузку: без отбора — всегда, с отбором — только договоры выбранных объектов."""
@@ -200,7 +222,7 @@ def _load_allowed_subtype(c: _Ctx):
         o = c.obj.get(r["object_id"], "")
         if c.obj_ok(o):
             yield _ent("allowed_subtype", [o, r["element_type"], r["subtype"]], refs={"object": _oref(o)},
-                       label=f"{o} · {r['element_type']} · подтип «{r['subtype']}»")
+                       label=f"{c.on(o)} · {r['element_type']} · подтип «{r['subtype']}»")
 
 
 def _load_mark(c: _Ctx):
@@ -208,7 +230,7 @@ def _load_mark(c: _Ctx):
         o = c.obj.get(r["object_id"], "")
         if c.obj_ok(o):
             yield _ent("mark", [o, r["element_type"], r["name"]], refs={"object": _oref(o)},
-                       label=f"{o} · {r['element_type']} · марка «{r['name']}»", rowid=r["id"])
+                       label=f"{c.on(o)} · {r['element_type']} · марка «{r['name']}»", rowid=r["id"])
 
 
 def _load_smu(c: _Ctx):
@@ -221,7 +243,7 @@ def _load_planning_track(c: _Ctx):
         o = c.obj.get(r["object_id"], "")
         if c.obj_ok(o):
             yield _ent("planning_track", [o, r["code"]], {"name": r["name"], "note": r["note"]}, {"object": _oref(o)},
-                       label=f"{o} · дорожка {r['code']} «{r['name']}»", rowid=r["id"])
+                       label=f"{c.on(o)} · дорожка {r['code']} «{r['name']}»", rowid=r["id"])
 
 
 def _load_work_type(c: _Ctx):
@@ -238,7 +260,7 @@ def _load_work_type(c: _Ctx):
                    {"row_kind": r["row_kind"], "code": r["code"], "name": r["name"], "unit": r["unit"],
                     "sort_order": r["sort_order"], "retired_at": r["retired_at"], "note": r["note"],
                     "planning_track_code": r["planning_track_code"]},
-                   refs, label=f"{o} · {r['path']}", rowid=r["id"])
+                   refs, label=f"{c.on(o)} · {r['path']}", rowid=r["id"])
 
 
 def _load_status_color(c: _Ctx):
@@ -268,7 +290,7 @@ def _load_status_record(c: _Ctx):
                                 if r["contract_id"] in c.contract else None)
         what = (r["element_type"] or "") + " " + (r["mark"] or "")
         yield _ent("status_record", [*k, counter[k]], fields, refs,
-                   label=f"{o} · {what.strip() or r['element_uid'][:8]} · «{r['status']}» {_s(r['changed_at'])}", rowid=r["id"])
+                   label=f"{c.on(o)} · {what.strip() or r['element_uid'][:8]} · «{r['status']}» {_s(r['changed_at'])}", rowid=r["id"])
 
 
 def _load_setting(c: _Ctx):
@@ -282,7 +304,7 @@ def _load_setting(c: _Ctx):
             continue  # при отборе по объектам общие (серверные) настройки не передаются
         refs = {"object": _oref(o)} if o else {}
         yield _ent("setting", [r["key"], o], {"value": r["value"]}, refs,
-                   label=("Настройка «%s»" % r["key"]) + (f" · {o}" if o else " (общая)"),
+                   label=("Настройка «%s»" % r["key"]) + (f" · {c.on(o)}" if o else " (общая)"),
                    rowid=(r["key"], r["object_id"]))
 
 
@@ -292,7 +314,7 @@ def _load_label_visibility(c: _Ctx):
         if c.obj_ok(o):
             yield _ent("label_visibility", [o, r["element_type"]],
                        {"visible": r["visible"], "dates_visible": r["dates_visible"]}, {"object": _oref(o)},
-                       label=f"{o} · подписи «{r['element_type']}»")
+                       label=f"{c.on(o)} · подписи «{r['element_type']}»")
 
 
 def _load_zone_color(c: _Ctx):
@@ -300,7 +322,7 @@ def _load_zone_color(c: _Ctx):
         o = c.obj.get(r["object_id"], "")
         if c.obj_ok(o):
             yield _ent("zone_color", [o, r["category"], r["name"]], {"color": r["color"]}, {"object": _oref(o)},
-                       label=f"{o} · цвет зоны {r['category']} «{r['name']}»")
+                       label=f"{c.on(o)} · цвет зоны {r['category']} «{r['name']}»")
 
 
 def _load_role(c: _Ctx):
@@ -374,7 +396,65 @@ def _load_default_contract(c: _Ctx):
         ckey = c.contract.get(r["contract_id"]) if r["contract_id"] is not None else None
         yield _ent("default_contract", [o, r["element_type"]], {},
                    {"object": _oref(o), "contract": _ref("contract", ckey, True) if ckey else None},
-                   label=f"{o} · контракт по умолчанию для «{r['element_type']}»")
+                   label=f"{c.on(o)} · контракт по умолчанию для «{r['element_type']}»")
+
+
+def _schedule_vkey(o, kind, loaded_at) -> list:
+    """Ключ версии графика: объект + вид + момент загрузки. Базовая версия у объекта ОДНА, её момент в ключ не входит
+    (повторная загрузка базового графика заменяет его — у серверов он разный, и это «изменение», а не новая версия)."""
+    return [o, kind, "" if kind == "baseline" else _s(loaded_at)]
+
+
+def _vtitle(kind, title, loaded_at) -> str:
+    return ("базовый график" if kind == "baseline" else "актуализация") + f" «{title or '—'}» от {_s(loaded_at)[:16]}"
+
+
+def _load_schedule_version(c: _Ctx):
+    for r in c.conn.execute("SELECT id, object_id, kind, title, source_file, origin, loaded_at, note FROM schedule_versions "
+                            "ORDER BY object_id, kind, loaded_at, id"):
+        o = c.obj.get(r["object_id"], "")
+        if c.obj_ok(o):
+            yield _ent("schedule_version", _schedule_vkey(o, r["kind"], r["loaded_at"]),
+                       {"title": r["title"], "source_file": r["source_file"], "origin": r["origin"], "note": r["note"],
+                        "loaded_at": r["loaded_at"]},
+                       {"object": _oref(o)}, label=f"{c.on(o)} · {_vtitle(r['kind'], r['title'], r['loaded_at'])}", rowid=r["id"])
+
+
+def _load_schedule_date(c: _Ctx):
+    sql = ("SELECT d.version_id, d.element_id, d.smr_start_date, d.smr_end_date, v.object_id, v.kind, v.title, v.loaded_at, "
+           "e.element_uid, e.element_type, e.mark FROM schedule_version_dates d JOIN schedule_versions v ON v.id = d.version_id "
+           "JOIN elements e ON e.id = d.element_id WHERE e.element_uid IS NOT NULL "
+           "ORDER BY v.object_id, v.kind, v.loaded_at, e.element_uid")
+    for r in c.conn.execute(sql):
+        o = c.obj.get(r["object_id"], "")
+        if not c.obj_ok(o):
+            continue
+        vkey = _schedule_vkey(o, r["kind"], r["loaded_at"])
+        what = ((r["element_type"] or "") + " " + (r["mark"] or "")).strip() or r["element_uid"][:8]
+        yield _ent("schedule_date", [*vkey, r["element_uid"]],
+                   {"smr_start_date": r["smr_start_date"], "smr_end_date": r["smr_end_date"]},
+                   {"schedule_version": _ref("schedule_version", vkey), "element": _ref("element", [r["element_uid"]])},
+                   label=f"{c.on(o)} · {_vtitle(r['kind'], r['title'], r['loaded_at'])} · {what}", rowid=(r["version_id"], r["element_id"]))
+
+
+def _load_schedule_work_kind(c: _Ctx):
+    for r in c.conn.execute("SELECT id, object_id, element_type, subtype, rate_per_day, order_no FROM schedule_work_kinds "
+                            "ORDER BY object_id, order_no, element_type, subtype"):
+        o = c.obj.get(r["object_id"], "")
+        if c.obj_ok(o):
+            yield _ent("schedule_work_kind", [o, r["element_type"], r["subtype"] or ""],
+                       {"rate_per_day": r["rate_per_day"], "order_no": r["order_no"]}, {"object": _oref(o)},
+                       label=f"{c.on(o)} · темп «{r['element_type']}{' / ' + r['subtype'] if r['subtype'] else ''}»", rowid=r["id"])
+
+
+def _load_schedule_flow(c: _Ctx):
+    for r in c.conn.execute("SELECT id, object_id, crane_name, stance_name, floor, order_no FROM schedule_flow "
+                            "ORDER BY object_id, order_no, id"):
+        o = c.obj.get(r["object_id"], "")
+        if c.obj_ok(o):
+            yield _ent("schedule_flow", [o, r["crane_name"], r["stance_name"], _s(r["floor"])], {"order_no": r["order_no"]},
+                       {"object": _oref(o)},
+                       label=f"{c.on(o)} · поток: {r['crane_name']} / {r['stance_name']} / этаж {r['floor']}", rowid=r["id"])
 
 
 LOADERS: dict[str, Callable] = {
@@ -385,6 +465,8 @@ LOADERS: dict[str, Callable] = {
     "role": _load_role, "role_feature": _load_role_feature,
     "counterparty": _load_counterparty, "agreement": _load_agreement, "specification": _load_specification,
     "contract": _load_contract, "contract_line": _load_contract_line, "default_contract": _load_default_contract,
+    "schedule_version": _load_schedule_version, "schedule_date": _load_schedule_date,
+    "schedule_work_kind": _load_schedule_work_kind, "schedule_flow": _load_schedule_flow,
 }
 
 
@@ -402,7 +484,7 @@ def _closure(kinds) -> list:
     need = set(kinds)
     parents = {"role_feature": ["role"], "work_type": ["work_type"], "agreement": ["counterparty"], "specification": ["agreement"],
                "contract": ["specification"], "contract_line": ["contract"], "default_contract": ["contract"],
-               "status_record": ["contract"]}
+               "status_record": ["contract"], "schedule_date": ["schedule_version"]}
     stack = list(need)
     while stack:
         for p in parents.get(stack.pop(), []):
@@ -417,7 +499,7 @@ def _closure(kinds) -> list:
 
 # ----------------------------------------------------------------------------- выгрузка
 def build_package(conn, sections, objects: Optional[list] = None) -> dict:
-    """Выгрузка выбранных разделов. `objects` — названия объектов для отбора (None — все)."""
+    """Выгрузка выбранных разделов. `objects` — сквозные идентификаторы объектов для отбора (None — все)."""
     sections = [s for s in SECTION_ORDER if s in set(sections)]
     if not sections:
         raise ExchangeError("Не выбрано ни одного раздела")
@@ -429,6 +511,7 @@ def build_package(conn, sections, objects: Optional[list] = None) -> dict:
             entities.append(e)
     return {"format": FORMAT, "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "sections": sections, "objects": sorted(objects) if objects else None,
+            "object_names": dict(c.oname),   # идентификатор → название отправителя: для подписей и запасного сопоставления по названию
             "source": server_info(conn), "entities": entities}
 
 
@@ -445,6 +528,10 @@ _SHAPE = {
     "agreement": (3, ["agreement_date"], ["counterparty", "object"]), "specification": (4, ["specification_date"], ["agreement"]),
     "contract": (5, ["is_archived"], ["specification"]), "contract_line": (7, ["quantity"], ["contract"]),
     "default_contract": (2, [], ["object", "contract"]),
+    "schedule_version": (3, ["title", "source_file", "origin", "note", "loaded_at"], ["object"]),
+    "schedule_date": (4, ["smr_start_date", "smr_end_date"], ["schedule_version", "element"]),
+    "schedule_work_kind": (3, ["rate_per_day", "order_no"], ["object"]),
+    "schedule_flow": (4, ["order_no"], ["object"]),
 }
 _MOMENT = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}")
 
@@ -516,14 +603,68 @@ def _target_maps(conn, kinds):
             if k in tmap:
                 dups.add(k)
             tmap[k] = e
-    objects = {r["name"] for r in conn.execute("SELECT name FROM objects")}
+    objects = {r["object_uid"] for r in conn.execute("SELECT object_uid FROM objects")}
     elements = {r["element_uid"] for r in conn.execute("SELECT element_uid FROM elements WHERE element_uid IS NOT NULL")}
     return tmap, dups, objects, elements
+
+
+# Виды сущностей, у которых ПЕРВЫЙ элемент ключа — идентификатор объекта (у настройки — второй).
+_OBJECT_FIRST_KEY = {"allowed_subtype", "mark", "planning_track", "work_type", "label_visibility", "zone_color", "default_contract",
+                     "schedule_version", "schedule_date", "schedule_work_kind", "schedule_flow"}
+
+
+def remap_objects(conn, package: dict) -> tuple:
+    """Объекты пакета → объекты ЭТОГО сервера. Основной путь — по сквозному идентификатору (переименование ничему не мешает).
+    Запасной — по названию, и только когда он однозначен: идентификатора отправителя здесь нет, объект с таким названием на
+    приёмнике ровно один, и его собственный идентификатор не принадлежит другому объекту отправителя. Так серверы, чьи базы
+    заводились порознь, находят друг друга; найденное по названию показывается человеку (второе значение результата), чтобы он
+    видел, что сопоставление не по идентификатору. Пакет не изменяется — возвращается копия с подменёнными ключами и ссылками."""
+    names = package.get("object_names") if isinstance(package.get("object_names"), dict) else {}
+    target = [(r["object_uid"], r["name"]) for r in conn.execute("SELECT object_uid, name FROM objects")]
+    target_uids = {u for u, _ in target}
+    by_name: dict = {}
+    for uid, name in target:
+        by_name.setdefault(name, []).append(uid)
+    # Сопоставлять нужно только объекты, на которые пакет реально ссылается (отбор по объектам и выбор разделов сужают пакет)
+    used: set = set()
+    for e in package["entities"]:
+        if e["kind"] in _OBJECT_FIRST_KEY:
+            used.add(e["key"][0])
+        elif e["kind"] == "setting" and e["key"][1]:
+            used.add(e["key"][1])
+        for ref in e["refs"].values():
+            if ref is not None and ref["kind"] in ("object", "work_type", "schedule_version"):
+                used.add(ref["key"][0])
+    mapping, matches = {}, []
+    for src in sorted(used & set(names)):
+        if src in target_uids:
+            continue
+        cand = by_name.get(_s(names[src]), [])
+        if len(cand) == 1 and cand[0] not in names:
+            mapping[src] = cand[0]
+            matches.append({"name": names[src], "source_uid": src, "target_uid": cand[0]})
+    if not mapping:
+        return package, []
+    sw = lambda u: mapping.get(u, u)  # noqa: E731
+    out = []
+    for e in package["entities"]:
+        e = {**e, "key": list(e["key"]), "refs": {k: (None if v is None else {**v, "key": list(v["key"])}) for k, v in e["refs"].items()}}
+        if e["kind"] in _OBJECT_FIRST_KEY:
+            e["key"][0] = sw(e["key"][0])
+        elif e["kind"] == "setting" and e["key"][1]:
+            e["key"][1] = sw(e["key"][1])
+        for ref in e["refs"].values():
+            if ref is not None and ref["kind"] in ("object", "work_type", "schedule_version"):
+                ref["key"][0] = sw(ref["key"][0])
+        out.append(e)
+    return {**package, "entities": out, "object_names": {sw(u): n for u, n in names.items()}}, matches
 
 
 def analyze(conn, package: dict) -> dict:
     """Сверка пакета с БАЗОЙ ЭТОГО сервера. Ничего не пишет."""
     _check_package(package)
+    package, by_name_matches = remap_objects(conn, package)
+    obj_names = package.get("object_names") if isinstance(package.get("object_names"), dict) else {}
     kinds = [k for k in KIND_ORDER if any(e["kind"] == k for e in package["entities"])]
     tmap, tdups, objects, elements = _target_maps(conn, kinds)
     pkg_count: dict = {}
@@ -556,7 +697,7 @@ def analyze(conn, package: dict) -> dict:
                 if ref["kind"] == "object":
                     ok = ref["key"][0] in objects
                     if not ok:
-                        problems.append(f"объект «{ref['key'][0]}» отсутствует на принимающем сервере")
+                        problems.append(f"объект «{obj_names.get(ref['key'][0]) or ref['key'][0]}» (по идентификатору и по названию) отсутствует на принимающем сервере")
                 elif ref["kind"] == "element":
                     ok = ref["key"][0] in elements
                     if not ok:
@@ -581,7 +722,8 @@ def analyze(conn, package: dict) -> dict:
         result.append({"id": entity_id(*key), "kind": pe["kind"], "key": pe["key"], "state": st, "label": pe["label"],
                        "changes": changes, "problems": problems, "warnings": warnings,
                        "needs": [list(n[1]) for n in needs], "fp": _fp(te) if te else None})
-    return {"entities": result, "counts": _counts(result), "source": package.get("source"), "sections": package.get("sections")}
+    return {"entities": result, "counts": _counts(result), "source": package.get("source"), "sections": package.get("sections"),
+            "objects_by_name": by_name_matches}
 
 
 def _counts(result) -> dict:
@@ -623,6 +765,7 @@ def apply(conn, package: dict, analysis: dict, selection: dict, user_name: str, 
     from app.db import touch_elements
     from app.history_import import _shift_planned_before_first_event
 
+    package, _ = remap_objects(conn, package)    # те же подмены, что в сверке: идентификаторы записей считаются по подменённым ключам
     fresh = analyze(conn, package)
     fresh_by_id = {r["id"]: r for r in fresh["entities"]}
     old_by_id = {r["id"]: r for r in analysis["entities"]}
@@ -640,7 +783,7 @@ def apply(conn, package: dict, analysis: dict, selection: dict, user_name: str, 
         ents[entity_id(e["kind"], e["key"])] = e
     kinds_involved = sorted({ents[i]["kind"] for i in chosen}, key=KIND_ORDER.index)
     tmap, _, objects, _ = _target_maps(conn, kinds_involved)
-    object_id = {r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM objects")}
+    object_id = {r["object_uid"]: r["id"] for r in conn.execute("SELECT id, object_uid FROM objects")}
     element_id = {r["element_uid"]: r["id"] for r in conn.execute("SELECT id, element_uid FROM elements WHERE element_uid IS NOT NULL")}
     created: dict = {}      # (kind, key) → rowid созданных в этом применении
     coverage_before = {r["id"]: contract_guard.coverage_state(conn, r["id"]) for r in conn.execute("SELECT id FROM contracts")}
@@ -663,6 +806,7 @@ def apply(conn, package: dict, analysis: dict, selection: dict, user_name: str, 
     done: dict = {}
     skipped: list = []
     touched_elements: set = set()
+    touched_dates: set = set()
     order = {k: i for i, k in enumerate(KIND_ORDER)}
     # сортировка устойчива: внутри вида сохраняется порядок пакета (родители видов работ идут раньше потомков)
     queue = sorted((e for i, e in ents.items() if i in chosen), key=lambda e: order[e["kind"]])
@@ -692,6 +836,17 @@ def apply(conn, package: dict, analysis: dict, selection: dict, user_name: str, 
             created[(kind, key)] = new_rowid
         if kind == "status_record":
             touched_elements.add(ids["element"])
+        if kind == "schedule_date" and key[1] == "baseline":
+            # Директивные даты изделия — его реквизиты; версия «базовый» хранится ВДОБАВОК к ним (app/schedule_versions.py), и загрузка
+            # базового графика пишет в оба места. Здесь то же, поштучно по каждому полю: правленное вручную (`manual_fields`) не трогается.
+            manual = _manual_fields_of(conn, ids["element"])
+            for field, value in (("project_smr_start_date", f["smr_start_date"]), ("project_delivery_date", f["smr_end_date"])):
+                if field in manual:
+                    skipped.append({"id": eid, "label": e["label"],
+                                    "reason": f"дата версии записана, а реквизит изделия «{field}» не изменён: он правился вручную"})
+                    continue
+                conn.execute(f"UPDATE elements SET {field} = ?, updated_at = datetime('now') WHERE id = ?", (value, ids["element"]))
+                touched_dates.add(ids["element"])
         d = done.setdefault(kind, {"new": 0, "changed": 0})
         d["new" if te is None else "changed"] += 1
 
@@ -714,7 +869,7 @@ def apply(conn, package: dict, analysis: dict, selection: dict, user_name: str, 
     if problems:
         raise ExchangeError("Применение нарушило бы остаток контрактации: " + "; ".join(problems[:8])
                             + (f" (и ещё {len(problems) - 8})" if len(problems) > 8 else "") + ". Ничего не применено.", 409)
-    touch_elements(conn, touched_elements)
+    touch_elements(conn, touched_elements | touched_dates)
     conn.commit()
     return {"applied": done, "applied_total": sum(v["new"] + v["changed"] for v in done.values()), "skipped": skipped,
             "elements_recomputed": len(touched_elements)}
@@ -838,7 +993,40 @@ def _write(conn, kind, key, f, ids, te, user_name):
                      "VALUES (?, ?, ?, ?, ?, ?, ?)",
                      (ids["element"], status, moment, by, _user_id_for(conn, by), f.get("comment"), ids.get("contract")))
         return None
+    if kind == "schedule_version":
+        if ins:
+            return conn.execute("INSERT INTO schedule_versions (object_id, kind, title, source_file, origin, loaded_at, loaded_by, note) "
+                                "VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+                                (ids["object"], key[1], f["title"], f["source_file"], f["origin"] or "import", f["loaded_at"], f["note"])).lastrowid
+        conn.execute("UPDATE schedule_versions SET title = ?, source_file = ?, origin = ?, loaded_at = ?, note = ? WHERE id = ?",
+                     (f["title"], f["source_file"], f["origin"] or "import", f["loaded_at"], f["note"], te["rowid"]))
+        return te["rowid"]
+    if kind == "schedule_date":
+        conn.execute("INSERT INTO schedule_version_dates (version_id, element_id, smr_start_date, smr_end_date) VALUES (?, ?, ?, ?) "
+                     "ON CONFLICT (version_id, element_id) DO UPDATE SET smr_start_date = excluded.smr_start_date, "
+                     "smr_end_date = excluded.smr_end_date",
+                     (ids["schedule_version"], ids["element"], f["smr_start_date"], f["smr_end_date"]))
+        return None
+    if kind == "schedule_work_kind":
+        if ins:
+            return conn.execute("INSERT INTO schedule_work_kinds (object_id, element_type, subtype, rate_per_day, order_no) VALUES (?, ?, ?, ?, ?)",
+                                (ids["object"], key[1], key[2] or None, f["rate_per_day"], f["order_no"])).lastrowid
+        conn.execute("UPDATE schedule_work_kinds SET rate_per_day = ?, order_no = ? WHERE id = ?", (f["rate_per_day"], f["order_no"], te["rowid"]))
+        return te["rowid"]
+    if kind == "schedule_flow":
+        if ins:
+            return conn.execute("INSERT INTO schedule_flow (object_id, crane_name, stance_name, floor, order_no) VALUES (?, ?, ?, ?, ?)",
+                                (ids["object"], key[1], key[2], int(key[3]), f["order_no"])).lastrowid
+        conn.execute("UPDATE schedule_flow SET order_no = ? WHERE id = ?", (f["order_no"], te["rowid"]))
+        return te["rowid"]
     raise ExchangeError("Вид сущности без записи: " + kind, 500)
+
+
+def _manual_fields_of(conn, element_id) -> set:
+    """Реквизиты изделия, правленные вручную (их не перезаписывают массовые загрузки)."""
+    from app.schedule_import import _manual_fields
+    row = conn.execute("SELECT manual_fields FROM elements WHERE id = ?", (element_id,)).fetchone()
+    return set(_manual_fields(row["manual_fields"] if row else None))
 
 
 def _user_id_for(conn, display_name) -> Optional[int]:

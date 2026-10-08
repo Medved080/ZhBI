@@ -95,7 +95,7 @@ export function mountServerExchange(el, { request, canWrite = true }) {
   const st = {
     conn: null, dir: "receive", sections: new Set(), objects: new Set(), analysis: null, calc: null,
     sel: { groups: new Set(), include: new Set(), exclude: new Set() }, itemGroup: new Map(),
-    open: new Map(), result: null, confirm: 0, typed: "", status: null, job: null,
+    open: new Map(), result: null, confirm: 0, typed: "", status: null, job: null, saved: [],
   };
   let remembered = {};
   try { remembered = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch (e) { remembered = {}; }
@@ -131,16 +131,22 @@ export function mountServerExchange(el, { request, canWrite = true }) {
           <span class="sx-badge ${test ? "sx-test" : ""}">${test ? "ТЕСТОВЫЙ СЕРВЕР" : "РАБОЧИЙ / НЕ ТЕСТОВЫЙ СЕРВЕР"}</span>
           <span class="sx-muted">версия обработок: ${esc(srv.release || "—")}</span>
           <button type="button" class="sx-btn" data-act="disconnect" ${busy ? "disabled" : ""}>Отключиться</button></div>
-        <p class="sx-hint">Пароль нигде не сохраняется; подключение закрывается через 30 минут без действий.</p></div>`;
+        <p class="sx-hint">Подключение закрывается через 30 минут без действий.</p></div>`;
       return;
     }
+    const saved = (st.saved || []).map((x) => `<div class="sx-row" style="align-items:center;margin-bottom:4px">
+        <button type="button" class="sx-btn sx-btn-primary" data-saved="${esc(x.id)}" ${busy ? "disabled" : ""}>Подключиться: ${esc(x.host)} · ${esc(x.login)}</button>
+        <span class="sx-muted">${esc(x.url)}</span>
+        <button type="button" class="sx-btn-link" data-forget="${esc(x.id)}" ${busy ? "disabled" : ""}>Забыть</button></div>`).join("");
     box.innerHTML = `<div class="sx-card sx-current"><h4 class="sx-title"><span class="sx-num">1</span>Подключиться к другому серверу</h4>
+      ${saved ? `<div style="margin-bottom:10px"><div class="sx-muted" style="margin-bottom:4px">Запомненные подключения</div>${saved}</div>` : ""}
       <form id="sx-form" autocomplete="off"><div class="sx-row">
         <label class="sx-field">Адрес сервера<input type="text" name="url" required placeholder="https://сервер или http://сервер:порт" value="${esc(remembered.url || "")}" list="sx-urls"></label>
         <label class="sx-field">Логин администратора<input type="text" name="login" required value="${esc(remembered.login || "")}" autocomplete="off"></label>
         <label class="sx-field">Пароль<input type="password" name="password" required autocomplete="new-password"></label>
         <button type="submit" class="sx-btn sx-btn-primary" ${busy ? "disabled" : ""}>Подключиться</button></div>
-        <label class="sx-check"><input type="checkbox" name="insecure"><span>Не проверять сертификат (только для внутреннего сервера с самоподписанным сертификатом)</span></label></form>
+        <label class="sx-check"><input type="checkbox" name="insecure"><span>Не проверять сертификат (только для внутреннего сервера с самоподписанным сертификатом)</span></label>
+        <label class="sx-check"><input type="checkbox" name="remember"><span>Запомнить это подключение (адрес, логин и пароль)<small>Хранятся на этом сервере в отдельном файле с закрытым доступом, только для вашей учётной записи; в резервные копии и перенос базы не попадают. В браузер пароль не возвращается. «Забыть» стирает запись.</small></span></label></form>
       <p class="sx-hint">Нужна учётная запись администратора сервиса на том сервере. Связь с корпоративными серверами возможна только из-под VPN.</p></div>`;
   }
 
@@ -161,8 +167,8 @@ export function mountServerExchange(el, { request, canWrite = true }) {
       <div class="sx-sections">${sectionList().map((s) => `<label class="sx-check"><input type="checkbox" data-section="${esc(s.key)}" ${st.sections.has(s.key) ? "checked" : ""}>
         <span>${esc(s.title)}<small>${esc(s.hint || "")}</small></span></label>`).join("")}</div>
       <details><summary class="sx-muted">Только для некоторых объектов${st.objects.size ? ` (выбрано ${st.objects.size})` : " (по умолчанию все)"}</summary>
-        <div class="sx-objects">${objs.map((o) => `<label class="sx-check"><input type="checkbox" data-object="${esc(o)}" ${st.objects.has(o) ? "checked" : ""}><span>${esc(o)}</span></label>`).join("") || '<span class="sx-muted">нет объектов</span>'}</div>
-        <p class="sx-hint">Отбор применяется к записям, привязанным к объекту; общие настройки сервера при отборе не передаются. Объекты сопоставляются по названию.</p></details>
+        <div class="sx-objects">${objs.map((o) => `<label class="sx-check"><input type="checkbox" data-object="${esc(o.uid)}" ${st.objects.has(o.uid) ? "checked" : ""}><span>${esc(o.name)}</span></label>`).join("") || '<span class="sx-muted">нет объектов</span>'}</div>
+        <p class="sx-hint">Отбор применяется к записям, привязанным к объекту; общие настройки сервера при отборе не передаются. Объекты находят друг у друга по сквозному идентификатору, поэтому переименование объекта обмену не мешает.</p></details>
       <div class="sx-row" style="margin-top:8px"><button type="button" class="sx-btn sx-btn-primary" data-act="analyze" ${busy || !st.sections.size ? "disabled" : ""}>Сверить</button>
         <span class="sx-hint">Сверка ничего не меняет — только показывает расхождения.</span></div></div>`;
   }
@@ -235,6 +241,7 @@ export function mountServerExchange(el, { request, canWrite = true }) {
     const sending = st.dir === "send";
     const calcHtml = st.calc ? calcCardHtml() : "";
     box.innerHTML = `<div class="sx-card sx-current"><h4 class="sx-title"><span class="sx-num">3</span>Сверка: ${sending ? "что будет отправлено на" : "что будет получено с"} ${esc(host)}</h4>
+      ${(a.objects_by_name || []).length ? `<div class="sx-status" role="status">⚠ Объекты найдены не по идентификатору, а по совпадению названия (идентификаторы на серверах разные — базы заводились порознь): ${a.objects_by_name.map((m) => `«${esc(m.name)}»`).join(", ")}. Убедитесь, что это один и тот же объект.</div>` : ""}
       <p class="sx-hint">«Будет добавлено» отмечено по умолчанию, «изменено» (запись есть, но отличается) — нет: отметьте группу целиком одним щелчком или раскройте число и отметьте записи. «Недоступно» применить нельзя — в списке сказано почему.</p>
       <div class="sx-row"><button type="button" class="sx-btn" data-act="sel-new">Отметить все новые</button><button type="button" class="sx-btn" data-act="sel-all">Отметить всё доступное</button>
         <button type="button" class="sx-btn" data-act="sel-none">Снять всё</button></div>
@@ -305,13 +312,32 @@ export function mountServerExchange(el, { request, canWrite = true }) {
   // ------------------------------------------------------------------ действия
   async function connect(form) {
     const fd = new FormData(form);
-    const body = { url: String(fd.get("url") || "").trim(), login: String(fd.get("login") || "").trim(), password: String(fd.get("password") || ""), insecure_tls: !!fd.get("insecure") };
+    const body = { url: String(fd.get("url") || "").trim(), login: String(fd.get("login") || "").trim(), password: String(fd.get("password") || ""), insecure_tls: !!fd.get("insecure"), remember: !!fd.get("remember") };
     await run("Подключаемся…", async () => {
       const c = await request("POST", "/admin/data-exchange/connect", body);
       st.conn = c;
+      if (body.remember) await loadSaved();
       try { localStorage.setItem(LS_KEY, JSON.stringify({ url: body.url, login: body.login })); } catch (e) { /* без запоминания */ }
       try { st.localObjects = (await request("GET", "/admin/data-exchange/info")).objects || []; } catch (e) { st.localObjects = []; }
       setStatus(`Подключено к ${c.host}.`, "ok");
+    });
+  }
+  async function loadSaved() {
+    try { st.saved = (await request("GET", "/admin/data-exchange/saved")).saved || []; } catch (e) { st.saved = []; }
+  }
+  async function connectSaved(id) {
+    await run("Подключаемся…", async () => {
+      const c = await request("POST", "/admin/data-exchange/connect-saved", { saved_id: id });
+      st.conn = c;
+      try { st.localObjects = (await request("GET", "/admin/data-exchange/info")).objects || []; } catch (e) { st.localObjects = []; }
+      setStatus(`Подключено к ${c.host}.`, "ok");
+    });
+  }
+  async function forgetSaved(id) {
+    await run("Забываем подключение…", async () => {
+      await request("DELETE", `/admin/data-exchange/saved/${id}`);
+      await loadSaved();
+      setStatus("Запомненное подключение удалено.", "");
     });
   }
   async function disconnect() {
@@ -407,6 +433,8 @@ export function mountServerExchange(el, { request, canWrite = true }) {
     const t = e.target.closest("button");
     if (!t || busy) return;
     if (t.dataset.dir) { if (st.dir !== t.dataset.dir) { st.dir = t.dataset.dir; st.objects = new Set(); resetFlow(); renderAll(); } return; }
+    if (t.dataset.saved) { connectSaved(t.dataset.saved); return; }
+    if (t.dataset.forget) { forgetSaved(t.dataset.forget); return; }
     if (t.dataset.open) { openGroup(t.dataset.open); return; }
     if (t.dataset.more) { const o = st.open.get(t.dataset.more); if (o) loadItems(t.dataset.more, o.items.length); return; }
     const act = t.dataset.act;
@@ -453,6 +481,7 @@ export function mountServerExchange(el, { request, canWrite = true }) {
 
   // уже есть подключения (страница обновлена, а сеанс на сервере жив)
   (async () => {
+    await loadSaved();
     try {
       const r = await request("GET", "/admin/data-exchange/connections");
       if (!dead && r.connections && r.connections.length && !st.conn) { st.conn = r.connections[0]; try { st.localObjects = (await request("GET", "/admin/data-exchange/info")).objects || []; } catch (e) { st.localObjects = []; } }
