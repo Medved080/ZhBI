@@ -144,7 +144,8 @@ export function supplierDocBodyProblem(b) {
 // POST /supplier-changes/{id}/post|unpost — без тела либо только версия документа, которую видел человек
 export function supplierDocActionBodyProblem(b) {
   if (b === undefined) return null;
-  if (!isObj(b) || !onlyKeys(b, ["expected_version"])) return "лишние поля";
+  if (!isObj(b) || !onlyKeys(b, ["expected_version", "force_conflicts"])) return "лишние поля";
+  if ("force_conflicts" in b && typeof b.force_conflicts !== "boolean") return "признак принудительной отмены не булево значение";
   return optVersion(b) ? null : "версия документа не строка";
 }
 

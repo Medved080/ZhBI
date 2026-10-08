@@ -20682,7 +20682,19 @@ document.getElementById("scd-unpost").addEventListener("click", async () => {
   const кнопка = document.getElementById("scd-unpost");
   кнопка.disabled = true;
   try {
-    scdDoc = await api(`/supplier-changes/${scdDoc.id}/unpost`, { method: "POST" });
+    const отмена = (принудительно) => api(`/supplier-changes/${scdDoc.id}/unpost`, принудительно
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force_conflicts: true }) }
+      : { method: "POST" });
+    try {
+      scdDoc = await отмена(false);
+    } catch (e) {
+      // Балансировка: изделия менялись ПОСЛЕ проведения (например, загрузка данных с другого сервера) — обычная отмена отказывает;
+      // человеку предлагается отменить принудительно, зная, что эти правки будут затёрты (2026-10-08, живой запрос).
+      if (e.status !== 409 || !String(e.message).includes("либо отмените принудительно")) throw e;
+      if (!confirm(e.message + "\n\nОтменить принудительно? Контракт, плановая дата и история статусов этих изделий "
+                 + "вернутся к состоянию ДО документа, а перечисленные правки будут потеряны.")) return;
+      scdDoc = await отмена(true);
+    }
     showToast(`Проведение документа № ${scdDoc.number} отменено`, "success");
     scdApplyMode();
     await scdOpenDoc(scdDoc.id);

@@ -160,6 +160,43 @@ def main() -> int:
                 print("   ", p)
         else:
             print("  ✓ после отмены все таблицы (кроме журнала и метки updated_at) совпадают с исходными")
+    # Принудительная отмена (2026-10-08): после проведения изделия правили (контракт, плановая дата, чужая запись истории — как после
+    # загрузки данных с другого сервера); обычная отмена отказывает, с force_conflicts — проходит, и контракт и плановая дата ВСЕХ
+    # изделий возвращаются к исходным.
+    print("\n=== принудительная отмена после чужих правок")
+    contract_id, mark = None, ""
+    before_el = {r["id"]: (r["contract_id"], r["planned_delivery_date"]) for r in conn.execute("SELECT id, contract_id, planned_delivery_date FROM elements")}
+    plan = sc._rebalance_plan(conn, oid, contract_id, mark, None, False)
+    body = sc.SupplierChangeIn(
+        object_id=oid, kind=sc.KIND_REBALANCE, doc_date=date.today().isoformat(), from_contract_id=0, to_contract_id=0,
+        mark=None, element_ids=[i["element_id"] for i in plan["items"]], all_contracts=True, all_marks=True, pool=False)
+    doc = sc.create_supplier_change(body, admin)
+    done = sc.post_supplier_change(doc["id"], admin, None)
+    items = [r["element_id"] for r in conn.execute("SELECT element_id FROM supplier_change_items WHERE doc_id = ? AND pair_no IS NOT NULL", (doc["id"],))]
+    if not items:
+        print("  изделий в обмене нет — сценарий пропущен")
+    else:
+        # правки «после проведения»: чужая запись истории и сдвиг плановой даты у первого изделия
+        conn.execute("INSERT INTO status_history (element_id, status, changed_by, comment) "
+                     "SELECT id, current_status, 'проверка', 'чужая правка после проведения' FROM elements WHERE id = ?", (items[0],))
+        conn.execute("UPDATE elements SET planned_delivery_date = '2099-01-01' WHERE id = ?", (items[-1],))
+        conn.commit()
+        try:
+            sc.unpost_supplier_change(doc["id"], admin, None)
+            print("  ✗ обычная отмена НЕ отказала")
+            bad += 1
+        except HTTPException as e:
+            print(f"  обычная отмена: отказ {e.status_code}")
+            if e.status_code != 409:
+                bad += 1
+        res = sc.unpost_supplier_change(doc["id"], admin, sc.DocActionIn(force_conflicts=True))
+        head = conn.execute("SELECT status FROM supplier_change_docs WHERE id = ?", (doc["id"],)).fetchone()
+        after_el = {r["id"]: (r["contract_id"], r["planned_delivery_date"]) for r in conn.execute("SELECT id, contract_id, planned_delivery_date FROM elements")}
+        wrong = [i for i in before_el if before_el[i] != after_el.get(i)]
+        print(f"  принудительная отмена: документ «{head['status']}», изделий возвращено {res['elements']}, расхождений контракта/даты: {len(wrong)}")
+        if head["status"] != sc.DRAFT or wrong:
+            bad += 1
+        sc.delete_supplier_change(doc["id"], admin)
     conn.close()
     shutil.rmtree(tmp, ignore_errors=True)
     print("\nИТОГ:", "всё возвращается к исходному состоянию" if not bad else f"ЕСТЬ ПРОБЛЕМЫ ({bad})")

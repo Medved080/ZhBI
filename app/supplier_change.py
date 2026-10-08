@@ -164,6 +164,9 @@ class SupplierChangeIn(BaseModel):
 class DocActionIn(BaseModel):
     """Необязательное тело проведения / отмены проведения: версия документа, которую видел человек, нажимая кнопку. Без тела — как раньше."""
     expected_version: Optional[str] = None
+    # Только отмена проведения БАЛАНСИРОВКИ: отменить, несмотря на правки изделий после проведения (2026-10-08, живой запрос: данные
+    # загрузили с другого сервера, документ остался, снять его иначе нельзя). Правки после проведения затираются.
+    force_conflicts: bool = False
 
 
 def _contract_name(conn, contract_id: int) -> str:
@@ -1944,13 +1947,15 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
         moves = conn.execute(
             "SELECT * FROM supplier_change_history_moves WHERE doc_id = ? ORDER BY id DESC", (doc_id,)
         ).fetchall()
+        конфликты: list = []
         if doc["kind"] == KIND_REBALANCE:
             конфликты = _rebalance_unpost_conflicts(conn, doc_id, items)
-            if конфликты:
+            if конфликты and not (body and body.force_conflicts):
                 raise HTTPException(
                     status_code=409,
                     detail="Отменить проведение нельзя: после него изделия менялись, и отмена затёрла бы эти изменения. "
-                           "Верните их или исправьте вручную:\n" + "\n".join(конфликты[:20])
+                           "Верните их или исправьте вручную (либо отмените принудительно — тогда эти правки будут затёрты):\n"
+                           + "\n".join(конфликты[:20])
                            + (f"\n… и ещё {len(конфликты) - 20}" if len(конфликты) > 20 else ""))
 
         # Участники сверки — контракты шапки (симметрично проведению) плюс
@@ -2035,7 +2040,9 @@ def unpost_supplier_change(doc_id: int, user: sqlite3.Row = Depends(get_current_
                      entity_type="supplier_change", entity_id=doc_id,
                      old_value=f"{KIND_TITLES.get(doc['kind'], doc['kind'])} № {doc['number']} проведён",
                      new_value="проведение отменено",
-                     details={"kind": doc["kind"], "elements": len(затронутые)})
+                     details={"kind": doc["kind"], "elements": len(затронутые),
+                              **({"forced": True, "overwritten_changes": len(конфликты), "examples": конфликты[:10]}
+                                 if конфликты else {})})
         return {**_doc_full(conn, doc_id), "elements": len(затронутые)}
     finally:
         conn.close()

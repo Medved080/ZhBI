@@ -365,7 +365,21 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
     S.busy = true; x.error = ""; S.message = ""; paint();
     const path = `/supplier-changes/${x.id}/${undo ? "unpost" : "post"}`;
     try {
-      const d = await api.post(path, x.version ? { expected_version: x.version } : {});
+      const тело = x.version ? { expected_version: x.version } : {};
+      let d;
+      try {
+        d = await api.post(path, тело);
+      } catch (err) {
+        // Балансировка: изделия менялись ПОСЛЕ проведения (например, загрузка данных с другого сервера) — обычная отмена отказывает;
+        // человеку предлагается отменить принудительно, зная, что эти правки будут затёрты (2026-10-08, живой запрос).
+        if (!(undo && err instanceof ApiError && err.status === 409 && String(err.detail).includes("либо отмените принудительно"))) throw err;
+        S.busy = false; paint();
+        const ok = await showConfirmDialog(`${err.detail}\n\nОтменить принудительно? Контракт, плановая дата и история статусов этих изделий вернутся к состоянию ДО документа, а перечисленные правки будут потеряны.`,
+          { confirmLabel: "Отменить принудительно", danger: true, multiline: true });
+        if (!ok || f() !== x) return;
+        S.busy = true; paint();
+        d = await api.post(path, { ...тело, force_conflicts: true });
+      }
       S.f = fromDoc(d);
       S.message = undo ? `Проведение отменено: ${d.elements ?? ""} изд. возвращены в состояние до документа (плановые даты, статусы и история — как были). Документ снова черновик.` : `Документ № ${d.number} проведён: ${x.kind === "date_rebalance" ? `поменялись местами ${d.moved} изд. (${d.pairs} пар, ${d.chains} цепочек): плановые даты, контракты и статусы перешли к другим изделиям.` : `${d.moved ?? d.pairs ?? ""} ${d.pairs != null ? "пар" : "изд."} перенесено.`} Отмена — кнопкой «Отменить проведение».`;
       S.busy = false; paint(); loadFormDataSoon();
