@@ -241,6 +241,7 @@ KIND_BEFORE_TRANSFER = "auto_before_transfer"
 # объектом в форме — и чертёж соседнего здания ляжет поверх этого. До этой
 # копии вернуться было неоткуда.
 KIND_BEFORE_IMPORT = "auto_before_import"
+KIND_BEFORE_FULL_RESTORE = "auto_before_full_restore"
 
 KIND_LABELS = {
     KIND_MANUAL: "создана пользователем",
@@ -251,6 +252,7 @@ KIND_LABELS = {
     KIND_BEFORE_TASKS: "служебная — перед обработкой данных",
     KIND_BEFORE_TRANSFER: "служебная — перед полной заменой базы снимком",
     KIND_BEFORE_IMPORT: "служебная — перед загрузкой данных из файла",
+    KIND_BEFORE_FULL_RESTORE: "служебная — перед восстановлением из полной копии",
 }
 
 

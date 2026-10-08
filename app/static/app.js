@@ -23980,6 +23980,110 @@ document.getElementById("backups-tbody").addEventListener("click", async (e) => 
   }
 });
 
+// ---------- Полные копии: база + вложения + калькулятор (2026-10-08) ----------
+// Сервер — app/full_backup.py. Здесь только показ списка и четыре действия:
+// создать, скачать, восстановить (с кодовым словом, которое проверяет сервер), удалить.
+async function loadFullBackups() {
+  const tbody = document.getElementById("fullbk-tbody");
+  const status = document.getElementById("fullbk-status");
+  try {
+    const data = await api("/admin/full-backups");
+    const e = data.estimate || {};
+    document.getElementById("fullbk-estimate").innerHTML =
+      `Сейчас в полную копию войдёт около <b>${formatBytes(e.total_bytes || 0)}</b> до сжатия: `
+      + `база ${formatBytes(e.db_bytes || 0)}, вложения ${(e.uploads || {}).files || 0} файл. / ${formatBytes((e.uploads || {}).bytes || 0)}`
+      + (e.calc_present ? `, калькулятор ${formatBytes((e.calc_db_bytes || 0) + ((e.calc_uploads || {}).bytes || 0))}` : ", калькулятора нет");
+    if (!data.backups.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="hint-text">Полных копий пока нет</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.backups.map(b => {
+      const s = b.tables || {};
+      const содержимое = b.tables
+        ? `элементов ${s.elements ?? "—"}, пользователей ${s.users ?? "—"}; вложений ${(b.uploads || {}).files ?? "—"}`
+          + `; калькулятор ${(b.calc || {}).present ? "есть" : "нет"}`
+        : "—";
+      return `<tr>
+        <td>${escapeHtml(activityTimeLocal(b.created_at))}</td>
+        <td>${escapeHtml(b.user_name || "—")}</td>
+        <td>${escapeHtml(b.comment || "")}</td>
+        <td>${содержимое}</td>
+        <td>${formatBytes(b.size_bytes)}</td>
+        <td style="white-space:nowrap">
+          <a class="btn btn-sm btn-secondary" href="/admin/full-backups/${encodeURIComponent(b.name)}/download" download>Скачать</a>
+          <button class="btn btn-sm btn-secondary" data-fullbk-restore="${escapeHtml(b.name)}">Восстановить</button>
+          <button class="btn btn-sm btn-secondary menu-item-danger" data-fullbk-delete="${escapeHtml(b.name)}">Удалить</button>
+        </td></tr>`;
+    }).join("");
+    status.textContent = `Полных копий: ${data.backups.length}`;
+  } catch (err) {
+    status.textContent = "Ошибка: " + err.message;
+  }
+}
+
+document.getElementById("menu-backups").addEventListener("click", loadFullBackups);
+
+document.getElementById("fullbk-create").addEventListener("click", async () => {
+  const btn = document.getElementById("fullbk-create");
+  const commentEl = document.getElementById("fullbk-comment");
+  btn.disabled = true;
+  document.getElementById("fullbk-status").textContent = "Собираем полную копию… это может занять несколько минут, не закрывайте страницу.";
+  try {
+    const meta = await api("/admin/full-backups", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment: commentEl.value.trim() || null }),
+    });
+    commentEl.value = "";
+    showToast(`Полная копия создана: ${meta.name} (${formatBytes(meta.size_bytes)})`, "info");
+    await loadFullBackups();
+  } catch (e) {
+    document.getElementById("fullbk-status").textContent = "Не удалось создать полную копию: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("fullbk-tbody").addEventListener("click", async (e) => {
+  const restore = e.target.dataset.fullbkRestore;
+  const del = e.target.dataset.fullbkDelete;
+  const status = document.getElementById("fullbk-status");
+  if (restore) {
+    let d;
+    try { d = await api(`/admin/full-backups/${encodeURIComponent(restore)}/describe`); }
+    catch (err) { status.textContent = "Не удалось прочитать копию: " + err.message; return; }
+    const опись = (o) => `элементов ${(o.tables || {}).elements ?? "?"}, вложений ${(o.uploads || {}).files ?? "?"}, калькулятор ${(o.calc || {}).present ? "есть" : "нет"}`;
+    const в_копии = опись(d.snapshot);
+    const сейчас = опись(d.current);
+    if (!confirm(`Восстановить ВСЁ из полной копии «${restore}» (${activityTimeLocal(d.created_at)})?\n\n`
+      + `Сейчас: ${сейчас}\nВ копии: ${в_копии}\n\n`
+      + `База, вложения и данные калькулятора будут заменены целиком; всё, что появилось после копии, пропадёт. `
+      + `Перед этим система снимет служебные копии, а прежние вложения сохранит рядом.`)) return;
+    const word = prompt("Для восстановления введите кодовое слово:");
+    if (word === null) return;
+    status.textContent = "Восстановление… не закрывайте страницу.";
+    try {
+      const res = await api(`/admin/full-backups/${encodeURIComponent(restore)}/restore`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: word }),
+      });
+      showToast(`Восстановлено из «${res.restored_from}». Служебная копия: ${res.safety_backup.name}`, "info");
+      status.textContent = "Восстановлено. Обновите страницу: данные и ваш сеанс могли измениться.";
+      setTimeout(() => location.reload(), 2500);
+    } catch (err) {
+      status.textContent = "Не удалось восстановить: " + err.message;
+    }
+    return;
+  }
+  if (del) {
+    if (!confirm(`Удалить полную копию «${del}»? Действие необратимо.`)) return;
+    try {
+      await api(`/admin/full-backups/${encodeURIComponent(del)}`, { method: "DELETE" });
+      loadFullBackups();
+    } catch (err) {
+      showToast("Не удалось удалить: " + err.message, "warning");
+    }
+  }
+});
+
 // ---------- Журнал действий (живой запрос 2026-07-29) ----------
 const activityBackdrop = document.getElementById("activity-backdrop");
 

@@ -8527,6 +8527,33 @@
         </tr></thead>
         <tbody id="backups-tbody"></tbody>
       </table>
+      <!-- Полные копии (2026-10-08): база + вложения (uploads/) + база и вложения калькулятора
+           одним архивом в data/backups/full. Обычная копия выше — только файл основной базы.
+           Состав и порядок восстановления — шапка app/full_backup.py. -->
+      <h3 style="margin-top:24px">Полные копии: база + вложения + калькулятор</h3>
+      <p class="hint-text">
+        Обычная копия выше — это только основная база. Полная копия добавляет то, что лежит
+        на диске вне базы: <b>вложения и внешние 3D-модели</b> (<code>uploads/</code>) и
+        <b>базу с вложениями калькулятора</b>. Не входят источники калькулятора, папка
+        <code>Input/</code>, классификатор адресов, карта и файлы с ключами (ИИ-роутер,
+        токены передачи). Полные копии лежат в <code>data/backups/full/</code>, сами не
+        удаляются — только кнопкой; скачайте копию и увезите её с сервера.
+        Восстановление заменяет базу, вложения и калькулятор целиком (прежние вложения
+        сохраняются рядом, перед заменой снимаются служебные копии) и требует кодовое слово.
+      </p>
+      <div id="fullbk-estimate" class="hint-text"></div>
+      <div class="row" style="align-items:flex-end">
+        <div style="flex:1"><label class="field">Комментарий к полной копии (необязательно)</label>
+          <input type="text" id="fullbk-comment" placeholder="например: перед переездом сервера"/></div>
+        <button class="btn btn-primary" id="fullbk-create">Создать полную копию</button>
+      </div>
+      <div class="hint-text" id="fullbk-status"></div>
+      <table id="fullbk-table">
+        <thead><tr>
+          <th>Создана</th><th>Кем</th><th>Комментарий</th><th>Содержимое</th><th>Размер</th><th></th>
+        </tr></thead>
+        <tbody id="fullbk-tbody"></tbody>
+      </table>
     </div>
     <div class="modal-sticky-foot">
       <div class="actions"><button class="btn btn-secondary" id="backups-close">Закрыть</button></div>

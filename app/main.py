@@ -147,7 +147,7 @@ from app.element_bulk_edit import (
     # что в выгрузке и в формах. Своя склейка здесь разошлась бы с ними.
     _contract_catalog as contract_catalog,
 )
-from app import contract_guard, contracting_bulk_edit, db_transfer, status_bulk_edit
+from app import contract_guard, contracting_bulk_edit, db_transfer, full_backup, status_bulk_edit
 from app.access import (
     accessible_object_ids,
     assert_object_access,
@@ -2484,6 +2484,87 @@ def admin_delete_backup(name: str, admin: sqlite3.Row = Depends(require_service_
     except BackupError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     activity.log("backup_delete", user=admin, old_value=name)
+    return Response(status_code=204)
+
+
+# ---- Полная резервная копия: база + вложения + калькулятор (2026-10-08) ----
+# Состав, место хранения и порядок восстановления — в шапке app/full_backup.py.
+# Права те же, что у обычных копий (раздел «backups»). Сборка и восстановление —
+# синхронные операции в пуле потоков, как выгрузка снимка в «Переносе базы».
+
+
+@app.get("/admin/full-backups")
+def admin_list_full_backups(admin: sqlite3.Row = Depends(require_service_feature("backups", "read"))):
+    """Полные копии на диске (новые сверху), оценка размера новой и свободное место."""
+    return {"backups": full_backup.list_full_backups(), "estimate": full_backup.estimate(),
+            "disk": disk_state()}
+
+
+@app.post("/admin/full-backups")
+def admin_create_full_backup(body: BackupCreateIn,
+                             admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
+    meta = full_backup.create_full_backup(
+        user_name=audit_display_name(admin), user_id=admin["id"], comment=body.comment)
+    activity.log("full_backup_create", user=admin, new_value=meta["name"],
+                 details={"комментарий": body.comment, "размер": meta["size_bytes"],
+                          "файлов вложений": (meta.get("uploads") or {}).get("files"),
+                          "калькулятор": bool((meta.get("calc") or {}).get("present"))})
+    return meta
+
+
+@app.get("/admin/full-backups/{name}/download")
+def admin_download_full_backup(name: str,
+                               admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
+    """Скачать полную копию на свою машину. В архиве вся база (пользователи,
+    журнал), поэтому — право на запись, а не просмотр."""
+    path = full_backup._safe_path(name)
+    activity.log("full_backup_download", user=admin, new_value=name)
+    return FileResponse(path, media_type="application/zip", filename=name)
+
+
+@app.get("/admin/full-backups/{name}/describe")
+def admin_describe_full_backup(name: str,
+                               admin: sqlite3.Row = Depends(require_service_feature("backups", "read"))):
+    """Что в копии и что сейчас на сервере — для окна подтверждения. Ничего не меняет."""
+    return full_backup.describe_full_backup(name)
+
+
+class FullBackupRestoreIn(BaseModel):
+    confirm: str    # кодовое слово; проверяется на СЕРВЕРЕ
+
+
+@app.post("/admin/full-backups/{name}/restore")
+def admin_restore_full_backup(name: str, body: FullBackupRestoreIn,
+                              admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
+    """ПОЛНАЯ ЗАМЕНА базы, вложений и данных калькулятора содержимым копии.
+
+    Перед заменой снимаются служебные копии (основная база и калькулятор),
+    прежние вложения отъезжают в `data/backups/`. После — миграции схемы и
+    обработки релиза, как после восстановления из обычной копии. Запись в
+    журнал ложится уже в НОВУЮ базу (старая уехала в служебную копию), поэтому
+    пишется по имени, а не по ссылке на пользователя.
+    """
+    from app import release_tasks
+
+    result = full_backup.restore_full_backup(
+        name, body.confirm, user_name=audit_display_name(admin), user_id=admin["id"])
+    result["schema_changes"] = init_db()
+    result["release_tasks"] = release_tasks.run_pending()
+    activity.log(
+        "full_backup_restore", user_name=audit_display_name(admin), new_value=name,
+        details={"служебная копия": result["safety_backup"]["name"],
+                 "служебная копия калькулятора": result["calc_safety_backup"],
+                 "прежние вложения": result["uploads_moved_to"],
+                 "миграций схемы": len(result["schema_changes"]),
+                 "обработок релиза": len(result["release_tasks"])})
+    return result
+
+
+@app.delete("/admin/full-backups/{name}", status_code=204)
+def admin_delete_full_backup(name: str,
+                             admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
+    full_backup.delete_full_backup(name)
+    activity.log("full_backup_delete", user=admin, old_value=name)
     return Response(status_code=204)
 
 

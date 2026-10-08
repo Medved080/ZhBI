@@ -92,17 +92,26 @@ const KEY_TABLES = [["elements", "Изделия"], ["status_history", "Исто
 export function mountBackups(el, { screen, groupTitle, api, rights }) {
   const body = frame(el, screen, groupTitle);
   const canWrite = can(rights, "backups", "write") && checkWrite("POST", "/admin/backups", { comment: "x" }).allowed;
-  let dead = false, busy = false, seq = 0;
-  const st = { data: null, error: "", q: "", comment: "" };
+  const canFull = can(rights, "backups", "write") && checkWrite("POST", "/admin/full-backups", { comment: "x" }).allowed;
+  let dead = false, busy = false, seq = 0, fseq = 0;
+  const st = { data: null, error: "", q: "", comment: "", full: null, fullError: "" };
   body.innerHTML = `
     <div class="v2-callout" role="note"><strong>Копии базы данных.</strong> Служебные копии система снимает сама перед обновлением и разрушительными операциями. ${canWrite ? "Здесь можно снять копию вручную, восстановить базу из копии (перед этим снимается служебная копия текущего состояния) или удалить копию." : "У вас есть только просмотр."}</div>
     <div id="bk-disk" class="v2-muted"></div>
     ${canWrite ? `<form id="bk-form" class="v2-bar" autocomplete="off"><input id="bk-comment" class="v2-search" placeholder="Комментарий к копии (необязательно)" maxlength="200" aria-label="Комментарий к копии"><button type="submit" class="v2-btn v2-primary" id="bk-create">Создать копию</button></form>` : ""}
     <div class="v2-bar"><input type="search" id="bk-search" class="v2-search" placeholder="Поиск по названию, автору, комментарию" aria-label="Поиск"><span class="v2-muted" id="bk-count" role="status" aria-live="polite"></span><button type="button" class="v2-btn" id="bk-refresh">Обновить</button></div>
-    <p class="v2-muted" id="bk-status" role="status" aria-live="polite"></p><div id="bk-body"></div>`;
+    <p class="v2-muted" id="bk-status" role="status" aria-live="polite"></p><div id="bk-body"></div>
+    <section id="fb-section" aria-labelledby="fb-title">
+      <h3 id="fb-title">Полные копии: база + вложения + калькулятор</h3>
+      <div class="v2-callout" role="note">Обычная копия выше — только основная база. <strong>Полная копия</strong> добавляет вложения и внешние 3D-модели (<code>uploads/</code>) и базу с вложениями калькулятора. Не входят: источники калькулятора, <code>Input/</code>, классификатор адресов, карта, файлы с ключами (ИИ-роутер, токены передачи). Лежит в <code>data/backups/full/</code>, сама не удаляется — только кнопкой; скачайте копию и увезите с сервера. Восстановление заменяет базу, вложения и калькулятор целиком (прежние вложения сохраняются рядом, служебные копии снимаются) и требует кодовое слово.</div>
+      <p class="v2-muted" id="fb-estimate"></p>
+      ${canFull ? `<form id="fb-form" class="v2-bar" autocomplete="off"><input id="fb-comment" class="v2-search" placeholder="Комментарий к полной копии (необязательно)" maxlength="200" aria-label="Комментарий к полной копии"><button type="submit" class="v2-btn v2-primary" id="fb-create">Создать полную копию</button></form>
+      <div class="v2-bar"><label class="v2-field">Кодовое слово для восстановления <input type="text" id="fb-word" autocomplete="off" style="width:150px;font-weight:700;letter-spacing:.15em"></label></div>` : ""}
+      <p class="v2-muted" id="fb-status" role="status" aria-live="polite"></p><div id="fb-body"></div>
+    </section>`;
   const $ = (s) => body.querySelector(s);
   const setStatus = (t) => { const n = $("#bk-status"); if (n) n.textContent = t; };
-  const lock = () => body.querySelectorAll("#bk-body button, #bk-create, #bk-refresh, #bk-comment").forEach((c) => { c.disabled = busy || (c.id === "bk-create" && !st.data); });   // до загрузки списка «Создать» выключена
+  const lock = () => body.querySelectorAll("#bk-body button, #bk-create, #bk-refresh, #bk-comment, #fb-body button, #fb-create, #fb-comment, #fb-word").forEach((c) => { c.disabled = busy || (c.id === "bk-create" && !st.data) || (c.id === "fb-create" && !st.full); });   // до загрузки списка «Создать» выключена
   function paint() {
     if (dead) return;
     const box = $("#bk-body");
@@ -178,9 +187,88 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
       }
     });
   }
+  // ---- Полные копии (2026-10-08): сервер — app/full_backup.py ----
+  const setFStatus = (t) => { const n = $("#fb-status"); if (n) n.textContent = t; };
+  function paintFull() {
+    if (dead) return;
+    const box = $("#fb-body");
+    if (!st.full) { box.innerHTML = st.fullError ? `<div class="v2-callout v2-callout-bad" role="alert"><strong>Не удалось загрузить список полных копий.</strong> ${esc(st.fullError)}<div class="v2-callout-actions"><button type="button" class="v2-btn" id="fb-retry">Повторить</button></div></div>` : `<p class="v2-muted" role="status">Загрузка…</p>`; $("#fb-retry")?.addEventListener("click", loadFull); return; }
+    const e = st.full.estimate || {};
+    $("#fb-estimate").textContent = `Сейчас в полную копию войдёт около ${fmtSize(e.total_bytes)} до сжатия: база ${fmtSize(e.db_bytes)}, вложений ${fmtNum((e.uploads || {}).files)} (${fmtSize((e.uploads || {}).bytes)})${e.calc_present ? `, калькулятор ${fmtSize((e.calc_db_bytes || 0) + ((e.calc_uploads || {}).bytes || 0))}` : ", калькулятора нет"}.`;
+    const rows = st.full.backups;
+    box.innerHTML = rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Создана (UTC)</th><th>Кто</th><th>Комментарий</th><th>Содержимое</th><th class="num">Размер</th><th>Имя</th>${canFull ? "<th></th>" : ""}</tr></thead><tbody>
+      ${rows.map((b) => `<tr><td>${esc(b.created_at)}</td><td>${esc(b.user_name || "")}</td><td>${esc(b.comment || "")}</td><td>${b.tables ? esc(`изделий ${fmtNum(b.tables.elements)}, пользователей ${fmtNum(b.tables.users)}; вложений ${fmtNum((b.uploads || {}).files)}; калькулятор ${(b.calc || {}).present ? "есть" : "нет"}`) : "—"}</td><td class="num">${esc(fmtSize(b.size_bytes))}</td><td>${esc(b.name)}</td>
+        ${canFull ? `<td><a class="v2-btn" href="/admin/full-backups/${encodeURIComponent(b.name)}/download" download aria-label="Скачать ${esc(b.name)}">Скачать</a> <button type="button" class="v2-btn" data-frestore="${esc(b.name)}" aria-label="Восстановить из ${esc(b.name)}">Восстановить…</button> <button type="button" class="v2-btn v2-danger" data-fdel="${esc(b.name)}" aria-label="Удалить ${esc(b.name)}">Удалить…</button></td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="v2-muted">Полных копий нет.</p>`;
+    lock();
+  }
+  async function loadFull() {
+    const my = ++fseq;
+    try { const d = await api.get("/admin/full-backups"); if (dead || my !== fseq) return false; st.full = d; st.fullError = ""; paintFull(); return true; }
+    catch (e) { if (dead || my !== fseq) return false; if (!st.full) { st.fullError = errText(e); paintFull(); } else setFStatus(`Список не обновился: ${errText(e)}`); return false; }
+  }
+  async function createFull() {
+    const comment = ($("#fb-comment").value || "").trim() || null;
+    const known = new Set(st.full?.backups.map((b) => b.name) || []);
+    await write(async () => {
+      setFStatus("Собираем полную копию: снимки баз и вложения. Это может занять несколько минут — не закрывайте страницу…");
+      try {
+        const m = await api.post("/admin/full-backups", { comment });
+        $("#fb-comment").value = "";
+        const ok = await loadFull();
+        setFStatus(ok ? `Полная копия создана: ${m.name} (${fmtSize(m.size_bytes)}).` : `Полная копия создана: ${m.name}, но список обновить не удалось — нажмите «Обновить».`);
+      } catch (e) {
+        if (unknownOutcome(e)) { const ok = await loadFull(); const fresh = ok && st.full.backups.find((b) => !known.has(b.name)); setFStatus(fresh ? `Сервер создал полную копию ${fresh.name}, хотя ответ не дошёл.` : ok ? `Полная копия не создана (${errText(e)}).` : `Неизвестно, создана ли полная копия (${errText(e)}). Обновите список.`); }
+        else setFStatus(errText(e));   // 507 (нет места), 409 (уже собирается) и др.
+      }
+    });
+  }
+  async function delFull(name) {
+    const b = st.full.backups.find((x) => x.name === name);
+    if (!b) return;
+    if (!(await showConfirmDialog(`Удалить полную копию «${name}» (${fmtSize(b.size_bytes)}, ${b.created_at})? Восстановить её будет нечем.`, { confirmLabel: "Удалить", danger: true }))) return;
+    await write(async () => {
+      setFStatus("Удаляем…");
+      try { await api.delete(`/admin/full-backups/${encodeURIComponent(name)}`); const ok = await loadFull(); setFStatus(ok ? `Полная копия удалена: ${name}.` : `Полная копия удалена: ${name}, но список обновить не удалось.`); }
+      catch (e) {
+        if (e instanceof ApiError && e.status === 404) { await loadFull(); setFStatus("Копии уже нет — список обновлён."); }
+        else if (unknownOutcome(e)) { const ok = await loadFull(); setFStatus(ok && !st.full.backups.some((x) => x.name === name) ? "Сервер удалил копию, хотя ответ не дошёл." : `Неизвестно, удалена ли копия (${errText(e)}). Проверьте список.`); }
+        else setFStatus(errText(e));
+      }
+    });
+  }
+  async function restoreFull(name) {
+    const word = ($("#fb-word")?.value || "").trim();
+    if (!word) { setFStatus("Введите кодовое слово над списком — без него восстановление не начнётся."); $("#fb-word")?.focus(); return; }
+    let d;
+    try { d = await api.get(`/admin/full-backups/${encodeURIComponent(name)}/describe`); } catch (e) { setFStatus(`Не удалось прочитать копию: ${errText(e)}`); return; }
+    const опись = (o) => `изделий ${o.tables?.elements != null ? fmtNum(o.tables.elements) : "?"}, вложений ${o.uploads?.files != null ? fmtNum(o.uploads.files) : "?"}, калькулятор ${o.calc?.present ? "есть" : "нет"}`;
+    const msg = `Восстановить ВСЁ из полной копии «${name}» (${d.created_at} UTC)?\n\nСейчас: ${опись(d.current)}\nВ копии: ${опись(d.snapshot)}\n\nБаза, вложения и данные калькулятора будут заменены целиком; всё, что появилось после копии, пропадёт (пользователи, доступы, данные, сеансы). Перед этим система снимет служебные копии основной базы и калькулятора, а прежние вложения сохранит рядом в data/backups.`;
+    if (!(await showConfirmDialog(msg, { confirmLabel: "Восстановить", danger: true }))) return;
+    await write(async () => {
+      setFStatus("Восстанавливаем… не закрывайте страницу.");
+      try {
+        const r = await api.post(`/admin/full-backups/${encodeURIComponent(name)}/restore`, { confirm: word });
+        $("#fb-word").value = "";
+        let sessionAlive = true;
+        try { await api.get("/me"); } catch (e) { sessionAlive = !(e instanceof ApiError && e.status === 401); }
+        const ok = sessionAlive && (await load()) && (await loadFull());
+        setFStatus(`Восстановлено из «${name}». Служебная копия основной базы: ${r.safety_backup?.name}${r.calc_safety_backup ? `; калькулятора: ${r.calc_safety_backup}` : ""}. ${sessionAlive ? (ok ? "" : "Список обновить не удалось.") : "Ваш сеанс в восстановленной базе не найден — войдите заново (обновите страницу)."}`);
+        if (!sessionAlive) setTimeout(() => location.reload(), 2500);
+      } catch (e) {
+        if (unknownOutcome(e)) setFStatus(`Неизвестно, выполнено ли восстановление (${errText(e)}). Ничего не повторено автоматически: обновите страницу и проверьте данные и список копий.`);
+        else setFStatus(errText(e));   // в том числе «кодовое слово введено неверно»: ничего не заменено
+      }
+    });
+  }
+  $("#fb-form")?.addEventListener("submit", (e) => { e.preventDefault(); if (!busy && st.full) createFull(); });
+  $("#fb-body").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b || busy) return;
+    if (b.dataset.frestore) restoreFull(b.dataset.frestore); else if (b.dataset.fdel) delFull(b.dataset.fdel);
+  });
   $("#bk-form")?.addEventListener("submit", (e) => { e.preventDefault(); if (!busy && st.data) create(); });
   $("#bk-search").addEventListener("input", (e) => { st.q = e.target.value; paint(); });
-  $("#bk-refresh").addEventListener("click", () => { if (!busy) load(); });
+  $("#bk-refresh").addEventListener("click", () => { if (!busy) { load(); loadFull(); } });
   body.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || busy) return;
@@ -188,7 +276,8 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
   });
   lock();
   load();
-  return { hasUnsavedChanges: () => !!($("#bk-comment")?.value || "").trim(), guardLeave: async () => !busy, destroy() { dead = true; } };
+  loadFull();
+  return { hasUnsavedChanges: () => !!(($("#bk-comment")?.value || "") + ($("#fb-comment")?.value || "")).trim(), guardLeave: async () => !busy, destroy() { dead = true; } };
 }
 
 // ================================================================== Доменная авторизация (LDAP)
