@@ -38,6 +38,7 @@ from shapely.strtree import STRtree
 from app.auth import SECURE_COOKIES, audit_display_name, format_display_name, get_current_user
 from app.auth import router as auth_router
 from app.ui_state import router as ui_state_router
+from app.status_timeline import router as status_timeline_router
 if CALC_AVAILABLE:
     from app.ai_integration import router as ai_router
     from app.assistant import router as assistant_router
@@ -430,6 +431,7 @@ app.add_middleware(ImpersonationMiddleware)
 
 app.include_router(auth_router)
 app.include_router(ui_state_router)
+app.include_router(status_timeline_router)
 if CALC_AVAILABLE:
     app.include_router(ai_router)
     app.include_router(rmr_router_api)

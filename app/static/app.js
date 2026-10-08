@@ -5607,6 +5607,7 @@ function setWorkspace(ws) {
   // в нижней части висела сцена прежнего объекта. Возвращаясь из МФР, показываем тот контейнер, что соответствует режиму 2D/3D.
   const stageBox = document.getElementById("stage");
   const stage3dBox = document.getElementById("stage-3d");
+  if (window.zhbiTimeline) zhbiTimeline.setVisible(!мфр);   // лента времени относится к схеме ЖБИ, у рабочего места МФР её нет
   const в3D = !!(state.view3d && state.view3d.active);
   if (stageBox) stageBox.style.display = (мфр || в3D) ? "none" : "";
   if (stage3dBox) stage3dBox.style.display = (!мфр && в3D) ? "block" : "none";
@@ -5785,7 +5786,8 @@ function updateShapeGeometry(node, shapeName, cx, cy, r, outline) {
 
 function styleShape(shape, element) {
   const selected = state.selectedId === element.id;
-  shape.setAttribute("fill", colorFor(element.current_status));
+  // срез состояния: изделие, отстающее от графика, рисуется косой штриховкой (app/static/timeline.js)
+  shape.setAttribute("fill", (window.zhbiTimeline && zhbiTimeline.hatchFill(element)) || colorFor(element.current_status));
   shape.setAttribute("fill-opacity", "1");
   shape.classList.toggle("selected", selected);
   shape.classList.toggle("multi-selected", state.multiSelectedIds.has(element.id));
@@ -5816,7 +5818,7 @@ function update3DElementAppearance(element, selected) {
   // вершинах, поэтому меняется переписыванием диапазона; подсветка выбора
   // (emissive) вершинным цветом не выражается — выбранный рисуется отдельным
   // мешем поверх.
-  if (!setElementVertexColor(element.id, element.current_status)) return;
+  if (!setElementVertexColor(element.id, element.current_status, window.zhbiTimeline ? zhbiTimeline.hatchColor3D(element) : null)) return;
   if (selected) {
     set3DHighlight(element.id, element.current_status);
   } else if (v3.highlightElementId === element.id) {
@@ -6807,6 +6809,7 @@ function updateSizesForZoom() {
   updateLabelCollisionVisibility(effectiveR, effectiveFont);
   updateScrollbars();
   updateZoomIndicator(pxPerUnit);
+  if (window.zhbiTimeline) zhbiTimeline.onZoom();   // период штриховки среза — в пикселях экрана
 }
 
 // ---------- отсечение по видимой области: и подписи, и сами фигуры ----------
@@ -7365,6 +7368,7 @@ const DELTA_FIELDS = [
 function applyElementDelta(fresh) {
   const element = state.byId.get(fresh.id);
   if (!element) return false; // элемента нет в текущей выборке слоёв — не наше дело
+  if (window.zhbiTimeline) zhbiTimeline.onDelta(fresh);   // открыт срез состояния: исходный статус изделия обновился
   let changed = false;
   for (const field of DELTA_FIELDS) {
     if (field in fresh && element[field] !== fresh[field]) {
@@ -7707,7 +7711,8 @@ async function loadPlanInner(preserveView = true) {
   // пересборка, см. "3D-режим схемы", Docs/backlog.md); иначе соберётся
   // сама при первом включении кнопкой.
   if (state.view3d.active) build3DScene();
-  if (сохранённоеСостояние) await uiStateApplyView(сохранённоеСостояние);
+  if (сохранённоеСостояние) { if (window.zhbiTimeline) zhbiTimeline.restore(сохранённоеСостояние.tl); await uiStateApplyView(сохранённоеСостояние); }
+  if (window.zhbiTimeline) zhbiTimeline.onPlanLoaded();   // срез состояния: история статусов объекта и штриховка
   uiStateMarkReady();
 }
 
@@ -7765,6 +7770,7 @@ function uiStateSnapshot() {
     stances: [...state.stanceZoneVisible],
     mode: v3.active ? (state.lowSpec ? "3d-light" : "3d") : "2d",
   };
+  if (window.zhbiTimeline) snap.tl = zhbiTimeline.snapshot();
   if (state.view) snap.view2d = { x: state.view.x, y: state.view.y, w: state.view.w, h: state.view.h };
   if (v3.camera && v3.controls) {
     const p = v3.camera.position, t = v3.controls.target;
@@ -8620,6 +8626,7 @@ function contractNameFor(element) {
 }
 
 function openStatusDialog(element, status) {
+  if (window.zhbiTimeline && zhbiTimeline.guardEdit()) return;   // открыт срез в прошлом — менять статусы нельзя
   pendingStatusChange = { element, status };
   document.getElementById("sc-status-label").textContent = state.statusLabels[status] || status;
   // Состояние ДО перевода: марка, текущий статус (той же цветовой меткой,
@@ -9611,6 +9618,7 @@ function distributeBulkMark(позиция) {
 }
 
 document.getElementById("bulk-status-apply").addEventListener("click", async () => {
+  if (window.zhbiTimeline && zhbiTimeline.guardEdit()) return;
   const status = document.getElementById("bulk-status-select").value;
   const items = [];
   document.querySelectorAll("#bulk-status-tbody tr").forEach(tr => {
@@ -25392,6 +25400,18 @@ function getFaceMaterial() {
       polygonOffsetFactor: 4,
       polygonOffsetUnits: 4,
     });
+    // Косая штриховка среза состояния: тонкие линии цвета hatch.rgb поверх фактического цвета статуса, где hatch.a = 1.
+    // Полосы идут по мировым координатам (x+y+z), период — zhbiTimeline.stripe3D мм; рисуется в шейдере, поэтому не требует
+    // ни текстур, ни отдельных мешей.
+    v3.faceMaterial.onBeforeCompile = (shader) => {
+      const period = (window.zhbiTimeline ? zhbiTimeline.stripe3D : 500).toFixed(1);
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute vec4 hatch;\nvarying vec4 vHatch;\nvarying vec3 vHatchPos;")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvHatch = hatch;\nvHatchPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nvarying vec4 vHatch;\nvarying vec3 vHatchPos;")
+        .replace("#include <color_fragment>", "#include <color_fragment>\nif (vHatch.a > 0.5) { float hs = fract((vHatchPos.x + vHatchPos.y + vHatchPos.z) / " + period + "); if (hs < 0.28) diffuseColor.rgb = vHatch.rgb; }");
+    };
   }
   return v3.faceMaterial;
 }
@@ -25562,6 +25582,17 @@ function build3DMergedGeometry(elements, levels, columnTops) {
   geometry.setAttribute("position", new THREE.BufferAttribute(positionArray, 3));
   geometry.setAttribute("normal", new THREE.BufferAttribute(normalArray, 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(colorArray, 3));
+  // цвет и признак штриховки среза состояния (rgb + a) — заполняется перекраской (setElementVertexColor); см. timeline.js
+  const hatchArray = new Float32Array(vertexCount * 4);
+  if (window.zhbiTimeline) {
+    for (const element of elements) {
+      const hc = zhbiTimeline.hatchColor3D(element), range = rangeById.get(element.id);
+      if (!hc || !range) continue;
+      const c = new THREE.Color(hc);
+      for (let i = 0; i < range.count; i++) { const at = (range.start + i) * 4; hatchArray[at] = c.r; hatchArray[at + 1] = c.g; hatchArray[at + 2] = c.b; hatchArray[at + 3] = 1; }
+    }
+  }
+  geometry.setAttribute("hatch", new THREE.BufferAttribute(hatchArray, 4));
   const mesh = new THREE.Mesh(geometry, getFaceMaterial());
   // Флаги стоят ВСЕГДА: при выключенной карте теней они ничего не стоят, а
   // включение настройки не требует пересборки девяти тысяч элементов (см.
@@ -25589,7 +25620,7 @@ function build3DMergedGeometry(elements, levels, columnTops) {
 // этого элемента, и в видеокарту уходит только изменённый диапазон
 // (addUpdateRange) — иначе на каждую смену статуса пришлось бы гнать весь
 // буфер целиком (на реальном файле это ~1,5 МБ).
-function setElementVertexColor(elementId, status) {
+function setElementVertexColor(elementId, status, hatchColor) {
   const merged = state.view3d.merged;
   if (!merged) return false;
   const range = merged.rangeById.get(elementId);
@@ -25603,6 +25634,20 @@ function setElementVertexColor(elementId, status) {
   }
   if (attribute.addUpdateRange) attribute.addUpdateRange(range.start * 3, range.count * 3);
   attribute.needsUpdate = true;
+  // Штриховка среза состояния (timeline.js): цвет тонких линий в отдельном атрибуте, a = 1 — штриховать; шейдер материала
+  // (getFaceMaterial) рисует диагональные полосы по мировым координатам. hatchColor === undefined — не трогать атрибут.
+  const hatch = merged.mesh.geometry.attributes.hatch;
+  if (hatch && hatchColor !== undefined) {
+    const h = hatch.array;
+    let r = 0, g = 0, b = 0, a = 0;
+    if (hatchColor) { const hc = new THREE.Color(hatchColor); r = hc.r; g = hc.g; b = hc.b; a = 1; }
+    for (let i = 0; i < range.count; i++) {
+      const at = (range.start + i) * 4;
+      h[at] = r; h[at + 1] = g; h[at + 2] = b; h[at + 3] = a;
+    }
+    if (hatch.addUpdateRange) hatch.addUpdateRange(range.start * 4, range.count * 4);
+    hatch.needsUpdate = true;
+  }
   return true;
 }
 
@@ -25613,7 +25658,7 @@ function refresh3DStatusColors() {
   if (!v3.merged) return;
   for (const id of v3.merged.rangeById.keys()) {
     const element = state.byId.get(id);
-    if (element) setElementVertexColor(id, element.current_status);
+    if (element) setElementVertexColor(id, element.current_status, window.zhbiTimeline ? zhbiTimeline.hatchColor3D(element) : null);
   }
   if (v3.highlightElementId !== null) {
     const selected = state.byId.get(v3.highlightElementId);
