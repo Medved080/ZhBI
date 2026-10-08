@@ -7,6 +7,7 @@
 //  * повторная отправка невозможна, пока идёт запрос; неизвестный исход (сеть/5xx) НЕ повторяется автоматически — сверяемся с сервером;
 //  * у доменной учётной записи формы нет: пароль меняется в домене (сервер отвечает 409 так же).
 import { ApiError } from "./api.js";
+import { attachPasswordToggle } from "./password-toggle.js";
 
 const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -27,6 +28,7 @@ export function mountPasswordForm(host, { api, user, forced = false, onSuccess, 
       <p class="v2-muted" id="pw-note" role="status" aria-live="polite"></p>
     </form>`;
   const $ = (s) => host.querySelector(s);
+  ["#pw-cur", "#pw-new", "#pw-rep"].forEach((id) => attachPasswordToggle($(id)));
   api.get("/password-policy").then((p) => { if (!dead && $("#pw-policy")) $("#pw-policy").textContent = p.text || ""; }).catch(() => { /* подсказка вторична: правило всё равно проверит сервер */ });
 
   const setBusy = (v) => { busy = v; host.querySelectorAll("input, button").forEach((c) => { c.disabled = v; }); };

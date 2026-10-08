@@ -403,6 +403,12 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
 }
 .v2-auth-card h2 { font-size: 1.125rem; margin-bottom: 4px; }
 .v2-auth-card form { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
+/* Поле пароля с глазком «показать / скрыть» (password-toggle.js) */
+.v2-pw-wrap { position: relative; display: block; }
+.v2-pw-wrap input { padding-right: 38px; }
+.v2-pw-toggle { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted, var(--ink)); cursor: pointer; }
+.v2-pw-toggle:hover { background: var(--sel); color: var(--ink); }
+.v2-pw-toggle[aria-pressed="true"] { color: var(--accent); }
 .v2-auth-error {
   color: var(--bad);
   font-size: 0.8125rem;

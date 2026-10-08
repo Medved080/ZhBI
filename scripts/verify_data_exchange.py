@@ -172,7 +172,7 @@ def main():
 
         # ---- подключение
         st, r = A.req("POST", "/admin/data-exchange/connect", {"url": base_b, "login": login, "password": "неверный-пароль-1"})
-        check(st == 401, "подключение: неверный пароль отклонён (%s)" % st)
+        check(st == 400, "подключение: неверный пароль чужого сервера отклонён кодом 400, а не 401 (иначе браузер выбросит в окно входа) (%s)" % st)
         st, r = A.req("POST", "/admin/data-exchange/connect", {"url": "file:///etc/passwd", "login": login, "password": PASSWORD})
         check(st == 400, "подключение: адрес не http/https отклонён")
         st, r = A.req("POST", "/admin/data-exchange/connect", {"url": "http://169.254.169.254", "login": login, "password": PASSWORD})

@@ -4,6 +4,7 @@
 // (POST /login, POST /me/change-password) — без своей копии правил.
 import { ApiError } from "./api.js";
 import { mountPasswordForm } from "./password-form.js";
+import { attachPasswordToggle } from "./password-toggle.js";
 
 export async function renderLogin(root, { api, onSuccess }) {
   root.innerHTML = `
@@ -25,6 +26,8 @@ export async function renderLogin(root, { api, onSuccess }) {
         <p class="v2-note"><a class="v2-link" href="/?ui=v1">← Открыть интерфейс V1</a></p>
       </div>
     </div>`;
+
+  attachPasswordToggle(root.querySelector("#v2-login-pass"));
 
   api.get("/login-users").then((list) => {
     const dl = root.querySelector("#v2-login-users");
