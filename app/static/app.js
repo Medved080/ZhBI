@@ -350,7 +350,7 @@ let state = {
     // Вся геометрия элементов — ОДИН меш граней + ОДИН объект рёбер на всю
     // сцену (см. build3DMergedGeometry). Было — меш на элемент, ~18,8 тысяч
     // вызовов отрисовки на кадр; замер и обоснование в Docs/backlog.md.
-    merged: null, // {mesh, edges, faceElementIds, segmentElementIds, rangeById}
+    merged: null, // {mesh, ghostMesh, ghostCount, edges, faceElementIds, segmentElementIds, rangeById}
     highlightMesh: null, // отдельный меш ВЫБРАННОГО элемента поверх слитой геометрии
     // Накладной меш подсвеченных «несвязанных» (АРМ) — тем же приёмом,
     // что и подсветка выбранного: из слитой геометрии не выкусить один
@@ -5868,7 +5868,8 @@ function styleShape(shape, element) {
   const selected = state.selectedId === element.id;
   // срез состояния: изделие, отстающее от графика, рисуется косой штриховкой (app/static/timeline.js)
   shape.setAttribute("fill", (window.zhbiTimeline && zhbiTimeline.hatchFill(element)) || colorFor(element.current_status));
-  shape.setAttribute("fill-opacity", "1");
+  // хронология: изделия «без статуса» полупрозрачны, сквозь них видны остальные
+  shape.setAttribute("fill-opacity", window.zhbiTimeline && zhbiTimeline.isGhost(element) ? "0.5" : "1");
   shape.classList.toggle("selected", selected);
   shape.classList.toggle("multi-selected", state.multiSelectedIds.has(element.id));
   if (!selected) {
@@ -25470,6 +25471,43 @@ function rendererOptionsForCurrentMode() {
 // разные меши, то есть возврат к множеству вызовов отрисовки. Смена статуса
 // одного элемента — переписывание его диапазона в атрибуте color
 // (setElementVertexColor), пересборка сцены не нужна.
+// Косая штриховка среза состояния: тонкие линии цвета hatch.rgb поверх фактического цвета статуса, где hatch.a = 1.
+// Полосы идут по мировым координатам (x+y+z), период — zhbiTimeline.stripe3D мм; рисуется в шейдере, поэтому не требует
+// ни текстур, ни отдельных мешей. Прозрачность «изделий без статуса» в хронологии (2026-10-08): ВЕСЬ буфер граней рисуется
+// двумя мешами с общей геометрией — непрозрачным (kind "opaque", отбрасывает фрагменты с ghost = 1) и полупрозрачным
+// (kind "ghost", оставляет только их). Так не нужна ни сортировка треугольников, ни второй набор индексов.
+function patchFaceShader(shader, kind) {
+  const period = (window.zhbiTimeline ? zhbiTimeline.stripe3D : 500).toFixed(1);
+  const отбросить = kind === "ghost" ? "if (vGhost < 0.5) discard;\n" : "if (vGhost > 0.5) discard;\n";
+  shader.vertexShader = shader.vertexShader
+    .replace("#include <common>", "#include <common>\nattribute vec4 hatch;\nattribute float ghost;\nvarying vec4 vHatch;\nvarying float vGhost;\nvarying vec3 vHatchPos;")
+    .replace("#include <begin_vertex>", "#include <begin_vertex>\nvHatch = hatch;\nvGhost = ghost;\nvHatchPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+  shader.fragmentShader = shader.fragmentShader
+    .replace("#include <common>", "#include <common>\nvarying vec4 vHatch;\nvarying float vGhost;\nvarying vec3 vHatchPos;")
+    .replace("#include <color_fragment>", "#include <color_fragment>\n" + отбросить + "if (vHatch.a > 0.5) { float hs = fract((vHatchPos.x + vHatchPos.y + vHatchPos.z) / " + period + "); if (hs < 0.28) diffuseColor.rgb = vHatch.rgb; }");
+}
+
+// Материал полупрозрачной половины буфера граней (см. patchFaceShader): та же геометрия, прозрачность 50%, глубину не пишет —
+// сквозь изделия «без статуса» видны остальные.
+function getGhostFaceMaterial() {
+  const v3 = state.view3d;
+  if (!v3.ghostFaceMaterial) {
+    v3.ghostFaceMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: 4,
+      polygonOffsetUnits: 4,
+    });
+    v3.ghostFaceMaterial.onBeforeCompile = (shader) => patchFaceShader(shader, "ghost");
+    v3.ghostFaceMaterial.customProgramCacheKey = () => "ghost-faces";
+  }
+  return v3.ghostFaceMaterial;
+}
+
 function getFaceMaterial() {
   const v3 = state.view3d;
   if (!v3.faceMaterial) {
@@ -25486,18 +25524,8 @@ function getFaceMaterial() {
       polygonOffsetFactor: 4,
       polygonOffsetUnits: 4,
     });
-    // Косая штриховка среза состояния: тонкие линии цвета hatch.rgb поверх фактического цвета статуса, где hatch.a = 1.
-    // Полосы идут по мировым координатам (x+y+z), период — zhbiTimeline.stripe3D мм; рисуется в шейдере, поэтому не требует
-    // ни текстур, ни отдельных мешей.
-    v3.faceMaterial.onBeforeCompile = (shader) => {
-      const period = (window.zhbiTimeline ? zhbiTimeline.stripe3D : 500).toFixed(1);
-      shader.vertexShader = shader.vertexShader
-        .replace("#include <common>", "#include <common>\nattribute vec4 hatch;\nvarying vec4 vHatch;\nvarying vec3 vHatchPos;")
-        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvHatch = hatch;\nvHatchPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
-      shader.fragmentShader = shader.fragmentShader
-        .replace("#include <common>", "#include <common>\nvarying vec4 vHatch;\nvarying vec3 vHatchPos;")
-        .replace("#include <color_fragment>", "#include <color_fragment>\nif (vHatch.a > 0.5) { float hs = fract((vHatchPos.x + vHatchPos.y + vHatchPos.z) / " + period + "); if (hs < 0.28) diffuseColor.rgb = vHatch.rgb; }");
-    };
+    v3.faceMaterial.onBeforeCompile = (shader) => patchFaceShader(shader, "opaque");
+    v3.faceMaterial.customProgramCacheKey = () => "opaque-faces";
   }
   return v3.faceMaterial;
 }
@@ -25679,7 +25707,23 @@ function build3DMergedGeometry(elements, levels, columnTops) {
     }
   }
   geometry.setAttribute("hatch", new THREE.BufferAttribute(hatchArray, 4));
+  // признак «рисовать полупрозрачно» (изделия без статуса в хронологии), см. patchFaceShader
+  const ghostArray = new Float32Array(vertexCount);
+  let ghostCount = 0;
+  if (window.zhbiTimeline) {
+    for (const element of elements) {
+      const range = rangeById.get(element.id);
+      if (!range || !zhbiTimeline.isGhost(element)) continue;
+      ghostArray.fill(1, range.start, range.start + range.count);
+      ghostCount++;
+    }
+  }
+  geometry.setAttribute("ghost", new THREE.BufferAttribute(ghostArray, 1));
   const mesh = new THREE.Mesh(geometry, getFaceMaterial());
+  const ghostMesh = new THREE.Mesh(geometry, getGhostFaceMaterial());
+  ghostMesh.visible = ghostCount > 0;
+  ghostMesh.renderOrder = 1;
+  ghostMesh.receiveShadow = true;
   // Флаги стоят ВСЕГДА: при выключенной карте теней они ничего не стоят, а
   // включение настройки не требует пересборки девяти тысяч элементов (см.
   // apply3DShadowSetting). Вся геометрия — один меш, поэтому построение
@@ -25699,7 +25743,7 @@ function build3DMergedGeometry(elements, levels, columnTops) {
     edges = new LineSegments2(lineGeometry, v3.edgeMaterial);
   }
 
-  return { mesh, edges, faceElementIds, segmentElementIds, rangeById };
+  return { mesh, ghostMesh, ghostCount, edges, faceElementIds, segmentElementIds, rangeById };
 }
 
 // Цвет статуса одного элемента в общем буфере. Заливаются только вершины
@@ -25722,6 +25766,17 @@ function setElementVertexColor(elementId, status, hatchColor) {
   attribute.needsUpdate = true;
   // Штриховка среза состояния (timeline.js): цвет тонких линий в отдельном атрибуте, a = 1 — штриховать; шейдер материала
   // (getFaceMaterial) рисует диагональные полосы по мировым координатам. hatchColor === undefined — не трогать атрибут.
+  const ghostAttr = merged.mesh.geometry.attributes.ghost;
+  if (ghostAttr && window.zhbiTimeline) {
+    const want = zhbiTimeline.isGhost(state.byId.get(elementId)) ? 1 : 0;
+    if (ghostAttr.array[range.start] !== want) {
+      ghostAttr.array.fill(want, range.start, range.start + range.count);
+      if (ghostAttr.addUpdateRange) ghostAttr.addUpdateRange(range.start, range.count);
+      ghostAttr.needsUpdate = true;
+      merged.ghostCount += want ? 1 : -1;
+      if (merged.ghostMesh) merged.ghostMesh.visible = merged.ghostCount > 0;
+    }
+  }
   const hatch = merged.mesh.geometry.attributes.hatch;
   if (hatch && hatchColor !== undefined) {
     const h = hatch.array;
@@ -27638,6 +27693,7 @@ function build3DScene(preserveCamera = false) {
   set3DHighlight(null);
   if (v3.merged) {
     v3.scene.remove(v3.merged.mesh);
+    if (v3.merged.ghostMesh) v3.scene.remove(v3.merged.ghostMesh);
     v3.merged.mesh.geometry.dispose();
     if (v3.merged.edges) {
       v3.scene.remove(v3.merged.edges);
@@ -27682,6 +27738,7 @@ function build3DScene(preserveCamera = false) {
   v3.merged = build3DMergedGeometry(shown, levels, columnTops);
   if (v3.merged) {
     v3.scene.add(v3.merged.mesh);
+    v3.scene.add(v3.merged.ghostMesh);
     if (v3.merged.edges) v3.scene.add(v3.merged.edges);
     const selected = state.byId.get(state.selectedId);
     if (selected) set3DHighlight(selected.id, selected.current_status);

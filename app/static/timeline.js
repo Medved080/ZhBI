@@ -43,6 +43,7 @@
     hatchMont: "off",               // off | plan | forecast — «должно быть смонтировано»
     hatchDeliv: "off",              // off | plan | forecast — «должно быть доставлено»
     flags: new Map(),               // id -> "installed" | "delivered" — у изделий со штриховкой
+    ghosts: new Set(),              // id изделий «без статуса» (Запланирован) в хронологическом режиме — рисуются на 50% прозрачности
     map: null,                      // сопоставление с state.elements (см. rebuildMapping)
     light: 0,                       // таймер лёгкого обновления
     buildMs: 0,                     // длительность последней пересборки 3D при воспроизведении
@@ -110,7 +111,7 @@
     const map = {
       n, k: new Int32Array(n).fill(-1), shown: new Uint8Array(n),
       montPlan: new Int32Array(n), montFc: new Int32Array(n), delPlan: new Int32Array(n), delFc: new Int32Array(n),
-      flag: new Uint8Array(n),
+      flag: new Uint8Array(n), ghost: new Uint8Array(n),
     };
     for (let i = 0; i < n; i++) {
       const e = els[i];
@@ -202,6 +203,9 @@
           if (due >= 0 && due <= T && sIdx < delIdx) f = 2;
         }
       }
+      // прозрачность изделий без статуса — только в хронологическом режиме
+      const g = chrono && el.current_status === "planned" ? 1 : 0;
+      if (g !== map.ghost[i]) { map.ghost[i] = g; if (g) tl.ghosts.add(el.id); else tl.ghosts.delete(el.id); touched = true; }
       if (f !== map.flag[i]) { map.flag[i] = f; if (f) tl.flags.set(el.id, f === 1 ? "installed" : "delivered"); else tl.flags.delete(el.id); touched = true; }
       if (touched) dirty.push(el);
     }
@@ -295,6 +299,9 @@
   }
 
   // Штриховка для 3D: цвет тонких линий изделия (или null) — читается app.js при перекраске вершин
+  // «без статуса» (Запланирован) в хронологии — рисуется на 50% прозрачности (2D: fill-opacity, 3D: второй полупрозрачный меш)
+  const isGhost = (element) => !!element && tl.ghosts.has(element.id);
+
   function hatchColor3D(element) {
     const kind = tl.flags.get(element.id);
     return kind ? colorFor(kind) : null;
@@ -582,11 +589,12 @@
     if (!bar) return;
     // новый объект — прежний срез/интервал не имеют смысла
     if (tl.loadedFor !== null && tl.loadedFor !== state.objectId) {
-      stop(); tl.data = null; tl.loadedFor = null; tl.server.clear(); tl.flags.clear(); tl.range = { from: null, to: null };
+      stop(); tl.data = null; tl.loadedFor = null; tl.server.clear(); tl.flags.clear(); tl.ghosts.clear(); tl.range = { from: null, to: null };
       tl.mode = "actual"; tl.cursor = null;
     }
     tl.server.clear();                    // state.elements заменён целиком — перекрашивать нечего, исходные статусы пришли с сервера
     tl.flags.clear();
+    tl.ghosts.clear();
     rebuildMapping();
     loadData(state.objectId);             // фоном: историю статусов могли дополнить
     if (tl.data) applyCursor(true);
@@ -615,7 +623,7 @@
   }
 
   window.zhbiTimeline = {
-    onPlanLoaded, onDelta, onZoom, setVisible, hatchFill, hatchColor3D, guardEdit, snapshot, restore,
+    onPlanLoaded, onDelta, onZoom, setVisible, hatchFill, hatchColor3D, isGhost, guardEdit, snapshot, restore,
     isChrono: () => tl.mode === "chrono",
     setHatch, getHatch: () => ({ mont: tl.hatchMont, deliv: tl.hatchDeliv }), onChange: (fn) => listeners.push(fn),
     _state: tl, _step, _apply: applyCursor, _setCursor: setCursor, _play: play, _stop: stop, _setMode: setMode,
