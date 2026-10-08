@@ -205,6 +205,12 @@ TABLES = [
     ("last_seen_at", "TEXT", "", "когда сеансом пользовались (пишется не чаще раза в минуту; по нему считается таймаут бездействия)"),
     ("impersonator_user_id", "INTEGER", "FK", "отладочный сеанс «от имени»: кто из администраторов открыл → users.id (CASCADE); NULL = обычный сеанс, только такие подходят по cookie"),
 ]),
+("user_ui_state", "user_ui_state — Личное состояние интерфейса", C_USER, S_USER, [
+    ("user_id", "INTEGER", "PK,FK", "владелец → users.id (CASCADE)"),
+    ("scope", "TEXT", "PK", "область состояния: «scene:<id объекта>» — фильтры, вид и камера схемы объекта"),
+    ("data", "TEXT", "", "JSON состояния (фильтры, видимость зон и подписей, режим 2D/3D, камера)"),
+    ("updated_at", "TEXT", "", "когда сохранено"),
+]),
 ("user_access", "user_access — Доступ и роль на объекте", C_USER, S_USER, [
     ("id", "INTEGER", "PK", "идентификатор гранта"),
     ("user_id", "INTEGER", "FK", "кому выдан → users.id (CASCADE)"),
@@ -1089,6 +1095,7 @@ FKS = [
     ("contract_incidents", "contract_id", "contracts", "id", "CASCADE"),
     ("counterparty_capacity", "counterparty_id", "counterparties", "id", "CASCADE"),
     ("contract_capacity", "contract_id", "contracts", "id", "CASCADE"),
+    ("user_ui_state", "user_id", "users", "id", "CASCADE"),
     ("supplier_change_docs", "object_id", "objects", "id", "CASCADE"),
     ("supplier_change_docs", "from_contract_id", "contracts", "id", "RESTRICT"),
     ("supplier_change_docs", "to_contract_id", "contracts", "id", "RESTRICT"),

@@ -1702,3 +1702,13 @@ CREATE TABLE IF NOT EXISTS team_access_grants (
 );
 CREATE INDEX IF NOT EXISTS idx_team_access_grants_object ON team_access_grants (object_id);
 
+
+-- Личное состояние интерфейса пользователя (фильтры схемы, вид, камера): переживает обновление страницы, паузу и новый вход,
+-- следует за учётной записью на другой компьютер. Область (scope) — «схема объекта N» и т.п.; данные — JSON.
+CREATE TABLE IF NOT EXISTS user_ui_state (
+    user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    scope TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, scope)
+);

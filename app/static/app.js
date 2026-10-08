@@ -36,6 +36,8 @@ if (EMBED_SCENE) {
     try { path = new URL(isReq ? input.url : String(input), document.baseURI).pathname; } catch (e) { path = ""; }
     // POST /plan-data и POST /elements/changed — ЧТЕНИЕ (тело запроса нужно только для параметров; ничего не пишут)
     if (method === "GET" || method === "HEAD" || (method === "POST" && (path === "/plan-data" || path === "/elements/changed"))) return realFetch(input, init);
+    // личное состояние интерфейса (фильтры, вид, камера) — настройка человека, а не рабочие данные: кадр сохраняет её сам
+    if (method === "PUT" && path === "/me/ui-state") return realFetch(input, init);
     // журнал действий V1 (POST /activity) в кадре не ведётся — тихий отказ без шума в интерфейсе
     if (path === "/activity") return Promise.resolve(new Response(null, { status: 204 }));
     return Promise.resolve(new Response(JSON.stringify({ detail: "В окне схемы запись отключена — операции выполняются в панели рабочего места" }),
@@ -1784,6 +1786,7 @@ async function switchObject(objectId) {
   state.selectedId = null;
   state.multiSelectedIds.clear();
   lastServerTime = null;
+  uiState.needRestore = true; uiState.ready = false;   // у нового объекта — свои сохранённые фильтры
   // Оба набора фильтров: перечислимые категории и диапазоны дат (СМР,
   // поставка) — структуры разной природы (см. комментарий у
   // state.dateFilters), и сбрасывать надо обе, иначе диапазон дат от
@@ -7648,6 +7651,8 @@ async function loadPlanInner(preserveView = true) {
     clearWorkspace();
     return;
   }
+  // Личное состояние запрашивается ПАРАЛЛЕЛЬНО с данными схемы, чтобы не удлинять открытие объекта
+  const состояниеОжидание = uiStateStartFetch();
   const data = await api("/plan-data", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selection }),
   });
@@ -7674,6 +7679,8 @@ async function loadPlanInner(preserveView = true) {
   state.zones = data.zones || [];
   state.baseMarkerRadius = data.marker_radius;
   state.selectedId = null;
+  const сохранённоеСостояние = await uiStateTake(состояниеОжидание);
+  if (сохранённоеСостояние) uiStateApplyFilters(сохранённоеСостояние);
 
   renderAxisGrid(data);
   renderZones();
@@ -7700,7 +7707,133 @@ async function loadPlanInner(preserveView = true) {
   // пересборка, см. "3D-режим схемы", Docs/backlog.md); иначе соберётся
   // сама при первом включении кнопкой.
   if (state.view3d.active) build3DScene();
+  if (сохранённоеСостояние) await uiStateApplyView(сохранённоеСостояние);
+  uiStateMarkReady();
 }
+
+// ==================== ЛИЧНОЕ СОСТОЯНИЕ СХЕМЫ НА СЕРВЕРЕ (2026-10-08) ====================
+//
+// Фильтры, видимость зон, режим 2D/3D и камера раньше слетали при каждом обновлении страницы. Теперь они хранятся за УЧЁТНОЙ
+// ЗАПИСЬЮ (таблица user_ui_state, app/ui_state.py), поэтому переживают и обновление, и долгую паузу, и новый вход, и другой
+// компьютер. Область — «scene:<id объекта>»: у каждого объекта свои значения (значения фильтров принадлежат его изделиям).
+// Работает и в кадре V2: фильтры V2 — это модель движка, а кадр сохраняет её сам (PUT /me/ui-state разрешён в кадре).
+//
+// Как сохраняется: раз в 1,5 с снимок сравнивается с последним сохранённым; пишем, когда снимок ДВА такта подряд одинаков
+// (панорамирование и зум не шлют запрос на каждый кадр). Пока состояние объекта не прочитано с сервера, писать нельзя — иначе
+// только что открытая схема затёрла бы сохранённые настройки значениями по умолчанию.
+const uiState = { needRestore: true, ready: false, scope: null, lastSaved: null, pending: null, timer: null };
+
+function uiStateScope() { return state.objectId ? `scene:${state.objectId}` : null; }
+
+function uiStateStartFetch() {
+  const scope = uiStateScope();
+  uiState.ready = false;
+  uiState.scope = scope;
+  if (!scope || !uiState.needRestore) return null;
+  return api(`/me/ui-state?scope=${encodeURIComponent(scope)}`).then((r) => ({ scope, ok: true, data: r.data })).catch(() => ({ scope, ok: false, data: null }));
+}
+
+async function uiStateTake(promise) {
+  if (!promise) return null;
+  const r = await promise;
+  if (r.scope !== uiStateScope()) return null;   // пока грузили, объект сменили
+  if (!r.ok) return null;                        // сервер не ответил: писать нельзя, пока не прочитаем (needRestore остаётся)
+  uiState.needRestore = false;
+  uiState.fetchedData = r.data;
+  return r.data && typeof r.data === "object" ? r.data : null;
+}
+
+function uiStateMarkReady() {
+  if (uiState.needRestore) return;      // чтение не удалось — не пишем
+  uiState.ready = true;
+  uiState.lastSaved = JSON.stringify(uiStateSnapshot());
+  uiState.pending = null;
+}
+
+function uiStateSnapshot() {
+  const filters = {};
+  for (const [key, set] of Object.entries(state.placementFilters)) if (set.size) filters[key] = [...set];
+  const dates = {};
+  for (const [key, f] of Object.entries(state.dateFilters)) if (f.from || f.to || f.empty !== "show") dates[key] = { from: f.from, to: f.to, empty: f.empty };
+  const lag = {};
+  for (const [key, on] of Object.entries(state.lagFilters)) if (on) lag[key] = true;
+  const v3 = state.view3d;
+  const snap = {
+    v: 1,
+    filters, dates, lag,
+    zones: { ...state.zoneVisibility },
+    stances: [...state.stanceZoneVisible],
+    mode: v3.active ? (state.lowSpec ? "3d-light" : "3d") : "2d",
+  };
+  if (state.view) snap.view2d = { x: state.view.x, y: state.view.y, w: state.view.w, h: state.view.h };
+  if (v3.camera && v3.controls) {
+    const p = v3.camera.position, t = v3.controls.target;
+    snap.cam3d = [p.x, p.y, p.z, t.x, t.y, t.z];
+  }
+  return snap;
+}
+
+function uiStateApplyFilters(saved) {
+  if (saved.filters && typeof saved.filters === "object") {
+    for (const [key, values] of Object.entries(saved.filters)) {
+      if (state.placementFilters[key] && Array.isArray(values)) values.forEach((v) => state.placementFilters[key].add(v));
+    }
+  }
+  if (saved.dates && typeof saved.dates === "object") {
+    for (const [key, f] of Object.entries(saved.dates)) {
+      if (state.dateFilters[key] && f) state.dateFilters[key] = { from: String(f.from || ""), to: String(f.to || ""), empty: ["show", "hide", "only"].includes(f.empty) ? f.empty : "show" };
+    }
+  }
+  if (saved.lag && typeof saved.lag === "object") {
+    for (const key of Object.keys(saved.lag)) if (key in state.lagFilters) state.lagFilters[key] = true;
+  }
+  if (saved.zones && typeof saved.zones === "object") {
+    for (const [cat, on] of Object.entries(saved.zones)) if (cat in state.zoneVisibility) state.zoneVisibility[cat] = !!on;
+  }
+  if (Array.isArray(saved.stances)) saved.stances.forEach((k) => state.stanceZoneVisible.add(k));
+}
+
+async function uiStateApplyView(saved) {
+  const num = (v) => typeof v === "number" && Number.isFinite(v);
+  try {
+    const v = saved.view2d;
+    if (v && num(v.x) && num(v.y) && num(v.w) && num(v.h) && v.w > 0 && v.h > 0) {
+      // вид сохранён для этого же объекта; охват мог измениться — берём, только если он пересекается с текущим охватом
+      const b = state.initialView;
+      if (!b || (v.x < b.x + b.w && v.x + v.w > b.x && v.y < b.y + b.h && v.y + v.h > b.y)) setView({ x: v.x, y: v.y, w: v.w, h: v.h });
+    }
+    if (["3d", "3d-light"].includes(saved.mode) && !state.view3d.active) {
+      await setViewMode(saved.mode);
+      const c = saved.cam3d, v3 = state.view3d;
+      if (Array.isArray(c) && c.length === 6 && c.every(num) && v3.camera && v3.controls) {
+        v3.camera.position.set(c[0], c[1], c[2]);
+        v3.controls.target.set(c[3], c[4], c[5]);
+        v3.controls.update();
+        requestRender3D();
+      }
+    }
+  } catch (e) { console.warn("Не удалось восстановить вид схемы:", e.message); }
+}
+
+function uiStateFlush(keepalive = false) {
+  const scope = uiStateScope();
+  if (!scope || !uiState.ready || uiState.scope !== scope || !state.currentUser) return;
+  const text = JSON.stringify(uiStateSnapshot());
+  if (text === uiState.lastSaved) return;
+  uiState.lastSaved = text;
+  api("/me/ui-state", { method: "PUT", headers: { "Content-Type": "application/json" }, keepalive,
+    body: JSON.stringify({ scope, data: JSON.parse(text) }) }).catch(() => { uiState.lastSaved = null; });
+}
+
+setInterval(() => {
+  if (!uiState.ready || !state.currentUser) return;
+  const text = JSON.stringify(uiStateSnapshot());
+  if (text === uiState.lastSaved) { uiState.pending = null; return; }
+  if (text === uiState.pending) uiStateFlush();   // не менялось два такта подряд — сохраняем
+  else uiState.pending = text;
+}, 1500);
+window.addEventListener("pagehide", () => uiStateFlush(true));
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") uiStateFlush(true); });
 
 // ==================== КАРТОЧКА ЭЛЕМЕНТА (сгруппирована по темам, п.11) ====================
 
