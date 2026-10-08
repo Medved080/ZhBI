@@ -45,6 +45,8 @@
     flags: new Map(),               // id -> "installed" | "delivered" — у изделий со штриховкой
     map: null,                      // сопоставление с state.elements (см. rebuildMapping)
     light: 0,                       // таймер лёгкого обновления
+    buildMs: 0,                     // длительность последней пересборки 3D при воспроизведении
+    builtSig: null,                 // подпись набора изделий, с которым собрана 3D-сцена при воспроизведении
     bar: null,
   };
 
@@ -211,16 +213,33 @@
     return changed;
   }
 
+  // Подпись набора изделий, прошедших отбор: по ней при воспроизведении решаем, нужна ли пересборка 3D.
+  function visibleSignature() {
+    let count = 0, sum = 0;
+    for (const el of state.elements) if (passesPlacementFilters(el)) { count++; sum = (sum + el.id * 2654435761) % 4294967296; }
+    return count + ":" + sum;
+  }
+
   // Тяжёлое обновление — не чаще четырёх раз в секунду: легенда со счётчиками и отбор по статусу.
+  // Отбор по статусу зависит от перекрашенного current_status, поэтому 3D пересобирается и во время воспроизведения —
+  // но только когда набор видимых изделий реально изменился, и не чаще, чем втрое дольше самой пересборки.
   function scheduleLight(need) {
     if (!need || tl.light) return;
+    const delay = tl.playing ? Math.max(250, 3 * (tl.buildMs || 0)) : 250;
     tl.light = setTimeout(() => {
       tl.light = 0;
       try {
         renderLegend();
-        if (state.placementFilters.status.size) applyPlacementFilters(!tl.playing);   // в 3D при воспроизведении — после остановки
+        if (!state.placementFilters.status.size) return;
+        if (!tl.playing) { applyPlacementFilters(true); return; }
+        const sig = visibleSignature();
+        if (sig === tl.builtSig) { applyPlacementFilters(false); return; }
+        const t0 = performance.now();
+        applyPlacementFilters(true);
+        tl.buildMs = performance.now() - t0;
+        tl.builtSig = sig;
       } catch (e) { /* не критично */ }
-    }, 250);
+    }, delay);
   }
 
   // ------------------------------------------------------------------ штриховка 2D
@@ -302,6 +321,7 @@
     playT0 = performance.now();
     tl.speed = (to - from) / PLAY_MS;           // секунд истории в мс
     tl.playing = true;
+    tl.builtSig = null;
     paintBar();
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(frame);
