@@ -30,13 +30,22 @@ async function loadThreeAndFbx() {
   return { THREE, FBXLoader, ...fbxMod };
 }
 
-async function parseFbxFile(file, kind) {
+// keep: фасад после загрузки сразу идёт в автосовмещение (как в V1) — повторно скачивать файл до 50 МБ незачем,
+// разобранную группу отдаём как есть (её освобождает тот, кто взял).
+async function parseFbxFile(file, kind, { keep = false } = {}) {
   const { THREE, FBXLoader, loadExternalModelFbx } = await loadThreeAndFbx();
   const arrayBuffer = await file.arrayBuffer();
   const result = await loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind });
-  result.dispose(); // геометрия/текстуры разобранной модели здесь не показываются (нет сцены) — сразу освобождаем память
+  if (!keep) result.dispose(); // геометрия/текстуры разобранной модели здесь не показываются (нет сцены) — сразу освобождаем память
   return result;
 }
+
+const AUTO_STATUS_LABELS = {
+  confident: "выполнено автоматически",
+  ambiguous: "неоднозначно — выбран один из вариантов",
+  low_confidence: "найдено приблизительно — проверьте",
+  insufficient: "недоступно",
+};
 
 export function mountExternalModels(el, ctx) {
   const { screen, groupTitle, api, objectId, object } = ctx;
@@ -52,7 +61,7 @@ export function mountExternalModels(el, ctx) {
         <form id="em-form" autocomplete="off" novalidate>
           <label class="v2-wire-field v2-field-wide"><span>Файл .fbx</span><input type="file" id="em-file" accept=".fbx"></label>
           <label class="v2-wire-field"><span>Вид</span><select id="em-kind"><option value="ground">Благоустройство</option><option value="facade">Фасад</option></select></label>
-          <label class="v2-wire-field v2-field-wide"><span>Название</span><input type="text" id="em-name" maxlength="255" placeholder="Благоустройство"></label>
+          <label class="v2-wire-field v2-field-wide"><span>Название</span><input type="text" id="em-name" maxlength="255" placeholder="по умолчанию — имя файла"></label>
           <div class="v2-bar"><button type="submit" class="v2-btn v2-primary" id="em-go">Загрузить</button></div>
         </form>
         <div id="em-upload-status" class="v2-ex-status" role="status" aria-live="polite"></div>
@@ -63,11 +72,16 @@ export function mountExternalModels(el, ctx) {
   const listStatus = makeStatus($("#em-list-status"));
 
   function modelRowHtml(m) {
+    const bbox = m.metadata && m.metadata.bbox_size_mm;
+    const info = [m.original_name ? esc(m.original_name) : "", bbox ? `габарит ${fmt(bbox.x / 1000)}×${fmt(bbox.y / 1000)}×${fmt(bbox.z / 1000)} м` : ""].filter(Boolean).join(" · ");
+    const state = m.placement_mode === "unreferenced" ? "Привязка не подтверждена" : esc(m.placement_mode || "");
+    const autoLine = m.auto_placement_status
+      ? `<br><span class="v2-muted">Автосовмещение: ${esc(AUTO_STATUS_LABELS[m.auto_placement_status] || m.auto_placement_status)}${m.auto_placement_json && m.auto_placement_json.reason ? ` — ${esc(m.auto_placement_json.reason)}` : ""}</span>` : "";
     return `<tr data-model="${m.id}">
-      <td>${esc(m.name)}</td><td>${esc(KIND_LABEL[m.kind] || m.kind)}</td>
+      <td>${esc(m.name)}${info ? `<br><span class="v2-muted">${info}</span>` : ""}</td><td>${esc(KIND_LABEL[m.kind] || m.kind)}</td>
       <td>${(m.size_bytes / 1024 / 1024).toFixed(1)} МБ</td>
-      <td>смещ. ${fmt(m.offset_mm.x)}/${fmt(m.offset_mm.y)}/${fmt(m.offset_mm.z)} мм · поворот ${fmt(m.rotation_deg)}° · масшт. ${fmt(m.scale.x, 3)}/${fmt(m.scale.y, 3)}/${fmt(m.scale.z, 3)}</td>
-      <td class="v2-bar"><button type="button" class="v2-btn" data-edit="${m.id}">Изменить размещение</button>${m.kind === "facade" ? `<button type="button" class="v2-btn" data-auto-align="${m.id}">Совместить автоматически</button>` : ""}<button type="button" class="v2-btn" data-recenter="${m.id}">Перецентровать</button><button type="button" class="v2-btn v2-danger" data-delete="${m.id}">Удалить</button></td>
+      <td>смещ. ${fmt(m.offset_mm.x)}/${fmt(m.offset_mm.y)}/${fmt(m.offset_mm.z)} мм · поворот ${fmt(m.rotation_deg)}° · масшт. ${fmt(m.scale.x, 3)}/${fmt(m.scale.y, 3)}/${fmt(m.scale.z, 3)}<br><span class="v2-muted">${state}</span>${autoLine}</td>
+      <td class="v2-bar"><button type="button" class="v2-btn" data-edit="${m.id}">Изменить размещение</button>${models.length > 1 ? `<button type="button" class="v2-btn" data-transfer="${m.id}">Перенести привязку на…</button>` : ""}${m.kind === "facade" ? `<button type="button" class="v2-btn" data-auto-align="${m.id}">Совместить автоматически</button>` : ""}<button type="button" class="v2-btn" data-recenter="${m.id}">Перецентровать</button><button type="button" class="v2-btn v2-danger" data-delete="${m.id}">Удалить</button></td>
     </tr>${m._editing ? `<tr data-edit-row="${m.id}"><td colspan="5">${editFormHtml(m)}</td></tr>` : ""}`;
   }
 
@@ -111,7 +125,9 @@ export function mountExternalModels(el, ctx) {
     const recenterBtn = e.target.closest("[data-recenter]");
     const deleteBtn = e.target.closest("[data-delete]");
     const autoAlignBtn = e.target.closest("[data-auto-align]");
-    if (editBtn) { const id = Number(editBtn.dataset.edit); models = models.map((m) => ({ ...m, _editing: m.id === id })); render(); }
+    const transferBtn = e.target.closest("[data-transfer]");
+    if (transferBtn) { await transferPlacement(Number(transferBtn.dataset.transfer)); }
+    else if (editBtn) { const id = Number(editBtn.dataset.edit); models = models.map((m) => ({ ...m, _editing: m.id === id })); render(); }
     else if (cancelBtn) { const id = Number(cancelBtn.dataset.cancelEdit); models = models.map((m) => ({ ...m, _editing: false })); render(); }
     else if (recenterBtn) { await recenter(Number(recenterBtn.dataset.recenter)); }
     else if (deleteBtn) { await removeModel(Number(deleteBtn.dataset.delete)); }
@@ -157,16 +173,22 @@ export function mountExternalModels(el, ctx) {
       return false;
     }
   }
-  async function runAutoAlign(id) {
+  // ready — уже разобранный при загрузке файл (тогда не скачиваем заново) и режим «сразу после загрузки», как в V1:
+  // уверенное совмещение применяется без вопроса, остальные исходы — через подтверждение/выбор.
+  async function runAutoAlign(id, ready = null) {
     if (busy) return;
     const m = models.find((x) => x.id === id);
     if (!m) return;
-    busy = true; listStatus.set("Скачиваю и разбираю файл модели…", "busy");
+    busy = true;
     let mods, parsed;
     try {
-      const [buf, loaded] = await Promise.all([fetchModelArrayBuffer(id), loadThreeAndFbx()]);
-      mods = loaded;
-      parsed = await mods.loadExternalModelFbx({ arrayBuffer: buf, THREE: mods.THREE, FBXLoader: mods.FBXLoader, kind: "facade" });
+      if (ready) { mods = ready.mods; parsed = ready.parsed; }
+      else {
+        listStatus.set("Скачиваю и разбираю файл модели…", "busy");
+        const [buf, loaded] = await Promise.all([fetchModelArrayBuffer(id), loadThreeAndFbx()]);
+        mods = loaded;
+        parsed = await mods.loadExternalModelFbx({ arrayBuffer: buf, THREE: mods.THREE, FBXLoader: mods.FBXLoader, kind: "facade" });
+      }
     } catch (err) {
       if (!dead) listStatus.set(`Не удалось разобрать файл модели: ${err.message || err}`, "bad");
       busy = false; return;
@@ -194,7 +216,7 @@ export function mountExternalModels(el, ctx) {
         const s = toPlacement(result.candidates[0]);
         const head = result.status === "confident" ? `Совместить фасад «${m.name}» автоматически?` : `${result.reason}`;
         const msg = `${head}\n\n${summaryLine(s)}.\n\nТекущее размещение (смещение ${fmtMm(m.offset_mm.x)}/${fmtMm(m.offset_mm.y)} мм, поворот ${fmtDeg(m.rotation_deg)}) будет заменено.`;
-        const ok = await showConfirmDialog(msg, { confirmLabel: result.status === "confident" ? "Совместить" : "Применить приблизительно", multiline: true });
+        const ok = (ready && result.status === "confident") || await showConfirmDialog(msg, { confirmLabel: result.status === "confident" ? "Совместить" : "Применить приблизительно", multiline: true });
         if (!ok) { if (!dead) listStatus.set("Автосовмещение отменено — прежнее размещение не изменено.", ""); return; }
         await saveAutoAlign(m, s.placement, result.status === "confident" ? "confident" : "low_confidence", result.diagnostics);
         return;
@@ -209,6 +231,40 @@ export function mountExternalModels(el, ctx) {
       await saveAutoAlign(m, summaries[Number(picked)].placement, "ambiguous", result.diagnostics);
     } catch (err) {
       if (!dead) listStatus.set(`Не удалось выполнить автосовмещение: ${err.message || err}`, "bad");
+    } finally { busy = false; }
+  }
+
+  // «Перенести эту привязку на» (V1: черновик + «Сохранить»; здесь черновиков нет — подтверждение и сразу PATCH
+  // целевой модели со сверкой её версии). Формула — calibrate.js/coordinates.js, та же, что в V1.
+  async function transferPlacement(sourceId) {
+    if (busy) return;
+    const src = models.find((x) => x.id === sourceId);
+    const targets = models.filter((x) => x.id !== sourceId);
+    if (!src || !targets.length) return;
+    const choices = [{ key: "cancel", label: "Отмена", focus: true },
+      ...targets.map((t) => ({ key: String(t.id), label: `${t.name} (${KIND_LABEL[t.kind] || t.kind})` }))];
+    const picked = await showChoices(`Перенести привязку «${src.name}» на модель:`, choices, { label: "Перенос привязки" });
+    if (!picked || picked === "cancel") return;
+    const dst = targets.find((t) => String(t.id) === picked);
+    if (!dst) return;
+    const ok = await showConfirmDialog(`Перенести привязку «${src.name}» на «${dst.name}»?\n\nЭто осмысленно ТОЛЬКО если оба FBX-файла заведомо из одного и того же источника координат (например, один и тот же экспорт сцены). Текущее размещение «${dst.name}» будет заменено.`, { confirmLabel: "Перенести", multiline: true });
+    if (!ok) return;
+    busy = true; listStatus.set("Переношу привязку…", "busy");
+    try {
+      const { computeTransferToModel } = await import("/static/external-models/calibrate.js");
+      const t = computeTransferToModel(src, dst);
+      const res = await api.patch(`/objects/${objectId}/external-models/${dst.id}`, {
+        offset_x_mm: t.offsetXMm, offset_y_mm: t.offsetYMm, offset_z_mm: t.offsetZMm, rotation_deg: t.rotationDeg,
+        expected_revision: dst.revision,
+      });
+      if (dead) return;
+      models = models.map((x) => (x.id === dst.id ? { ...res, _editing: false } : x));
+      render();
+      listStatus.set(`Привязка перенесена на «${res.name}».`, "ok");
+    } catch (err) {
+      if (dead) return;
+      if (err.status === 409) { await loadList(); listStatus.set("Модель изменена в другом месте — список обновлён, повторите.", "bad"); }
+      else listStatus.set(`Не удалось перенести привязку: ${errText(err)}`, "bad");
     } finally { busy = false; }
   }
 
@@ -293,18 +349,19 @@ export function mountExternalModels(el, ctx) {
     if (!/\.fbx$/i.test(file.name)) { uploadStatus.set(`Нужен файл .fbx — выбран «${file.name}»`, "bad"); return; }
     busy = true; $("#em-go").disabled = true;
     const kind = $("#em-kind").value;
+    let parsed = null;
     try {
       uploadStatus.set("Разбираю файл (геометрия, оси, единицы)…", "busy");
-      let parsed;
       try {
-        parsed = await parseFbxFile(file, kind);
+        parsed = await parseFbxFile(file, kind, { keep: kind === "facade" });
       } catch (parseErr) {
         uploadStatus.set(`Файл не распознан: ${parseErr.message || parseErr}`, "bad");
         return;
       }
       if (dead) return;
       const meta = {
-        name: $("#em-name").value.trim() || undefined, kind,
+        // как в V1: без названия — имя файла без «.fbx» (иначе сервер подставил бы «Благоустройство» всем подряд)
+        name: $("#em-name").value.trim() || file.name.replace(/\.fbx$/i, "") || undefined, kind,
         source_anchor_mm: { x: parsed.sourceAnchorMm[0], y: parsed.sourceAnchorMm[1], z: parsed.sourceAnchorMm[2] },
         bbox_size_mm: parsed.bboxSizeMm, mesh_count: parsed.meshCount, triangle_count: parsed.triangleCount,
         texture_count: parsed.textureCount, warnings: parsed.warnings,
@@ -321,6 +378,12 @@ export function mountExternalModels(el, ctx) {
       models = [...models, { ...res, _editing: false }];
       render();
       $("#em-file").value = ""; $("#em-name").value = "";
+      // Фасад — сразу ищем автосовмещение по контурам стен (V1 делает это же); исход пишется в статус списка.
+      if (kind === "facade" && parsed) {
+        busy = false;
+        const mods = await loadThreeAndFbx();
+        await runAutoAlign(res.id, { mods, parsed });
+      }
     } catch (err) {
       if (dead) return;
       if (err.blockedByPolicy) { uploadStatus.set(errText(err), "bad"); return; }
@@ -329,7 +392,7 @@ export function mountExternalModels(el, ctx) {
         const box = $("#em-upload-status");
         box.querySelector("[data-verify]")?.addEventListener("click", () => verifyOutcome(api, box, { action: "external_model_upload", entityId: objectId, sinceMs: Date.now(), what: "загрузка 3D-модели" }));
       } else uploadStatus.set(`Не удалось загрузить: ${errText(err)}`, "bad");
-    } finally { busy = false; if (!dead) $("#em-go").disabled = false; }
+    } finally { if (parsed) parsed.dispose(); busy = false; if (!dead) $("#em-go").disabled = false; }
   }
 
   $("#em-form").addEventListener("submit", (e) => { e.preventDefault(); upload(); });
