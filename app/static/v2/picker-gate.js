@@ -111,15 +111,15 @@ export function contractingDeleteBodyProblem(b) {
 }
 
 // POST /supplier-changes, PATCH /supplier-changes/{id}: документ «Замена поставщика» (element_ids) и «Обмен привязками» (side_a/side_b)
-const SC_KEYS = ["object_id", "kind", "number", "doc_date", "from_contract_id", "to_contract_id", "mark", "reason", "comment", "element_ids", "side_a", "side_b", "expected_version", "all_contracts", "all_marks", "pool"];
+const SC_KEYS = ["object_id", "kind", "number", "doc_date", "from_contract_id", "to_contract_id", "mark", "reason", "comment", "element_ids", "side_a", "side_b", "expected_version", "all_contracts", "all_marks", "pool", "include_undated"];
 const idList = (v, max = 2000) => Array.isArray(v) && v.length <= max && v.every(isId) && new Set(v).size === v.length;
 export function supplierDocBodyProblem(b) {
   if (!isObj(b) || !onlyKeys(b, SC_KEYS)) return "лишние поля";
   if (!isId(b.object_id)) return "не указан объект";
   if (b.kind !== "supplier_change" && b.kind !== "link_swap" && b.kind !== "date_rebalance") return "неизвестный вид документа";
   if (!isIsoDate(b.doc_date)) return "не указана дата документа";
-  for (const k of ["all_contracts", "all_marks", "pool"]) if (k in b && typeof b[k] !== "boolean") return `поле ${k} не логическое`;
-  if (b.kind !== "date_rebalance" && (b.all_contracts || b.all_marks || b.pool)) return "охват «все» — только у балансировки";
+  for (const k of ["all_contracts", "all_marks", "pool", "include_undated"]) if (k in b && typeof b[k] !== "boolean") return `поле ${k} не логическое`;
+  if (b.kind !== "date_rebalance" && (b.all_contracts || b.all_marks || b.pool || b.include_undated)) return "охват «все» — только у балансировки";
   // «Все контракты»: контракт-представитель для шапки выбирает сервер, клиент шлёт 0
   const всеКонтракты = b.kind === "date_rebalance" && b.all_contracts === true && b.from_contract_id === 0 && b.to_contract_id === 0;
   if (!всеКонтракты && (!isId(b.from_contract_id) || !isId(b.to_contract_id))) return "не выбраны контракты";
