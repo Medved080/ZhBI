@@ -181,6 +181,7 @@ const MFR_SCREENS = {
   "fact-journal-edit": () => import("./fact-journal-screen.js").then((m) => m.mountFactJournalScreen),
   "chess-flat-edit": () => import("./chess-flat-screen.js").then((m) => m.mountChessFlatScreen),
   "block-bulk-edit": () => import("./block-bulk-screen.js").then((m) => m.mountBlockBulkScreen),
+  "headcount-edit": () => import("./headcount-screen.js").then((m) => m.mountHeadcountScreen),
 };
 
 const MODULES = {

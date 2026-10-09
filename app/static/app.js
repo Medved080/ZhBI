@@ -33015,6 +33015,38 @@ document.getElementById("menu-fact-journal").addEventListener("click", () => {
   openFactJournal();
 });
 
+// ==================== ЧИСЛЕННОСТЬ ПЕРСОНАЛА (2026-10-09, Docs/headcount.md) ====================
+// Общий экран V1/V2 — отдельный ES-модуль с ленивым import() (как chess-flat.js): нужен не на каждом открытии. Зависимости
+// передаются явно: транспорт (api() этого файла), подтверждение и права.
+let headcountView = null;
+function closeHeadcount() {
+  if (headcountView && headcountView.hasUnsavedChanges() && !confirm("В карточке есть несохранённые строки. Закрыть без сохранения?")) return;
+  if (headcountView) { headcountView.destroy(); headcountView = null; }
+  document.getElementById("headcount-backdrop").classList.remove("open");
+}
+document.getElementById("hc-close").addEventListener("click", closeHeadcount);
+document.getElementById("menu-headcount").addEventListener("click", async () => {
+  if (!state.objectId) { showToast("Сначала выберите объект", "warning"); return; }
+  const объект = currentObject();
+  document.getElementById("hc-object-name").textContent = объект ? объект.object.name : "";
+  document.getElementById("headcount-backdrop").classList.add("open");
+  if (headcountView) { headcountView.destroy(); headcountView = null; }
+  const send = (method) => (path, body) => api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const mod = await import("/static/headcount-ui.js");
+  headcountView = mod.mountHeadcount(document.getElementById("hc-host"), {
+    api: {
+      get: (path) => api(path), put: send("PUT"), post: send("POST"), patch: send("PATCH"),
+      delete: (path) => api(path, { method: "DELETE" }),
+    },
+    upload: (path, form) => api(path, { method: "POST", body: form }),
+    download: (url) => downloadFromServer(url),
+    objectId: state.objectId,
+    canWrite: can("headcount", "write"),
+    canAdmin: systemAdmin(),
+    confirm: async (text) => confirm(text),
+  });
+});
+
 // «Новый отчёт» из журнала (живой запрос пользователя, 2026-09-10:
 // «сначала явно выбрать блок и дату, затем заполнить существующую форму
 // факта») — журнал, в отличие от панели блока/вкладки «Запланированные

@@ -5190,6 +5190,17 @@
             <button id="menu-chess-flat-open" data-feature="work_progress" data-feature-kind="write">Плоская шахматка</button>
           </div>
         </div>
+        <!-- ЧИСЛЕННОСТЬ (2026-10-09, Docs/headcount.md): ввод численности по
+             подрядчикам и видам работ, подрядчики объекта, отчёты факта и
+             (администратору сервиса) загрузка данных. Один общий экран на V1 и
+             V2 — app/static/headcount-ui.js. «Чтение» открывает отчёты,
+             «Изменение» — ввод (раздел `headcount`). -->
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Численность</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-headcount" data-feature="headcount" data-feature-kind="read">Численность персонала</button>
+          </div>
+        </div>
         <div class="submenu">
           <button type="button" class="submenu-trigger">Настройки</button>
           <div class="dropdown-menu submenu-panel">
@@ -9306,6 +9317,15 @@
         <button class="btn btn-secondary" id="fj-close">Закрыть</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- «Численность персонала» (2026-10-09): окно с общим экраном app/static/headcount-ui.js (ввод, подрядчики, отчёт, загрузка). -->
+<div class="modal-backdrop" id="headcount-backdrop">
+  <div class="modal modal-sticky" style="max-width:1100px">
+    <div class="modal-sticky-head"><h2>Численность персонала — <span id="hc-object-name"></span></h2></div>
+    <div class="modal-sticky-scroll"><div id="hc-host"></div></div>
+    <div class="modal-sticky-foot"><div class="actions"><button class="btn btn-secondary" id="hc-close">Закрыть</button></div></div>
   </div>
 </div>
 

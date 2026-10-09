@@ -21,6 +21,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app import activity
@@ -571,32 +572,85 @@ def report(levels: str = Query("object", description="Уровни через з
                 continue   # строка есть в группировке, а в окнах показателей пуста — не показываем
             item = {x: {"key": r[f"k_{x}"], "label": r[f"l_{x}"]} for x in level_list}
             item["fact_day"] = r["fact_day"]
-            item["week_avg"] = round(r["week_sum"] / week_days, 1) if week_days else 0
-            item["month_avg"] = round(r["month_sum"] / month_days, 1) if month_days else 0
+            item["week_avg"] = round(r["week_sum"] / week_days, 3) if week_days else 0
+            item["month_avg"] = round(r["month_sum"] / month_days, 3) if month_days else 0
             if extra:
                 item["period_sum"] = r["period_sum"]
-                item["period_avg"] = round(r["period_sum"] / period_days, 1) if period_days else 0
+                item["period_avg"] = round(r["period_sum"] / period_days, 3) if period_days else 0
             out_rows.append(item)
         # итог — из СУММ, а не из округлённых строк: иначе он расходился бы с суммой показанных значений на десятые
         week_sum, month_sum = sum(r["week_sum"] for r in rows), sum(r["month_sum"] for r in rows)
         total = {"fact_day": sum(i["fact_day"] for i in out_rows),
-                 "week_avg": round(week_sum / week_days, 1) if week_days else 0,
-                 "month_avg": round(month_sum / month_days, 1) if month_days else 0}
+                 "week_avg": round(week_sum / week_days, 3) if week_days else 0,
+                 "month_avg": round(month_sum / month_days, 3) if month_days else 0}
         if extra:
             total["period_sum"] = sum(i["period_sum"] for i in out_rows)
-            total["period_avg"] = round(total["period_sum"] / period_days, 1) if period_days else 0
+            total["period_avg"] = round(total["period_sum"] / period_days, 3) if period_days else 0
 
         year_from = (p_from or ref.replace(month=1, day=1)).replace(day=1)
         month_rows = conn.execute(
             "SELECT substr(r.work_date, 1, 7) AS m, SUM(r.workers) AS s, COUNT(DISTINCT r.work_date) AS d " + join +
             " AND r.work_date >= ? AND r.work_date <= ? GROUP BY m ORDER BY m",
             (*params, year_from.isoformat(), (p_to or ref).isoformat())).fetchall()
-        months = [{"month": m["m"], "avg": round(m["s"] / m["d"], 1) if m["d"] else 0, "days": m["d"]} for m in month_rows]
+        months = [{"month": m["m"], "avg": round(m["s"] / m["d"], 3) if m["d"] else 0, "days": m["d"]} for m in month_rows]
         return {"levels": level_list, "as_of": ref.isoformat(), "week_from": week_from.isoformat(), "month_from": month_from.isoformat(),
                 "week_days": week_days, "month_days": month_days, "period_days": period_days, "rows": out_rows,
                 "total": total, "months": months, "objects": len(ids)}
     finally:
         conn.close()
+
+
+LEVEL_TITLES = {"smu": "Подразделение", "object": "Объект", "section": "Раздел", "work": "Вид работ", "contractor": "Подрядчик"}
+
+
+@global_router.get("/report.xlsx")
+def report_xlsx(levels: str = Query("object"), as_of: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                object_ids: Optional[str] = None, smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = None,
+                contractor_inn: Optional[str] = None, user: sqlite3.Row = Depends(get_current_user)):
+    """Тот же отчёт, что `/headcount/report`, одним листом Excel: по строке на сочетание выбранных уровней, итог внизу. Права те же."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    d = report(levels=levels, as_of=as_of, date_from=date_from, date_to=date_to, object_ids=object_ids, smu_id=smu_id, section=section,
+               work_code=work_code, contractor_inn=contractor_inn, user=user)
+    day = date.fromisoformat(d["as_of"]).strftime("%d.%m.%Y")
+    has_period = d["total"].get("period_sum") is not None
+    heads = [LEVEL_TITLES[x] for x in d["levels"]] + [f"Факт на {day}", "Среднее за неделю", "Среднее за месяц"]
+    if has_period:
+        heads += ["Человек-дней за период", "Среднее за период"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Численность"
+    ws.append(heads)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    def numbers(src):
+        out = [src["fact_day"], src["week_avg"], src["month_avg"]]
+        return out + ([src["period_sum"], src["period_avg"]] if has_period else [])
+
+    for row in d["rows"]:
+        ws.append([row[x]["label"] for x in d["levels"]] + numbers(row))
+    ws.append(["Итого"] + [None] * (len(d["levels"]) - 1) + numbers(d["total"]))
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+    for i, title in enumerate(heads, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = 46 if i <= len(d["levels"]) else 18
+    ws.freeze_panes = "A2"
+    n = len(d["levels"])
+    avg_cols = [n + 2, n + 3] + ([n + 5] if has_period else [])   # колонки «среднее»: один знак после запятой, как в интерфейсе
+    for col in avg_cols:
+        for row in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+            row[0].number_format = "0.0"
+    buf = BytesIO()
+    wb.save(buf)
+    name = f"Численность_на_{day}.xlsx"
+    from urllib.parse import quote
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename=\"headcount.xlsx\"; filename*=UTF-8''{quote(name)}"})
 
 
 def _empty_report(level_list: list, ref: date) -> dict:

@@ -454,6 +454,14 @@ export const POLICY = [
   { id: "pdf.facade.analyze", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: синхронный разбор макета блоков (в базу не пишет)", method: "POST", path: re("/import-pdf-facade/analyze"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF, отказ 403 у не-админа, 4xx на неверный/битый файл" },
   { id: "pdf.facade.apply", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: применить показанный макет блоков по токену", method: "POST", path: re("/import-pdf-facade/apply"), check: tokenOnlyProblem, risk: "секции/этажи/блоки модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
   { id: "pdf.clear", screen: "pdf-import", action: "Загрузка из PDF: отладочная очистка справочников объекта перед повторной загрузкой (применяется сразу, без сводки)", method: "POST", path: re(`/objects/\\d+/clear-import-data`), check: clearImportDataProblem, risk: "необратимо через интерфейс (помещения из PDF и/или секции/этажи и/или виды работ блоков); копия базы перед очисткой", allowed: true, proof: "настоящий backend: очистка по отмеченным группам, счётчики в ответе, отказ 403, журнал" },
+  { id: "hc.contractor.create", screen: "headcount", action: "Численность: добавить подрядчика объекта (название и/или ИНН)", method: "POST", path: re(`/objects/\\d+/headcount/contractors`), check: hcContractorProblem, risk: "список подрядчиков объекта", allowed: true, proof: "живая проверка V2 на копии обезличенной БД и scripts/verify_headcount.py: создание, дубль 409, отказ 403" },
+  { id: "hc.contractor.update", screen: "headcount", action: "Численность: изменить название / ИНН подрядчика (связь с контрагентом подбирается по ИНН)", method: "PATCH", path: re(`/objects/\\d+/headcount/contractors/\\d+`), check: hcContractorProblem, risk: "список подрядчиков объекта", allowed: true, proof: "scripts/verify_headcount.py: ИНН добавлен позже, пометка «ИНН не проверен»" },
+  { id: "hc.contractor.delete", screen: "headcount", action: "Численность: удалить подрядчика (без записей и истории)", method: "DELETE", path: re(`/objects/\\d+/headcount/contractors/\\d+`), risk: "список подрядчиков объекта; с записями или историей — отказ сервера 409", allowed: true, proof: "scripts/verify_headcount.py: отказ 409 у подрядчика с записями и с историей" },
+  { id: "hc.records.save", screen: "headcount", action: "Численность: внести или заменить числа за день пакетом (повтор по ключу заменяет число, прежнее — в истории; позже срока — отметка просрочки)", method: "PUT", path: re(`/objects/\\d+/headcount/records`), check: hcSaveProblem, risk: "данные объекта; пакет атомарен", allowed: true, proof: "scripts/verify_headcount.py: ввод, замена, дубль, атомарность, просрочка, права; живая проверка V2" },
+  { id: "hc.records.delete", screen: "headcount", action: "Численность: удалить строку (значение остаётся в истории)", method: "DELETE", path: re(`/objects/\\d+/headcount/records/\\d+`), risk: "данные объекта; история сохраняется", allowed: true, proof: "scripts/verify_headcount.py: удаление и запись в истории" },
+  { id: "hc.codifier.import", screen: "headcount", action: "Численность: загрузка кодификатора видов работ из Excel (администратор сервиса; можно «без записи»)", method: "POST", path: re(`/headcount/codifier/import`), check: hcUploadProblem(["file", "dry_run"]), risk: "общий справочник; повтор безопасен", allowed: true, proof: "scripts/verify_headcount_import.py и dry_run_headcount_import.py: двойной прогон" },
+  { id: "hc.import.analyze", screen: "headcount", action: "Численность: разбор выгрузки SharePoint без записи", method: "POST", path: re(`/headcount/import/analyze`), check: hcUploadProblem(["file"]), risk: "ничего не пишет", allowed: true, proof: "scripts/verify_headcount_import.py" },
+  { id: "hc.import.apply", screen: "headcount", action: "Численность: загрузка выгрузки SharePoint с сопоставлением объектов 1С (администратор сервиса; можно «без записи»)", method: "POST", path: re(`/headcount/import/apply`), check: hcUploadProblem(["file", "mapping", "dry_run"]), risk: "массовая запись; повтор идемпотентен, правки из формы не затираются", allowed: true, proof: "scripts/dry_run_headcount_import.py на реальных файлах: двойной прогон, итог сходится с файлом" },
   { id: "em.upload", screen: "external-models", action: "Внешние 3D-модели: загрузка FBX (метаданные — anchor/габарит/оси — посчитаны клиентом при разборе файла, сервер проверяет независимо)", method: "POST", path: re(`/objects/\\d+/external-models`), check: uploadFbxProblem, risk: "новая модель объекта; файл на диске сервера", allowed: true, proof: "настоящий backend: загрузка синтетического FBX, отказ 403, отказ сервера на неподдерживаемый профиль осей" },
   { id: "em.patch", screen: "external-models", action: "Внешние 3D-модели: правка размещения числовыми полями (смещение/поворот/масштаб/название) со сверкой версии записи, включая результат «Совместить автоматически» (фасад)", method: "PATCH", path: re(`/objects/\\d+/external-models/\\d+`), check: emPatchProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: правка → SQL, 409 при чужой правке, отказ 403; автосовмещение — scripts/verify_gaps2_auto_align.mjs (синтетический FBX+геометрия, статус confident/ambiguous/insufficient, запись offset/rotation_deg и auto_placement_status одним PATCH)" },
   { id: "em.recenter", screen: "external-models", action: "Внешние 3D-модели: перецентровать (привязать заново к текущим границам объекта) со сверкой версии записи", method: "POST", path: re(`/objects/\\d+/external-models/\\d+/recenter`), check: emRecenterProblem, risk: "размещение модели объекта", allowed: true, proof: "настоящий backend: перецентровка → SQL, 409 при чужой правке, отказ 403" },
@@ -639,6 +647,40 @@ function clearImportDataProblem(body) {
   if (!(body.elements || body.structure || body.work)) return "не отмечена ни одна группа для очистки";
   return null;
 }
+
+// ---- Численность персонала: формы тел операций ----
+function hcContractorProblem(body) {
+  if (!isObj(body)) return "тело не объект";
+  if (Object.keys(body).some((k) => !["name", "inn", "counterparty_id"].includes(k))) return "лишние поля";
+  for (const k of ["name", "inn"]) if (body[k] != null && (typeof body[k] !== "string" || body[k].length > 300)) return `поле «${k}» — строка до 300 знаков`;
+  if (body.counterparty_id != null && !Number.isInteger(body.counterparty_id)) return "контрагент — целый идентификатор";
+  return null;
+}
+function hcSaveProblem(body) {
+  if (!isObj(body) || Object.keys(body).some((k) => !["date", "rows"].includes(k))) return "лишние поля";
+  if (!realDate(body.date)) return "дата не существует";
+  if (!Array.isArray(body.rows) || !body.rows.length || body.rows.length > 500) return "строк нет или больше 500";
+  const seen = new Set();
+  for (const r of body.rows) {
+    if (!isObj(r) || Object.keys(r).some((k) => !["contractor_id", "codifier_id", "workers"].includes(k))) return "строка неверной формы";
+    if (!Number.isInteger(r.contractor_id) || !Number.isInteger(r.codifier_id) || !Number.isInteger(r.workers) || r.workers < 1 || r.workers > 100000) return "число рабочих — целое от 1 до 100 000";
+    const key = `${r.contractor_id}:${r.codifier_id}`;
+    if (seen.has(key)) return "в карточке дубликат подрядчика и вида работ";
+    seen.add(key);
+  }
+  return null;
+}
+// Загрузка файла Excel без вложенных объектов: ровно один .xlsx и только перечисленные поля формы.
+function hcUploadProblem(fields) { return (body) => {
+  if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
+  if ([...body.keys()].some((k) => !fields.includes(k))) return "лишние поля формы";
+  const files = body.getAll("file");
+  if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
+  if ((files[0].name.split(".").pop() || "").toLowerCase() !== "xlsx") return "нужен файл .xlsx";
+  if (!(files[0].size > 0)) return "файл пуст";
+  if (body.has("mapping")) { try { const m = JSON.parse(body.get("mapping")); if (!isObj(m)) return "сопоставление — не объект"; } catch (e) { return "сопоставление — не JSON"; } }
+  return null;
+}; }
 
 // Загрузка внешней 3D-модели (FBX): файл + поле формы «meta» — JSON-СТРОКА (не вложенный объект: FormData несёт только
 // строки/файлы), посчитанная клиентом при разборе файла (anchor/габарит/оси). Сервер проверяет её независимо.

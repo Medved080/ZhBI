@@ -1,0 +1,86 @@
+/* Учёт численности (app/static/headcount-ui.js) — общий вид для V1 и V2.
+   У интерфейсов разные имена цветовых токенов (V1: --color-*, V2: --bg/--ink/--line…), поэтому ниже они сводятся к своим --hc-*:
+   берётся токен V1, если он есть, иначе токен V2. Классы только с префиксом hc-, чужих глобальных правил не трогаем. */
+.hc-root {
+  --hc-bg: var(--color-surface, var(--bg, #fff));
+  --hc-soft: var(--color-accent-soft, var(--surface, #f3f4f6));
+  --hc-ink: var(--color-text, var(--ink, #1a1d21));
+  --hc-muted: var(--color-text-muted, var(--muted, #6b7280));
+  --hc-line: var(--color-border, var(--line, #dde1e6));
+  --hc-accent: var(--color-primary, var(--accent, #1353d6));
+  --hc-on-accent: var(--color-on-primary, var(--accent-ink, #fff));
+  --hc-bad: var(--color-danger, var(--bad, #c0392b));
+  --hc-good: var(--color-success, var(--good, #1e7e34));
+  --hc-warn: #b36b00;
+  --hc-btn-line: color-mix(in srgb, var(--hc-ink) 40%, var(--hc-bg));
+  color: var(--hc-ink);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.hc-root *, .hc-root *::before, .hc-root *::after { box-sizing: border-box; }
+.hc-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hc-line); margin-bottom: 12px; flex-wrap: wrap; }
+.hc-tab { appearance: none; background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 14px; color: var(--hc-muted); font: inherit; cursor: pointer; }
+.hc-tab.on { color: var(--hc-ink); border-bottom-color: var(--hc-accent); font-weight: 600; }
+.hc-tab:focus-visible, .hc-btn:focus-visible, .hc-link:focus-visible, .hc-tog:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
+.hc-bar { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
+.hc-bar label { display: flex; flex-direction: column; font-size: 12px; color: var(--hc-muted); gap: 2px; }
+.hc-root input[type="text"], .hc-root input[type="number"], .hc-root input[type="date"], .hc-root select {
+  font: inherit; color: var(--hc-ink); background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 6px; padding: 5px 8px; min-height: 32px; max-width: 100%;
+}
+/* У V1 есть общие правила «input/select на всю ширину формы» — здесь поля обычного размера, ширину задают классы ниже */
+.hc-root.hc-root input:not([type="checkbox"]):not([type="file"]), .hc-root.hc-root select { width: auto; display: inline-block; margin: 0; }
+.hc-root.hc-root .hc-btn { width: auto; display: inline-block; margin: 0; }
+.hc-root.hc-root .hc-num { width: 96px !important; text-align: right; }
+.hc-root.hc-root .hc-pick-in { width: 100% !important; }
+.hc-root.hc-root .hc-form input[type="text"] { width: 280px !important; }
+.hc-root input:focus-visible, .hc-root select:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 1px; }
+.hc-btn { font: inherit; color: var(--hc-ink); background: color-mix(in srgb, var(--hc-accent) 7%, var(--hc-bg)); border: 1px solid var(--hc-btn-line); border-radius: 6px; padding: 5px 12px; min-height: 32px; cursor: pointer; }
+.hc-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--hc-accent) 16%, var(--hc-bg)); }
+.hc-btn:disabled { opacity: .5; cursor: default; }
+.hc-btn.primary { background: var(--hc-accent); color: var(--hc-on-accent); border-color: var(--hc-accent); }
+.hc-btn.danger { color: var(--hc-bad); border-color: var(--hc-bad); }
+.hc-btn.on { background: var(--hc-accent); color: var(--hc-on-accent); border-color: var(--hc-accent); }
+.hc-btn.mini { padding: 2px 8px; min-height: 26px; font-size: 12px; }
+.hc-seg { display: inline-flex; gap: 0; } .hc-seg .hc-btn { border-radius: 0; margin-left: -1px; } .hc-seg .hc-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; } .hc-seg .hc-btn:last-child { border-radius: 0 6px 6px 0; }
+.hc-link { background: none; border: 0; padding: 0; color: var(--hc-accent); cursor: pointer; text-decoration: underline; font: inherit; font-size: 12px; }
+.hc-muted { color: var(--hc-muted); } .hc-small { font-size: 12px; } .hc-wrap { align-items: flex-end; } .hc-grow { flex: 1 1 260px; min-width: 220px; }
+.hc-msg { min-height: 1.2em; margin: 4px 0; } .hc-msg.ok { color: var(--hc-good); } .hc-msg.bad, .hc-muted.bad { color: var(--hc-bad); } .hc-msg.warn { color: var(--hc-warn); }
+.hc-deadline { font-size: 13px; color: var(--hc-muted); } .hc-deadline.over { color: var(--hc-warn); font-weight: 600; }
+.hc-scroll { overflow: auto; max-width: 100%; max-height: 60vh; border: 1px solid var(--hc-line); border-radius: 8px; }
+.hc-maptbl { max-height: 45vh; }
+.hc-tbl { border-collapse: collapse; width: 100%; }
+.hc-tbl th, .hc-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--hc-line); text-align: left; vertical-align: middle; }
+.hc-tbl th { position: sticky; top: 0; background: var(--hc-soft); font-weight: 600; z-index: 1; white-space: nowrap; }
+.hc-tbl tfoot td { font-weight: 600; background: var(--hc-soft); position: sticky; bottom: 0; }
+.hc-tbl .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hc-tbl tr.dirty td { background: color-mix(in srgb, var(--hc-warn) 12%, var(--hc-bg)); }
+.hc-tbl tr.added td { background: color-mix(in srgb, var(--hc-accent) 8%, var(--hc-bg)); }
+.hc-num { width: 96px; text-align: right; }
+.hc-code { font-variant-numeric: tabular-nums; color: var(--hc-muted); font-size: 12px; }
+.hc-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--hc-line); color: var(--hc-muted); white-space: nowrap; }
+.hc-badge.bad { color: var(--hc-bad); border-color: var(--hc-bad); } .hc-badge.warn { color: var(--hc-warn); border-color: var(--hc-warn); }
+.hc-callout { border: 1px solid var(--hc-line); border-left: 4px solid var(--hc-muted); border-radius: 6px; padding: 8px 12px; margin: 8px 0; background: var(--hc-soft); }
+.hc-callout.bad { border-left-color: var(--hc-bad); } .hc-callout.warn { border-left-color: var(--hc-warn); } .hc-callout.ok { border-left-color: var(--hc-good); }
+.hc-add { margin: 12px 0 4px; padding: 10px; border: 1px dashed var(--hc-btn-line); border-radius: 8px; }
+.hc-addrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; } .hc-addrow label { display: flex; flex-direction: column; font-size: 12px; color: var(--hc-muted); gap: 2px; }
+.hc-addrow select { max-width: 320px; }
+.hc-picker { position: relative; width: 100%; min-width: 260px; }
+.hc-addrow .hc-grow { flex: 1 1 340px; } .hc-pick-in { width: 100%; }
+.hc-pick-list { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 0; list-style: none; max-height: 280px; overflow: auto; background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,.18); color: var(--hc-ink); }
+.hc-pick-list li { padding: 6px 10px; cursor: pointer; } .hc-pick-list li:hover { background: var(--hc-soft); }
+.hc-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0; padding: 10px; border: 1px solid var(--hc-line); border-radius: 8px; }
+.hc-form label { display: flex; flex-direction: column; font-size: 12px; color: var(--hc-muted); gap: 2px; } .hc-form input[type="text"] { min-width: 260px; }
+.hc-form .hc-msg { flex-basis: 100%; }
+.hc-rep tr.d0 td { font-weight: 600; } .hc-rep tr.d1 td:first-child { font-weight: 500; }
+.hc-tog { background: none; border: 0; cursor: pointer; width: 22px; color: var(--hc-ink); font: inherit; } .hc-leaf { display: inline-block; width: 22px; }
+.hc-sum { display: flex; gap: 8px 24px; flex-wrap: wrap; margin: 8px 0; padding: 10px; background: var(--hc-soft); border-radius: 8px; }
+.hc-chart { display: flex; align-items: flex-end; gap: 10px; height: 170px; padding: 8px 4px 0; border-bottom: 1px solid var(--hc-line); overflow-x: auto; }
+.hc-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 44px; flex: 1 0 44px; max-width: 90px; position: relative; padding-bottom: 20px; }
+.hc-bar-v { display: block; width: 70%; background: var(--hc-accent); border-radius: 3px 3px 0 0; opacity: .85; }
+.hc-val { font-size: 11px; color: var(--hc-muted); margin-bottom: 2px; } .hc-lab { position: absolute; bottom: 2px; font-size: 11px; color: var(--hc-muted); }
+.hc-root { min-width: 0; max-width: 100%; }
+@media (max-width: 720px) {
+  .hc-root.hc-root .hc-num { width: 80px !important; } .hc-addrow select, .hc-addrow label { max-width: 100%; min-width: 0; }
+  .hc-picker { min-width: 0; } .hc-addrow .hc-grow { flex-basis: 100%; min-width: 0; } .hc-root.hc-root .hc-form input[type="text"] { width: 100% !important; }
+  .hc-form label, .hc-bar label { flex: 1 1 100%; } .hc-deadline { flex-basis: 100%; }
+}
