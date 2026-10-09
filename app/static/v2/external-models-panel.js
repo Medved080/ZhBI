@@ -39,7 +39,17 @@ function v1Api(api) {
  * @param {()=>void} [o.onChanged] — модели на сервере изменились (сцене нужно перечитать слой)
  * @returns {{reload:Function,isDirty:Function,isToolActive:Function,stopTools:Function,destroy:Function}}
  */
+// Стили панели подключаются самой панелью: страница V2 из кэша браузера (index.html без заголовков кэша) может быть старой
+// и не знать про external-models.css — тогда панель выглядела бы голой разметкой (замечание 2026-10-09).
+function ensureCss() {
+  if (document.querySelector('link[href*="/static/v2/external-models.css"]')) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet"; link.href = "/static/v2/external-models.css";
+  document.head.appendChild(link);
+}
+
 export function mountExternalModelsPanel(el, o) {
+  ensureCss();
   const { api, objectId, canEdit = true, scene = null } = o;
   el.classList.add("v2-em-wrap");
   el.innerHTML = `<div class="v2-ex-status" role="status" aria-live="polite" data-em-status></div><div class="v2-em" data-em-body><p class="v2-muted">Загрузка…</p></div>`;
