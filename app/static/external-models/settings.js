@@ -427,6 +427,19 @@ export function renderExternalModelsPanel(container, deps) {
   // сбрасываться на «Благоустройство».
   let uploadKind = "ground";
 
+  // Итог/ход загрузки — прямо в форме загрузки, а не только тостом: showToast
+  // пишет в статус-бар ПОД модалкой, и отказ загрузки (например, FBX с другой
+  // ориентацией осей) выглядел как «ничего не произошло» (живой репорт
+  // 2026-10-09, файлы 0511_77_04_0003004_2315). Переживает перерисовку панели.
+  let uploadNote = { text: "", bad: false };
+  function setUploadNote(text, bad = false) {
+    uploadNote = { text, bad };
+    const el = container.querySelector("#em-upload-status");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("em-upload-bad", bad);
+  }
+
   function render() {
     container.innerHTML = `
       ${models.map(modelCardHtml).join("") || '<div class="hint-text">Внешних 3D-моделей пока нет.</div>'}
@@ -442,7 +455,7 @@ export function renderExternalModelsPanel(container, deps) {
           <label class="btn btn-sm btn-primary em-upload-pick">Выбрать FBX-файл…
             <input type="file" id="em-upload-file" accept=".fbx" hidden/></label>
         </div>
-        <span class="hint-text" id="em-upload-status"></span>
+        <span class="hint-text${uploadNote.bad ? " em-upload-bad" : ""}" id="em-upload-status">${escapeHtml(uploadNote.text)}</span>
       </div>` : ""}
     `;
     wire();
@@ -796,16 +809,15 @@ export function renderExternalModelsPanel(container, deps) {
         if (!file) return;
         const filenameEl = container.querySelector("#em-upload-filename");
         if (filenameEl) { filenameEl.textContent = file.name; filenameEl.classList.add("picked"); }
-        const statusEl = container.querySelector("#em-upload-status");
         const kind = uploadKind;
-        statusEl.textContent = "Разбор файла в браузере…";
+        setUploadNote("Разбор файла в браузере…");
         try {
           const { ensureExternalModelsLoaded } = await import("/static/external-models/app-bridge.js");
           const { THREE, FBXLoader, loadExternalModelFbx } = await ensureExternalModelsLoaded();
           const buf = await file.arrayBuffer();
           const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader, kind });
-          statusEl.textContent = `Разобрано: ${parsed.meshCount} меш(ей), ${parsed.triangleCount} треугольников, ` +
-            `${parsed.textureCount} текстур. Загрузка на сервер…`;
+          setUploadNote(`Разобрано: ${parsed.meshCount} меш(ей), ${parsed.triangleCount} треугольников, ` +
+            `${parsed.textureCount} текстур. Загрузка на сервер…`);
           const meta = {
             name: file.name.replace(/\.fbx$/i, "") || KIND_LABELS[kind] || "Благоустройство",
             kind,
@@ -835,7 +847,7 @@ export function renderExternalModelsPanel(container, deps) {
           // applicable` тихо игнорировался, и человек не видел, что
           // автосовмещение вообще не пыталось сработать.
           if (kind === "facade") {
-            statusEl.textContent = "Модель загружена. Поиск автоматического совмещения по контурам стен объекта…";
+            setUploadNote("Модель загружена. Поиск автоматического совмещения по контурам стен объекта…");
             try {
               const outcome = await computeAutoAlignment(created, THREE, parsed.group, parsed.sourceAnchorMm);
               const dbStatus = outcome.applicable ? outcome.dbStatus : "insufficient";
@@ -877,13 +889,14 @@ export function renderExternalModelsPanel(container, deps) {
 
           parsed.dispose();
           models = [...models, created];
-          statusEl.textContent = "";
           if (kind !== "facade") showToast("Модель загружена", "info");
+          uploadNote = { text: `Модель «${created.name}» загружена.`, bad: false };
           render();
           onChanged && onChanged();
         } catch (e) {
-          statusEl.textContent = "";
-          showToast(e.message || "Не удалось загрузить модель", "error");
+          const причина = e.message || "Не удалось загрузить модель";
+          setUploadNote(`Не загружено: ${причина}`, true);
+          showToast(причина, "error");
         } finally {
           fileInput.value = "";
         }
