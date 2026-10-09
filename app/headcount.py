@@ -577,12 +577,14 @@ def report(levels: str = Query("object", description="Уровни через з
                 item["period_sum"] = r["period_sum"]
                 item["period_avg"] = round(r["period_sum"] / period_days, 1) if period_days else 0
             out_rows.append(item)
+        # итог — из СУММ, а не из округлённых строк: иначе он расходился бы с суммой показанных значений на десятые
+        week_sum, month_sum = sum(r["week_sum"] for r in rows), sum(r["month_sum"] for r in rows)
         total = {"fact_day": sum(i["fact_day"] for i in out_rows),
-                 "week_avg": round(sum(i["week_avg"] for i in out_rows), 1),
-                 "month_avg": round(sum(i["month_avg"] for i in out_rows), 1)}
+                 "week_avg": round(week_sum / week_days, 1) if week_days else 0,
+                 "month_avg": round(month_sum / month_days, 1) if month_days else 0}
         if extra:
             total["period_sum"] = sum(i["period_sum"] for i in out_rows)
-            total["period_avg"] = round(sum(i["period_avg"] for i in out_rows), 1)
+            total["period_avg"] = round(total["period_sum"] / period_days, 1) if period_days else 0
 
         year_from = (p_from or ref.replace(month=1, day=1)).replace(day=1)
         month_rows = conn.execute(
