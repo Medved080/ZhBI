@@ -25340,6 +25340,11 @@ let LineMaterial = null;
 // ОДНА общая загрузка на всех вызывающих (2026-10-09): раньше `if (THREE) return` выпускал второго вызывающего, пока первый ещё
 // дожидался OrbitControls/линий, — тот шёл дальше с пустым OrbitControls («OrbitControls is not defined»). Гонка проявилась, когда
 // оболочка V2 включала 3D сразу вслед за загрузкой схемы, а ещё одно включение 3D уже шло.
+// Предел отдаления 3D: «100%» индикатора зума — обзор всей схемы целиком, и раньше дальше него отъехать было нельзя
+// (maxDistance = homeDistance). Внешняя модель (участок, фасад) бывает больше здания, и её целиком не видно. Теперь можно
+// отъехать вдвое дальше — до 50% индикатора (запрос пользователя 2026-10-09). Приближение не ограничено, как и прежде.
+const ZOOM_OUT_LIMIT_3D = 2;
+
 let threeLoadPromise = null;
 function ensureThreeLoaded() {
   if (!threeLoadPromise) {
@@ -28182,7 +28187,7 @@ function create3DRendererAndControls(container) {
   container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(v3.camera, renderer.domElement);
-  if (v3.homeDistance) controls.maxDistance = v3.homeDistance;
+  if (v3.homeDistance) controls.maxDistance = v3.homeDistance * ZOOM_OUT_LIMIT_3D;
   // enableDamping=false — камера должна чётко следовать за курсором и
   // останавливаться сразу, как только оператор отпустил кнопку/колесо, а
   // не "докручиваться" по инерции ещё какое-то время (живой репорт
@@ -28322,7 +28327,7 @@ function fit3DCameraToData() {
   v3.camera.far = size * 20;
   v3.camera.updateProjectionMatrix();
   v3.homeDistance = distance;
-  v3.controls.maxDistance = distance;
+  v3.controls.maxDistance = distance * ZOOM_OUT_LIMIT_3D;
   v3.controls.update();
   // Точка отсчёта для индикатора зума 3D (см. updateZoomIndicator3D ниже) —
   // "100%" всегда означает именно ЭТОТ, только что установленный обзор
@@ -33668,7 +33673,7 @@ function applyMfr3DAngles(camera, controls, home) {
     home.targetZ + distance * Math.sin(pitch * DEG),
   );
   controls.target.set(home.targetX, home.targetY, home.targetZ);
-  controls.maxDistance = distance;
+  controls.maxDistance = distance * ZOOM_OUT_LIMIT_3D;
   controls.update();
 }
 
@@ -34497,7 +34502,7 @@ async function buildMfr3D() {
   mfr3d.homeDistance = охват * 1.45;
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.maxDistance = mfr3d.homeDistance;
+  controls.maxDistance = mfr3d.homeDistance * ZOOM_OUT_LIMIT_3D;
   if (сохранённыйРакурс) {
     camera.position.copy(сохранённыйРакурс.position);
     controls.target.copy(сохранённыйРакурс.target);
@@ -36809,6 +36814,13 @@ function externalModelsBackdropForTools() {
   return document.getElementById("external-models-backdrop");
 }
 
+// Сдвиг/поворот/масштаб группы внешней модели виден только на следующем КАДРЕ. Сцена ЖБИ рисует кадры по требованию
+// (requestRender3D), поэтому после правки группы кадр надо заказать самим — иначе число в форме меняется, а модель стоит как стояла,
+// пока человек не тронет камеру (замечание 2026-10-09: «не реагирует на поворот»). У МФР кадры идут непрерывно — там вызов безвреден.
+function requestExternalModelsRedraw() {
+  if (typeof requestRender3D === "function") requestRender3D();
+}
+
 // Настройка положения внешней модели мышью прямо в открытой 3D-сцене (§8
 // задания) — общее ядро для МФР и ЖБИ, отличаются только: где взять
 // canvas/camera/controls/группу, плоскость перетаскивания (у какого мира
@@ -36921,6 +36933,7 @@ function startExternalModelPlacementOnPlane({
     } else {
       group.position.copy(armStartGroupPos);
       group.quaternion.copy(armStartQuaternion);
+      requestExternalModelsRedraw();
       onCancel();
     }
   }
@@ -36951,6 +36964,7 @@ function startExternalModelPlacementOnPlane({
       group.position.copy(gestureBasePos).add(gestureDelta);
       onPreview(currentOffset().x, currentOffset().y, currentRotationDeg());
     }
+    requestExternalModelsRedraw();
     e.preventDefault();
     e.stopImmediatePropagation();
   }
@@ -37107,6 +37121,7 @@ function hidePlacementGizmo() {
   if (!placementGizmo) return;
   const { object, scene } = placementGizmo;
   scene.remove(object);
+  requestExternalModelsRedraw();
   // ArrowHelper — только удалить из сцены: geometry общая на класс (a не
   // на экземпляр), dispose() сломал бы её для остальных стрелок этого же
   // гизмо ДО того, как traverse до них дойдёт. Освобождать стоит только
@@ -37124,10 +37139,12 @@ function showPlacementGizmo(scene, sceneKind, position, extents) {
   object.position.copy(position);
   scene.add(object);
   placementGizmo = { object, scene };
+  requestExternalModelsRedraw();
 }
 
 function updatePlacementGizmoPosition(position) {
   if (placementGizmo) placementGizmo.object.position.copy(position);
+  requestExternalModelsRedraw();
 }
 
 // Насквозь через РЕАЛЬНЫЙ (с учётом текущего масштаба модели, живой запрос
@@ -37222,6 +37239,7 @@ function previewExternalModelPlacement(model, overrideMm) {
       group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -(Number(overrideMm.rotationDeg) || 0) * Math.PI / 180);
       group.scale.set(scale.x, scale.y, scale.z);
       updatePlacementGizmoPosition(group.position);
+      requestExternalModelsRedraw();
       return { ok: true };
     }
   }
@@ -37234,6 +37252,7 @@ function previewExternalModelPlacement(model, overrideMm) {
       group.quaternion.copy(axisRemap).multiply(qRotate);
       group.scale.set(scale.x, scale.y, scale.z);
       updatePlacementGizmoPosition(group.position);
+      requestExternalModelsRedraw();
       return { ok: true };
     }
   }
@@ -37334,6 +37353,7 @@ function beginExternalModelCalibration(model, callbacks) {
         applyRotationPreview: (g, rotationDeg) => {
           g.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (-rotationDeg * Math.PI) / 180);
         },
+        requestRender: requestExternalModelsRedraw,
         ...callbacks,
       });
     }
@@ -37355,6 +37375,7 @@ function beginExternalModelCalibration(model, callbacks) {
           const qRotate = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (-rotationDeg * Math.PI) / 180);
           g.quaternion.copy(axisRemap).multiply(qRotate);
         },
+        requestRender: requestExternalModelsRedraw,
         ...callbacks,
       });
     }

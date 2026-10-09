@@ -100,6 +100,7 @@ const PICK_LABELS = {
  * @param {(v:[number,number,number]) => [number,number]} opts.viewToProjectXY — обратный адаптер просмотрщика (мир → P.xy)
  * @param {(p:[number,number,number]) => [number,number,number]} opts.projectToView — прямой адаптер (P → мир), для превью позиции
  * @param {(group:*, rotationDeg:number) => void} opts.applyRotationPreview — ставит group.quaternion для предпросмотра (МФР/ЖБИ считают его по-разному)
+ * @param {() => void} [opts.requestRender] — заказать кадр после правки группы (сцена ЖБИ рисует по требованию, а не непрерывно)
  * @param {(result:{offsetXMm:number, offsetYMm:number, rotationDeg:number}) => void} opts.onApply
  * @param {() => void} opts.onCancel
  */
@@ -107,7 +108,7 @@ export function beginPointPairCalibration(opts) {
   const {
     THREE, canvas, camera, controls, backdrop, scene, group, excludeObjects,
     sourceAnchorXY, objectAnchorXY, viewToProjectXY, projectToView,
-    applyRotationPreview, onApply, onCancel,
+    applyRotationPreview, onApply, onCancel, requestRender,
   } = opts;
 
   const armStartPos = group.position.clone();
@@ -215,6 +216,7 @@ export function beginPointPairCalibration(opts) {
     const s = computeState();
     if (s.calib) previewGroup(s.calib);
     render(s);
+    if (requestRender) requestRender();
   }
 
   function pointFromRaycast(kind, hit) {
@@ -258,6 +260,7 @@ export function beginPointPairCalibration(opts) {
     } else {
       group.position.copy(armStartPos);
       group.quaternion.copy(armStartQuat);
+      if (requestRender) requestRender();
       onCancel();
     }
   }
