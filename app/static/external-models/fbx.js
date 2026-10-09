@@ -272,6 +272,7 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind
     texturePixels,
     formatVersion: settings.formatVersion,
     mmPerUnit: settings.mmPerUnit,
+    axisProfile: axisProfileName(settings),   // "y_up" | "z_up" — для предпросмотра файла перед загрузкой
     warnings,
     blobUrls,
     dispose() {

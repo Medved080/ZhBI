@@ -16,6 +16,7 @@ import { loadRegistry, screenAllowed, screenNotApplicable } from "./registry.js"
 import { mountScreenView, mountHome, linkList } from "./screen-view.js";
 import { mountReadScreen } from "./read-screen.js";
 import { mountWorkspace } from "./workspace.js";
+import { requestOpenFbx } from "./workspace-external-models.js";
 import { mountSupplierDocs } from "./supplier-docs.js";
 import { mountContractsList } from "./contracts-list.js";
 import { mountSchedule } from "./schedule.js";
@@ -594,11 +595,23 @@ async function renderShell(user, permissions) {
     if (navBusy || api.hasPendingWrites()) { if (opts.fromHash) restoreHash(); return false; }
     navBusy = true;
     try {
-      const target = key === "home" ? null : screenOf(key);
+      let target = key === "home" ? null : screenOf(key);
       if (key !== "home" && (!target || !allowedScreen(target))) {
         // Экрана нет или он недоступен роли на этом объекте — на начальную страницу, а не пустое место.
         key = "home";
         content.dataset.note = "unavailable";
+        target = null;
+      }
+      // «Загрузить из FBX» в V1 — окно поверх сцены объекта, со всеми инструментами на сцене (мышью, по точкам, предпросмотр). В V2 это
+      // рабочее место объекта («Модель» для ЖБИ, «Модель МФР» для МФР) с окном панели FBX, открытым поверх схемы. Если рабочее место этой
+      // роли недоступно — остаётся страница без сцены (exchange-external-models.js): загрузка и числа, без инструментов на сцене.
+      if (target && target.exchange === "external-models") {
+        const ws = registry.screens.find((x) => x.impl === "workspace" && (x.ws === "model" || x.ws === "mfr") && allowedScreen(x));
+        if (ws) {
+          // уже на этом рабочем месте — окно открывается сразу, без перемонтирования схемы
+          if (ws.id === currentKey && !opts.force && activeModule?.openFbx) { activeModule.openFbx(); return true; }
+          requestOpenFbx(objectId); key = ws.id; target = ws;
+        }
       }
       if (key === currentKey && !opts.force) { if (opts.fromHash) restoreHash(); return true; }
       if (activeModule && !opts.guarded && !(await activeModule.guardLeave())) { if (opts.fromHash) restoreHash(); return false; }

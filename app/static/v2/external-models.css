@@ -6,6 +6,12 @@
 .v2-em { font-size: 0.8125rem; }
 .v2-em .hint-text, .em-floating .hint-text { color: var(--muted); font-size: 0.75rem; margin: 0; }
 
+/* Плотность — как у окна V1 (замечание 2026-10-09: «верстка не такая»): общие поля V2 выше (padding 9px 10px), и две карточки
+   с формой загрузки не помещались на одном экране без прокрутки, а в V1 помещаются. */
+.v2-em input:not([type="checkbox"]):not([type="radio"]), .v2-em select, .em-floating input:not([type="checkbox"]) { padding: 6px 8px; font-size: 0.8125rem; }
+.v2-em .em-num-wrap .em-num-input, .em-floating .em-num-wrap .em-num-input { padding-right: 22px; }
+.v2-em .em-num-grid label.field, .em-floating label { margin: 0 0 3px; }
+
 /* карточки */
 .v2-em .form-card { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 12px 16px; margin: 0 0 12px; }
 .v2-em label.field { display: block; margin: 0 0 4px; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
@@ -83,7 +89,19 @@
 /* окно панели в рабочем месте (workspace.js): широкое, как окно V1; на время режимов поверх 3D прячется, а не закрывается */
 .v2-dialog-backdrop.v2-em-backdrop[hidden] { display: none; }
 .v2-dialog.v2-em-dialog { width: min(calc(100vw - 64px), 1600px); max-width: 96vw; max-height: 90vh; display: flex; flex-direction: column; }
-.v2-em-dialog .v2-em-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 6px; }
+.v2-dialog.v2-em-dialog { position: relative; padding: 14px 18px 12px; }
+/* строка сообщений панели: пустая — не занимает места (иначе окно не помещалось на экране без прокрутки) */
+.v2-em-wrap > [data-em-status] { margin: 0 0 8px; min-height: 0; }
+.v2-em-wrap > [data-em-status]:empty { display: none; }
+.v2-em-dialog .v2-em-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; cursor: move; user-select: none; }
 .v2-em-dialog .v2-em-head h3 { margin: 0; font-size: 1rem; }
+.v2-em-winbtns { display: flex; gap: 4px; }
+.v2-em-winbtn { border: 0; background: none; color: var(--muted); border-radius: 6px; width: 30px; height: 28px; line-height: 1; font-size: 1rem; cursor: pointer; }
+.v2-em-winbtn:hover { background: var(--sel); color: var(--ink); }
+.v2-em-dialog.is-max { position: fixed; inset: 12px; width: auto; max-width: none; height: auto; max-height: none; margin: 0; }
+.v2-em-dialog.is-max .v2-em-head { cursor: default; }
+.v2-em-resize { position: absolute; right: 2px; bottom: 2px; width: 16px; height: 16px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 0 50%, var(--muted) 50% 56%, transparent 56% 66%, var(--muted) 66% 72%, transparent 72%); opacity: .6; }
+.v2-em-dialog.is-max .v2-em-resize { display: none; }
 .v2-em-dialog .v2-em-scroll { overflow-y: auto; min-height: 0; padding-right: 4px; }
-.v2-em-dialog .v2-dialog-actions { margin-top: 12px; }
+.v2-em-dialog .v2-dialog-actions { margin-top: 8px; }

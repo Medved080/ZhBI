@@ -73,12 +73,8 @@ export function mountExternalModelsPanel(el, o) {
     onChanged: () => { if (!dead && o.onChanged) o.onChanged(); },
     setHostVisible: (on) => { if (o.setHostVisible) o.setHostVisible(on); },
     onDirtyChange: (dirty) => { if (o.onDirtyChange) o.onDirtyChange(dirty); },
-    confirm: (text) => showConfirmDialog(text, { confirmLabel: "Перенести", multiline: true }),
-    // Как раньше в V2: после разбора файла — что именно разобрано и какие замечания, и только потом отправка
-    confirmUpload: ({ file, kind, parsed }) => showConfirmDialog(
-      `Загрузить модель «${file.name.replace(/\.fbx$/i, "")}» (${kind === "facade" ? "фасад" : "благоустройство"}, ${(file.size / 1024 / 1024).toFixed(1)} МБ, `
-      + `мешей ${parsed.meshCount}, треугольников ${parsed.triangleCount})?${parsed.warnings.length ? `\n\nЗамечания: ${parsed.warnings.join("; ")}` : ""}`,
-      { confirmLabel: "Загрузить", multiline: true }),
+    confirm: (text, opts = {}) => showConfirmDialog(text, { multiline: true, ...opts }),
+    // Подтверждение загрузки — общее с V1 окно предпросмотра содержимого файла (external-models/file-preview.js): deps.confirmUpload не задаём
     // Обрыв связи посреди отправки: файл мог дойти, мог нет — автоматически не повторяем, предлагаем сверку по журналу
     onUploadError: (e) => {
       if (!isUnknownOutcome(e)) return;

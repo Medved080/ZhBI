@@ -12,6 +12,24 @@ import { mountExternalModelsPanel } from "./external-models-panel.js";
 
 const START_TIMEOUT_MS = 8000;
 
+// «Загрузить из FBX» в меню — это окно ПОВЕРХ сцены (как в V1: диалог открывается над уже построенной схемой). Экран меню и рабочее
+// место — разные экраны V2, поэтому запрос «открой окно» передаётся рабочему месту через sessionStorage (приём locate-handoff.js):
+// одноразовый, живёт 5 минут, относится к одному объекту; рабочее место забирает его, когда схема загрузилась (workspace.js).
+const OPEN_KEY = "v2.openFbxRequest";
+const OPEN_TTL_MS = 5 * 60 * 1000;
+export function requestOpenFbx(objectId) {
+  try { sessionStorage.setItem(OPEN_KEY, JSON.stringify({ objectId: Number(objectId), at: Date.now() })); } catch (e) { /* хранилище недоступно — окно откроют кнопкой во вкладке «Вид» */ }
+}
+export function takeOpenFbx(objectId) {
+  let r = null;
+  try { r = JSON.parse(sessionStorage.getItem(OPEN_KEY) || "null"); } catch (e) { r = null; }
+  if (!r) return false;
+  if (Date.now() - (r.at || 0) > OPEN_TTL_MS) { try { sessionStorage.removeItem(OPEN_KEY); } catch (e) { /* */ } return false; }
+  if (r.objectId !== Number(objectId)) return false;
+  try { sessionStorage.removeItem(OPEN_KEY); } catch (e) { /* */ }
+  return true;
+}
+
 // В кадр уходит только то, что нужно сцене (кадр собирает модель заново и проверяет числа)
 function pack(m) {
   return {
@@ -22,6 +40,50 @@ function pack(m) {
     object_anchor_mm: { x: Number(m.object_anchor_mm.x), y: Number(m.object_anchor_mm.y) },
     metadata: m.metadata?.bbox_size_mm ? { bbox_size_mm: m.metadata.bbox_size_mm } : {},
   };
+}
+
+// Управление окном, как у окон V1 (тот же набор: перетащить за заголовок, потянуть за угол, развернуть на весь экран, закрыть):
+// до первого жеста окно стоит по центру и размером по содержимому, потом переводится в явное положение.
+function setupWindowControls(win) {
+  const head = win.querySelector("[data-em-drag]");
+  const handle = win.querySelector("[data-em-resize]");
+  const maxBtn = win.querySelector("[data-em-max]");
+  const ensureFixed = () => {
+    if (win.style.position === "fixed") return;
+    const r = win.getBoundingClientRect();
+    win.style.position = "fixed"; win.style.left = `${r.left}px`; win.style.top = `${r.top}px`; win.style.margin = "0";
+  };
+  head.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button") || win.classList.contains("is-max")) return;
+    ensureFixed();
+    const sx = e.clientX, sy = e.clientY, left = parseFloat(win.style.left) || 0, top = parseFloat(win.style.top) || 0;
+    head.setPointerCapture(e.pointerId);
+    const move = (ev) => { win.style.left = `${left + ev.clientX - sx}px`; win.style.top = `${Math.max(0, top + ev.clientY - sy)}px`; };
+    const up = () => { head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up); head.removeEventListener("pointercancel", up); };
+    head.addEventListener("pointermove", move); head.addEventListener("pointerup", up); head.addEventListener("pointercancel", up);
+    e.preventDefault();
+  });
+  handle.addEventListener("pointerdown", (e) => {
+    if (win.classList.contains("is-max")) return;
+    ensureFixed();
+    const rect = win.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
+    win.style.width = `${rect.width}px`; win.style.height = `${rect.height}px`; win.style.maxWidth = "95vw"; win.style.maxHeight = "95vh";
+    handle.setPointerCapture(e.pointerId);
+    const move = (ev) => { win.style.width = `${Math.max(480, rect.width + ev.clientX - sx)}px`; win.style.height = `${Math.max(260, rect.height + ev.clientY - sy)}px`; };
+    const up = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up); handle.removeEventListener("pointercancel", up); };
+    handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", up); handle.addEventListener("pointercancel", up);
+    e.preventDefault(); e.stopPropagation();
+  });
+  let saved = null;
+  maxBtn.addEventListener("click", () => {
+    if (win.classList.toggle("is-max")) {
+      saved = { position: win.style.position, left: win.style.left, top: win.style.top, width: win.style.width, height: win.style.height, maxWidth: win.style.maxWidth, maxHeight: win.style.maxHeight, margin: win.style.margin };
+      maxBtn.title = "Свернуть из полного экрана"; maxBtn.setAttribute("aria-label", maxBtn.title);
+    } else {
+      Object.assign(win.style, saved || { position: "", left: "", top: "", width: "", height: "", maxWidth: "", maxHeight: "", margin: "" });
+      maxBtn.title = "На весь экран"; maxBtn.setAttribute("aria-label", maxBtn.title);
+    }
+  });
 }
 
 export function createWorkspaceExternalModels({ api, send, getObjectId, getScene, mfr }) {
@@ -121,10 +183,15 @@ export function createWorkspaceExternalModels({ api, send, getObjectId, getScene
     const backdrop = document.createElement("div");
     backdrop.className = "v2-dialog-backdrop v2-em-backdrop";
     backdrop.innerHTML = `<div class="v2-dialog v2-em-dialog" role="dialog" aria-modal="true" aria-label="Загрузка из FBX">
-      <div class="v2-em-head"><h3>Загрузка из FBX</h3></div>
-      <p class="v2-muted" style="margin:0 0 10px">Модель принадлежит текущему объекту. Виден слой в его 3D (во вкладке «Вид» — переключатели «Благоустройство» / «Фасады из FBX»). Мышью, по точкам и с предпросмотром модель настраивается на сцене за этим окном${switched ? " — схема переключена в 3D" : ""}.</p>
+      <div class="v2-em-head" data-em-drag title="Окно можно перетаскивать за заголовок"><h3>Загрузка из FBX</h3>
+        <span class="v2-em-winbtns">
+          <button type="button" class="v2-em-winbtn" data-em-max title="На весь экран" aria-label="На весь экран">⛶</button>
+          <button type="button" class="v2-em-winbtn" data-em-x title="Закрыть" aria-label="Закрыть">✕</button>
+        </span></div>
+      <p class="v2-muted" style="margin:0 0 10px">Модель принадлежит текущему объекту. Виден слой в его 3D ЖБИ и «Модели МФР» — переключатель «Благоустройство» там же, во вкладке «Вид».${switched ? " Схема переключена в 3D: на ней настраивается положение." : ""}</p>
       <div class="v2-em-scroll" data-em-host></div>
-      <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-em-close>Закрыть</button></div></div>`;
+      <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-em-close>Закрыть</button></div>
+      <div class="v2-em-resize" data-em-resize title="Изменить размер (потянуть)"></div></div>`;
     document.body.appendChild(backdrop);
     const panel = mountExternalModelsPanel(backdrop.querySelector("[data-em-host]"), {
       api, objectId, canEdit, scene,
@@ -135,11 +202,14 @@ export function createWorkspaceExternalModels({ api, send, getObjectId, getScene
     const onKey = (e) => {
       if (e.key !== "Escape") return;
       if (op || backdrop.hidden) { send("extStop"); e.preventDefault(); return; }   // Esc снимает режим на сцене
-      if (document.querySelector(".v2-dialog-backdrop:not(.v2-em-backdrop)")) return;  // поверх открыт другой диалог — он обработает Esc сам
+      // поверх открыт другой диалог (подтверждение, предпросмотр файла) — он обработает Esc сам
+      if (document.querySelector(".v2-dialog-backdrop:not(.v2-em-backdrop), .emfp-backdrop")) return;
       e.preventDefault(); close();
     };
     document.addEventListener("keydown", onKey, true);
     backdrop.querySelector("[data-em-close]").addEventListener("click", () => close());
+    backdrop.querySelector("[data-em-x]").addEventListener("click", () => close());
+    setupWindowControls(backdrop.querySelector(".v2-em-dialog"));
     dlg = { backdrop, panel, onKey };
   }
 

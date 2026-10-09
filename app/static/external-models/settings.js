@@ -90,15 +90,16 @@ const AUTO_STATUS_LABELS = {
 // Панель живёт в двух оболочках: модалка V1 (по умолчанию) и страница/окно V2 (app/static/v2/external-models-panel.js).
 // Всё, что зависит от оболочки, — необязательные deps, V1 их не передаёт:
 //   setHostVisible(bool) — спрятать/вернуть окно панели на время режимов поверх 3D (V1: модалка #external-models-backdrop);
-//   confirm(текст) → Promise<bool> — подтверждение (V1: window.confirm);
+//   confirm(текст, {confirmLabel, danger}) → Promise<bool> — подтверждение: перенос привязки и удаление (V1: window.confirm);
 //   onDirtyChange(bool) — есть несохранённый черновик (V1: флаг модалки для общего сторожа закрытия);
-//   confirmUpload({file, kind, parsed}) → Promise<bool> — подтверждение загрузки после разбора файла (V1: нет);
+//   confirmUpload({file, kind, parsed, THREE, existing}) → Promise<bool> — подтверждение загрузки после разбора файла (по умолчанию —
+//     общий предпросмотр содержимого файла, file-preview.js: так в V1 и V2 нельзя отправить не тот файл);
 //   onUploadError(error, noteEl) — дополнительные действия при отказе загрузки (V2: проверка «дошёл ли файл до сервера»).
 // beginPlacement/beginCalibration/previewPlacement/showGizmo/hideGizmo — инструменты 3D; без них соответствующих кнопок нет.
 // beginPlacement/beginCalibration могут вернуть результат синхронно (V1) или обещанием (V2: сцена в кадре за мостом).
 export function renderExternalModelsPanel(container, deps) {
   const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement, beginCalibration, previewPlacement, showGizmo, hideGizmo } = deps;
-  const confirmAsk = deps.confirm || ((text) => Promise.resolve(window.confirm(text)));
+  const confirmAsk = deps.confirm || ((text) => Promise.resolve(window.confirm(text)));   // 2-й аргумент {confirmLabel, danger} V1 игнорирует
   const setHostVisible = deps.setHostVisible
     || ((on) => document.getElementById("external-models-backdrop")?.classList.toggle("open", on));
   let models = [];
@@ -772,7 +773,7 @@ export function renderExternalModelsPanel(container, deps) {
         `Перенести привязку «${sourceModel.name}» на «${targetModel.name}»? ` +
         `Это осмысленно ТОЛЬКО если оба FBX-файла заведомо из одного и того же источника координат ` +
         `(например, один и тот же экспорт сцены). Текущий черновик «${targetModel.name}» будет заменён — ` +
-        `сохранение всё ещё отдельным нажатием «Сохранить».`)) return;
+        `сохранение всё ещё отдельным нажатием «Сохранить».`, { confirmLabel: "Перенести" })) return;
       const { computeTransferToModel } = await import("/static/external-models/app-bridge.js").then((m) => m.ensureExternalModelsLoaded());
       const { offsetXMm, offsetYMm, offsetZMm, rotationDeg } = computeTransferToModel(sourceModel, targetModel);
       const d = draftFor(targetModel);
@@ -809,7 +810,7 @@ export function renderExternalModelsPanel(container, deps) {
     container.querySelectorAll(".em-delete").forEach((btn) => btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.modelId);
       const model = models.find((m) => m.id === id);
-      if (!confirm(`Удалить модель «${model.name}»? Действие необратимо.`)) return;
+      if (!await confirmAsk(`Удалить модель «${model.name}»? Действие необратимо.`, { confirmLabel: "Удалить", danger: true })) return;
       btn.disabled = true;
       try {
         await api(`/objects/${objectId}/external-models/${id}`, { method: "DELETE" });
@@ -845,9 +846,16 @@ export function renderExternalModelsPanel(container, deps) {
           const { THREE, FBXLoader, loadExternalModelFbx } = await ensureExternalModelsLoaded();
           const buf = await file.arrayBuffer();
           const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader, kind });
-          if (deps.confirmUpload && !(await deps.confirmUpload({ file, kind, parsed }))) {
+          // Предпросмотр содержимого ДО отправки (запрос пользователя 2026-10-09: «чтобы не загрузить не тот файл»): картинка модели,
+          // состав, габарит, предупреждение о дубле. Без «Загрузить» на сервер ничего не уходит.
+          setUploadNote("Файл разобран — проверьте содержимое в окне предпросмотра…");
+          const confirmUpload = deps.confirmUpload || (async (a) => {
+            const { showFbxFilePreview } = await import("/static/external-models/file-preview.js");
+            return showFbxFilePreview(a);
+          });
+          if (!(await confirmUpload({ file, kind, parsed, THREE, existing: models }))) {
             parsed.dispose();
-            setUploadNote("Загрузка отменена.");
+            setUploadNote("Загрузка отменена — файл не отправлен. Можно выбрать другой.");
             return;
           }
           setUploadNote(`Разобрано: ${parsed.meshCount} меш(ей), ${parsed.triangleCount} треугольников, ` +

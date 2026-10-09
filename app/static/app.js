@@ -25337,8 +25337,17 @@ let LineSegments2 = null;
 let LineSegmentsGeometry = null;
 let LineMaterial = null;
 
-async function ensureThreeLoaded() {
-  if (THREE) return;
+// ОДНА общая загрузка на всех вызывающих (2026-10-09): раньше `if (THREE) return` выпускал второго вызывающего, пока первый ещё
+// дожидался OrbitControls/линий, — тот шёл дальше с пустым OrbitControls («OrbitControls is not defined»). Гонка проявилась, когда
+// оболочка V2 включала 3D сразу вслед за загрузкой схемы, а ещё одно включение 3D уже шло.
+let threeLoadPromise = null;
+function ensureThreeLoaded() {
+  if (!threeLoadPromise) {
+    threeLoadPromise = loadThreeLibs().catch((e) => { threeLoadPromise = null; THREE = null; throw e; });
+  }
+  return threeLoadPromise;
+}
+async function loadThreeLibs() {
   THREE = await import("three");
   ({ OrbitControls } = await import("/static/vendor/three/OrbitControls.js"));
   // "Толстые" линии рёбер силуэта — обычный THREE.LineBasicMaterial.linewidth

@@ -21,7 +21,7 @@ import { anyModalDirty, guardModals } from "./mfr-common.js";
 import { writeFilterSnapshot, queueFilteredReportOpen } from "./scheme-filter-snapshot.js";
 import { createWorkspaceMiniReports } from "./workspace-mini-reports.js";
 import { takeLocate } from "./locate-handoff.js";
-import { createWorkspaceExternalModels } from "./workspace-external-models.js";
+import { createWorkspaceExternalModels, takeOpenFbx } from "./workspace-external-models.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -264,6 +264,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     mfrStartView(s);
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
     // «Показать на схеме» из отчёта «Моя работа» (locate-handoff.js): выделить изделие и навести кадр, когда схема загружена
+    // «Загрузить из FBX» из меню (main.js → requestOpenFbx): окно поверх сцены открывается, когда схема загрузилась (как диалог V1 над схемой)
+    if (s.loaded && !s.error && takeOpenFbx(curObject)) extm.open();
     if (!mfr && s.loaded) { const want = takeLocate(curObject); if (want) { send("select", { id: want }); send("locate", { id: want }); } }
     if (selKey(s) !== prevSel) loadDetail(selKey(s));
     paintAll();
@@ -1060,6 +1062,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     getAssistantContext: () => ({ elementIds: assistantIds,
       selectedIds: sc?.loaded ? [...new Set([...(sc.multiIds || []), ...(sc.selectedId ? [sc.selectedId] : [])])].slice(0,100) : [],
       filters: JSON.stringify({ view:sc?.view,shown:sc?.shown,total:sc?.total,excluded:sc?.excluded }).slice(0,3000) }),
+    openFbx: () => extm.open(),   // «Загрузить из FBX» из меню, когда это рабочее место уже открыто
     hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved() || extm.isDirty(),
     guardLeave: async () => {
       if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
