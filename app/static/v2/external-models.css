@@ -1,0 +1,89 @@
+/* Панель «Внешние 3D-модели» (FBX) в V2. Разметку строит общий с V1 модуль external-models/settings.js, поэтому классы те же
+   (form-card, em-*, btn …); раскладка карточек повторяет V1, а вид — токены V2 (--bg, --ink, --line, --accent, …).
+   Плавающая панель чисел «Настраивать поверх 3D» вешается прямо на body, вне .v2-em, поэтому её кнопки стилизуются отдельно. */
+
+.v2-em-wrap { min-width: 0; }
+.v2-em { font-size: 0.8125rem; }
+.v2-em .hint-text, .em-floating .hint-text { color: var(--muted); font-size: 0.75rem; margin: 0; }
+
+/* карточки */
+.v2-em .form-card { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 12px 16px; margin: 0 0 12px; }
+.v2-em label.field { display: block; margin: 0 0 4px; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+.v2-em label.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--ink); cursor: pointer; }
+
+/* кнопки: один вид с .v2-btn */
+.v2-em .btn, .em-floating .btn {
+  padding: 8px 12px; border: 1px solid var(--btn-line); border-radius: 7px; background: var(--btn-bg); color: var(--ink);
+  white-space: nowrap; font: inherit;
+}
+.v2-em .btn:hover:not(:disabled) { background: var(--sel); border-color: var(--accent); }
+.v2-em .btn-sm, .em-floating .btn-sm { padding: 5px 10px; font-size: 0.75rem; }
+.v2-em .btn-primary, .em-floating .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.v2-em .btn-primary:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); filter: brightness(.92); }
+.v2-em .btn-danger { background: var(--bad); border-color: var(--bad); color: var(--accent-ink); }
+.v2-em .btn-danger:hover:not(:disabled) { background: var(--bad); filter: brightness(.94); }
+.v2-em .btn:disabled { opacity: .45; cursor: default; }
+
+/* числовое поле со стрелками шага */
+.em-num-wrap { position: relative; display: inline-block; }
+.em-num-wrap .em-num-input { padding-right: 20px; width: 100%; box-sizing: border-box; }
+.em-num-steppers { position: absolute; right: 1px; top: 1px; bottom: 1px; display: flex; flex-direction: column; width: 16px; }
+.em-num-step {
+  flex: 1 1 50%; padding: 0; border: none; background: var(--surface); color: var(--muted); cursor: pointer;
+  font-size: 8px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.em-num-step:hover { background: var(--accent); color: var(--accent-ink); }
+.em-num-step:first-child { border-radius: 0 6px 0 0; }
+.em-num-step:last-child { border-radius: 0 0 6px 0; }
+
+/* карточка модели — две колонки: «Положение» и «Подобрать положение» */
+.em-card { container-type: inline-size; padding: 12px 16px; }
+.em-card-head { display: flex; align-items: center; gap: 12px; }
+.em-card-title { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; }
+.em-card-name { font-size: 0.9375rem; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.em-kind-chip { font-size: 0.6875rem; font-weight: 600; line-height: 18px; padding: 0 8px; border-radius: 999px; background: var(--sel); color: var(--accent); }
+.em-card-state { flex-shrink: 0; white-space: nowrap; }
+.em-card-note { margin: 4px 0 0; }
+.em-card-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 20px; margin-top: 10px; align-items: start; }
+.em-col-tools { border-left: 1px solid var(--line); padding-left: 20px; }
+.em-col-title { font-size: 0.6875rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.em-num-grid { display: grid; grid-template-columns: repeat(4, minmax(96px, 1fr)); gap: 10px; }
+.em-num-grid .em-num-wrap { display: block; }
+.em-scale-title { margin-top: 10px; }
+.em-scale-grid { grid-template-columns: repeat(3, minmax(96px, 1fr)); }
+.em-col-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.em-save-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.em-save-feedback { font-size: 0.75rem; color: var(--muted); }
+.em-save-feedback.ok { color: var(--good); }
+.em-tools-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.em-tools-grid .btn { width: 100%; }
+.em-transfer { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.em-transfer label.field { margin: 0; }
+.em-transfer select { flex: 1 1 auto; width: auto; min-width: 0; }
+.em-candidates { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+@container (max-width: 860px) {
+  .em-card-body { grid-template-columns: minmax(0, 1fr); }
+  .em-col-tools { border-left: none; padding-left: 0; }
+}
+
+/* форма загрузки */
+.em-upload { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 0; }
+.em-upload-title { font-weight: 600; }
+.em-upload .hint-text { flex: 1 1 100%; order: 3; }
+.em-upload .hint-text.em-upload-bad, .em-upload-bad { color: var(--bad); }
+.em-upload-kind-group { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+.em-upload-file-row { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; min-width: 220px; }
+.em-upload-filename {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 6px 10px; border: 1px solid var(--btn-line); border-radius: 7px; background: var(--bg); color: var(--muted); font-size: 0.75rem;
+}
+.em-upload-filename.picked { color: var(--ink); }
+.em-upload-pick { flex: 0 0 auto; cursor: pointer; }
+
+/* окно панели в рабочем месте (workspace.js): широкое, как окно V1; на время режимов поверх 3D прячется, а не закрывается */
+.v2-dialog-backdrop.v2-em-backdrop[hidden] { display: none; }
+.v2-dialog.v2-em-dialog { width: min(calc(100vw - 64px), 1600px); max-width: 96vw; max-height: 90vh; display: flex; flex-direction: column; }
+.v2-em-dialog .v2-em-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 6px; }
+.v2-em-dialog .v2-em-head h3 { margin: 0; font-size: 1rem; }
+.v2-em-dialog .v2-em-scroll { overflow-y: auto; min-height: 0; padding-right: 4px; }
+.v2-em-dialog .v2-dialog-actions { margin-top: 12px; }

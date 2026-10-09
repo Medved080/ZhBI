@@ -12,6 +12,7 @@
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
 //   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setGuidFilter{text} · setHatch{kind:"mont"|"deliv",value:"off"|"plan"|"forecast"} · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   внешние 3D-модели (FBX; ЖБИ и МФР): extPlacementStart{model} · extCalibrationStart{model} · extStop · extPreview{model,override} · extGizmo{on,model} · extRefresh{objectId}; события ext-op{op,phase,…}, ext-refreshed{objectId}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
 // Сообщения не из родительского окна и не с нашего origin молча игнорируются. Кадр НИЧЕГО не пишет на сервер (см. app.js).
@@ -776,6 +777,79 @@
 
   // Команды операций над изделиями (модель ЖБИ, АРМ прораба; те же безопасны и для комплектовщика): кадр по-прежнему только читает,
   // изменения выполняет оболочка через шлюз записи, а здесь лишь применяется то, что подтвердил сервер.
+  // ---------------- внешние 3D-модели объекта (FBX): настройка положения в сцене ----------------
+  // Окно настроек (список, числа, «Сохранить») — в оболочке V2 (external-models-panel.js); в кадре только то, что требует сцены:
+  // жест мышью, калибровка по точкам, предпросмотр, гизмо осей. Кадр ничего не пишет на сервер: результат уходит событием
+  // ext-op {op:"placement"|"calibration", phase:"started"|"error"|"preview"|"done"|"apply"|"cancel", …}, сохраняет оболочка.
+  // Модель приходит обычным JSON и собирается заново из проверенных чисел — лишних полей кадр не принимает.
+  const finiteNum = (x) => typeof x === "number" && Number.isFinite(x);
+  function extVec(o, keys) {
+    if (!o || typeof o !== "object") throw new Error("параметры модели");
+    const r = {};
+    for (const k of keys) { if (!finiteNum(o[k]) || Math.abs(o[k]) > 1e10) throw new Error("параметры модели"); r[k] = o[k]; }
+    return r;
+  }
+  function extModel(m) {
+    if (!m || typeof m !== "object" || !isInt(m.id) || !isInt(m.object_id) || !finiteNum(m.rotation_deg)) throw new Error("параметры модели");
+    const out = {
+      id: m.id, object_id: m.object_id, kind: m.kind === "facade" ? "facade" : "ground", rotation_deg: m.rotation_deg,
+      offset_mm: extVec(m.offset_mm, ["x", "y", "z"]),
+      scale: extVec(m.scale || { x: 1, y: 1, z: 1 }, ["x", "y", "z"]),
+      source_anchor_mm: extVec(m.source_anchor_mm, ["x", "y", "z"]),
+      object_anchor_mm: extVec(m.object_anchor_mm, ["x", "y"]),
+      metadata: {},
+    };
+    if (m.metadata && m.metadata.bbox_size_mm) out.metadata.bbox_size_mm = extVec(m.metadata.bbox_size_mm, ["x", "y", "z"]);
+    return out;
+  }
+  let extActive = null;   // {op, stop} — не больше одного режима разом
+  const extPost = (op, phase, extra) => post({ evt: "ext-op", op, phase, ...(extra || {}) });
+  function extStarted(op, result) {
+    if (!result || !result.ok) { extPost(op, "error", { reason: String((result && result.reason) || "режим недоступен") }); return; }
+    extActive = { op, stop: result.stop };
+    extPost(op, "started");
+  }
+  Object.assign(COMMANDS, {
+    extPlacementStart(a) {
+      const model = extModel(a.model);
+      if (extActive) { extPost("placement", "error", { reason: "Уже идёт другой режим настройки — завершите его." }); return; }
+      extStarted("placement", beginExternalModelPlacement(model, {
+        onPreview: (x, y, rot) => extPost("placement", "preview", { x, y, rot }),
+        onDone: (x, y, rot) => { extActive = null; extPost("placement", "done", { x, y, rot }); },
+        onCancel: () => { extActive = null; extPost("placement", "cancel"); },
+      }));
+    },
+    extCalibrationStart(a) {
+      const model = extModel(a.model);
+      if (extActive) { extPost("calibration", "error", { reason: "Уже идёт другой режим настройки — завершите его." }); return; }
+      extStarted("calibration", beginExternalModelCalibration(model, {
+        onApply: (r) => { extActive = null; extPost("calibration", "apply", { offsetXMm: r.offsetXMm, offsetYMm: r.offsetYMm, rotationDeg: r.rotationDeg }); },
+        onCancel: () => { extActive = null; extPost("calibration", "cancel"); },
+      }));
+    },
+    // досрочная отмена режима (Esc в оболочке, закрытие окна); сам режим сообщит cancel
+    extStop() { if (extActive) extActive.stop(); },
+    // живой предпросмотр чисел черновика: override — {offsetXMm, offsetYMm, [offsetZMm], rotationDeg, [scaleX/Y/Z]}
+    extPreview(a) {
+      const o = a.override;
+      if (!o || typeof o !== "object") throw new Error("override");
+      const ov = { offsetXMm: o.offsetXMm, offsetYMm: o.offsetYMm, rotationDeg: o.rotationDeg };
+      for (const k of ["offsetXMm", "offsetYMm", "rotationDeg"]) if (!finiteNum(ov[k])) throw new Error("override");
+      for (const k of ["offsetZMm", "scaleX", "scaleY", "scaleZ"]) if (o[k] !== undefined) { if (!finiteNum(o[k])) throw new Error("override"); ov[k] = o[k]; }
+      previewExternalModelPlacement(extModel(a.model), ov);
+    },
+    extGizmo(a) {
+      if (typeof a.on !== "boolean") throw new Error("on");
+      if (a.on) showExternalModelGizmo(extModel(a.model)); else hidePlacementGizmo();
+    },
+    // модели на сервере изменились (загрузка/сохранение/удаление) — слой сцены перечитывает их
+    async extRefresh(a) {
+      if (!isInt(a.objectId)) throw new Error("objectId");
+      await refreshExternalModelsInOpenScene(a.objectId);
+      post({ evt: "ext-refreshed", objectId: a.objectId });
+    },
+  });
+
   const COMMANDS_EL = {
     // Контракты выбранного объекта (то, что движок получил вместе со схемой): только скаляры, для выбора контракта в оболочке
     getContracts() {

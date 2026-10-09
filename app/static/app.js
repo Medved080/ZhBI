@@ -36792,6 +36792,14 @@ async function refreshExternalModelsInOpenScene(objectId) {
   }
 }
 
+// «Окно настроек», которое режимы поверх 3D прячут на время работы и возвращают по окончании. В V1 это модалка
+// #external-models-backdrop. В кадре сцены V2 (EMBED_SCENE) окно настроек — в оболочке, а модалка V1 в документе кадра
+// лишняя: «вернуть» её по окончании значило бы показать поверх сцены окно V1 — подставляем неподключённый элемент.
+function externalModelsBackdropForTools() {
+  if (EMBED_SCENE) return document.createElement("div");
+  return document.getElementById("external-models-backdrop");
+}
+
 // Настройка положения внешней модели мышью прямо в открытой 3D-сцене (§8
 // задания) — общее ядро для МФР и ЖБИ, отличаются только: где взять
 // canvas/camera/controls/группу, плоскость перетаскивания (у какого мира
@@ -37252,7 +37260,7 @@ function beginExternalModelPlacement(model, callbacks) {
       showPlacementGizmo(mfr3d.scene, "mfr", group.position, placementGizmoExtentsMm(model));
       return startExternalModelPlacementOnPlane({
         canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
-        backdrop: document.getElementById("external-models-backdrop"), group,
+        backdrop: externalModelsBackdropForTools(), group,
         planeNormal: new THREE.Vector3(0, 0, 1), rotateAxis: new THREE.Vector3(0, 0, 1),
         worldDeltaToOffsetDelta: (d) => ({ dOffsetX: d.x, dOffsetY: d.y }),
         angleOfPoint: (p) => Math.atan2(p.y - group.position.y, p.x - group.position.x),
@@ -37279,7 +37287,7 @@ function beginExternalModelPlacement(model, callbacks) {
       showPlacementGizmo(state.view3d.scene, "zhbi", group.position, placementGizmoExtentsMm(model));
       return startExternalModelPlacementOnPlane({
         canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
-        backdrop: document.getElementById("external-models-backdrop"), group,
+        backdrop: externalModelsBackdropForTools(), group,
         planeNormal: new THREE.Vector3(0, 1, 0), rotateAxis: new THREE.Vector3(0, 1, 0),
         worldDeltaToOffsetDelta: (d) => ({ dOffsetX: d.x, dOffsetY: -d.z }),
         angleOfPoint: (p) => Math.atan2(p.x - group.position.x, p.z - group.position.z),
@@ -37308,7 +37316,7 @@ function beginExternalModelCalibration(model, callbacks) {
       const origin = mfrExternalModels.origin, low = mfrExternalModels.low;
       return externalModelsBridge.beginPointPairCalibration({
         THREE, canvas: mfr3d.renderer.domElement, camera: mfr3d.camera, controls: mfr3d.controls,
-        backdrop: document.getElementById("external-models-backdrop"),
+        backdrop: externalModelsBackdropForTools(),
         scene: mfr3d.scene, group, excludeObjects: mfrExternalModels.layer.getAllGroups(),
         sourceAnchorXY: [model.source_anchor_mm.x, model.source_anchor_mm.y],
         objectAnchorXY: [model.object_anchor_mm.x, model.object_anchor_mm.y],
@@ -37327,7 +37335,7 @@ function beginExternalModelCalibration(model, callbacks) {
     if (group) {
       return externalModelsBridge.beginPointPairCalibration({
         THREE, canvas: state.view3d.renderer.domElement, camera: state.view3d.camera, controls: state.view3d.controls,
-        backdrop: document.getElementById("external-models-backdrop"),
+        backdrop: externalModelsBackdropForTools(),
         scene: state.view3d.scene, group, excludeObjects: zhbiExternalModels.layer.getAllGroups(),
         sourceAnchorXY: [model.source_anchor_mm.x, model.source_anchor_mm.y],
         objectAnchorXY: [model.object_anchor_mm.x, model.object_anchor_mm.y],

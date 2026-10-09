@@ -87,12 +87,25 @@ const AUTO_STATUS_LABELS = {
   insufficient: "недоступно",
 };
 
+// Панель живёт в двух оболочках: модалка V1 (по умолчанию) и страница/окно V2 (app/static/v2/external-models-panel.js).
+// Всё, что зависит от оболочки, — необязательные deps, V1 их не передаёт:
+//   setHostVisible(bool) — спрятать/вернуть окно панели на время режимов поверх 3D (V1: модалка #external-models-backdrop);
+//   confirm(текст) → Promise<bool> — подтверждение (V1: window.confirm);
+//   onDirtyChange(bool) — есть несохранённый черновик (V1: флаг модалки для общего сторожа закрытия);
+//   confirmUpload({file, kind, parsed}) → Promise<bool> — подтверждение загрузки после разбора файла (V1: нет);
+//   onUploadError(error, noteEl) — дополнительные действия при отказе загрузки (V2: проверка «дошёл ли файл до сервера»).
+// beginPlacement/beginCalibration/previewPlacement/showGizmo/hideGizmo — инструменты 3D; без них соответствующих кнопок нет.
+// beginPlacement/beginCalibration могут вернуть результат синхронно (V1) или обещанием (V2: сцена в кадре за мостом).
 export function renderExternalModelsPanel(container, deps) {
   const { objectId, canEdit, api, escapeHtml, showToast, onChanged, beginPlacement, beginCalibration, previewPlacement, showGizmo, hideGizmo } = deps;
+  const confirmAsk = deps.confirm || ((text) => Promise.resolve(window.confirm(text)));
+  const setHostVisible = deps.setHostVisible
+    || ((on) => document.getElementById("external-models-backdrop")?.classList.toggle("open", on));
   let models = [];
   const drafts = new Map(); // modelId -> {offsetXM, offsetYM, rotationDeg, name}
   let activeGesture = null; // {modelId, stop()} — не больше одного разом
   let activeCalibration = null; // {modelId, stop()} — тоже не больше одного и не одновременно с activeGesture
+  let startingTool = false;     // ждём подтверждения старта режима от сцены (в V2 она в кадре, ответ приходит позже)
 
   function draftFor(model) {
     if (!drafts.has(model.id)) {
@@ -241,7 +254,7 @@ export function renderExternalModelsPanel(container, deps) {
     floatingNumbersPanel.el.remove();
     floatingNumbersPanel = null;
     window.removeEventListener("keydown", onFloatingNumbersKeyDown);
-    document.getElementById("external-models-backdrop")?.classList.add("open");
+    setHostVisible(true);
     if (hideGizmo) hideGizmo();
     render();
   }
@@ -253,7 +266,7 @@ export function renderExternalModelsPanel(container, deps) {
   function openFloatingNumbers(model) {
     if (floatingNumbersPanel) closeFloatingNumbers();
     const d = draftFor(model);
-    document.getElementById("external-models-backdrop")?.classList.remove("open");
+    setHostVisible(false);
     // Гизмо осей X/Y/Z (живой запрос пользователя 2026-09-15: «обозначение
     // осей... куда двигаем») — прямо в 3D-сцене, а не в этой HTML-панели:
     // показывается на весь заход в режим, положение обновляет сама
@@ -265,6 +278,7 @@ export function renderExternalModelsPanel(container, deps) {
         ${numFieldHtml(model.id, cssClass, key, step, value)}
       </label>`;
     const panel = document.createElement("div");
+    panel.className = "em-floating";
     panel.style.cssText = "position:fixed; top:16px; left:50%; transform:translateX(-50%); "
       + "z-index:1000; background:rgba(20,24,32,.92); padding:12px 16px; border-radius:8px; "
       + "display:flex; align-items:flex-end; gap:14px; box-shadow:0 4px 16px rgba(0,0,0,.35)";
@@ -306,9 +320,11 @@ export function renderExternalModelsPanel(container, deps) {
   // событий input/change на DOM нет вовсе, backdrop.dataset.dirty не
   // выставился бы сам. Синхронизируем явно при каждой перерисовке.
   function syncDirtyFlag() {
+    const dirty = models.some(isDirty);
+    if (deps.onDirtyChange) deps.onDirtyChange(dirty);
     const backdrop = container.closest(".modal-backdrop");
     if (!backdrop) return;
-    if (models.some(isDirty)) backdrop.dataset.dirty = "1";
+    if (dirty) backdrop.dataset.dirty = "1";
     else delete backdrop.dataset.dirty;
   }
 
@@ -567,13 +583,13 @@ export function renderExternalModelsPanel(container, deps) {
       }
     }));
 
-    container.querySelectorAll(".em-placement").forEach((btn) => btn.addEventListener("click", () => {
+    container.querySelectorAll(".em-placement").forEach((btn) => btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.modelId);
       if (activeGesture && activeGesture.modelId === id) {
         activeGesture.stop(); // повторный клик — досрочная отмена (пока диалог виден, до скрытия)
         return;
       }
-      if (activeGesture) return; // один жест разом
+      if (activeGesture || startingTool) return; // один жест разом
       const model = models.find((m) => m.id === id);
       const d = draftFor(model);
       // Жест должен продолжать ТЕКУЩИЙ черновик (числовые поля могли уже
@@ -597,7 +613,10 @@ export function renderExternalModelsPanel(container, deps) {
       // перетаскивания; «Отмена»/Esc обязаны откатить черновик к этому
       // снимку, а не только визуально откатить группу в 3D (§5).
       const draftSnapshot = { offsetXM: d.offsetXM, offsetYM: d.offsetYM, rotationDeg: d.rotationDeg };
-      const result = beginPlacement(modelForGesture, {
+      startingTool = true;
+      let result;
+      try {
+        result = await beginPlacement(modelForGesture, {
         onPreview: (xMm, yMm, rotationDeg) => {
           d.offsetXM = mmToM(xMm);
           d.offsetYM = mmToM(yMm);
@@ -617,29 +636,36 @@ export function renderExternalModelsPanel(container, deps) {
           activeGesture = null;
           render();
         },
-      });
+        });
+      } finally {
+        startingTool = false;
+      }
       if (!result.ok) {
         showToast(result.reason || "Настройка положения сейчас недоступна", "error");
         return;
       }
-      activeGesture = { modelId: id, stop: result.stop };
+      // Режим мог уже завершиться, пока ждали подтверждения старта (оболочка V2 — ответ из кадра приходит позже)
+      if (!result.finished) activeGesture = { modelId: id, stop: result.stop };
       render();
     }));
 
-    container.querySelectorAll(".em-calibrate").forEach((btn) => btn.addEventListener("click", () => {
+    container.querySelectorAll(".em-calibrate").forEach((btn) => btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.modelId);
       if (activeCalibration && activeCalibration.modelId === id) {
         activeCalibration.stop(); // повторный клик — досрочная отмена
         return;
       }
-      if (activeCalibration || activeGesture) return; // один режим разом
+      if (activeCalibration || activeGesture || startingTool) return; // один режим разом
       const model = models.find((m) => m.id === id);
       // Калибровка сама двигает/крутит группу по мере выбора точек — своя
       // точка отсчёта, черновик драг-жеста здесь ни при чём. Результат
       // применяется ТОЛЬКО в draft (§5 задания: до «Сохранить» ничего не
       // пишем), пользователь подтверждает обычной кнопкой «Сохранить».
       const d = draftFor(model);
-      const result = beginCalibration(model, {
+      startingTool = true;
+      let result;
+      try {
+        result = await beginCalibration(model, {
         onApply: ({ offsetXMm, offsetYMm, rotationDeg }) => {
           d.offsetXM = mmToM(offsetXMm);
           d.offsetYM = mmToM(offsetYMm);
@@ -652,12 +678,15 @@ export function renderExternalModelsPanel(container, deps) {
           activeCalibration = null;
           render();
         },
-      });
+        });
+      } finally {
+        startingTool = false;
+      }
       if (!result.ok) {
         showToast(result.reason || "Совмещение по точкам сейчас недоступно", "error");
         return;
       }
-      activeCalibration = { modelId: id, stop: result.stop };
+      if (!result.finished) activeCalibration = { modelId: id, stop: result.stop };
       render();
     }));
 
@@ -739,7 +768,7 @@ export function renderExternalModelsPanel(container, deps) {
       if (!targetId) { showToast("Выберите модель, на которую перенести привязку", "error"); return; }
       const sourceModel = models.find((m) => m.id === id);
       const targetModel = models.find((m) => m.id === targetId);
-      if (!confirm(
+      if (!await confirmAsk(
         `Перенести привязку «${sourceModel.name}» на «${targetModel.name}»? ` +
         `Это осмысленно ТОЛЬКО если оба FBX-файла заведомо из одного и того же источника координат ` +
         `(например, один и тот же экспорт сцены). Текущий черновик «${targetModel.name}» будет заменён — ` +
@@ -816,6 +845,11 @@ export function renderExternalModelsPanel(container, deps) {
           const { THREE, FBXLoader, loadExternalModelFbx } = await ensureExternalModelsLoaded();
           const buf = await file.arrayBuffer();
           const parsed = await loadExternalModelFbx({ arrayBuffer: buf, THREE, FBXLoader, kind });
+          if (deps.confirmUpload && !(await deps.confirmUpload({ file, kind, parsed }))) {
+            parsed.dispose();
+            setUploadNote("Загрузка отменена.");
+            return;
+          }
           setUploadNote(`Разобрано: ${parsed.meshCount} меш(ей), ${parsed.triangleCount} треугольников, ` +
             `${parsed.textureCount} текстур. Загрузка на сервер…`);
           const meta = {
@@ -846,6 +880,7 @@ export function renderExternalModelsPanel(container, deps) {
           // геометрии для сравнения нет вовсе) — раньше `!outcome.
           // applicable` тихо игнорировался, и человек не видел, что
           // автосовмещение вообще не пыталось сработать.
+          let alignText = "";
           if (kind === "facade") {
             setUploadNote("Модель загружена. Поиск автоматического совмещения по контурам стен объекта…");
             try {
@@ -866,37 +901,38 @@ export function renderExternalModelsPanel(container, deps) {
                 method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patchBody),
               });
               if (dbStatus === "confident") {
-                showToast("Фасад совмещён автоматически по контурам стен объекта — проверьте результат", "info");
+                alignText = "Фасад совмещён автоматически по контурам стен объекта — проверьте результат"; showToast(alignText, "info");
               } else if (dbStatus === "low_confidence") {
                 const d = draftFor(created);
                 d.offsetXM = mmToM(outcome.placement.offsetXMm);
                 d.offsetYM = mmToM(outcome.placement.offsetYMm);
                 d.rotationDeg = outcome.placement.rotationDeg;
-                showToast(`Совмещение найдено приблизительно (${reason}) — проверьте черновик и нажмите «Сохранить»`, "warning");
+                alignText = `Совмещение найдено приблизительно (${reason}) — проверьте черновик и нажмите «Сохранить»`; showToast(alignText, "warning");
               } else if (dbStatus === "ambiguous") {
                 const d = draftFor(created);
                 d.ambiguousCandidates = outcome.candidates;
-                showToast(`Найдено несколько вариантов совмещения (${reason}) — выберите вариант в карточке модели`, "warning");
+                alignText = `Найдено несколько вариантов совмещения (${reason}) — выберите вариант в карточке модели`; showToast(alignText, "warning");
               } else {
-                showToast(`Автоматическое совмещение не выполнено: ${reason}. Используйте «Совместить по точкам» или кнопку «Совместить автоматически» после уточнения модели МФР.`, "warning");
+                alignText = `Автоматическое совмещение не выполнено: ${String(reason).replace(/[.\s]+$/, "")}. Используйте «Совместить по точкам» или кнопку «Совместить автоматически» после уточнения модели МФР.`; showToast(alignText, "warning");
               }
             } catch (alignError) {
               // Ошибка автосовмещения НЕ должна маскировать успешную
               // загрузку самой модели — она уже есть на сервере как есть.
-              showToast(`Модель загружена, но автосовмещение не удалось: ${alignError.message || alignError}`, "warning");
+              alignText = `Модель загружена, но автосовмещение не удалось: ${alignError.message || alignError}`; showToast(alignText, "warning");
             }
           }
 
           parsed.dispose();
           models = [...models, created];
           if (kind !== "facade") showToast("Модель загружена", "info");
-          uploadNote = { text: `Модель «${created.name}» загружена.`, bad: false };
+          uploadNote = { text: `Модель «${created.name}» загружена.${alignText ? " " + alignText : ""}`, bad: false };
           render();
           onChanged && onChanged();
         } catch (e) {
           const причина = e.message || "Не удалось загрузить модель";
           setUploadNote(`Не загружено: ${причина}`, true);
           showToast(причина, "error");
+          if (deps.onUploadError) deps.onUploadError(e, container.querySelector("#em-upload-status"));
         } finally {
           fileInput.value = "";
         }
@@ -912,5 +948,16 @@ export function renderExternalModelsPanel(container, deps) {
   }
 
   reload();
-  return { reload };
+  return {
+    reload,
+    // Есть ли несохранённый черновик и идёт ли режим поверх 3D — оболочка V2 спрашивает перед закрытием окна/уходом со страницы
+    isDirty: () => models.some(isDirty),
+    isToolActive: () => Boolean(activeGesture || activeCalibration || floatingNumbersPanel || startingTool),
+    // Снять активный режим (жест/калибровку/плавающие числа) без применения — окно закрывают или уходят со страницы
+    stopTools: () => {
+      if (activeGesture) activeGesture.stop();
+      if (activeCalibration) activeCalibration.stop();
+      if (floatingNumbersPanel) closeFloatingNumbers();
+    },
+  };
 }

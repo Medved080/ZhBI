@@ -21,6 +21,7 @@ import { anyModalDirty, guardModals } from "./mfr-common.js";
 import { writeFilterSnapshot, queueFilteredReportOpen } from "./scheme-filter-snapshot.js";
 import { createWorkspaceMiniReports } from "./workspace-mini-reports.js";
 import { takeLocate } from "./locate-handoff.js";
+import { createWorkspaceExternalModels } from "./workspace-external-models.js";
 
 const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
@@ -146,6 +147,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     },
   });
   let reportSignature = "";
+  // Внешние 3D-модели (FBX): окно загрузки/настройки с инструментами на сцене (кадр — по мосту, команды ext*)
+  const extm = createWorkspaceExternalModels({ api, send, getObjectId: () => curObject, getScene: () => sc, mfr });
 
   function onMessage(e) {
     // принимаем только сообщения от НАШЕГО кадра и с нашего origin
@@ -189,6 +192,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       al.cand = { elementType: m.elementType, mark: m.mark, items: m.items }; al.candAsked = true; paintPanel();
     } else if (m.evt === "search-result" && Array.isArray(m.items)) {
       if (qInput && m.text === qInput.value) paintFound(m);
+    } else if (m.evt === "ext-op") {
+      extm.onEvent(m);
     } else if (m.evt === "notice") {
       notice = String(m.message || "").slice(0, 300); paintStatus();
     } else if (m.evt === "cmd-error") {
@@ -791,7 +796,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       ${mfr && sc?.mfr?.layers?.length ? `<h4>Слои</h4>${sc.mfr.layers.map((l) => `<label class="ws-check"><input type="checkbox" data-mlayer="${esc(l.key)}" ${l.on ? "checked" : ""} ${l.disabled ? "disabled" : ""}> <span>${esc(l.label)}</span></label>`).join("")}` : ""}
       ${zones.length ? `<h4>Зоны на схеме</h4>${zones.map((z) => `<label class="ws-check"><input type="checkbox" data-zone="${esc(z.category)}" ${z.on ? "checked" : ""}> <span>${esc(z.category === "Кран" ? "Краны" : "Захватки")}</span></label>`).join("")}` : ""}
       ${!mfr && sc?.labels?.length ? `<h4>Подписи</h4>${sc.labels.map((l) => `<label class="ws-check"><input type="checkbox" data-label-type="${esc(l.type)}" ${l.on ? "checked" : ""}> <span>${esc(l.type)}</span></label>${l.dates === null ? "" : `<label class="ws-check ws-check-sub"><input type="checkbox" data-label-dates="${esc(l.type)}" ${l.dates ? "checked" : ""} ${l.on ? "" : "disabled"}> <span>Даты</span></label>`}`).join("")}<p class="v2-muted">Как в V1: действует до перезагрузки схемы; с чего начинать — «Видимость подписей» в настройках.</p>` : ""}
-      ${!mfr && sc?.external ? `<h4>Внешние 3D-модели (в 3D)</h4>${[["models", "Благоустройство"], ["facades", "Фасады из FBX"]].map(([k, t]) => `<label class="ws-check"><input type="checkbox" data-ext="${k}" ${sc.external[k] ? "checked" : ""}> <span>${t}</span></label>`).join("")}<p class="v2-muted">Если модели объекта загружены. Действует до перезагрузки схемы, как в V1.</p>` : ""}
+      ${!mfr && sc?.external ? `<h4>Внешние 3D-модели (в 3D)</h4>${[["models", "Благоустройство"], ["facades", "Фасады из FBX"]].map(([k, t]) => `<label class="ws-check"><input type="checkbox" data-ext="${k}" ${sc.external[k] ? "checked" : ""}> <span>${t}</span></label>`).join("")}<p class="v2-muted">Если модели объекта загружены. Действует до перезагрузки схемы, как в V1.</p>${extm.buttonHtml()}` : ""}
+      ${mfr ? `<h4>Внешние 3D-модели (в 3D)</h4>${extm.buttonHtml()}` : ""}
       ${!mfr && !picker && sc?.hatch ? hatchHtml() : ""}
       <h4>Масштаб</h4><div class="ws-actions"><button type="button" class="v2-btn" data-tool="fit">Вписать в экран</button></div></div>`;
   }
@@ -820,6 +826,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     body.querySelectorAll("[data-pkrem]").forEach((b) => b.addEventListener("click", () => { onlyRemainder = !onlyRemainder; paintPanel(); }));
     panels.bind(body);
     ops.bind(body);
+    extm.bind(body);
     mbp?.bind(body, { selectedBlocks: () => (sc?.mfr?.selectedBlocks || []).map(Number) });
     body.querySelectorAll("[data-al]").forEach((b) => b.addEventListener(b.tagName === "SELECT" ? "change" : "click", () => {
       const a = b.dataset.al;
@@ -1052,22 +1059,24 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     getAssistantContext: () => ({ elementIds: assistantIds,
       selectedIds: sc?.loaded ? [...new Set([...(sc.multiIds || []), ...(sc.selectedId ? [sc.selectedId] : [])])].slice(0,100) : [],
       filters: JSON.stringify({ view:sc?.view,shown:sc?.shown,total:sc?.total,excluded:sc?.excluded }).slice(0,3000) }),
-    hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved(),
+    hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved() || extm.isDirty(),
     guardLeave: async () => {
       if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
+      if (extm.isOpen() && !(await extm.close())) return false;   // окно внешних 3D-моделей: несохранённое положение
       return ops.guardLeave();
     },
     // Смена объекта в шапке V2: тот же кадр получает команду (кадр сам сбрасывает несовместимую выборку и фильтры,
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
+      extm.close(true);
       assistantIds = null; curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },
     destroy() {
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
-      clearTimeout(qTimer); clearTimeout(stripRetry); stopFrame(); queue.length = 0; mbp?.destroy();
+      clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();
       const side = shellSide(); if (side) side.hidden = navWasHidden;
     },
   };
