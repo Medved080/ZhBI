@@ -113,3 +113,6 @@
 .hc-filters .hc-picker { min-width: 0; }
 .hc-filters .hc-check { align-self: flex-end; height: 36px; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--hc-ink); padding: 0; }
 .hc-tbl td.nw, .hc-tbl .nw { white-space: nowrap; }
+.hc-tbl tr.unmapped td { background: color-mix(in srgb, var(--hc-warn) 10%, var(--hc-bg)); }
+.hc-suggest { margin-top: 4px; } .hc-suggest .hc-link { font-size: 12px; text-align: left; }
+.hc-check-inline { margin-left: 16px; white-space: nowrap; color: var(--hc-ink); } .hc-root.hc-root .hc-check-inline input { width: auto; vertical-align: middle; }

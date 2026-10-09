@@ -25,6 +25,7 @@ import io
 import json
 import re
 import sqlite3
+import difflib
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -215,6 +216,34 @@ def _contractor_identity(inn_cell: Optional[str]) -> tuple:
 
 # ------------------------------------------------------------------ analyze
 
+_WORD = re.compile(r"[\w]+", re.UNICODE)
+
+
+def _tokens(name: Optional[str]) -> set:
+    return set(_WORD.findall((name or "").lower()))
+
+
+def suggest_objects(name_1c: Optional[str], objects: list, limit: int = 3) -> list:
+    """Похожие объекты системы для несопоставленного объекта 1С: подсказка человеку, НЕ автосопоставление (решение 2026-10-09:
+    объекты сопоставляются вручную). Мера — наибольшая из похожести строк и доли общих слов; берутся только свободные объекты
+    (без привязки к другому GUID) с оценкой не ниже 0.35."""
+    base = _norm(name_1c)
+    tokens = _tokens(name_1c)
+    scored = []
+    for o in objects:
+        if o["guid_1c"]:
+            continue
+        other = _norm(o["name"])
+        ratio = difflib.SequenceMatcher(None, base, other).ratio()
+        ot = _tokens(o["name"])
+        overlap = len(tokens & ot) / max(1, min(len(tokens), len(ot))) if tokens and ot else 0
+        score = max(ratio, overlap * 0.9)
+        if score >= 0.35:
+            scored.append((score, o))
+    scored.sort(key=lambda t: -t[0])
+    return [{"id": o["id"], "name": o["name"], "score": round(score, 2)} for score, o in scored[:limit]]
+
+
 def analyze_history(conn: sqlite3.Connection, file_bytes: bytes) -> dict:
     parsed = parse_history(file_bytes)
     codes = {r["code"] for r in conn.execute("SELECT code FROM work_codifier")}
@@ -248,7 +277,7 @@ def analyze_history(conn: sqlite3.Connection, file_bytes: bytes) -> dict:
         groups.append({"guid": g["guid"], "name_1c": g["name_1c"], "rows": g["rows"], "contractors": len(g["contractors"]),
                        "date_from": g["date_from"].isoformat(), "date_to": g["date_to"].isoformat(),
                        "object_id": match["id"] if match else None, "object_name": match["name"] if match else None,
-                       "match": how})
+                       "match": how, "suggest": [] if match else suggest_objects(g["name_1c"], objects)})
     kinds = defaultdict(int)
     for _, c in contractors:
         if c is None:

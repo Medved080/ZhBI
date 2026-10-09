@@ -1768,6 +1768,9 @@ async function switchObject(objectId) {
     if (!можноЗакрытьФорму(открытаяНесохранённая)) return;
     открытаяНесохранённая.classList.remove("open");
   }
+  // Личные настройки схемы прежнего объекта (фильтры, «Вид», «Подписи») пишутся раз в несколько секунд; переход к другому объекту
+  // раньше терял всё, что человек успел поменять за последние секунды, — сохраняем сразу, пока scope ещё прежний.
+  uiStateFlush(true);
   state.objectId = objectId;
   // Имя чертежа принадлежит прежнему объекту. До загрузки нового плана
   // передавать его отчётам нельзя: на МФР-объекте чертежа вообще нет, а
@@ -1790,6 +1793,7 @@ async function switchObject(objectId) {
   state.multiSelectedIds.clear();
   lastServerTime = null;
   uiState.needRestore = true; uiState.ready = false;   // у нового объекта — свои сохранённые фильтры
+  uiState.labels = { vis: {}, dates: {} };
   // Оба набора фильтров: перечислимые категории и диапазоны дат (СМР,
   // поставка) — структуры разной природы (см. комментарий у
   // state.dateFilters), и сбрасывать надо обе, иначе диапазон дат от
@@ -6758,6 +6762,7 @@ function renderLabelToggles() {
       state.labelDatesVisibility[type] = isChecked;
       datesInput.checked = isChecked;
       datesInput.disabled = !isChecked;
+      uiStateSyncLabels(type);
 
       if (!isChecked) {
         // Скрыть — можно форсировать сразу: updateLabelCollisionVisibility
@@ -6803,6 +6808,7 @@ function renderLabelToggles() {
 
     datesInput.addEventListener("change", (e) => {
       state.labelDatesVisibility[type] = e.target.checked;
+      uiStateSyncLabels(type);
       refreshSubLabelsForType(type);
     });
     row.appendChild(datesLabel);
@@ -7780,6 +7786,7 @@ async function loadPlanInner(preserveView = true) {
   state.statusLabels = data.status_labels;
   state.labelVisibility = data.label_visibility;
   state.labelDatesVisibility = data.label_dates_visibility || {};
+  uiState.labelBase = { vis: { ...state.labelVisibility }, dates: { ...state.labelDatesVisibility } };   // умолчания объекта
   state.contracts = data.contracts || [];
   state.contractLineTotals = data.contract_line_totals || [];
   state.defaultContracts = data.default_contracts || {};
@@ -7789,6 +7796,7 @@ async function loadPlanInner(preserveView = true) {
   state.selectedId = null;
   const сохранённоеСостояние = await uiStateTake(состояниеОжидание);
   if (сохранённоеСостояние) uiStateApplyFilters(сохранённоеСостояние);
+  uiStateApplyLabels();   // отклонения «Подписей» от умолчаний объекта (и при перезагрузке данных в сеансе — не сбрасываем выбор человека)
 
   renderAxisGrid(data);
   renderZones();
@@ -7830,7 +7838,10 @@ async function loadPlanInner(preserveView = true) {
 // Как сохраняется: раз в 1,5 с снимок сравнивается с последним сохранённым; пишем, когда снимок ДВА такта подряд одинаков
 // (панорамирование и зум не шлют запрос на каждый кадр). Пока состояние объекта не прочитано с сервера, писать нельзя — иначе
 // только что открытая схема затёрла бы сохранённые настройки значениями по умолчанию.
-const uiState = { needRestore: true, ready: false, scope: null, lastSaved: null, pending: null, timer: null };
+const uiState = { needRestore: true, ready: false, scope: null, lastSaved: null, pending: null, timer: null,
+  // «Подписи» правой панели «Вид» (видимость марки по типу и её «Даты»): храним ТОЛЬКО отклонения от настройки объекта по умолчанию
+  // (её задаёт администратор, «Видимость подписей по типам»): так позднее изменение умолчаний не затирается чужой личной настройкой
+  labels: { vis: {}, dates: {} }, labelBase: { vis: {}, dates: {} } };
 
 function uiStateScope() { return state.objectId ? `scene:${state.objectId}` : null; }
 
@@ -7874,6 +7885,8 @@ function uiStateSnapshot() {
     stances: [...state.stanceZoneVisible],
     mode: v3.active ? (state.lowSpec ? "3d-light" : "3d") : "2d",
   };
+  if (Object.keys(uiState.labels.vis).length) snap.labels = { ...uiState.labels.vis };
+  if (Object.keys(uiState.labels.dates).length) snap.labelDates = { ...uiState.labels.dates };
   if (window.zhbiTimeline) snap.tl = zhbiTimeline.snapshot();
   if (state.guidFilter.text.trim()) snap.guid = state.guidFilter.text;
   if (state.view) snap.view2d = { x: state.view.x, y: state.view.y, w: state.view.w, h: state.view.h };
@@ -7903,6 +7916,24 @@ function uiStateApplyFilters(saved) {
   }
   if (Array.isArray(saved.stances)) saved.stances.forEach((k) => state.stanceZoneVisible.add(k));
   if (typeof saved.guid === "string") state.guidFilter.text = saved.guid.slice(0, 20000);
+  for (const [key, field] of [["labels", "vis"], ["labelDates", "dates"]]) {
+    uiState.labels[field] = {};
+    if (saved[key] && typeof saved[key] === "object") for (const [type, on] of Object.entries(saved[key])) if (typeof on === "boolean") uiState.labels[field][type] = on;
+  }
+}
+
+// «Подписи» (вкладка «Вид»): применить личные отклонения от умолчаний объекта к состоянию. Типов, которых в объекте уже нет, касаться нельзя.
+function uiStateApplyLabels() {
+  for (const [type, on] of Object.entries(uiState.labels.vis)) if (type in state.labelVisibility) state.labelVisibility[type] = on;
+  for (const [type, on] of Object.entries(uiState.labels.dates)) if (type in state.labelVisibility) state.labelDatesVisibility[type] = on;
+}
+
+// После щелчка по «Подписи» / «Даты» типа: пересчитать его отклонение от умолчания объекта (равно умолчанию — запись убирается).
+function uiStateSyncLabels(type) {
+  const base = uiState.labelBase;
+  const vis = state.labelVisibility[type] !== false, dates = state.labelDatesVisibility[type] !== false;
+  if (vis === (base.vis[type] !== false)) delete uiState.labels.vis[type]; else uiState.labels.vis[type] = vis;
+  if (dates === (base.dates[type] !== false)) delete uiState.labels.dates[type]; else uiState.labels.dates[type] = dates;
 }
 
 async function uiStateApplyView(saved) {

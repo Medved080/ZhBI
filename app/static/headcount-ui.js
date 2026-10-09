@@ -549,18 +549,27 @@ export function mountHeadcount(el, ctx) {
       <div class="hc-sum"><div><b>${an.rows_valid.toLocaleString("ru-RU")}</b> строк</div><div><b>${fmtDate(an.date_from)} — ${fmtDate(an.date_to)}</b> (${an.days} дн.)</div><div><b>${an.keys.toLocaleString("ru-RU")}</b> записей после сворачивания</div>
         <div><b>${an.duplicate_keys}</b> повторов ключа (с разными числами: ${an.conflicting_keys})</div><div><b>${k.total}</b> подрядчиков</div><div><b>${an.weekend_rows.toLocaleString("ru-RU")}</b> строк за выходные</div></div>
       ${warn.map((w) => `<div class="hc-callout warn">${esc(w)}</div>`).join("")}
-      <p class="hc-muted">Объектов 1С в файле: ${an.objects.length}; сопоставлено: <b id="hc-mapped">${mapped}</b>. Несопоставленные не загружаются.</p>
-      <div class="hc-scroll hc-maptbl"><table class="hc-tbl"><thead><tr><th>Объект 1С</th><th class="num">Строк</th><th>Период</th><th>Объект в системе</th></tr></thead><tbody>${an.objects.map((g) => `<tr>
+      <p class="hc-muted">Объектов 1С в файле: ${an.objects.length}; сопоставлено: <b id="hc-mapped">${mapped}</b>, не сопоставлено: <b id="hc-unmapped">${an.objects.length - mapped}</b>. Несопоставленные не загружаются; они показаны первыми, под названием — похожие объекты системы.
+        <label class="hc-check-inline"><input type="checkbox" id="hc-only-un" ${a.onlyUnmapped ? "checked" : ""}> только несопоставленные</label></p>
+      <div class="hc-scroll hc-maptbl"><table class="hc-tbl"><thead><tr><th>Объект 1С</th><th class="num">Строк</th><th>Период</th><th>Объект в системе</th></tr></thead><tbody>${[...an.objects].sort((x, y) => (a.mapping[x.guid] ? 1 : 0) - (a.mapping[y.guid] ? 1 : 0)).filter((g) => !a.onlyUnmapped || !a.mapping[g.guid]).map((g) => `<tr class="${a.mapping[g.guid] ? "" : "unmapped"}">
         <td>${esc(g.name_1c || "—")}<div class="hc-small hc-muted">${esc(g.guid)}</div></td><td class="num">${g.rows.toLocaleString("ru-RU")}</td><td class="hc-small">${fmtDate(g.date_from)} — ${fmtDate(g.date_to)}</td>
-        <td><select data-guid="${esc(g.guid)}"><option value="">— не загружать —</option>${an.candidates.map((o) => `<option value="${o.id}" ${a.mapping[g.guid] === o.id ? "selected" : ""} ${o.guid_1c && o.guid_1c !== g.guid ? "disabled" : ""}>${esc(o.name)}${o.guid_1c && o.guid_1c !== g.guid ? " (уже привязан к другому GUID)" : ""}</option>`).join("")}</select>${g.match ? `<span class="hc-badge">${g.match === "guid" ? "по GUID" : "по названию"}</span>` : ""}</td></tr>`).join("")}</tbody></table></div>
+        <td><select data-guid="${esc(g.guid)}"><option value="">— не загружать —</option>${an.candidates.map((o) => `<option value="${o.id}" ${a.mapping[g.guid] === o.id ? "selected" : ""} ${o.guid_1c && o.guid_1c !== g.guid ? "disabled" : ""}>${esc(o.name)}${o.guid_1c && o.guid_1c !== g.guid ? " (уже привязан к другому GUID)" : ""}</option>`).join("")}</select>${g.match ? `<span class="hc-badge">${g.match === "guid" ? "по GUID" : "по названию"}</span>` : ""}${!a.mapping[g.guid] && g.suggest && g.suggest.length ? `<div class="hc-suggest hc-small">Похоже: ${g.suggest.map((x) => `<button type="button" class="hc-link" data-pick="${esc(g.guid)}" data-obj="${x.id}" title="Сходство ${Math.round(x.score * 100)}%">${esc(x.name)}</button>`).join(" · ")}</div>` : ""}</td></tr>`).join("")}</tbody></table></div>
       <div class="hc-bar"><button type="button" class="hc-btn" id="hc-his-dry" ${a.busy ? "disabled" : ""}>Проверить загрузку без записи</button><button type="button" class="hc-btn primary" id="hc-his-go" ${a.busy || !mapped ? "disabled" : ""}>Загрузить</button></div>`;
     box.querySelectorAll("[data-guid]").forEach((s) => s.addEventListener("change", () => {
       a.mapping[s.dataset.guid] = s.value ? Number(s.value) : null;
       const used = new Map(); let dup = false;
       for (const [g, o] of Object.entries(a.mapping)) if (o) { if (used.has(o)) dup = true; used.set(o, g); }
-      pane.querySelector("#hc-mapped").textContent = Object.values(a.mapping).filter(Boolean).length;
+      const n = Object.values(a.mapping).filter(Boolean).length;
+      pane.querySelector("#hc-mapped").textContent = n; pane.querySelector("#hc-unmapped").textContent = an.objects.length - n;
       s.setCustomValidity(dup ? "Один объект выбран для двух GUID" : ""); if (dup) s.reportValidity();
+      s.closest("tr").classList.toggle("unmapped", !a.mapping[s.dataset.guid]);
     }));
+    box.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+      const sel = box.querySelector(`select[data-guid="${b.dataset.pick}"]`);
+      sel.value = b.dataset.obj; sel.dispatchEvent(new Event("change", { bubbles: true }));   // выбор человека, как если бы он выбрал сам
+      b.closest(".hc-suggest")?.remove();
+    }));
+    box.querySelector("#hc-only-un")?.addEventListener("change", (e) => { a.onlyUnmapped = e.target.checked; paintAnalysis(); });
     const run = async (dry) => {
       a.busy = true; a.error = ""; paintAdmin();
       try {

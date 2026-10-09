@@ -112,3 +112,12 @@ res = hi.apply_history(conn, hist, {G1: o1, G2: o2}, user=admin)
 try: hi.apply_history(conn, hist, {G2: o1}); ok(False, "объект уже привязан к другому GUID")
 except HTTPException as e: ok(e.status_code == 409, "объект с другим GUID — 409")
 print("ЗАГРУЗКА: ВСЁ ПРОШЛО")
+
+# подсказки для несопоставленных объектов 1С
+objs = [{"id": 1, "name": "Балашиха, областная больница", "guid_1c": None}, {"id": 2, "name": "Нагатинский затон, жилой дом", "guid_1c": None},
+        {"id": 3, "name": "Балашиха, поликлиника", "guid_1c": "x"}, {"id": 4, "name": "Совсем другое", "guid_1c": None}]
+sg = hi.suggest_objects("Балашиха, областная больница (корп. 2)", objs)
+ok(sg and sg[0]["id"] == 1, "подсказка: самое похожее название первым")
+ok(all(x["id"] != 3 for x in sg), "подсказка: объекты, уже привязанные к другому GUID, не предлагаются")
+ok(hi.suggest_objects("ZZZ QQQ", objs) == [], "подсказка: непохожее не предлагается")
+print("ПОДСКАЗКИ ПРОШЛИ")
