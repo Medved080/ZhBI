@@ -175,3 +175,13 @@ ok(_lw(_io.BytesIO(x.body)).active.max_row - 1 == hl["total"], "Excel журна
 ok(hc.list_records(object_ids=None, date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, limit=10, offset=0, user=nobody)["total"] == 0,
    "записи: без грантов — пусто")
 print("ПРОСМОТР ПРОШЁЛ")
+
+# ---- умолчания: отчёт на последний день с данными, подсказки при пустом объекте
+jd = rep(as_of=None)
+last_d = db.get_connection().execute("SELECT MAX(work_date) FROM headcount_records WHERE object_id IN (?,?) AND work_date <= ?", (obj, obj2, hc.now_msk().date().isoformat())).fetchone()[0]
+ok(jd["as_of"] == last_d and jd["total"]["fact_day"] > 0, "отчёт без даты — на последний день с данными в выборке, а не «вчера»")
+ok(hc.get_day(object_id=obj, day="2020-01-01", user=admin)["last_date"] == last_d or hc.get_day(object_id=obj, day="2020-01-01", user=admin)["last_date"] is not None, "день: подсказка «последний день с данными»")
+empty_obj = [r["id"] for r in db.get_connection().execute("SELECT id FROM objects WHERE id NOT IN (?, ?) ORDER BY id LIMIT 1", (obj, obj2))][0]
+re_ = hc.list_records(object_ids=str(empty_obj), date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, limit=10, offset=0, user=admin)
+ok(re_["total"] == 0 and re_["all_total"] > 0, "записи по пустому объекту: подсказка, сколько их по всем доступным")
+print("УМОЛЧАНИЯ ПРОШЛИ")

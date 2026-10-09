@@ -341,8 +341,10 @@ def _day_payload(conn, object_id: int, work_date: date) -> dict:
         (object_id, work_date.isoformat())).fetchall()
     items = [_record_out(r) for r in rows]
     due = deadline_for(work_date)
+    last = conn.execute("SELECT MAX(work_date) FROM headcount_records WHERE object_id = ? AND work_date <= ?",
+                        (object_id, now_msk().date().isoformat())).fetchone()[0]
     return {
-        "date": work_date.isoformat(), "deadline": due.isoformat(), "overdue_now": now_msk() > due,
+        "date": work_date.isoformat(), "last_date": last, "deadline": due.isoformat(), "overdue_now": now_msk() > due,
         "rows": items, "total": sum(i["workers"] for i in items),
     }
 
@@ -505,7 +507,7 @@ def _readable_object_ids(conn, user, wanted: Optional[list]) -> list:
 
 @global_router.get("/report")
 def report(levels: str = Query("object", description="Уровни через запятую из: smu, object, section, work, contractor"),
-           as_of: Optional[str] = Query(None, description="Опорный день (по умолчанию — вчера)"),
+           as_of: Optional[str] = Query(None, description="Опорный день (по умолчанию — последний день с данными в выборке)"),
            date_from: Optional[str] = None, date_to: Optional[str] = None,
            object_ids: Optional[str] = Query(None, description="Объекты через запятую; по умолчанию все доступные"),
            smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = Query(
@@ -517,8 +519,7 @@ def report(levels: str = Query("object", description="Уровни через з
     level_list = [x.strip() for x in levels.split(",") if x.strip()]
     if not level_list or any(x not in _LEVELS for x in level_list) or len(set(level_list)) != len(level_list):
         raise HTTPException(status_code=400, detail="levels: список без повторов из smu, object, section, work, contractor")
-    ref = _parse_date(as_of, "Опорный день") if as_of else now_msk().date() - timedelta(days=1)
-    week_from, month_from = ref - timedelta(days=6), ref.replace(day=1)
+    ref = _parse_date(as_of, "Опорный день") if as_of else None   # не задан — последний день с данными в выборке (ниже)
     p_from = _parse_date(date_from, "Дата с") if date_from else None
     p_to = _parse_date(date_to, "Дата по") if date_to else None
     wanted = None
@@ -531,7 +532,7 @@ def report(levels: str = Query("object", description="Уровни через з
     try:
         ids = _readable_object_ids(conn, user, wanted)
         if not ids:
-            return _empty_report(level_list, ref)
+            return _empty_report(level_list, ref or now_msk().date() - timedelta(days=1))
         where, params = [f"r.object_id IN ({','.join('?' * len(ids))})"], list(ids)
         if smu_id is not None:
             where.append("o.smu_id = ?"); params.append(smu_id)
@@ -545,6 +546,11 @@ def report(levels: str = Query("object", description="Уровни через з
         join = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id LEFT JOIN smu_catalog s ON s.id = o.smu_id "
                 "JOIN work_codifier w ON w.id = r.codifier_id JOIN headcount_contractors c ON c.id = r.contractor_id "
                 "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE " + " AND ".join(where))
+
+        if ref is None:
+            last = conn.execute("SELECT MAX(r.work_date) " + join + " AND r.work_date <= ?", (*params, now_msk().date().isoformat())).fetchone()[0]
+            ref = date.fromisoformat(last) if last else now_msk().date() - timedelta(days=1)
+        week_from, month_from = ref - timedelta(days=6), ref.replace(day=1)
 
         def days(start: date, end: date) -> int:
             return conn.execute("SELECT COUNT(DISTINCT r.work_date) " + join + " AND r.work_date BETWEEN ? AND ?",
@@ -725,6 +731,14 @@ def _data_item(r) -> dict:
     }
 
 
+def _all_readable_total(conn, user) -> int:
+    """Сколько записей численности видно человеку по ВСЕМ доступным объектам (подсказка, когда по выбранному объекту пусто)."""
+    ids = _readable_object_ids(conn, user, None)
+    if not ids:
+        return 0
+    return conn.execute(f"SELECT COUNT(*) FROM headcount_records WHERE object_id IN ({','.join('?' * len(ids))})", ids).fetchone()[0]
+
+
 @global_router.get("/records")
 def list_records(object_ids: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
                  contractor_q: Optional[str] = None, work_code: Optional[str] = None, source: Optional[str] = None,
@@ -737,11 +751,12 @@ def list_records(object_ids: Optional[str] = None, date_from: Optional[str] = No
         flt = _data_filters(conn, user, alias="r", object_ids=object_ids, date_from=date_from, date_to=date_to,
                             contractor_q=contractor_q, work_code=work_code, source=source, late=late)
         if flt is None:
-            return {"items": [], "total": 0, "sum_workers": 0, "offset": offset, "limit": limit}
+            return {"items": [], "total": 0, "sum_workers": 0, "offset": offset, "limit": limit, "all_total": _all_readable_total(conn, user)}
         where, params = " AND ".join(flt[0]), flt[1]
         total, sum_w = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(r.workers), 0) {_DATA_FROM} WHERE {where}", params).fetchone()
         rows = conn.execute(f"{_DATA_COLS}{_DATA_FROM} WHERE {where} {_DATA_ORDER} LIMIT ? OFFSET ?", (*params, limit, offset)).fetchall()
-        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "offset": offset, "limit": limit}
+        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "offset": offset, "limit": limit,
+                "all_total": _all_readable_total(conn, user) if not total else total}
     finally:
         conn.close()
 

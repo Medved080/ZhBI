@@ -53,7 +53,7 @@ export function mountHeadcount(el, ctx) {
     tab: "input", works: null, contractors: null, loadError: "",
     date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
     contractorForm: null,
-    rep: { preset: "objects", scope: "object", asOf: addDays(todayIso(), -1), from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
+    rep: { preset: "objects", scope: "object", asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
     data: { mode: "records", scope: "object", from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
   };
@@ -111,6 +111,7 @@ export function mountHeadcount(el, ctx) {
       </div>
       ${st.dayError ? `<div class="hc-callout bad" role="alert">${esc(st.dayError)}</div>` : ""}
       <p id="hc-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
+      ${d && !d.rows.length && d.last_date && d.last_date !== st.date ? `<div class="hc-callout">За этот день данных нет. Последний день с данными по объекту — <button type="button" class="hc-link" id="hc-lastday">${esc(fmtDate(d.last_date))}</button>.</div>` : ""}
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Человек</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
         <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
       ${ctx.canWrite && !future ? `<div class="hc-add" id="hc-add"></div>
@@ -119,6 +120,7 @@ export function mountHeadcount(el, ctx) {
     pane.querySelector("#hc-prev").addEventListener("click", () => gotoDay(addDays(st.date, -1)));
     pane.querySelector("#hc-next").addEventListener("click", () => gotoDay(addDays(st.date, 1)));
     pane.querySelector("#hc-date").addEventListener("change", (e) => e.target.value && gotoDay(e.target.value));
+    pane.querySelector("#hc-lastday")?.addEventListener("click", () => gotoDay(d.last_date));
     paintRows();
     if (ctx.canWrite && !future) {
       paintAdd();
@@ -297,7 +299,7 @@ export function mountHeadcount(el, ctx) {
     pane.innerHTML = `
       <div class="hc-bar hc-wrap">
         <div class="hc-seg" role="group" aria-label="Срез">${PRESETS.map((p) => `<button type="button" class="hc-btn ${r.preset === p.key ? "on" : ""}" data-preset="${p.key}">${esc(p.title)}</button>`).join("")}</div>
-        <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}"></label>
+        <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}" title="Пусто — последний день с данными"></label>
         <label>Период с<input type="date" id="hc-r-from" value="${esc(r.from)}"></label>
         <label>по<input type="date" id="hc-r-to" value="${esc(r.to)}"></label>
         <label>Объекты<select id="hc-r-scope"><option value="object" ${r.scope === "object" ? "selected" : ""}>Только этот объект</option><option value="all" ${r.scope === "all" ? "selected" : ""}>Все доступные мне</option></select></label>
@@ -307,7 +309,7 @@ export function mountHeadcount(el, ctx) {
       <p class="hc-muted hc-small">Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
       <div id="hc-r-body"></div>`;
     pane.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => { r.preset = b.dataset.preset; r.toggled = new Set(); loadReport(); }));
-    ["asof", "from", "to"].forEach((k) => pane.querySelector(`#hc-r-${k}`).addEventListener("change", (e) => { r[{ asof: "asOf", from: "from", to: "to" }[k]] = e.target.value; }));
+    ["asof", "from", "to"].forEach((k) => pane.querySelector(`#hc-r-${k}`).addEventListener("change", (e) => { r[{ asof: "asOf", from: "from", to: "to" }[k]] = e.target.value; if (k === "asof") r.asOfUser = !!e.target.value; }));
     pane.querySelector("#hc-r-scope").addEventListener("change", (e) => { r.scope = e.target.value; loadReport(); });
     pane.querySelector("#hc-r-go").addEventListener("click", loadReport);
     pane.querySelector("#hc-r-xlsx")?.addEventListener("click", async () => {
@@ -318,7 +320,8 @@ export function mountHeadcount(el, ctx) {
 
   function reportQuery() {
     const r = st.rep, preset = PRESETS.find((p) => p.key === r.preset);
-    const q = new URLSearchParams({ levels: preset.levels.join(","), as_of: r.asOf });
+    const q = new URLSearchParams({ levels: preset.levels.join(",") });
+    if (r.asOfUser && r.asOf) q.set("as_of", r.asOf);   // не задана человеком — сервер берёт последний день с данными
     if (r.from && r.to) { q.set("date_from", r.from); q.set("date_to", r.to); }
     if (r.scope === "object") q.set("object_ids", String(ctx.objectId));
     return q.toString();
@@ -327,7 +330,7 @@ export function mountHeadcount(el, ctx) {
   async function loadReport() {
     const r = st.rep;
     r.loading = true; r.error = ""; paintReportBody();
-    try { r.data = await api.get(`/headcount/report?${reportQuery()}`); } catch (e) { r.error = errText(e); r.data = null; }
+    try { r.data = await api.get(`/headcount/report?${reportQuery()}`); if (!r.asOfUser) r.asOf = r.data.as_of || ""; } catch (e) { r.error = errText(e); r.data = null; }
     r.loading = false;
     if (!dead && st.tab === "report") paintReportBody();
   }
@@ -352,6 +355,8 @@ export function mountHeadcount(el, ctx) {
     if (r.loading) { box.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     if (r.error) { box.innerHTML = `<div class="hc-callout bad" role="alert">${esc(r.error)}</div>`; return; }
     const d = r.data;
+    const asofInput = pane.querySelector("#hc-r-asof");
+    if (asofInput && !r.asOfUser && r.asOf) asofInput.value = r.asOf;   // день, который выбрал сервер
     if (!d || !d.rows.length) { box.innerHTML = `<p class="hc-muted">Данных за выбранное окно нет.</p>`; return; }
     const hasPeriod = d.total.period_sum != null;
     const tree = buildTree(d.rows, d.levels);
@@ -438,7 +443,13 @@ export function mountHeadcount(el, ctx) {
     if (d.loading) { box.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     if (d.error) { box.innerHTML = `<div class="hc-callout bad" role="alert">${esc(d.error)}</div>`; return; }
     const r = d.res;
-    if (!r || !r.total) { box.innerHTML = `<p class="hc-muted">По выбранным условиям данных нет.</p>`; return; }
+    if (!r || !r.total) {
+      const filtered = !!(d.from || d.to || d.contractor.trim() || d.workId || d.source || d.late);
+      const more = d.mode === "records" && !all && !filtered && r && r.all_total;
+      box.innerHTML = `<p class="hc-muted">По выбранным условиям данных нет.</p>${more ? `<div class="hc-callout warn">По этому объекту записей нет, а по всем доступным вам объектам их ${r.all_total.toLocaleString("ru-RU")}. <button type="button" class="hc-btn" id="hc-d-all">Показать по всем объектам</button></div>` : ""}`;
+      box.querySelector("#hc-d-all")?.addEventListener("click", () => { d.scope = "all"; d.offset = 0; d.res = null; paintData(); });
+      return;
+    }
     const from = r.offset + 1, to = r.offset + r.items.length;
     const sourceText = (x) => (x === "import" ? "загрузка из SharePoint" : x === "bot" ? "бот" : "форма");
     const head = `<div class="hc-bar"><span><strong>${from.toLocaleString("ru-RU")}–${to.toLocaleString("ru-RU")}</strong> из ${r.total.toLocaleString("ru-RU")}</span>
