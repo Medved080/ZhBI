@@ -46,8 +46,9 @@
 .hc-muted { color: var(--hc-muted); } .hc-small { font-size: 12px; } .hc-wrap { align-items: flex-end; } .hc-grow { flex: 1 1 260px; min-width: 220px; }
 .hc-msg { min-height: 1.2em; margin: 4px 0; } .hc-msg.ok { color: var(--hc-good); } .hc-msg.bad, .hc-muted.bad { color: var(--hc-bad); } .hc-msg.warn { color: var(--hc-warn); }
 .hc-deadline { font-size: 13px; color: var(--hc-muted); } .hc-deadline.over { color: var(--hc-warn); font-weight: 600; }
-.hc-scroll { overflow: auto; max-width: 100%; max-height: 60vh; border: 1px solid var(--hc-line); border-radius: 8px; }
-.hc-maptbl { max-height: 45vh; }
+.hc-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--hc-line); border-radius: 8px; }
+/* Своей вертикальной прокрутки у таблиц нет (2026-10-09, замечание пользователя: в невысоком окне таблица сопоставления
+   показывала две строки в прокрутке внутри прокрутки): длинная таблица тянет страницу, а страница (окно V1, main V2) прокручивается. */
 .hc-tbl { border-collapse: collapse; width: 100%; }
 .hc-tbl th, .hc-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--hc-line); text-align: left; vertical-align: middle; }
 .hc-tbl th { position: sticky; top: 0; background: var(--hc-soft); font-weight: 600; z-index: 1; white-space: nowrap; }

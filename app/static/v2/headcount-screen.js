@@ -9,7 +9,8 @@ import { saveBlob } from "./exchange-common.js";
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 export function mountHeadcountScreen(el, { screen, objectId, api, rights, groupTitle }) {
-  el.className = "v2-page v2-app";
+  // НЕ «v2-app»: это класс экранов-приложений с внутренней прокруткой (overflow: hidden), длинная страница в нём обрезалась без полосы прокрутки
+  el.className = "v2-page";
   const admin = !!rights?.system_admin;
   const canWrite = admin || rights?.features?.headcount === "write";
   el.innerHTML = `<div class="v2-container v2-screen">

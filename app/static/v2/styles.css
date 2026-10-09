@@ -1256,10 +1256,14 @@ button.ws-tile:hover { background: var(--surface); }
 .v2-step-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .v2-step-hint { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
 .v2-step-scope { display: flex; flex-direction: column; gap: 4px; font-size: 0.8125rem; }
-.v2-btn-soft, .v2-step input[type="file"]::file-selector-button { border: 1px solid transparent; border-radius: 10px; background: var(--sel); color: var(--accent); font-weight: 600; padding: 9px 16px; cursor: pointer; }
-.v2-btn-soft:hover:not(:disabled), .v2-step input[type="file"]::file-selector-button:hover { background: var(--sel); border-color: var(--accent); }
-.v2-step input[type="file"] { font-size: 0.8125rem; max-width: 100%; }
-.v2-step input[type="file"]::file-selector-button { margin-right: 10px; }
+.v2-btn-soft, input[type="file"]::file-selector-button { border: 1px solid transparent; border-radius: 10px; background: var(--sel); color: var(--accent); font-weight: 600; padding: 9px 16px; cursor: pointer; }
+.v2-btn-soft:hover:not(:disabled), input[type="file"]::file-selector-button:hover { background: var(--sel); border-color: var(--accent); }
+input[type="file"] { font-size: 0.8125rem; max-width: 100%; }
+input[type="file"]::file-selector-button { margin-right: 10px; }
+input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default; }
+/* Правила выше НЕ привязаны к .v2-step (2026-10-09): они были только внутри шагов «Обмена данными», и каждый новый экран с полем
+   выбора файла (классификатор адресов, подложка карты, массовая правка блоков, снимок базы, вложения, численность) получал
+   серую системную кнопку браузера. Поле файла везде выглядит одинаково и берёт цвета текущей гаммы. */
 .v2-bk-foot { justify-content: space-between; }
 .v2-bk-foot .v2-btn { border-radius: 10px; padding: 9px 18px; font-weight: 600; }
 .v2-bk-foot-info { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 0.8125rem; }

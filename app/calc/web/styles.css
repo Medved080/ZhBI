@@ -615,6 +615,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-excel-download{display:inline-block;padding:8px 14px;border:1px solid var(--pc-accent);border-radius:7px;color:var(--pc-accent);font-weight:600;text-decoration:none}
 #precast-concept .pc-excel-download:hover{background:var(--sel)}
 #precast-concept .pc-excel-file{display:flex;flex-direction:column;gap:4px;font-size:12px}
+/* кнопка выбора файла — как остальные кнопки калькулятора (2026-10-09: оставалась серой системной) */
+#precast-concept input[type="file"]::file-selector-button{font:inherit;color:inherit;border:1px solid var(--pc-line);background:var(--pc-bg);border-radius:7px;padding:8px 12px;margin-right:10px;cursor:pointer}
+#precast-concept input[type="file"]::file-selector-button:hover{background:var(--surface)}
+#precast-concept input[type="file"]:disabled::file-selector-button{opacity:.5;cursor:default}
 #precast-concept .pc-excel-errors{border:1px solid var(--bad);border-radius:8px;padding:10px 14px;margin:10px 0;color:var(--bad);max-width:900px}
 #precast-concept .pc-excel-errors ul{margin:6px 0 0;padding-left:18px}
 #precast-concept .pc-excel-msg{margin:10px 0}
