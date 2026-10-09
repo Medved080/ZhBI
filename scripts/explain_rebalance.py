@@ -67,6 +67,7 @@ def main() -> int:
         zones = conn.execute(
             "SELECT (SELECT name FROM zones WHERE id = ?) AS crane, (SELECT name FROM zones WHERE id = ?) AS stance", (e["zone_crane_id"], e["zone_stance_id"])).fetchone()
         consistent = e["id"] in sc._history_consistent_ids(conn, [e["id"]])
+        reason_opt = sc._rebalance_eligible(e, None, "", True)      # с опцией «включить изделия без плановой даты»
         reason = sc._rebalance_eligible(e, None, "")
         if reason is None and e["contract_id"] is None:
             reason = "у изделия нет контракта (в балансировку входят только изделия с контрактом)"
@@ -84,6 +85,8 @@ def main() -> int:
         late = days(need, e["planned_delivery_date"])
         print(f"  просрочка плановой относительно требуемой: {('нет данных' if late is None else f'{late} дн.' if late > 0 else 'в срок (запас ' + str(-late) + ' дн.)')}")
         print(f"  входит в балансировку: {'ДА' if reason is None else 'НЕТ — ' + reason}")
+        if reason is not None and reason_opt is None and e["contract_id"] is not None and consistent:
+            print("  → войдёт, если в документе включить «изделия без плановой даты поставки» (в расчёте — самое последнее в очереди марки)")
         if not consistent:
             # подробности проверки согласованности: кэш (статус, фактическая дата) против истории статусов
             hist = conn.execute("SELECT id, status, changed_at, changed_by, comment FROM status_history WHERE element_id = ? "
@@ -125,16 +128,19 @@ def main() -> int:
                   "изделие без требуемой даты срочности не имеет и может быть только источником ранней даты")
         if same_obj:
             oid = ea["object_id"]
-            for pool in (False, True):
-                plan = sc._rebalance_plan(conn, oid, None, "", None, pool)
+            for pool, und in ((False, False), (True, False), (False, True), (True, True)):
+                plan = sc._rebalance_plan(conn, oid, None, "", None, pool, und)
                 by = {i["element_id"]: i for i in plan["items"]}
-                print(f"\n  расчёт по объекту ({'общий пул дат между контрактами' if pool else 'внутри контрактов'}), «все контракты × все марки»:")
+                print(f"\n  расчёт по объекту ({'общий пул дат между контрактами' if pool else 'внутри контрактов'}"
+                      f"{', С изделиями без плановой даты' if und else ''}), «все контракты × все марки»:")
                 for x in (a, b):
                     i = by.get(x["id"])
                     if i is None:
                         print(f"    id {x['id']}: в расчёте НЕТ (не прошёл отбор или его группа не меняется: в группах без изменений строки не показываются)")
                     else:
-                        print(f"    id {x['id']}: дата {i['plan_old']} → {i['plan_new']}; партнёр {i['partner_id'] or '—'}; "
+                        old = "без даты" if i.get("undated_old") else f"{i['plan_old']}{' (факт)' if i.get('fact_old') else ''}"
+                        new = "без даты" if i.get("undated_new") else f"{i['plan_new']}{' (факт)' if i.get('fact_new') else ''}"
+                        print(f"    id {x['id']}: дата {old} → {new}; партнёр {i['partner_id'] or '—'}; "
                               f"просрочка {i['delay_old']} → {i['delay_new']}; в обмене: {'да' if i['pair_no'] else 'нет'}")
     conn.close()
     shutil.rmtree(tmp, ignore_errors=True)
