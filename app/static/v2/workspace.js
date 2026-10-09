@@ -511,9 +511,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       const excluded = g.items.reduce((n, it) => n + (it.on ? 0 : 1) + (it.branches ? Object.values(it.branches).reduce((m, arr) => m + arr.filter((x) => !x.on).length, 0) : 0), 0);
       const open = openGroups.has(g.id);
       const q = (groupSearch.get(g.id) || "").toLowerCase();
-      const many = g.items.length > 12;
+      // Поле поиска — у длинных групп и у ВСЕГДА у дерева «Тип элемента» (марки лежат в его ветках, типов мало, а марок сотни: как «Поиск марки…» в V1)
+      const many = g.items.length > 12 || g.kind === "tree";
       const items = g.items.filter((it) => !q || it.label.toLowerCase().includes(q) || (it.branches && Object.values(it.branches).some((arr) => arr.some((x) => x.label.toLowerCase().includes(q)))));
-      const body = !open ? "" : `<div class="ws-fbody">${many ? `<input type="search" class="ws-fsearch" data-search="${esc(g.id)}" placeholder="Найти…" value="${esc(groupSearch.get(g.id) || "")}" aria-label="Найти в группе «${esc(g.title)}»">` : ""}
+      const body = !open ? "" : `<div class="ws-fbody">${many ? `<input type="search" class="ws-fsearch" data-search="${esc(g.id)}" placeholder="${g.kind === "tree" ? "Поиск марки…" : "Найти…"}" value="${esc(groupSearch.get(g.id) || "")}" aria-label="Найти в группе «${esc(g.title)}»">` : ""}
         <div class="ws-factions"><button type="button" data-all="${esc(g.id)}" data-on="1">Все</button><button type="button" data-all="${esc(g.id)}" data-on="0">Ничего</button></div>
         ${items.map((it) => {
           if (g.kind !== "tree") return itemHtml(g, it);
