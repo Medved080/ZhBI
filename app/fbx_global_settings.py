@@ -11,10 +11,21 @@ from typing import Optional
 
 MAX_DEPTH = 6
 
-SUPPORTED_AXIS_PROFILE = {
-    "up_axis": 1, "up_axis_sign": 1,
-    "front_axis": 2, "front_axis_sign": 1,
-    "coord_axis": 0, "coord_axis_sign": 1,
+# Поддержанные профили осей. y_up — первый приёмочный файл
+# (0507_Aviomotornaya_ZU_5_Ground.fbx); z_up — экспорт Blender (файлы
+# 0511_77_04_0003004_2315, 2026-10-09). Должно совпадать с
+# app/static/external-models/fbx-global-settings.js.
+SUPPORTED_AXIS_PROFILES = {
+    "y_up": {
+        "up_axis": 1, "up_axis_sign": 1,
+        "front_axis": 2, "front_axis_sign": 1,
+        "coord_axis": 0, "coord_axis_sign": 1,
+    },
+    "z_up": {
+        "up_axis": 2, "up_axis_sign": 1,
+        "front_axis": 1, "front_axis_sign": -1,
+        "coord_axis": 0, "coord_axis_sign": 1,
+    },
 }
 
 
@@ -171,10 +182,19 @@ def read_fbx_global_settings(buf: bytes) -> dict:
     return result
 
 
+def axis_profile_name(settings: dict) -> Optional[str]:
+    """Имя поддержанного профиля осей или None, если комбинация не поддержана."""
+    for name, p in SUPPORTED_AXIS_PROFILES.items():
+        if all(int(settings[k]) == v for k, v in p.items()):
+            return name
+    return None
+
+
 def assert_supported_axis_profile(settings: dict) -> None:
-    p = SUPPORTED_AXIS_PROFILE
-    if (int(settings["up_axis"]) != p["up_axis"] or int(settings["up_axis_sign"]) != p["up_axis_sign"]
-            or int(settings["front_axis"]) != p["front_axis"] or int(settings["front_axis_sign"]) != p["front_axis_sign"]
-            or int(settings["coord_axis"]) != p["coord_axis"] or int(settings["coord_axis_sign"]) != p["coord_axis_sign"]):
+    if axis_profile_name(settings) is None:
         raise FbxGlobalSettingsError(
-            "Комбинация осей FBX не поддерживается в этой версии импорта — поддержан только профиль первого приёмочного файла.")
+            "Комбинация осей FBX не поддерживается в этой версии импорта "
+            f"(UpAxis={settings['up_axis']}/{settings['up_axis_sign']}, "
+            f"FrontAxis={settings['front_axis']}/{settings['front_axis_sign']}, "
+            f"CoordAxis={settings['coord_axis']}/{settings['coord_axis_sign']}). "
+            "Поддержаны Y вверх (первый приёмочный файл) и Z вверх (экспорт Blender).")

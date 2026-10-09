@@ -6,17 +6,18 @@
 // Docs/fbx-ground-implementation-task.md §4). Ошибка формата/версии/
 // комбинации осей — явный отказ, не угадывание.
 //
-// Первая и пока единственная поддерживаемая комбинация осей — профиль
-// файла 0507_Aviomotornaya_ZU_5_Ground.fbx: UpAxis=1 (+1), FrontAxis=2
-// (+1), CoordAxis=0 (+1). Другие комбинации отклоняются.
+// Поддерживаемые комбинации осей: y_up — профиль файла
+// 0507_Aviomotornaya_ZU_5_Ground.fbx (UpAxis=1/+1, FrontAxis=2/+1,
+// CoordAxis=0/+1); z_up — экспорт Blender, файлы 0511_77_04_0003004_2315
+// (UpAxis=2/+1, FrontAxis=1/−1, CoordAxis=0/+1). Другие отклоняются.
+// Должно совпадать с app/fbx_global_settings.py.
 
 const MAX_DEPTH = 6;
 const HEADER_MAGIC = "Kaydara FBX Binary  ";
 
-export const SUPPORTED_AXIS_PROFILE = {
-  upAxis: 1, upAxisSign: 1,
-  frontAxis: 2, frontAxisSign: 1,
-  coordAxis: 0, coordAxisSign: 1,
+export const SUPPORTED_AXIS_PROFILES = {
+  y_up: { upAxis: 1, upAxisSign: 1, frontAxis: 2, frontAxisSign: 1, coordAxis: 0, coordAxisSign: 1 },
+  z_up: { upAxis: 2, upAxisSign: 1, frontAxis: 1, frontAxisSign: -1, coordAxis: 0, coordAxisSign: 1 },
 };
 
 class Cursor {
@@ -173,19 +174,22 @@ export function readFbxGlobalSettings(buffer) {
   return result;
 }
 
-/** Отклоняет всё, кроме единственного подтверждённого профиля осей (§2, §4). */
+/** Имя поддержанного профиля осей ("y_up"/"z_up") или null. */
+export function axisProfileName(settings) {
+  for (const [name, p] of Object.entries(SUPPORTED_AXIS_PROFILES)) {
+    if (Object.keys(p).every((k) => settings[k] === p[k])) return name;
+  }
+  return null;
+}
+
+/** Отклоняет всё, кроме подтверждённых профилей осей (§2, §4). */
 export function assertSupportedAxisProfile(settings) {
-  const p = SUPPORTED_AXIS_PROFILE;
-  if (
-    settings.upAxis !== p.upAxis || settings.upAxisSign !== p.upAxisSign ||
-    settings.frontAxis !== p.frontAxis || settings.frontAxisSign !== p.frontAxisSign ||
-    settings.coordAxis !== p.coordAxis || settings.coordAxisSign !== p.coordAxisSign
-  ) {
+  if (axisProfileName(settings) === null) {
     throw new Error(
       "Комбинация осей FBX не поддерживается в этой версии импорта " +
       `(UpAxis=${settings.upAxis}/${settings.upAxisSign}, FrontAxis=${settings.frontAxis}/${settings.frontAxisSign}, ` +
       `CoordAxis=${settings.coordAxis}/${settings.coordAxisSign}). ` +
-      "Поддержан только профиль первого приёмочного файла.",
+      "Поддержаны Y вверх (первый приёмочный файл) и Z вверх (экспорт Blender).",
     );
   }
 }

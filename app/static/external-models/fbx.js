@@ -3,7 +3,7 @@
 // к каноническим координатам C (мм) с двойной точностью ДО записи в
 // Float32-буферы, лимиты геометрии/текстур. THREE и FBXLoader — явные
 // зависимости аргументов, глобалей не читает (см. §9 задания).
-import { readFbxGlobalSettings, assertSupportedAxisProfile } from "./fbx-global-settings.js";
+import { readFbxGlobalSettings, assertSupportedAxisProfile, axisProfileName } from "./fbx-global-settings.js";
 
 const DEFAULT_LIMITS = {
   maxTriangles: 2_000_000,
@@ -63,12 +63,26 @@ function waitForTextures(manager, timeoutMs) {
   return { done, settleIfIdle: () => { if (!started) finish(); } };
 }
 
-const AXIS_REMAP_ELEMENTS = [
-  1000, 0, 0, 0,
-  0, 0, -1000, 0,
-  0, 1000, 0, 0,
-  0, 0, 0, 1,
-];
+// F → C. y_up: C = 1000·(x, −z, y) (масштаб зашит, первый приёмочный файл
+// в метрах). z_up (Blender): геометрия уже в правой системе Z вверх, оси
+// совпадают с C — масштаб берётся из файла (mmPerUnit), не из константы.
+function axisRemapElements(profile, mmPerUnit) {
+  if (profile === "z_up") {
+    const k = mmPerUnit;
+    return [
+      k, 0, 0, 0,
+      0, k, 0, 0,
+      0, 0, k, 0,
+      0, 0, 0, 1,
+    ];
+  }
+  return [
+    1000, 0, 0, 0,
+    0, 0, -1000, 0,
+    0, 1000, 0, 0,
+    0, 0, 0, 1,
+  ];
+}
 
 function collectMeshes(root, THREE) {
   const meshes = [];
@@ -135,7 +149,7 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind
     throw new Error(`Слишком много треугольников (${Math.round(triangleCount)} > ${lim.maxTriangles}).`);
   }
 
-  const axisRemap = new THREE.Matrix4().set(...AXIS_REMAP_ELEMENTS);
+  const axisRemap = new THREE.Matrix4().set(...axisRemapElements(axisProfileName(settings), settings.mmPerUnit));
   const combinedByMesh = new Map();
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
   const v = new THREE.Vector3();
