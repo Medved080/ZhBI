@@ -185,3 +185,10 @@ empty_obj = [r["id"] for r in db.get_connection().execute("SELECT id FROM object
 re_ = hc.list_records(object_ids=str(empty_obj), date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, limit=10, offset=0, user=admin)
 ok(re_["total"] == 0 and re_["all_total"] > 0, "записи по пустому объекту: подсказка, сколько их по всем доступным")
 print("УМОЛЧАНИЯ ПРОШЛИ")
+
+# ---- перечень объектов для отбора собирается из фактических данных
+fc = hc.facets(user=admin)["objects"]
+ok({o["id"] for o in fc} == {obj, obj2} and all(o["records"] > 0 and o["date_from"] <= o["date_to"] for o in fc), "facets: только объекты, у которых есть записи")
+ok(hc.facets(user=nobody)["objects"] == [], "facets: без грантов — пусто")
+ok(rep(object_ids=f"{obj},{obj2}")["objects"] == 2, "отчёт: число объектов — по данным, а не по всем доступным")
+print("ОТБОР ПО ОБЪЕКТАМ ПРОШЁЛ")

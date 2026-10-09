@@ -94,3 +94,22 @@
 .hc-check { flex-direction: row !important; align-items: center; gap: 6px !important; padding-bottom: 6px; color: var(--hc-ink) !important; font-size: 13px !important; }
 .hc-root.hc-root .hc-check input { width: auto; }
 .hc-bar .hc-picker { min-width: 240px; }
+
+/* Панели фильтров (отчёт, «Все данные»): все поля одной высоты и выровнены по нижней кромке, подписи сверху; кнопки не прыгают на другую строку */
+.hc-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin: 8px 0; }
+.hc-filters > label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--hc-muted); }
+.hc-filters > .hc-btn, .hc-filters > .hc-seg { align-self: flex-end; }
+.hc-spacer { flex: 1 1 0; }
+.hc-root.hc-root .hc-filters input:not([type="checkbox"]), .hc-root.hc-root .hc-filters select, .hc-root.hc-root .hc-filters .hc-btn,
+.hc-root.hc-root .hc-bar input:not([type="checkbox"]), .hc-root.hc-root .hc-bar select, .hc-root.hc-root .hc-bar .hc-btn:not(.mini),
+.hc-root.hc-root .hc-addrow input, .hc-root.hc-root .hc-addrow select, .hc-root.hc-root .hc-addrow .hc-btn {
+  height: 36px; min-height: 36px; padding-top: 0; padding-bottom: 0; font: inherit; font-size: 14px; line-height: normal; box-sizing: border-box;
+}
+.hc-root.hc-root .hc-filters input[type="date"] { width: 140px; }
+.hc-root.hc-root .hc-f-obj select { width: 100%; text-overflow: ellipsis; }
+.hc-filters .hc-f-obj { flex: 1 1 220px; min-width: 200px; max-width: 420px; }
+.hc-root.hc-root .hc-f-ctr input { width: 210px; }
+.hc-filters .hc-grow { flex: 1 1 260px; min-width: 220px; }
+.hc-filters .hc-picker { min-width: 0; }
+.hc-filters .hc-check { align-self: flex-end; height: 36px; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--hc-ink); padding: 0; }
+.hc-tbl td.nw, .hc-tbl .nw { white-space: nowrap; }

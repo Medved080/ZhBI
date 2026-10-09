@@ -39,7 +39,7 @@ function ensureCss() {
 
 // Готовые срезы отчёта: порядок уровней вложенности (сервер: smu, object, section, work, contractor).
 const PRESETS = [
-  { key: "objects", title: "По объектам", levels: ["smu", "object", "section", "work"] },
+  { key: "objects", title: "По объектам", levels: ["object", "section", "work"] },
   { key: "contractors", title: "По подрядчикам", levels: ["contractor", "object", "work"] },
   { key: "works", title: "По работам", levels: ["section", "work", "contractor"] },
 ];
@@ -52,9 +52,9 @@ export function mountHeadcount(el, ctx) {
   const st = {
     tab: "input", works: null, contractors: null, loadError: "",
     date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
-    contractorForm: null,
-    rep: { preset: "objects", scope: "object", asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
-    data: { mode: "records", scope: "object", from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
+    contractorForm: null, facets: null,
+    rep: { preset: "objects", obj: null, bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
+    data: { mode: "records", obj: null, from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
   };
   const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"], ["data", "Все данные"]];
@@ -79,11 +79,25 @@ export function mountHeadcount(el, ctx) {
     paint();
   }
 
+  // объекты, по которым в системе есть численность (собираются сервером из фактических записей)
+  async function loadFacets() {
+    if (st.facets) return st.facets;
+    try { st.facets = (await api.get("/headcount/facets")).objects || []; } catch (e) { st.facets = []; }
+    // выбор по умолчанию: текущий объект, если по нему есть данные, иначе все объекты с данными
+    const mine = st.facets.some((o) => o.id === ctx.objectId) ? String(ctx.objectId) : "all";
+    if (st.rep.obj === null) st.rep.obj = mine;
+    if (st.data.obj === null) st.data.obj = mine;
+    return st.facets;
+  }
+  const objectOptions = (selected) => `<option value="all" ${selected === "all" ? "selected" : ""}>Все объекты с данными (${(st.facets || []).length})</option>${(st.facets || []).map((o) =>
+    `<option value="${o.id}" ${String(o.id) === String(selected) ? "selected" : ""}>${esc(o.name)} — ${o.records.toLocaleString("ru-RU")}</option>`).join("")}`;
+
   function paint() {
     if (dead) return;
     el.querySelectorAll("[data-tab]").forEach((b) => { const on = b.dataset.tab === st.tab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
     if (st.loadError) { pane.innerHTML = `<div class="hc-callout bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(st.loadError)} <button type="button" class="hc-btn" id="hc-retry">Повторить</button></div>`; pane.querySelector("#hc-retry").addEventListener("click", () => { st.loadError = ""; loadRefs(); }); return; }
     if (st.tab !== "admin" && (st.contractors === null || st.works === null)) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
+    if ((st.tab === "report" || st.tab === "data") && !st.facets) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; loadFacets().then(() => !dead && paint()); return; }
     ({ input: paintInput, contractors: paintContractors, report: paintReport, data: paintData, admin: paintAdmin })[st.tab]();
   }
 
@@ -211,7 +225,7 @@ export function mountHeadcount(el, ctx) {
     st.saving = true; paintDirty(); setMsg("Сохранение…");
     try {
       const res = await api.put(`/objects/${ctx.objectId}/headcount/records`, { date: st.date, rows });
-      st.day = res; st.added = []; st.changed = new Map(); st.history = null;
+      st.day = res; st.added = []; st.changed = new Map(); st.history = null; st.facets = null;
       st.msg = `Сохранено: добавлено ${res.created}, изменено ${res.changed}${res.late ? ". Внесено позже срока — записи отмечены как просроченные." : "."}`; st.msgKind = res.late ? "warn" : "ok";
     } catch (e) { st.msg = errText(e); st.msgKind = "bad"; }   // введённое остаётся на месте
     st.saving = false;
@@ -297,20 +311,28 @@ export function mountHeadcount(el, ctx) {
   function paintReport() {
     const r = st.rep;
     pane.innerHTML = `
-      <div class="hc-bar hc-wrap">
+      <div class="hc-filters">
         <div class="hc-seg" role="group" aria-label="Срез">${PRESETS.map((p) => `<button type="button" class="hc-btn ${r.preset === p.key ? "on" : ""}" data-preset="${p.key}">${esc(p.title)}</button>`).join("")}</div>
+        ${r.preset === "objects" ? `<label class="hc-check"><input type="checkbox" id="hc-r-smu" ${r.bySmu ? "checked" : ""}> сгруппировать по подразделениям</label>` : ""}
+        <span class="hc-spacer"></span>
+        <button type="button" class="hc-btn" id="hc-r-open">Развернуть всё</button><button type="button" class="hc-btn" id="hc-r-close">Свернуть</button>
+      </div>
+      <div class="hc-filters">
+        <label class="hc-f-obj">Объект<select id="hc-r-obj">${objectOptions(r.obj)}</select></label>
         <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}" title="Пусто — последний день с данными"></label>
         <label>Период с<input type="date" id="hc-r-from" value="${esc(r.from)}"></label>
         <label>по<input type="date" id="hc-r-to" value="${esc(r.to)}"></label>
-        <label>Объекты<select id="hc-r-scope"><option value="object" ${r.scope === "object" ? "selected" : ""}>Только этот объект</option><option value="all" ${r.scope === "all" ? "selected" : ""}>Все доступные мне</option></select></label>
-        <button type="button" class="hc-btn" id="hc-r-go">Обновить</button>
-        ${ctx.download ? `<button type="button" class="hc-btn" id="hc-r-xlsx">Выгрузить в Excel</button>` : ""}
+        <button type="button" class="hc-btn primary" id="hc-r-go">Обновить</button>
+        ${ctx.download ? `<button type="button" class="hc-btn" id="hc-r-xlsx" title="Выгрузить отчёт в Excel">В Excel</button>` : ""}
       </div>
       <p class="hc-muted hc-small">Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
       <div id="hc-r-body"></div>`;
-    pane.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => { r.preset = b.dataset.preset; r.toggled = new Set(); loadReport(); }));
+    pane.querySelector("#hc-r-obj").addEventListener("change", (e) => { r.obj = e.target.value; loadReport(); });
+    pane.querySelector("#hc-r-smu")?.addEventListener("change", (e) => { r.bySmu = e.target.checked; r.toggled = new Set(); loadReport(); });
+    pane.querySelector("#hc-r-open").addEventListener("click", () => { r.expand = "all"; r.toggled = new Set(); paintReportBody(); });
+    pane.querySelector("#hc-r-close").addEventListener("click", () => { r.expand = null; r.toggled = new Set(); paintReportBody(); });
+    pane.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => { r.preset = b.dataset.preset; r.toggled = new Set(); r.expand = null; r.data = null; paintReport(); }));
     ["asof", "from", "to"].forEach((k) => pane.querySelector(`#hc-r-${k}`).addEventListener("change", (e) => { r[{ asof: "asOf", from: "from", to: "to" }[k]] = e.target.value; if (k === "asof") r.asOfUser = !!e.target.value; }));
-    pane.querySelector("#hc-r-scope").addEventListener("change", (e) => { r.scope = e.target.value; loadReport(); });
     pane.querySelector("#hc-r-go").addEventListener("click", loadReport);
     pane.querySelector("#hc-r-xlsx")?.addEventListener("click", async () => {
       try { await ctx.download(`/headcount/report.xlsx?${reportQuery()}`, "Численность_отчёт.xlsx"); } catch (e) { r.error = errText(e); paintReportBody(); }
@@ -320,10 +342,11 @@ export function mountHeadcount(el, ctx) {
 
   function reportQuery() {
     const r = st.rep, preset = PRESETS.find((p) => p.key === r.preset);
-    const q = new URLSearchParams({ levels: preset.levels.join(",") });
+    const levels = (r.preset === "objects" && r.bySmu ? ["smu", ...preset.levels] : preset.levels).join(",");
+    const q = new URLSearchParams({ levels });
     if (r.asOfUser && r.asOf) q.set("as_of", r.asOf);   // не задана человеком — сервер берёт последний день с данными
     if (r.from && r.to) { q.set("date_from", r.from); q.set("date_to", r.to); }
-    if (r.scope === "object") q.set("object_ids", String(ctx.objectId));
+    if (r.obj && r.obj !== "all") q.set("object_ids", r.obj);
     return q.toString();
   }
 
@@ -362,7 +385,7 @@ export function mountHeadcount(el, ctx) {
     const tree = buildTree(d.rows, d.levels);
     const lines = [];
     const walk = (node) => [...node.children.values()].sort((a, b) => (b.sums.month_avg || 0) - (a.sums.month_avg || 0) || a.label.localeCompare(b.label, "ru")).forEach((n) => {
-      const leaf = n.children.size === 0, open = (n.depth < 1) !== r.toggled.has(n.path);   // по умолчанию раскрыт только верхний уровень
+      const leaf = n.children.size === 0, open = (r.expand === "all") !== r.toggled.has(n.path);   // по умолчанию всё свёрнуто: на верхнем уровне видны ВСЕ строки, раскрывают по клику или кнопкой   // по умолчанию раскрыт только верхний уровень
       lines.push(`<tr class="d${Math.min(n.depth, 3)}" data-path="${esc(n.path)}"><td style="padding-left:${8 + n.depth * 18}px">${leaf ? `<span class="hc-leaf"></span>` : `<button type="button" class="hc-tog" data-tog="${esc(n.path)}" aria-expanded="${open}">${open ? "▾" : "▸"}</button>`}${esc(n.label)}</td>
         <td class="num">${fmtNum(n.sums.fact_day)}</td><td class="num">${fmtNum(n.sums.week_avg)}</td><td class="num">${fmtNum(n.sums.month_avg)}</td>${hasPeriod ? `<td class="num">${fmtNum(n.sums.period_sum)}</td><td class="num">${fmtNum(n.sums.period_avg)}</td>` : ""}</tr>`);
       if (!leaf && open) walk(n);
@@ -382,7 +405,7 @@ export function mountHeadcount(el, ctx) {
   // =====================================================================  ВСЕ ДАННЫЕ (просмотр внесённого и загруженного)
   function dataQuery(extra = {}) {
     const d = st.data, q = new URLSearchParams();
-    if (d.scope === "object") q.set("object_ids", String(ctx.objectId));
+    if (d.obj && d.obj !== "all") q.set("object_ids", d.obj);
     if (d.from) q.set("date_from", d.from);
     if (d.to) q.set("date_to", d.to);
     if (d.contractor.trim()) q.set("contractor_q", d.contractor.trim());
@@ -395,25 +418,27 @@ export function mountHeadcount(el, ctx) {
   }
 
   function paintData() {
-    const d = st.data, all = d.scope === "all";
+    const d = st.data, all = !d.obj || d.obj === "all";
     pane.innerHTML = `
-      <div class="hc-bar hc-wrap">
+      <div class="hc-filters">
         <div class="hc-seg" role="group" aria-label="Что показывать"><button type="button" class="hc-btn ${d.mode === "records" ? "on" : ""}" data-mode="records">Записи</button><button type="button" class="hc-btn ${d.mode === "history" ? "on" : ""}" data-mode="history">История изменений</button></div>
-        <label>Объекты<select id="hc-d-scope"><option value="object" ${!all ? "selected" : ""}>Только этот объект</option><option value="all" ${all ? "selected" : ""}>Все доступные мне</option></select></label>
+        <label class="hc-f-obj">Объект<select id="hc-d-obj">${objectOptions(d.obj)}</select></label>
         <label>День с<input type="date" id="hc-d-from" value="${esc(d.from)}"></label>
         <label>по<input type="date" id="hc-d-to" value="${esc(d.to)}"></label>
-        <label>Подрядчик (название или ИНН)<input type="text" id="hc-d-ctr" value="${esc(d.contractor)}" placeholder="часть названия или ИНН"></label>
-        <label class="hc-grow">Вид работ (код и всё, что под ним)<div class="hc-picker" id="hc-d-work"></div></label>
-        <label>Источник<select id="hc-d-src"><option value="">любой</option><option value="form" ${d.source === "form" ? "selected" : ""}>форма</option><option value="import" ${d.source === "import" ? "selected" : ""}>загрузка из SharePoint</option></select></label>
         ${d.mode === "records" ? `<label class="hc-check"><input type="checkbox" id="hc-d-late" ${d.late ? "checked" : ""}> только просроченные</label>` : ""}
+      </div>
+      <div class="hc-filters">
+        <label class="hc-f-ctr">Подрядчик (название или ИНН)<input type="text" id="hc-d-ctr" value="${esc(d.contractor)}" placeholder="часть названия или ИНН"></label>
+        <label class="hc-grow">Вид работ (код и всё, что под ним)<div class="hc-picker" id="hc-d-work"></div></label>
+        <label>Источник<select id="hc-d-src"><option value="">любой</option><option value="form" ${d.source === "form" ? "selected" : ""}>форма</option><option value="import" ${d.source === "import" ? "selected" : ""}>из SharePoint</option></select></label>
         <button type="button" class="hc-btn primary" id="hc-d-go">Показать</button>
-        ${ctx.download ? `<button type="button" class="hc-btn" id="hc-d-xlsx">Выгрузить в Excel</button>` : ""}
+        ${ctx.download ? `<button type="button" class="hc-btn" id="hc-d-xlsx" title="Выгрузить весь отбор в Excel">В Excel</button>` : ""}
       </div>
       <div id="hc-d-body"></div>`;
     const picker = workPicker(pane.querySelector("#hc-d-work"), st.works);
     if (d.workId) picker.set(d.workId);
     const read = () => {
-      d.scope = pane.querySelector("#hc-d-scope").value; d.from = pane.querySelector("#hc-d-from").value; d.to = pane.querySelector("#hc-d-to").value;
+      d.obj = pane.querySelector("#hc-d-obj").value; d.from = pane.querySelector("#hc-d-from").value; d.to = pane.querySelector("#hc-d-to").value;
       d.contractor = pane.querySelector("#hc-d-ctr").value; d.source = pane.querySelector("#hc-d-src").value;
       d.late = !!pane.querySelector("#hc-d-late")?.checked; d.workId = picker.value();
     };
@@ -438,7 +463,7 @@ export function mountHeadcount(el, ctx) {
   }
 
   function paintDataBody() {
-    const d = st.data, box = pane.querySelector("#hc-d-body"), all = d.scope === "all";
+    const d = st.data, box = pane.querySelector("#hc-d-body"), all = !d.obj || d.obj === "all";
     if (!box) return;
     if (d.loading) { box.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     if (d.error) { box.innerHTML = `<div class="hc-callout bad" role="alert">${esc(d.error)}</div>`; return; }
@@ -447,7 +472,7 @@ export function mountHeadcount(el, ctx) {
       const filtered = !!(d.from || d.to || d.contractor.trim() || d.workId || d.source || d.late);
       const more = d.mode === "records" && !all && !filtered && r && r.all_total;
       box.innerHTML = `<p class="hc-muted">По выбранным условиям данных нет.</p>${more ? `<div class="hc-callout warn">По этому объекту записей нет, а по всем доступным вам объектам их ${r.all_total.toLocaleString("ru-RU")}. <button type="button" class="hc-btn" id="hc-d-all">Показать по всем объектам</button></div>` : ""}`;
-      box.querySelector("#hc-d-all")?.addEventListener("click", () => { d.scope = "all"; d.offset = 0; d.res = null; paintData(); });
+      box.querySelector("#hc-d-all")?.addEventListener("click", () => { d.obj = "all"; d.offset = 0; d.res = null; paintData(); });
       return;
     }
     const from = r.offset + 1, to = r.offset + r.items.length;
@@ -456,13 +481,13 @@ export function mountHeadcount(el, ctx) {
       ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: <strong>${r.sum_workers.toLocaleString("ru-RU")}</strong></span>` : ""}
       <button type="button" class="hc-btn mini" id="hc-d-prev" ${r.offset <= 0 ? "disabled" : ""}>◀ Назад</button><button type="button" class="hc-btn mini" id="hc-d-next" ${to >= r.total ? "disabled" : ""}>Вперёд ▶</button></div>`;
     const objCol = (name) => (all ? `<td>${esc(name)}</td>` : "");
-    const rows = d.mode === "records" ? r.items.map((i) => `<tr><td>${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
+    const rows = d.mode === "records" ? r.items.map((i) => `<tr><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
         <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td>
-        <td class="hc-small">Внесено: ${esc(fmtMoment(i.entered_at))}${i.entered_by ? " · " + esc(i.entered_by) : ""}<br>${i.late ? `<span class="hc-badge bad">просрочено${i.overdue_minutes ? " на " + fmtOverdue(i.overdue_minutes) : ""}</span> ` : ""}<span class="hc-badge">${esc(sourceText(i.source))}</span>${i.changes ? `<br>Изменено: ${esc(fmtMoment(i.updated_at))}${i.updated_by ? " · " + esc(i.updated_by) : ""} <span class="hc-badge">правок: ${i.changes}</span>` : ""}</td></tr>`).join("")
-      : r.items.map((i) => `<tr><td class="hc-small">${esc(fmtMoment(i.changed_at))}<br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td>${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
+        <td class="hc-small"><span class="nw">${esc(fmtMoment(i.entered_at))}</span>${i.entered_by ? " · " + esc(i.entered_by) : ""}<br>${i.late ? `<span class="hc-badge bad">просрочено${i.overdue_minutes ? " на " + fmtOverdue(i.overdue_minutes) : ""}</span> ` : ""}<span class="hc-badge">${esc(sourceText(i.source))}</span>${i.changes ? ` <span class="hc-badge" title="Последняя правка: ${esc(fmtMoment(i.updated_at))}${i.updated_by ? " · " + esc(i.updated_by) : ""}">правок: ${i.changes}</span>` : ""}</td></tr>`).join("")
+      : r.items.map((i) => `<tr><td class="hc-small"><span class="nw">${esc(fmtMoment(i.changed_at))}</span><br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
         <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td></tr>`).join("");
     const heads = d.mode === "records"
-      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Человек", "Кто и когда"]
+      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Человек", "Внесено (кто и когда)"]
       : ["Когда и кто изменил", "День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Было → стало"];
     box.innerHTML = `${head}<div class="hc-scroll"><table class="hc-tbl"><thead><tr>${heads.map((h) => `<th class="${h === "Человек" || h === "Было → стало" ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
     box.querySelector("#hc-d-prev").addEventListener("click", () => { d.offset = Math.max(0, d.offset - d.limit); loadData(); });
@@ -542,7 +567,7 @@ export function mountHeadcount(el, ctx) {
         const fd = new FormData(); fd.append("file", a.file); fd.append("mapping", JSON.stringify(a.mapping)); fd.append("dry_run", dry ? "true" : "false");
         const r = await ctx.upload("/headcount/import/apply", fd);
         a.result = `${dry ? "Проверка, ничего не записано — получилось бы: " : "Загружено: "}записей создано ${r.records_created}, обновлено ${r.records_updated}, без изменений ${r.records_unchanged}, оставлено как внесено в системе ${r.kept_form_records}; строк истории ${r.history_rows}; новых подрядчиков ${r.contractors_created}${Object.keys(r.skipped).length ? "; пропущено: " + Object.entries(r.skipped).map(([x, n]) => `${x} — ${n}`).join(", ") : ""}.`;
-        if (!dry) { st.day = null; st.contractors = null; loadRefs(); }
+        if (!dry) { st.day = null; st.contractors = null; st.facets = null; loadRefs(); }
       } catch (e) { a.error = errText(e); }
       a.busy = false; paintAdmin();
     };

@@ -601,7 +601,8 @@ def report(levels: str = Query("object", description="Уровни через з
         months = [{"month": m["m"], "avg": round(m["s"] / m["d"], 3) if m["d"] else 0, "days": m["d"]} for m in month_rows]
         return {"levels": level_list, "as_of": ref.isoformat(), "week_from": week_from.isoformat(), "month_from": month_from.isoformat(),
                 "week_days": week_days, "month_days": month_days, "period_days": period_days, "rows": out_rows,
-                "total": total, "months": months, "objects": len(ids)}
+                "total": total, "months": months,
+                "objects": conn.execute("SELECT COUNT(DISTINCT r.object_id) " + join + " AND r.work_date <= ?", (*params, ref.isoformat())).fetchone()[0]}
     finally:
         conn.close()
 
@@ -729,6 +730,24 @@ def _data_item(r) -> dict:
         "source": r["source"], "entered_at": r["entered_at"], "entered_by": _user_name(r, "ue"), "updated_at": r["updated_at"],
         "updated_by": _user_name(r, "uu"), "changes": max(0, r["hist"] - 1),
     }
+
+
+@global_router.get("/facets")
+def facets(user: sqlite3.Row = Depends(get_current_user)):
+    """Объекты, по которым в системе ЕСТЬ численность (и на чтение которых у человека есть право): для выбора в отчёте и в «Все данные».
+    Список собран из фактических записей, а не из справочника объектов, — пустых объектов в нём нет."""
+    conn = get_connection()
+    try:
+        ids = _readable_object_ids(conn, user, None)
+        if not ids:
+            return {"objects": []}
+        rows = conn.execute(
+            "SELECT r.object_id AS id, o.name, COUNT(*) AS records, MIN(r.work_date) AS date_from, MAX(r.work_date) AS date_to "
+            f"FROM headcount_records r JOIN objects o ON o.id = r.object_id WHERE r.object_id IN ({','.join('?' * len(ids))}) "
+            "GROUP BY r.object_id ORDER BY o.name", ids).fetchall()
+        return {"objects": sorted((dict(r) for r in rows), key=lambda x: (x["name"] or "").lower())}
+    finally:
+        conn.close()
 
 
 def _all_readable_total(conn, user) -> int:
