@@ -653,6 +653,204 @@ def report_xlsx(levels: str = Query("object"), as_of: Optional[str] = None, date
                     headers={"Content-Disposition": f"attachment; filename=\"headcount.xlsx\"; filename*=UTF-8''{quote(name)}"})
 
 
+# ------------------------------------------------------------------ просмотр всех данных: записи и журнал изменений
+
+EXPORT_ROW_LIMIT = 300_000   # предел выгрузки в Excel (лист Excel вмещает ~1 млн строк, но файл такого размера уже не открыть)
+SOURCE_TITLES = {"form": "форма", "import": "загрузка из SharePoint", "bot": "бот"}
+
+
+def _data_filters(conn, user, *, alias: str, object_ids: Optional[str], date_from: Optional[str], date_to: Optional[str],
+                  contractor_q: Optional[str], work_code: Optional[str], source: Optional[str], late: bool = False):
+    """Общие отбор и права для просмотра записей и журнала. Возвращает (WHERE-условия, параметры) или None, если читать нечего.
+    Названия подрядчиков сравниваются В PYTHON: SQLite без ICU не приводит кириллицу к одному регистру (Docs/DECISIONS.md)."""
+    wanted = None
+    if object_ids:
+        try:
+            wanted = [int(x) for x in object_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="object_ids: список чисел через запятую")
+    ids = _readable_object_ids(conn, user, wanted)
+    if not ids:
+        return None
+    where, params = [f"{alias}.object_id IN ({','.join('?' * len(ids))})"], list(ids)
+    if date_from:
+        where.append(f"{alias}.work_date >= ?"); params.append(_parse_date(date_from, "Дата с").isoformat())
+    if date_to:
+        where.append(f"{alias}.work_date <= ?"); params.append(_parse_date(date_to, "Дата по").isoformat())
+    if work_code:
+        where.append(f"{alias}.codifier_id IN (SELECT id FROM work_codifier WHERE code LIKE ? ESCAPE '\\')")
+        params.append(work_code.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+    if source:
+        if source not in SOURCES:
+            raise HTTPException(status_code=400, detail="source: form, import или bot")
+        where.append(f"{alias}.source = ?"); params.append(source)
+    if late:
+        where.append(f"{alias}.late = 1")
+    if contractor_q and contractor_q.strip():
+        needle = " ".join(contractor_q.split()).lower()
+        rows = conn.execute(
+            f"SELECT c.id, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn FROM headcount_contractors c "
+            f"LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE c.object_id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        match = [r["id"] for r in rows if needle in " ".join(f"{r['name_raw'] or ''} {r['cpn'] or ''} {r['inn_raw'] or ''}".split()).lower()]
+        if not match:
+            return None
+        where.append(f"{alias}.contractor_id IN ({','.join('?' * len(match))})"); params.extend(match)
+    return where, params
+
+
+_DATA_FROM = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id JOIN work_codifier w ON w.id = r.codifier_id "
+              "JOIN headcount_contractors c ON c.id = r.contractor_id LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
+              "LEFT JOIN users ue ON ue.id = r.entered_by LEFT JOIN users uu ON uu.id = r.updated_by ")
+_DATA_COLS = ("SELECT r.id, r.object_id, o.name AS object_name, r.work_date, r.workers, r.late, r.source, r.entered_at, r.updated_at, "
+              "w.code AS work_code, w.name AS work_name, w.section_name, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn, "
+              "ue.last_name AS ue_last, ue.first_name AS ue_first, uu.last_name AS uu_last, uu.first_name AS uu_first, "
+              "(SELECT COUNT(*) FROM headcount_history h WHERE h.object_id = r.object_id AND h.work_date = r.work_date "
+              " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id) AS hist ")
+_DATA_ORDER = "ORDER BY r.work_date DESC, o.name, c.name_raw, c.inn_raw, w.code "
+
+
+def _data_item(r) -> dict:
+    parts = _contractor_out_from_parts(r["name_raw"], r["cpn"], r["inn_raw"])
+    overdue = None
+    if r["late"]:
+        entered = _db_time(r["entered_at"])
+        if entered:
+            overdue = max(1, int((entered - deadline_for(date.fromisoformat(r["work_date"]))).total_seconds() // 60))
+    return {
+        "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"], "contractor": parts["display"],
+        "inn": r["inn_raw"], "inn_status": parts["inn_status"], "section": r["section_name"], "work_code": r["work_code"],
+        "work_name": r["work_name"], "workers": r["workers"], "late": bool(r["late"]), "overdue_minutes": overdue,
+        "source": r["source"], "entered_at": r["entered_at"], "entered_by": _user_name(r, "ue"), "updated_at": r["updated_at"],
+        "updated_by": _user_name(r, "uu"), "changes": max(0, r["hist"] - 1),
+    }
+
+
+@global_router.get("/records")
+def list_records(object_ids: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                 contractor_q: Optional[str] = None, work_code: Optional[str] = None, source: Optional[str] = None,
+                 late: bool = False, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+                 user: sqlite3.Row = Depends(get_current_user)):
+    """ВСЕ внесённые и загруженные записи численности, новые сверху, с отбором и постраничным показом. Видны только объекты, на которые
+    есть право чтения; `total` и `sum_workers` — по всему отбору, а не по странице."""
+    conn = get_connection()
+    try:
+        flt = _data_filters(conn, user, alias="r", object_ids=object_ids, date_from=date_from, date_to=date_to,
+                            contractor_q=contractor_q, work_code=work_code, source=source, late=late)
+        if flt is None:
+            return {"items": [], "total": 0, "sum_workers": 0, "offset": offset, "limit": limit}
+        where, params = " AND ".join(flt[0]), flt[1]
+        total, sum_w = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(r.workers), 0) {_DATA_FROM} WHERE {where}", params).fetchone()
+        rows = conn.execute(f"{_DATA_COLS}{_DATA_FROM} WHERE {where} {_DATA_ORDER} LIMIT ? OFFSET ?", (*params, limit, offset)).fetchall()
+        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "offset": offset, "limit": limit}
+    finally:
+        conn.close()
+
+
+@global_router.get("/history-log")
+def list_history_log(object_ids: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                     contractor_q: Optional[str] = None, work_code: Optional[str] = None, source: Optional[str] = None,
+                     limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), user: sqlite3.Row = Depends(get_current_user)):
+    """Журнал ВСЕХ изменений численности (создания, замены, удаления), новые сверху. Отбор по дню численности (`work_date`)."""
+    conn = get_connection()
+    try:
+        flt = _data_filters(conn, user, alias="h", object_ids=object_ids, date_from=date_from, date_to=date_to,
+                            contractor_q=contractor_q, work_code=work_code, source=source)
+        if flt is None:
+            return {"items": [], "total": 0, "offset": offset, "limit": limit}
+        where, params = " AND ".join(flt[0]), flt[1]
+        frm = ("FROM headcount_history h JOIN objects o ON o.id = h.object_id JOIN work_codifier w ON w.id = h.codifier_id "
+               "JOIN headcount_contractors c ON c.id = h.contractor_id LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
+               "LEFT JOIN users u ON u.id = h.changed_by ")
+        total = conn.execute(f"SELECT COUNT(*) {frm} WHERE {where}", params).fetchone()[0]
+        rows = conn.execute(
+            "SELECT h.id, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.source, h.changed_at, "
+            "w.code AS work_code, w.name AS work_name, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn, "
+            f"u.last_name AS u_last, u.first_name AS u_first {frm} WHERE {where} ORDER BY h.changed_at DESC, h.id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset)).fetchall()
+        return {"items": [{
+            "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"],
+            "contractor": _contractor_out_from_parts(r["name_raw"], r["cpn"], r["inn_raw"])["display"],
+            "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
+            "source": r["source"], "changed_at": r["changed_at"], "changed_by": _user_name(r, "u")} for r in rows],
+            "total": total, "offset": offset, "limit": limit}
+    finally:
+        conn.close()
+
+
+def _xlsx_response(headers: list, rows, widths: list, name: str) -> Response:
+    from io import BytesIO
+    from urllib.parse import quote
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Данные"
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+    for row in rows:
+        ws.append(row)
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    buf = BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename=\"headcount.xlsx\"; filename*=UTF-8''{quote(name)}"})
+
+
+def _moment_xlsx(value: Optional[str]):
+    d = _db_time(value)
+    return d.replace(tzinfo=None) if d else None
+
+
+@global_router.get("/records.xlsx")
+def records_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                 contractor_q: Optional[str] = None, work_code: Optional[str] = None, source: Optional[str] = None,
+                 late: bool = False, user: sqlite3.Row = Depends(get_current_user)):
+    """Те же записи, что `/headcount/records`, в Excel (весь отбор, не страница)."""
+    conn = get_connection()
+    try:
+        flt = _data_filters(conn, user, alias="r", object_ids=object_ids, date_from=date_from, date_to=date_to,
+                            contractor_q=contractor_q, work_code=work_code, source=source, late=late)
+        rows = [] if flt is None else conn.execute(
+            f"{_DATA_COLS}{_DATA_FROM} WHERE {' AND '.join(flt[0])} {_DATA_ORDER} LIMIT {EXPORT_ROW_LIMIT}", flt[1]).fetchall()
+    finally:
+        conn.close()
+    items = [_data_item(r) for r in rows]
+    heads = ["Дата", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Человек", "Просрочено", "Опоздание, мин",
+             "Источник", "Внесено", "Кем внесено", "Изменено", "Кем изменено", "Правок"]
+    body = [[date.fromisoformat(i["date"]), i["object"], i["contractor"], i["inn"], i["section"], i["work_code"], i["work_name"], i["workers"],
+             "да" if i["late"] else "", i["overdue_minutes"], SOURCE_TITLES.get(i["source"], i["source"]), _moment_xlsx(i["entered_at"]),
+             i["entered_by"], _moment_xlsx(i["updated_at"]), i["updated_by"], i["changes"]] for i in items]
+    resp = _xlsx_response(heads, body, [12, 34, 38, 14, 34, 14, 50, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
+    return resp
+
+
+@global_router.get("/history-log.xlsx")
+def history_log_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                     contractor_q: Optional[str] = None, work_code: Optional[str] = None, source: Optional[str] = None,
+                     user: sqlite3.Row = Depends(get_current_user)):
+    data = list_history_log(object_ids=object_ids, date_from=date_from, date_to=date_to, contractor_q=contractor_q, work_code=work_code,
+                            source=source, limit=500, offset=0, user=user)
+    items = list(data["items"])
+    offset = 500
+    while len(items) < min(data["total"], EXPORT_ROW_LIMIT):
+        more = list_history_log(object_ids=object_ids, date_from=date_from, date_to=date_to, contractor_q=contractor_q, work_code=work_code,
+                                source=source, limit=500, offset=offset, user=user)["items"]
+        if not more:
+            break
+        items.extend(more)
+        offset += 500
+    heads = ["Когда изменено", "Кто", "День численности", "Объект", "Подрядчик", "Код вида работ", "Вид работ", "Было", "Стало", "Источник"]
+    body = [[_moment_xlsx(i["changed_at"]), i["changed_by"], date.fromisoformat(i["date"]), i["object"], i["contractor"], i["work_code"], i["work_name"],
+             i["old"], i["new"] if i["new"] is not None else "удалено", SOURCE_TITLES.get(i["source"], i["source"])] for i in items]
+    return _xlsx_response(heads, body, [17, 24, 14, 34, 38, 14, 50, 8, 10, 22], "Численность_журнал_изменений.xlsx")
+
+
 def _empty_report(level_list: list, ref: date) -> dict:
     return {"levels": level_list, "as_of": ref.isoformat(), "rows": [], "total": {"fact_day": 0, "week_avg": 0, "month_avg": 0},
             "months": [], "objects": 0}

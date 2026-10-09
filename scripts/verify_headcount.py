@@ -142,3 +142,36 @@ for name, fn, kw in [
 j = hc.report(levels="object", as_of="2026-09-07", date_from=None, date_to=None, object_ids=None, smu_id=None, section=None, work_code=None, contractor_inn=None, user=nobody)
 ok(j["rows"] == [] and j["objects"] == 0, "отчёт без грантов: пусто, чужие объекты не видны")
 print("ПРАВА ПРОШЛИ")
+
+# ---- просмотр всех данных
+import io as _io
+from openpyxl import load_workbook as _lw
+def recs(**kw):
+    d = dict(object_ids=f"{obj},{obj2}", date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, limit=100, offset=0)
+    d.update(kw); return hc.list_records(**d, user=admin)
+allr = recs()
+total_db = conn_total = db.get_connection().execute("SELECT COUNT(*), SUM(workers) FROM headcount_records WHERE object_id IN (?,?)", (obj, obj2)).fetchone()
+ok(allr["total"] == total_db[0] and allr["sum_workers"] == total_db[1], "записи: итог и сумма по всему отбору")
+ok(allr["items"][0]["date"] >= allr["items"][-1]["date"], "записи: новые сверху")
+ok(len(recs(limit=5)["items"]) == 5 and recs(limit=5, offset=5)["items"][0]["id"] != recs(limit=5)["items"][0]["id"], "записи: постраничный показ")
+ok(recs(object_ids=str(obj))["total"] < allr["total"], "записи: отбор по объекту")
+ok(recs(date_from="2026-09-01", date_to="2026-09-03")["total"] == 6, "записи: отбор по периоду")
+ok(recs(work_code="130-03")["total"] > 0 and all(i["work_code"] == "130-03" for i in recs(work_code="130-03")["items"]), "записи: отбор по коду вида работ")
+ok(recs(work_code="130")["total"] >= recs(work_code="130-03")["total"], "записи: код — это начало (раздел целиком)")
+ok(recs(contractor_q="АЛЬФА")["total"] > 0 and all("Альфа" in i["contractor"] for i in recs(contractor_q="АЛЬФА")["items"]), "записи: подрядчик без учёта регистра кириллицы")
+ok(recs(contractor_q="7745000111")["total"] > 0, "записи: подрядчик по ИНН")
+ok(recs(contractor_q="нет-такого")["total"] == 0, "записи: ничего не найдено — пусто")
+ok(recs(source="import")["total"] == 0 and recs(source="form")["total"] == allr["total"], "записи: отбор по источнику")
+ok(0 < recs(late=True)["total"] <= allr["total"] and all(i["late"] for i in recs(late=True)["items"]), "записи: только просроченные")
+try: recs(source="xxx"); ok(False, "источник")
+except HTTPException as e: ok(e.status_code == 400, "записи: неверный источник — 400")
+hl = hc.list_history_log(object_ids=f"{obj},{obj2}", date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, limit=100, offset=0, user=admin)
+ok(hl["total"] >= allr["total"] and hl["items"][0]["changed_at"] >= hl["items"][-1]["changed_at"], "журнал: не меньше записей, новые сверху")
+x = hc.records_xlsx(object_ids=f"{obj},{obj2}", date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, user=admin)
+ws = _lw(_io.BytesIO(x.body)).active
+ok(ws.max_row - 1 == allr["total"] and ws.cell(1, 1).value == "Дата", "Excel записей: все строки отбора, а не страница")
+x = hc.history_log_xlsx(object_ids=f"{obj},{obj2}", date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, user=admin)
+ok(_lw(_io.BytesIO(x.body)).active.max_row - 1 == hl["total"], "Excel журнала: все строки отбора")
+ok(hc.list_records(object_ids=None, date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, limit=10, offset=0, user=nobody)["total"] == 0,
+   "записи: без грантов — пусто")
+print("ПРОСМОТР ПРОШЁЛ")

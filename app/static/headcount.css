@@ -50,8 +50,8 @@
 /* Своей вертикальной прокрутки у таблиц нет (2026-10-09, замечание пользователя: в невысоком окне таблица сопоставления
    показывала две строки в прокрутке внутри прокрутки): длинная таблица тянет страницу, а страница (окно V1, main V2) прокручивается. */
 .hc-tbl { border-collapse: collapse; width: 100%; }
-.hc-tbl th, .hc-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--hc-line); text-align: left; vertical-align: middle; }
-.hc-tbl th { position: sticky; top: 0; background: var(--hc-soft); font-weight: 600; z-index: 1; white-space: nowrap; }
+.hc-tbl th, .hc-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--hc-line); text-align: left; vertical-align: middle; }
+.hc-tbl th { position: sticky; top: 0; background: var(--hc-soft); font-weight: 600; z-index: 1; }
 .hc-tbl tfoot td { font-weight: 600; background: var(--hc-soft); position: sticky; bottom: 0; }
 .hc-tbl .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hc-tbl tr.dirty td { background: color-mix(in srgb, var(--hc-warn) 12%, var(--hc-bg)); }
@@ -91,3 +91,6 @@
 .hc-root.hc-root .hc-maptbl select { width: 100%; min-width: 180px; max-width: 460px; text-overflow: ellipsis; }
 .hc-maptbl td { min-width: 0; overflow-wrap: anywhere; }
 .hc-maptbl td:first-child { width: 38%; }
+.hc-check { flex-direction: row !important; align-items: center; gap: 6px !important; padding-bottom: 6px; color: var(--hc-ink) !important; font-size: 13px !important; }
+.hc-root.hc-root .hc-check input { width: auto; }
+.hc-bar .hc-picker { min-width: 240px; }

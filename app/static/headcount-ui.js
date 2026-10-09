@@ -6,7 +6,7 @@
 // глобалями с модулем): ctx = { api, objectId, objectName, canWrite, canAdmin, confirm, upload }.
 //   api.get/put/post/patch/delete(path, body) — как у V2; в V1 это тонкая обёртка над `api()` app.js;
 //   upload(path, FormData) — multipart POST (загрузка файлов);
-//   download(urlWithQuery) — скачать файл GET-запросом (необязателен: без него кнопка «Выгрузить в Excel» не показывается);
+//   download(urlWithQuery, имяФайла) — скачать файл GET-запросом (необязателен: без него кнопка «Выгрузить в Excel» не показывается);
 //   confirm(text, { danger }) → Promise<boolean>.
 // Сервер (app/headcount.py, app/headcount_import.py) считает ВСЁ: срок и просрочку, ключи, историю, отчёт. Клиент только показывает.
 
@@ -54,9 +54,10 @@ export function mountHeadcount(el, ctx) {
     date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
     contractorForm: null,
     rep: { preset: "objects", scope: "object", asOf: addDays(todayIso(), -1), from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
+    data: { mode: "records", scope: "object", from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
   };
-  const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"]];
+  const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"], ["data", "Все данные"]];
   if (ctx.canAdmin) tabs.push(["admin", "Загрузка данных"]);
 
   el.classList.add("hc-root");
@@ -83,7 +84,7 @@ export function mountHeadcount(el, ctx) {
     el.querySelectorAll("[data-tab]").forEach((b) => { const on = b.dataset.tab === st.tab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
     if (st.loadError) { pane.innerHTML = `<div class="hc-callout bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(st.loadError)} <button type="button" class="hc-btn" id="hc-retry">Повторить</button></div>`; pane.querySelector("#hc-retry").addEventListener("click", () => { st.loadError = ""; loadRefs(); }); return; }
     if (st.tab !== "admin" && (st.contractors === null || st.works === null)) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
-    ({ input: paintInput, contractors: paintContractors, report: paintReport, admin: paintAdmin })[st.tab]();
+    ({ input: paintInput, contractors: paintContractors, report: paintReport, data: paintData, admin: paintAdmin })[st.tab]();
   }
 
   // =====================================================================  ВВОД
@@ -310,7 +311,7 @@ export function mountHeadcount(el, ctx) {
     pane.querySelector("#hc-r-scope").addEventListener("change", (e) => { r.scope = e.target.value; loadReport(); });
     pane.querySelector("#hc-r-go").addEventListener("click", loadReport);
     pane.querySelector("#hc-r-xlsx")?.addEventListener("click", async () => {
-      try { await ctx.download(`/headcount/report.xlsx?${reportQuery()}`); } catch (e) { r.error = errText(e); paintReportBody(); }
+      try { await ctx.download(`/headcount/report.xlsx?${reportQuery()}`, "Численность_отчёт.xlsx"); } catch (e) { r.error = errText(e); paintReportBody(); }
     });
     if (r.data || r.error || r.loading) paintReportBody(); else loadReport();
   }
@@ -371,6 +372,90 @@ export function mountHeadcount(el, ctx) {
       if (r.toggled.has(p)) r.toggled.delete(p); else r.toggled.add(p);
       paintReportBody();
     }));
+  }
+
+  // =====================================================================  ВСЕ ДАННЫЕ (просмотр внесённого и загруженного)
+  function dataQuery(extra = {}) {
+    const d = st.data, q = new URLSearchParams();
+    if (d.scope === "object") q.set("object_ids", String(ctx.objectId));
+    if (d.from) q.set("date_from", d.from);
+    if (d.to) q.set("date_to", d.to);
+    if (d.contractor.trim()) q.set("contractor_q", d.contractor.trim());
+    const work = d.workId && st.works.find((w) => w.id === d.workId);
+    if (work) q.set("work_code", work.code);
+    if (d.source) q.set("source", d.source);
+    if (d.late && d.mode === "records") q.set("late", "true");
+    for (const [k, v] of Object.entries(extra)) q.set(k, String(v));
+    return q.toString();
+  }
+
+  function paintData() {
+    const d = st.data, all = d.scope === "all";
+    pane.innerHTML = `
+      <div class="hc-bar hc-wrap">
+        <div class="hc-seg" role="group" aria-label="Что показывать"><button type="button" class="hc-btn ${d.mode === "records" ? "on" : ""}" data-mode="records">Записи</button><button type="button" class="hc-btn ${d.mode === "history" ? "on" : ""}" data-mode="history">История изменений</button></div>
+        <label>Объекты<select id="hc-d-scope"><option value="object" ${!all ? "selected" : ""}>Только этот объект</option><option value="all" ${all ? "selected" : ""}>Все доступные мне</option></select></label>
+        <label>День с<input type="date" id="hc-d-from" value="${esc(d.from)}"></label>
+        <label>по<input type="date" id="hc-d-to" value="${esc(d.to)}"></label>
+        <label>Подрядчик (название или ИНН)<input type="text" id="hc-d-ctr" value="${esc(d.contractor)}" placeholder="часть названия или ИНН"></label>
+        <label class="hc-grow">Вид работ (код и всё, что под ним)<div class="hc-picker" id="hc-d-work"></div></label>
+        <label>Источник<select id="hc-d-src"><option value="">любой</option><option value="form" ${d.source === "form" ? "selected" : ""}>форма</option><option value="import" ${d.source === "import" ? "selected" : ""}>загрузка из SharePoint</option></select></label>
+        ${d.mode === "records" ? `<label class="hc-check"><input type="checkbox" id="hc-d-late" ${d.late ? "checked" : ""}> только просроченные</label>` : ""}
+        <button type="button" class="hc-btn primary" id="hc-d-go">Показать</button>
+        ${ctx.download ? `<button type="button" class="hc-btn" id="hc-d-xlsx">Выгрузить в Excel</button>` : ""}
+      </div>
+      <div id="hc-d-body"></div>`;
+    const picker = workPicker(pane.querySelector("#hc-d-work"), st.works);
+    if (d.workId) picker.set(d.workId);
+    const read = () => {
+      d.scope = pane.querySelector("#hc-d-scope").value; d.from = pane.querySelector("#hc-d-from").value; d.to = pane.querySelector("#hc-d-to").value;
+      d.contractor = pane.querySelector("#hc-d-ctr").value; d.source = pane.querySelector("#hc-d-src").value;
+      d.late = !!pane.querySelector("#hc-d-late")?.checked; d.workId = picker.value();
+    };
+    pane.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { read(); d.mode = b.dataset.mode; d.offset = 0; d.res = null; paintData(); }));
+    pane.querySelector("#hc-d-go").addEventListener("click", () => { read(); d.offset = 0; loadData(); });
+    pane.querySelector("#hc-d-ctr").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); read(); d.offset = 0; loadData(); } });
+    pane.querySelector("#hc-d-xlsx")?.addEventListener("click", async () => {
+      read();
+      try { await ctx.download(`/headcount/${d.mode === "records" ? "records" : "history-log"}.xlsx?${dataQuery()}`, d.mode === "records" ? "Численность_записи.xlsx" : "Численность_журнал_изменений.xlsx"); }
+      catch (e) { d.error = errText(e); paintDataBody(); }
+    });
+    if (d.res || d.error || d.loading) paintDataBody(); else loadData();
+  }
+
+  async function loadData() {
+    const d = st.data;
+    d.loading = true; d.error = ""; paintDataBody();
+    try { d.res = await api.get(`/headcount/${d.mode === "records" ? "records" : "history-log"}?${dataQuery({ limit: d.limit, offset: d.offset })}`); }
+    catch (e) { d.error = errText(e); d.res = null; }
+    d.loading = false;
+    if (!dead && st.tab === "data") paintDataBody();
+  }
+
+  function paintDataBody() {
+    const d = st.data, box = pane.querySelector("#hc-d-body"), all = d.scope === "all";
+    if (!box) return;
+    if (d.loading) { box.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
+    if (d.error) { box.innerHTML = `<div class="hc-callout bad" role="alert">${esc(d.error)}</div>`; return; }
+    const r = d.res;
+    if (!r || !r.total) { box.innerHTML = `<p class="hc-muted">По выбранным условиям данных нет.</p>`; return; }
+    const from = r.offset + 1, to = r.offset + r.items.length;
+    const sourceText = (x) => (x === "import" ? "загрузка из SharePoint" : x === "bot" ? "бот" : "форма");
+    const head = `<div class="hc-bar"><span><strong>${from.toLocaleString("ru-RU")}–${to.toLocaleString("ru-RU")}</strong> из ${r.total.toLocaleString("ru-RU")}</span>
+      ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: <strong>${r.sum_workers.toLocaleString("ru-RU")}</strong></span>` : ""}
+      <button type="button" class="hc-btn mini" id="hc-d-prev" ${r.offset <= 0 ? "disabled" : ""}>◀ Назад</button><button type="button" class="hc-btn mini" id="hc-d-next" ${to >= r.total ? "disabled" : ""}>Вперёд ▶</button></div>`;
+    const objCol = (name) => (all ? `<td>${esc(name)}</td>` : "");
+    const rows = d.mode === "records" ? r.items.map((i) => `<tr><td>${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
+        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td>
+        <td class="hc-small">Внесено: ${esc(fmtMoment(i.entered_at))}${i.entered_by ? " · " + esc(i.entered_by) : ""}<br>${i.late ? `<span class="hc-badge bad">просрочено${i.overdue_minutes ? " на " + fmtOverdue(i.overdue_minutes) : ""}</span> ` : ""}<span class="hc-badge">${esc(sourceText(i.source))}</span>${i.changes ? `<br>Изменено: ${esc(fmtMoment(i.updated_at))}${i.updated_by ? " · " + esc(i.updated_by) : ""} <span class="hc-badge">правок: ${i.changes}</span>` : ""}</td></tr>`).join("")
+      : r.items.map((i) => `<tr><td class="hc-small">${esc(fmtMoment(i.changed_at))}<br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td>${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
+        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td></tr>`).join("");
+    const heads = d.mode === "records"
+      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Человек", "Кто и когда"]
+      : ["Когда и кто изменил", "День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Было → стало"];
+    box.innerHTML = `${head}<div class="hc-scroll"><table class="hc-tbl"><thead><tr>${heads.map((h) => `<th class="${h === "Человек" || h === "Было → стало" ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    box.querySelector("#hc-d-prev").addEventListener("click", () => { d.offset = Math.max(0, d.offset - d.limit); loadData(); });
+    box.querySelector("#hc-d-next").addEventListener("click", () => { d.offset += d.limit; loadData(); });
   }
 
   // =====================================================================  ЗАГРУЗКА ДАННЫХ (администратор сервиса)
@@ -487,5 +572,6 @@ function workPicker(box, works) {
   const pick = (li) => { chosen = Number(li.dataset.id); const w = works.find((x) => x.id === chosen); input.value = `${w.code} ${w.name}`; close(); };
   document.addEventListener("click", (e) => { if (!box.contains(e.target)) close(); });
   window.addEventListener("scroll", (e) => { if (!list.hidden && !list.contains(e.target)) close(); }, true);
-  return { value: () => chosen, clear: () => { chosen = null; input.value = ""; close(); } };
+  return { value: () => chosen, clear: () => { chosen = null; input.value = ""; close(); },
+    set: (id) => { const w = works.find((x) => x.id === id); if (w) { chosen = id; input.value = `${w.code} ${w.name}`; } } };
 }
