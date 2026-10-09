@@ -9708,6 +9708,12 @@
             <label class="field" style="margin-top:0" id="scd-mark-label">Марка обмена</label>
             <select id="scd-mark"></select>
             <div class="hint-text" id="scd-mark-note"></div>
+            <div id="scd-undated-row">
+              <label style="font-size:12px;display:flex;gap:6px;align-items:flex-start;margin-top:8px">
+                <input type="checkbox" id="scd-undated"/>
+                <span>Включить изделия без плановой даты поставки: в расчёте они считаются самыми последними в очереди поставок своей марки (позже самой поздней даты). Им достаются места, где изделие нужно позже всех; ранние даты и привезённые изделия уходят туда, где нужно раньше. Дата у такого изделия появится, когда оно получит плановую дату обменом.</span>
+              </label>
+            </div>
             <div id="scd-pool-row" style="display:none">
               <label style="font-size:12px;display:flex;gap:6px;align-items:flex-start;margin-top:8px">
                 <input type="checkbox" id="scd-pool"/>

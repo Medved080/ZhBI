@@ -106,6 +106,8 @@ def main() -> int:
     scopes = [
         ("все контракты × все марки", dict(all_contracts=True, all_marks=True, pool=False), None, ""),
         ("все контракты × все марки, общий пул", dict(all_contracts=True, all_marks=True, pool=True), None, ""),
+        ("все контракты × все марки, общий пул, С ИЗДЕЛИЯМИ БЕЗ ПЛАНОВОЙ ДАТЫ",
+         dict(all_contracts=True, all_marks=True, pool=True, include_undated=True), None, ""),
         (f"один контракт ({big['name'][:40]}) × все марки", dict(all_contracts=False, all_marks=True, pool=False), big["contract_id"], ""),
         (f"один контракт × одна марка ({big_mark})", dict(all_contracts=False, all_marks=False, pool=False), big["contract_id"], big_mark),
     ]
@@ -113,7 +115,7 @@ def main() -> int:
     for title, flags, contract_id, mark in scopes:
         print(f"\n=== {title}")
         before = snapshot(work)
-        plan = sc._rebalance_plan(conn, oid, contract_id, mark, None, flags["pool"])
+        plan = sc._rebalance_plan(conn, oid, contract_id, mark, None, flags["pool"], flags.get("include_undated", False))
         ok_before = sc._history_consistent_ids(conn, [i["element_id"] for i in plan["items"]])
         sm = plan["summary"]
         print(f"  план: изделий {sm['count']}, затронуто {sm['moved']} ({sm['pairs']} пар, {sm['chains']} цепочек), "
@@ -124,6 +126,13 @@ def main() -> int:
             element_ids=[i["element_id"] for i in plan["items"]], **flags)
         doc = sc.create_supplier_change(body, admin)
         done = sc.post_supplier_change(doc["id"], admin, None)
+        if flags.get("include_undated"):
+            n_und = sum(1 for i in plan["items"] if i["undated_old"])
+            n_und_moved = sum(1 for i in plan["items"] if i["undated_old"] != i["undated_new"])
+            print(f"  изделий без плановой даты в расчёте: {n_und}; у скольких мест «без даты» ↔ дата поменялось: {n_und_moved}")
+            if n_und == 0:
+                print("  ✗ изделий без плановой даты в расчёте нет — опция ничего не проверила")
+                bad += 1
         # пометки документа в истории не должны ломать согласованность кэша (статус, фактическая дата) с историей: иначе доставленное
         # изделие после проведения выпадает из следующей балансировки, а при пересчёте факт поставки подменяется датой документа
         ok_after = sc._history_consistent_ids(conn, list(ok_before))

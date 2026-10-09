@@ -903,6 +903,8 @@ CREATE TABLE IF NOT EXISTS supplier_change_docs (
     all_contracts INTEGER NOT NULL DEFAULT 0,
     all_marks INTEGER NOT NULL DEFAULT 0,
     pool INTEGER NOT NULL DEFAULT 0,
+    -- Балансировка (2026-10-09): 1 — включить изделия без плановой даты поставки (в расчёте — самые последние в очереди). У прочих видов 0.
+    include_undated INTEGER NOT NULL DEFAULT 0,
     UNIQUE (object_id, number)
 );
 

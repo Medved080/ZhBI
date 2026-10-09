@@ -149,6 +149,9 @@ class SupplierChangeIn(BaseModel):
     all_contracts: bool = False
     all_marks: bool = False
     pool: bool = False
+    # Балансировка: включить изделия БЕЗ плановой даты поставки (2026-10-09): в расчёте они считаются самыми последними в очереди
+    # поставок своей группы — позже самой поздней даты группы. Так им отдаются привезённые и ранние изделия по очереди требуемых дат.
+    include_undated: bool = False
     reason: Optional[str] = None
     comment: Optional[str] = None
     # Замена поставщика: что переносим. Обмен привязками: side_a/side_b,
@@ -567,6 +570,15 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     # история), поэтому факт переходит вместе с ним: привезённое изделие может занять место соседа, которому оно нужно раньше.
     is_fact = {i: bool(by[i]["current_status"] == "delivered" and by[i]["actual_delivery_date"]) for i in ids}
     old = {i: ordinal(by[i]["actual_delivery_date"] if is_fact[i] else by[i]["planned_delivery_date"]) for i in ids}
+    # Изделия БЕЗ даты (нет плановой и нет факта; входят по опции документа) — самые последние в очереди поставок группы: условная дата
+    # на день позже самой поздней даты группы. Дальше они — обычные участники расчёта (раньше нужное изделие получает более раннюю дату,
+    # а «без даты» достаётся тому, кому нужно позже всех); в выводе у таких дат нет (`undated_*`).
+    undated = {i for i in ids if old[i] is None}
+    if undated:
+        dated = [old[i] for i in ids if old[i] is not None]
+        pseudo = (max(dated) if dated else date.today().toordinal()) + 1
+        for i in undated:
+            old[i] = pseudo
     nd = {i: ordinal(need.get(i)) for i in ids}                        # требуемая дата (None — нет)
 
     def late(plan_day, i):
@@ -778,7 +790,9 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
         out.append({"element_id": i, "address": r["address"], "floor": r["floor"],
                     "status": r["current_status"], "status_new": by[src]["current_status"] if src else r["current_status"],
                     # plan_old / plan_new — ДАТА ИЗДЕЛИЯ для расчёта (у привезённого — факт); fact_* говорят, что это факт, а не план
-                    "need_date": need.get(i), "plan_old": iso(old[i]), "plan_new": iso(new_day),
+                    "need_date": need.get(i), "plan_old": None if i in undated else iso(old[i]),
+                    "plan_new": None if (src if src else i) in undated else iso(new_day),
+                    "undated_old": i in undated, "undated_new": (src if src else i) in undated,
                     "fact_old": is_fact[i], "fact_new": is_fact[src] if src else is_fact[i],
                     "delay_old": delay_old, "delay_new": delay_new,
                     # partner_id — изделие, от которого место получает дату, статус, историю и контракт (в паре — взаимный партнёр)
@@ -787,8 +801,9 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     return out
 
 
-def _rebalance_eligible(e, contract_id: Optional[int], mark: str) -> Optional[str]:
-    """Почему изделие нельзя балансировать (None — можно). contract_id None — любой контракт, mark пустая — любая марка."""
+def _rebalance_eligible(e, contract_id: Optional[int], mark: str, include_undated: bool = False) -> Optional[str]:
+    """Почему изделие нельзя балансировать (None — можно). contract_id None — любой контракт, mark пустая — любая марка.
+    `include_undated` — опция документа: изделия без плановой даты поставки тоже входят (в расчёте они — самые последние в очереди)."""
     if e is None or not e["is_current"]:
         return "изделия нет в актуальном чертеже объекта"
     if contract_id is not None and e["contract_id"] != contract_id:
@@ -797,7 +812,7 @@ def _rebalance_eligible(e, contract_id: Optional[int], mark: str) -> Optional[st
         return f"марка изделия не совпадает с маркой документа «{mark}»"
     if e["current_status"] in REBALANCE_BLOCKED_STATUSES:
         return "изделие уже смонтировано — его дата поставки не переставляется"
-    if not e["planned_delivery_date"]:
+    if not e["planned_delivery_date"] and not include_undated:
         return "у изделия нет плановой даты поставки"
     return None
 
@@ -844,7 +859,8 @@ def _contract_labels(conn, ids) -> dict:
     return {i: (_contract_counterparty(conn, i) or "—", _contract_name(conn, i)) for i in set(ids)}
 
 
-def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str, element_ids=None, pool: bool = False) -> dict:
+def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str, element_ids=None, pool: bool = False,
+                    include_undated: bool = False) -> dict:
     """Предпросмотр: подходящие изделия и их новые даты + сводка «было → стало».
 
     contract_id None — по всем контрактам объекта, mark пустая — по всем маркам. Расчёт ведётся по группам (контракт, марка),
@@ -860,7 +876,7 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
     if mark:
         sql += " AND LOWER(TRIM(COALESCE(mark, ''))) = LOWER(TRIM(?))"
         args.append(mark)
-    rows = [r for r in conn.execute(sql, args).fetchall() if _rebalance_eligible(r, contract_id, mark) is None]
+    rows = [r for r in conn.execute(sql, args).fetchall() if _rebalance_eligible(r, contract_id, mark, include_undated) is None]
     надёжные = _history_consistent_ids(conn, [r["id"] for r in rows])
     rows = [r for r in rows if r["id"] in надёжные]      # без истории / с расхождением кэша — в обмен не берутся
     if element_ids is not None:
@@ -917,7 +933,7 @@ def _rebalance_plan(conn, object_id: int, contract_id: Optional[int], mark: str,
         "without_need": sum(1 for i in items if i["need_date"] is None)}}
 
 
-def _rebalance_candidates(conn, object_id: int) -> dict:
+def _rebalance_candidates(conn, object_id: int, include_undated: bool = False) -> dict:
     """Контракты объекта, по которым ЕСТЬ ЧТО балансировать, и марки в них, а также то же при общем пуле дат:
     {contracts: [{contract_id, counterparty, changed, late, marks:[{mark, count, changed, late}]}], pool: {changed, late, marks:[...]}}.
     «Есть что балансировать» — расчёт (`_rebalance_allocate`) меняет плановую дату хотя бы у одного изделия группы. Контракты и
@@ -926,9 +942,9 @@ def _rebalance_candidates(conn, object_id: int) -> dict:
     from app.schedule_versions import need_start_dates
 
     rows = conn.execute(
-        f"SELECT {_REBALANCE_COLS} FROM elements WHERE object_id = ? AND is_current = 1 AND contract_id IS NOT NULL "
-        "AND planned_delivery_date IS NOT NULL", (object_id,)).fetchall()
-    rows = [r for r in rows if _rebalance_eligible(r, r["contract_id"], "") is None]
+        f"SELECT {_REBALANCE_COLS} FROM elements WHERE object_id = ? AND is_current = 1 AND contract_id IS NOT NULL"
+        + ("" if include_undated else " AND planned_delivery_date IS NOT NULL"), (object_id,)).fetchall()
+    rows = [r for r in rows if _rebalance_eligible(r, r["contract_id"], "", include_undated) is None]
     требуемые = need_start_dates(conn, object_id)
     имена = {c["id"]: c for c in _object_contracts(conn, object_id)}
     живые = {i for i, c in имена.items() if not c["is_archived"]}
@@ -973,20 +989,20 @@ def _rebalance_candidates(conn, object_id: int) -> dict:
 
 
 @router.get("/rebalance-candidates")
-def rebalance_candidates(object_id: int = Query(...),
+def rebalance_candidates(object_id: int = Query(...), include_undated: bool = Query(False),
                          user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write"))):
     """Контракты и марки, по которым балансировка что-то изменит, с числом изделий (для выбора в форме документа)."""
     conn = get_connection()
     try:
         assert_object_any_feature(conn, user, object_id, DOC_FEATURES, "write")
-        return _rebalance_candidates(conn, object_id)
+        return _rebalance_candidates(conn, object_id, include_undated)
     finally:
         conn.close()
 
 
 @router.get("/rebalance-preview")
 def rebalance_preview(object_id: int = Query(...), contract_id: Optional[int] = Query(None), mark: str = Query(""),
-                      pool: bool = Query(False), doc_id: Optional[int] = Query(None),
+                      pool: bool = Query(False), doc_id: Optional[int] = Query(None), include_undated: bool = Query(False),
                       user: sqlite3.Row = Depends(require_any_feature(DOC_FEATURES, "write"))):
     """Что даст балансировка поставки — без записи (форма документа и проверка перед проведением).
 
@@ -1005,7 +1021,7 @@ def rebalance_preview(object_id: int = Query(...), contract_id: Optional[int] = 
                 raise HTTPException(status_code=404, detail="Документ не найден")
             element_ids = [r["element_id"] for r in conn.execute(
                 "SELECT element_id FROM supplier_change_items WHERE doc_id = ?", (doc_id,))]
-        return _rebalance_plan(conn, object_id, contract_id, mark.strip(), element_ids, pool)
+        return _rebalance_plan(conn, object_id, contract_id, mark.strip(), element_ids, pool, include_undated)
     finally:
         conn.close()
 
@@ -1026,7 +1042,7 @@ def _post_rebalance(conn, doc, items, автор, user_id) -> dict:
         e = conn.execute(
             "SELECT id, element_type, subtype, mark, address, floor, current_status, contract_id, object_id, "
             "is_current, planned_delivery_date, actual_delivery_date FROM elements WHERE id = ?", (it["element_id"],)).fetchone()
-        причина = _rebalance_eligible(e, contract_id, марка) if e is not None and e["object_id"] == doc["object_id"] \
+        причина = _rebalance_eligible(e, contract_id, марка, bool(doc["include_undated"])) if e is not None and e["object_id"] == doc["object_id"] \
             else "изделия нет в актуальном чертеже объекта"
         if not причина and e["contract_id"] is None:
             причина = "у изделия нет контракта"
@@ -1169,6 +1185,7 @@ def _doc_head(conn, r) -> dict:
         "number": r["number"], "doc_date": r["doc_date"], "mark": r["mark"],
         "reason": r["reason"], "comment": r["comment"],
         "all_contracts": bool(r["all_contracts"]), "all_marks": bool(r["all_marks"]), "pool": bool(r["pool"]),
+        "include_undated": bool(r["include_undated"]),
         "created_at": r["created_at"], "created_by": r["created_by"],
         "posted_at": r["posted_at"], "posted_by": r["posted_by"],
         "from_contract_id": r["from_contract_id"], "to_contract_id": r["to_contract_id"],
@@ -1222,7 +1239,7 @@ def _doc_version(conn, doc) -> str:
     return record_version.digest({
         "status": doc["status"], "number": doc["number"], "doc_date": doc["doc_date"], "from": doc["from_contract_id"],
         "to": doc["to_contract_id"], "mark": doc["mark"], "reason": doc["reason"], "comment": doc["comment"],
-        "all_contracts": doc["all_contracts"], "all_marks": doc["all_marks"], "pool": doc["pool"],
+        "all_contracts": doc["all_contracts"], "all_marks": doc["all_marks"], "pool": doc["pool"], "include_undated": doc["include_undated"],
         "items": [[i["element_id"], i["side"], i["pair_no"]] for i in items],
     })
 
@@ -1516,6 +1533,8 @@ def _validate_head(conn, body: SupplierChangeIn) -> None:
             body.pool = False      # общий пул осмыслен только между контрактами
     elif body.from_contract_id == body.to_contract_id:
         raise HTTPException(status_code=400, detail="Стороны операции совпадают — выберите разные контракты")
+    if body.kind != KIND_REBALANCE:
+        body.include_undated = False
     роли = (("«текущий»", "«новый»") if body.kind == KIND_SUPPLIER
             else ("контракта", "контракта") if body.kind == KIND_REBALANCE else ("стороны 1", "стороны 2"))
     _assert_contract_of_object(conn, body.from_contract_id, body.object_id, роли[0])
@@ -1558,11 +1577,11 @@ def create_supplier_change(body: SupplierChangeIn,
         conn.execute(
             "INSERT INTO supplier_change_docs (object_id, kind, status, number, doc_date, "
             "from_contract_id, to_contract_id, mark, reason, comment, created_by, created_by_user_id, "
-            "all_contracts, all_marks, pool) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "all_contracts, all_marks, pool, include_undated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (body.object_id, body.kind, DRAFT, номер, body.doc_date, body.from_contract_id,
              body.to_contract_id, (body.mark or None), (body.reason or None), (body.comment or None),
-             автор, user["id"], int(body.all_contracts), int(body.all_marks), int(body.pool)),
+             автор, user["id"], int(body.all_contracts), int(body.all_marks), int(body.pool), int(body.include_undated)),
         )
         doc_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         _save_items(conn, doc_id, body.kind, body.object_id, body)
@@ -1608,10 +1627,10 @@ def update_supplier_change(doc_id: int, body: SupplierChangeIn,
             raise HTTPException(status_code=409, detail=f"Документ № {номер} на этом объекте уже есть")
         conn.execute(
             "UPDATE supplier_change_docs SET number = ?, doc_date = ?, from_contract_id = ?, "
-            "to_contract_id = ?, mark = ?, reason = ?, comment = ?, all_contracts = ?, all_marks = ?, pool = ? WHERE id = ?",
+            "to_contract_id = ?, mark = ?, reason = ?, comment = ?, all_contracts = ?, all_marks = ?, pool = ?, include_undated = ? WHERE id = ?",
             (номер, body.doc_date, body.from_contract_id, body.to_contract_id,
              (body.mark or None), (body.reason or None), (body.comment or None),
-             int(body.all_contracts), int(body.all_marks), int(body.pool), doc_id),
+             int(body.all_contracts), int(body.all_marks), int(body.pool), int(body.include_undated), doc_id),
         )
         _save_items(conn, doc_id, doc["kind"], doc["object_id"], body)
         conn.commit()

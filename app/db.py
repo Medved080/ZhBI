@@ -384,6 +384,7 @@ _COLUMN_MIGRATIONS = [
     ("supplier_change_docs", "all_contracts", "INTEGER NOT NULL DEFAULT 0"),
     ("supplier_change_docs", "all_marks", "INTEGER NOT NULL DEFAULT 0"),
     ("supplier_change_docs", "pool", "INTEGER NOT NULL DEFAULT 0"),
+    ("supplier_change_docs", "include_undated", "INTEGER NOT NULL DEFAULT 0"),
     ("supplier_change_items", "side", "INTEGER NOT NULL DEFAULT 1"),
     ("supplier_change_items", "pair_no", "INTEGER"),
     # «Что было» до проведения — единственное основание для отмены. У
