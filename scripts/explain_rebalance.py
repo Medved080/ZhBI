@@ -120,9 +120,12 @@ def main() -> int:
             after = (days(a["need"], eff(eb)), days(b["need"], eff(ea)))
             pos = lambda v: max(v, 0)  # noqa: E731
             print(f"  просрочка сейчас: {before[0]} / {before[1]} дн.; после обмена датами: {after[0]} / {after[1]} дн.")
-            gain = (pos(before[0]) + pos(before[1])) - (pos(after[0]) + pos(after[1]))
-            print(f"  суммарная просрочка по паре: {pos(before[0]) + pos(before[1])} → {pos(after[0]) + pos(after[1])} дн. "
-                  f"({'обмен выгоден' if gain > 0 else 'обмен НЕ даёт выигрыша — поэтому они и не обменены' if gain == 0 else 'обмен ухудшил бы'})")
+            # критерии выбора раскладки — по порядку: число просроченных, максимальная просрочка, сумма дней (как в алгоритме)
+            k_before = (sum(1 for v in before if v > 0), max(map(pos, before)), sum(map(pos, before)))
+            k_after = (sum(1 for v in after if v > 0), max(map(pos, after)), sum(map(pos, after)))
+            print(f"  (просроченных, максимум, сумма дней): сейчас {k_before}, после обмена датами {k_after} — "
+                  f"{'обмен выгоден' if k_after < k_before else 'обмен НЕ даёт выигрыша по критериям алгоритма' if k_after == k_before else 'обмен ухудшил бы'}"
+                  " (на уровне группы алгоритм может предпочесть цепочку с другими изделиями)")
         else:
             print("  у одного из изделий нет требуемой даты или плановой — выигрыш от обмена не вычислить; "
                   "изделие без требуемой даты срочности не имеет и может быть только источником ранней даты")
