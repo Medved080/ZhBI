@@ -136,26 +136,27 @@ async function main() {
     await b.close();
   }
 
-  // ---- 5) Обычная ФОРМА (не табличный экран) — «СМУ» (dicts, dict-edit): ширина ОСТАЁТСЯ ограниченной.
+  // ---- 5) Обычная ФОРМА (не табличный экран) — «СМУ» (dicts, dict-edit): с 2026-10-09 формы тоже занимают всю
+  // рабочую область (раньше колонка была ограничена 1120px) — задание «формы по ширине экрана».
   {
     const b = await session(BASE, "admin", { width: 1920, height: 1080 });
     await openSection(b, "dict-smu");
     await b.waitFor("!!document.querySelector('.v2-container')", 15000);
     const contW = (await rect(b, ".v2-container")).w;
-    const hasWide = await b.eval(`document.querySelector('.v2-container').classList.contains('v2-container--wide')`);
-    ok("TBL-17 форма «СМУ» НЕ получила v2-container--wide (осталась узкой)", hasWide === false, `contW=${contW}`);
-    ok("TBL-18 ширина формы «СМУ» ограничена (~1120px + отступы), не во весь экран", contW < 1200, `contW=${contW}`);
+    ok("TBL-17 форма «СМУ» занимает всю рабочую область (контейнер без потолка 1120px)", contW > 1300, `contW=${contW}`);
+    const maxW = await b.eval(`getComputedStyle(document.querySelector('.v2-container')).maxWidth`);
+    ok("TBL-18 у контейнера формы нет max-width", maxW === "none", `maxWidth=${maxW}`);
     await b.shot(`${SHOTS}/05-dict-smu-form-1920x1080.png`);
     await b.close();
   }
 
-  // ---- 6) «Настройки домена» (record) — карточка-запись: тоже узкая.
+  // ---- 6) «Настройки домена» (record) — карточка-запись: сетка полей тянется на ширину области.
   {
     const b = await session(BASE, "admin", { width: 1920, height: 1080 });
     await openSection(b, "ldap");
-    await b.waitFor("!!document.querySelector('.v2-container')", 15000);
-    const hasWide = await b.eval(`document.querySelector('.v2-container').classList.contains('v2-container--wide')`);
-    ok("TBL-19 «Настройки домена» (kind=record) НЕ получила v2-container--wide", hasWide === false);
+    await b.waitFor("!!document.querySelector('.v2-fields')", 15000);
+    const fw = (await rect(b, ".v2-fields")).w;
+    ok("TBL-19 «Настройки домена»: сетка полей шире прежних 670px", fw > 1000, `fieldsW=${fw}`);
     await b.close();
   }
 

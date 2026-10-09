@@ -121,15 +121,15 @@ button:disabled { cursor: default; opacity: .6; }
 }
 .v2-back:hover { background: var(--sel); border-color: var(--accent); }
 
-/* Единая центрированная колонка (DESIGN-SYSTEM.md §5, "workspace" —
-   1120px) — общая для заголовка раздела, вкладок, содержимого и действий
-   подвала, чтобы их левый/правый край СОВПАДАЛ на широком экране. Фон и
+/* Единая колонка на всю ширину рабочей области (2026-10-09: раньше была центрированная 1120px — на широком
+   мониторе по бокам оставались пустые поля, форма жалась к середине) — общая для заголовка раздела, вкладок,
+   содержимого и действий подвала, чтобы их левый/правый край СОВПАДАЛ. Фон и
    разделители при этом остаются на всю ширину полосы (см. .v2-nav,
    .v2-page-head, .v2-scroll, .v2-foot ниже — у них самих нет
    горизонтальных отступов, только у вложенного .v2-container).
    Глобальная шапка сервиса (.v2-head) сюда не входит намеренно — у неё
    своя сетка. */
-.v2-container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+.v2-container { max-width: none; margin: 0 auto; padding: 0 24px; }
 /* Табличные экраны (отчёты, справочники, реестры, журналы — read-screen.js) занимают всю доступную ширину
    рабочей области вместо ширины формы-карточки: отдельный модификатор, а не снятие ограничения у ВСЕХ экранов
    (задание «tables», п.1). Ширина остатка после левой навигации уже даёт раскладка .v2-body (flex,
@@ -181,6 +181,10 @@ button:disabled { cursor: default; opacity: .6; }
   flex-wrap: wrap;
   margin-bottom: 20px;
 }
+/* Панель с несколькими кнопками или полями ввода (Сохранить / Отменить / Обновить; «поле + Добавить») на широком экране не разъезжается по краям — элементы идут подряд. */
+.v2-screen .v2-bar:has(> button ~ button), .v2-screen .v2-bar:has(input, select, textarea) { justify-content: flex-start; }
+/* Текстовые поля в строках таблицы-формы занимают ширину своей колонки, а не узкую «по умолчанию». */
+.v2-screen .v2-read-tbl td > input[type="text"] { width: 100%; min-width: 180px; }
 h1, h2, h3 { margin: 0; }
 .v2-page h3, .v2-scroll h3 { font-size: 1.125rem; font-weight: 600; }
 .v2-page h4, .v2-scroll h4 { margin: 0 0 14px; font-size: 0.875rem; font-weight: 600; }
@@ -282,9 +286,12 @@ table.v2-table { width: 100%; border-collapse: separate; border-spacing: 0; text
 }
 .v2-side button[aria-pressed="true"] { background: var(--sel); color: var(--accent); }
 
-.v2-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 670px; }
+/* Поля формы — адаптивная сетка: сколько колонок помещается по ширине, столько и будет (на узком окне — одна). */
+.v2-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
 label.v2-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.75rem; color: var(--muted); }
 label.v2-field input, label.v2-field select { font-size: 0.875rem; color: var(--ink); width: 100%; }
+/* Одиночное поле формы вне сетки .v2-fields (одно значение в строке) не растягиваем на всю ширину: поле на 1500px — неудобно читать и целиться. */
+.v2-screen :not(.v2-fields) > label.v2-field { max-width: 560px; }
 /* Ключевые реквизиты документа (контракт, марка) — крупно и в рамке акцента: по ним человек проверяет, ЧТО он проводит (2026-10-09). Подпись — тёмным и жирным. */
 label.v2-field.v2-key { font-size: 0.8125rem; font-weight: 700; color: var(--ink); }
 #sd-inner label.v2-field.v2-key select, label.v2-field.v2-key select { font-size: 1.0625rem; font-weight: 700; padding: 10px 12px; border: 2px solid var(--accent); border-radius: 8px; background: var(--sel); min-height: 46px; }
@@ -293,7 +300,7 @@ label.v2-field.v2-key { font-size: 0.8125rem; font-weight: 700; color: var(--ink
 /* -------- виджет адреса (app/static/address.js) и мини-карта
    (app/static/map.js) — переиспользуются из V1 как есть (раздел 6), эти
    классы — их собственная разметка, здесь только внешний вид под токены V2. */
-.object-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 670px; }
+.object-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
 .object-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.75rem; color: var(--muted); min-width: 0; position: relative; }
 .object-field > span { font-size: 0.75rem; color: var(--muted); }
 .object-field input { font-size: 0.875rem; color: var(--ink); width: 100%; font-family: inherit; }
@@ -320,9 +327,9 @@ button.address-suggest-item:hover, button.address-suggest-item.kb-focus { backgr
 .link-like { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
 .link-like:hover { text-decoration: underline; }
 
-.v2-coords-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; max-width: 670px; margin-top: 12px; }
+.v2-coords-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
 .v2-coords-row .v2-field { flex: 0 0 150px; }
-.v2-pin-map { height: 220px; max-width: 670px; border-radius: 7px; overflow: hidden; margin-top: 8px; position: relative; border: 1px solid var(--line); }
+.v2-pin-map { height: 260px; border-radius: 7px; overflow: hidden; margin-top: 8px; position: relative; border: 1px solid var(--line); }
 .v2-pin-map .maplibregl-map { position: absolute; inset: 0; }
 
 .v2-avatar-preview { max-width: 220px; max-height: 140px; border-radius: 7px; border: 1px solid var(--line); display: block; margin-bottom: 10px; object-fit: cover; }
@@ -885,7 +892,9 @@ body.v2-noselect { user-select: none; }
 }
 
 /* Формы карточек */
-.v2-field-wide { display: flex; width: 100%; max-width: 760px; }
+.v2-field-wide { display: flex; width: 100%; }
+/* Однострочные выбор и файл в формах обмена на всю ширину не растягиваем — длинное поле выбора хуже читается. */
+.v2-ex .v2-field-wide:not(:has(textarea)) { max-width: 760px; }
 .v2-field-wide textarea { width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical; }
 textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface); }
 .v2-rn-list li { align-items: center; margin-bottom: 4px; }

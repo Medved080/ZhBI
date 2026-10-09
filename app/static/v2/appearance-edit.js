@@ -46,10 +46,9 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
       <div id="ap-body" class="v2-cards" role="group" aria-label="Цветовая гамма"></div>
       <p id="ap-status" class="v2-muted" role="status" aria-live="polite"></p>
       <h3 class="v2-report-h">Подписи и 3D</h3>
-      <div class="v2-fields" style="max-width:520px">
+      <div class="v2-fields">
         <label class="v2-field">Минимальный размер подписей на схеме, px (${MIN_LABEL_PX_MIN}–${MIN_LABEL_PX_MAX})
           <input type="number" id="ap-minlabel" min="${MIN_LABEL_PX_MIN}" max="${MIN_LABEL_PX_MAX}" step="1" value="${user.min_label_px ?? 12}"></label>
-        <div></div>
         <label class="v2-field">Подъём камеры 3D, ° (${VIEW3D_PITCH_MIN}–${VIEW3D_PITCH_MAX})
           <input type="number" id="ap-pitch" min="${VIEW3D_PITCH_MIN}" max="${VIEW3D_PITCH_MAX}" step="1" value="${user.view3d_pitch_deg ?? 55}"></label>
         <label class="v2-field">Поворот камеры 3D, °
