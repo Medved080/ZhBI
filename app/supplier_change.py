@@ -539,24 +539,16 @@ def mark_contracts(
 def _rebalance_allocate(rows: list, need: dict) -> list:
     """Раскладка внутри группы одинаковых изделий: какое изделие какое МЕСТО займёт (изделия меняются местами).
 
-    Из нескольких вариантов берётся лучший по (числу просроченных, максимальной просрочке, сумме дней опоздания, числу
-    затронутых изделий) — но только из тех, что НЕ ХУЖЕ прежнего итога (до перехода на обмен местами) сразу по первым трём
-    показателям. Варианты (плановые даты поставщика только переходят между изделиями группы):
+    Единственный алгоритм (решение пользователя 2026-10-09; прежние варианты — пары по выигрышу, строгие пары, минимум обменов, «дожим»,
+    шаг «привезённые на ранние места» — убраны): очередь МЕСТ отсортирована по требуемой дате (начало СМР последней актуализации, при её
+    отсутствии — директивное; места без требуемой даты — в конце), очередь ИЗДЕЛИЙ — по дате изделия (привезённое — фактическая дата
+    поставки, остальные — плановая, изделие без даты (по опции документа) — последним). i-е по порядку место получает i-е изделие: к самым
+    ранним по монтажу местам попадают самые ранние из доставляемых и уже доставленных. Группа — в рамках формы документа: «контракт + марка»,
+    при общем пуле — марка через контракты. Изделия с одинаковой датой, уже стоящие на «своих» местах, не двигаются.
 
-    * **P — пары по выигрышу.** Непересекающиеся пары: просроченное изделие меняется с изделием, у которого дата раньше, если в сумме
-      по паре просрочка уменьшается (партнёр может стать чуть позже, если выигрыш больше потери). Пары выбираются по убыванию выигрыша.
-    * **C — строгие пары.** Просроченное меняется только с тем, кто после обмена тоже в срок (самый «тугой» партнёр).
-    * **A — минимум обменов, как раньше.** Последовательные обмены, одно изделие может участвовать в нескольких (получаются цепочки).
-    * **A2** — то же, но уже вставшее в срок изделие повторно не меняется.
-    * **B — полная очередь.** Изделия по возрастанию требуемой даты получают плановые даты по возрастанию. Оптимум по максимальной
-      просрочке и сумме дней, но сдвигает почти весь набор. Участвует только если прежний итог был ею (она была строго лучше «минимума
-      обменов» по (просроченным, максимуму)) или она строго лучше любого локального варианта (2026-10-06: результат не хуже прежнего).
-
-    Вариант задаёт, какие плановые даты где окажутся; по нему строится перестановка «место ← изделие» (`receives`): изделие, чья дата
-    досталась месту, переезжает на это место со СВОИМИ статусом, историей и контрактом (механика «Обмена привязками»). Перестановка
-    разбивается на циклы: цикл из двух — пара, из трёх и более — цепочка (каждое получает от следующего по кругу). Изделия без
-    требуемой даты срочностью не обладают и могут быть только источником ранней даты. Результат детерминирован; повторный расчёт по
-    уже сбалансированному набору ничего не меняет.
+    Изделие переезжает на новое место со СВОИМИ плановой датой, статусом, историей и контрактом (механика «Обмена привязками»);
+    перестановка разбивается на циклы: цикл из двух — пара, из трёх и более — цепочка (каждое получает от следующего по кругу).
+    Результат детерминирован; повторный расчёт по уже сбалансированному набору ничего не меняет.
     """
     from datetime import date
 
@@ -584,82 +576,16 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     def late(plan_day, i):
         return max(0, plan_day - nd[i]) if nd[i] is not None else 0
 
-    def key(plan):
-        lates = [late(plan[i], i) for i in ids]
-        return (sum(1 for x in lates if x > 0), max(lates, default=0), sum(lates), sum(1 for i in ids if plan[i] != old[i]))
-
-    def plan_min_swaps(skip_on_time):
-        plan = dict(old)
-        queue = sorted((i for i in ids if late(plan[i], i) > 0), key=lambda i: (-late(plan[i], i), i))
-        for i in queue:
-            if skip_on_time and late(plan[i], i) == 0:
-                continue
-            ni, best = nd[i], None
-            for j in ids:
-                pj = plan[j]
-                if j == i or pj >= plan[i] or pj > ni:
-                    continue        # партнёр: дата раньше, и просроченному она подходит
-                nj = nd[j]
-                if nj is not None and plan[i] > nj:
-                    continue        # после обмена партнёр сам бы опоздал
-                k = (10 ** 6 if nj is None else nj - plan[i], j)      # самый «тугой» подходящий — запас остальных не тратим
-                if best is None or k < best[0]:
-                    best = (k, j)
-            if best:
-                j = best[1]
-                plan[i], plan[j] = plan[j], plan[i]
-        return plan
-
-    def plan_strict_pairs():
-        plan, taken = dict(old), set()
-        for i in sorted((i for i in ids if late(old[i], i) > 0), key=lambda i: (-late(old[i], i), i)):
-            if i in taken:
-                continue
-            best = None
-            for j in ids:
-                if j == i or j in taken or old[j] >= old[i] or old[j] > nd[i]:
-                    continue
-                if nd[j] is not None and old[i] > nd[j]:
-                    continue
-                k = (10 ** 6 if nd[j] is None else nd[j] - old[i], j)
-                if best is None or k < best[0]:
-                    best = (k, j)
-            if best:
-                j = best[1]
-                taken.update((i, j))
-                plan[i], plan[j] = old[j], old[i]
-        return plan
-
-    def plan_gain_pairs():
-        cand = []
-        for i in ids:
-            li = late(old[i], i)
-            if li == 0:
-                continue
-            for j in ids:
-                if j == i or old[j] >= old[i]:
-                    continue
-                lj, li2, lj2 = late(old[j], j), late(old[j], i), late(old[i], j)
-                gc = (li > 0) + (lj > 0) - (li2 > 0) - (lj2 > 0)
-                gd = li + lj - li2 - lj2
-                if gc > 0 or (gc == 0 and gd > 0):
-                    cand.append((-gc, -gd, i, j))
-        cand.sort()
-        plan, taken = dict(old), set()
-        for _, _, i, j in cand:
-            if i in taken or j in taken:
-                continue
-            taken.update((i, j))
-            plan[i], plan[j] = old[j], old[i]
-        return plan
-
     def plan_full_queue():
+        """Очередь: места по возрастанию ТРЕБУЕМОЙ даты (без требуемой — в конец), изделия по возрастанию ДАТЫ ИЗДЕЛИЯ (привезённое — факт
+        поставки, остальные — плановая, без даты — последние); i-му месту — дата i-го изделия. Самые ранние из привезённых и доставляемых
+        достаются самым ранним по монтажу местам."""
         queue = sorted(ids, key=lambda i: (nd[i] is None, nd[i] or 0, old[i], i))
         return dict(zip(queue, sorted(old.values())))
 
     def derive(plan):
-        """Перестановка «место ← изделие» по плану дат: у места новая дата = старая дата изделия-источника; при одинаковых датах
-        изделие, чья дата и так на месте, остаётся (лишних обменов нет), остальные сопоставляются по номеру."""
+        """Перестановка «место ← изделие» по плану дат: у места новая дата = дата изделия-источника; при одинаковых датах изделие, чья дата
+        и так на месте, остаётся (лишних обменов нет), остальные сопоставляются по номеру."""
         sources: dict = {}
         targets: dict = {}
         for i in ids:
@@ -673,134 +599,9 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
                 got[t] = src
         return got
 
-    def plan_of(got):
-        return {i: old[got.get(i, i)] for i in ids}
-
-    def prune(got):
-        """Убрать бесполезные участия: изделие x выбрасывается из цикла (оно остаётся на своём месте, а получавшее от него место берёт
-        у его источника), если от этого не растёт ни число просроченных, ни сумма дней, ни максимум. Так из «полной очереди» уходят
-        изделия, которые и так в срок и просто сдвигались по очереди: статусы и история у них зря не переезжают."""
-        got = dict(got)
-        given = {src: t for t, src in got.items()}
-        plan = plan_of(got)
-        cnt = sum(1 for i in ids if late(plan[i], i) > 0)
-        tot = sum(late(plan[i], i) for i in ids)
-        mx = max((late(plan[i], i) for i in ids), default=0)
-        changed = True
-        while changed:
-            changed = False
-            for x in sorted(got):
-                if x not in got:
-                    continue
-                t, src = given[x], got[x]                     # место t держит дату x, место x держит дату src
-                lt, lx = late(old[x], t), late(old[src], x)
-                lt2, lx2 = late(old[src], t), late(old[x], x)  # после выбрасывания: t берёт дату src, x остаётся при своей
-                n_cnt = cnt - (lt > 0) - (lx > 0) + (lt2 > 0) + (lx2 > 0)
-                n_tot = tot - lt - lx + lt2 + lx2
-                if n_cnt <= cnt and n_tot <= tot and lt2 <= mx and lx2 <= mx:
-                    cnt, tot = n_cnt, n_tot
-                    del got[x], given[x]
-                    if src == t:
-                        del got[t], given[t]
-                    else:
-                        got[t] = src
-                        given[src] = t
-                    changed = True
-        return got
-
-    def keyed(got):
-        return key(plan_of(got))
-
-    def polish(got):
-        """Дожим: пока какой-то обмен датами ПАРЫ изделий строго улучшает (число просроченных, максимум, сумму дней, затем сумму квадратов опозданий), он делается.
-        Нужен потому, что варианты выше — эвристики и оставляют «инверсии»: изделию, которому нужно раньше, досталась дата позже,
-        чем изделию, которому нужно позже (при той же сумме дней опоздания выравниваются — парный выигрыш этого не видел). Ключ строго
-        убывает, поэтому цикл конечен; результат не хуже выбранного."""
-        plan = plan_of(got)
-        lates = {i: late(plan[i], i) for i in ids}
-        cnt, tot, sq = sum(1 for x in lates.values() if x > 0), sum(lates.values()), sum(x * x for x in lates.values())
-        mx = max(lates.values(), default=0)
-        order = sorted((i for i in ids if nd[i] is not None), key=lambda i: (nd[i], i))   # улучшает только обмен «инверсии»: раньше нужное — позже получает
-        improved = True
-        while improved:
-            improved = False
-            for p, a in enumerate(order):
-                for b in order[p + 1:]:
-                    if plan[a] <= plan[b]:
-                        continue
-                    la2, lb2 = late(plan[b], a), late(plan[a], b)
-                    n_cnt = cnt - (lates[a] > 0) - (lates[b] > 0) + (la2 > 0) + (lb2 > 0)
-                    n_tot = tot - lates[a] - lates[b] + la2 + lb2
-                    if n_cnt > cnt or (n_cnt == cnt and n_tot > tot):
-                        continue
-                    n_sq = sq - lates[a] ** 2 - lates[b] ** 2 + la2 ** 2 + lb2 ** 2
-                    if (n_cnt, n_tot, n_sq) >= (cnt, tot, sq) and n_cnt == cnt and n_tot == tot and n_sq >= sq:
-                        continue
-                    lates[a], lates[b] = la2, lb2
-                    n_mx = max(lates.values(), default=0)
-                    if (n_cnt, n_mx, n_tot, n_sq) >= (cnt, mx, tot, sq):
-                        lates[a], lates[b] = late(plan[a], a), late(plan[b], b)     # максимум вырос — откат
-                        continue
-                    plan[a], plan[b] = plan[b], plan[a]
-                    cnt, tot, sq, mx = n_cnt, n_tot, n_sq, n_mx
-                    improved = True
-        return derive(plan)
-
-    def fact_first(got):
-        """Привезённые — на самые ранние по потребности места (2026-10-09, решение пользователя: привезённая плита стоит там, где нужно
-        в октябре, а непривезённая слева нужна раньше — их надо поменять, даже если обе в срок). Критерий просрочки (число просроченных,
-        максимум, сумма) такой пары не различает, поэтому это отдельный шаг ПОСЛЕ него: место `a` с более ранней потребностью, где
-        сидит НЕ привезённое изделие, меняется с местом `b` с более поздней потребностью, где сидит привезённое, — только если от
-        этого не растёт ни число просроченных, ни сумма дней, ни максимум. Каждый обмен убирает «инверсию» (раньше нужное место
-        без привезённого, позже нужное — с ним), поэтому цикл конечен; повторный расчёт по результату ничего не меняет."""
-        got = dict(got)
-
-        def src(i):
-            return got.get(i, i)
-        plan = plan_of(got)
-        lates = {i: late(plan[i], i) for i in ids}
-        cnt, tot, mx = sum(1 for v in lates.values() if v > 0), sum(lates.values()), max(lates.values(), default=0)
-        placed = sorted((i for i in ids if nd[i] is not None), key=lambda i: (nd[i], i))
-        again = True
-        while again:
-            again = False
-            delivered = [i for i in reversed(placed) if is_fact[src(i)]]        # места с привезёнными: от самой поздней потребности
-            for a in placed:
-                if is_fact[src(a)]:
-                    continue
-                for b in delivered:
-                    if nd[b] <= nd[a]:
-                        break                      # дальше потребность не позже — менять нечего
-                    la2, lb2 = late(plan[b], a), late(plan[a], b)
-                    n_cnt = cnt - (lates[a] > 0) - (lates[b] > 0) + (la2 > 0) + (lb2 > 0)
-                    n_tot = tot - lates[a] - lates[b] + la2 + lb2
-                    if n_cnt > cnt or n_tot > tot or max(la2, lb2) > mx:
-                        continue
-                    got[a], got[b] = src(b), src(a)
-                    plan[a], plan[b] = plan[b], plan[a]
-                    lates[a], lates[b], cnt, tot = la2, lb2, n_cnt, n_tot
-                    again = True
-                    break
-                if again:
-                    break
-        return {t: x for t, x in got.items() if t != x}
-
-    raw_variants = (plan_gain_pairs(), plan_strict_pairs(), plan_min_swaps(True), plan_min_swaps(False))
-    raw_full = plan_full_queue()
-    # Прежний итог (до перехода на обмен местами): «минимум обменов», а «полная очередь» — только если строго лучше по (просроченным, максимуму).
-    old_is_full = key(raw_full)[:2] < key(raw_variants[3])[:2]
-    reference = key(raw_full if old_is_full else raw_variants[3])
-    variants = [prune(derive(pl)) for pl in raw_variants]
-    full = prune(derive(raw_full))
-    best_local = min(variants, key=keyed)
-    candidates = list(variants)
-    if old_is_full or keyed(full)[:2] < keyed(best_local)[:2]:
-        candidates.append(full)        # полная очередь — только если прежний итог был ею или она строго лучше любого локального
-    # Результат не хуже прежнего ОДНОВРЕМЕННО по числу просроченных, максимальной просрочке и сумме дней опоздания; среди таких —
-    # лучший, а при равенстве — с меньшим числом затронутых изделий
-    feasible = [g for g in candidates if all(x <= y for x, y in zip(keyed(g)[:3], reference[:3]))]
-    receives = min(feasible, key=keyed)
-    receives = fact_first(polish(prune(receives)))
+    # ЕДИНСТВЕННЫЙ способ раскладки (решение пользователя 2026-10-09: «убрать парные замены, оставить только такую последовательность»):
+    # две отсортированные очереди — места по требуемой дате и изделия по дате поставки — совмещаются по порядку.
+    receives = derive(plan_full_queue())
 
     seen: set = set()
     cycles: list = []
