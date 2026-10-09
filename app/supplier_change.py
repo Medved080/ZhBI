@@ -576,32 +576,28 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     def late(plan_day, i):
         return max(0, plan_day - nd[i]) if nd[i] is not None else 0
 
-    def plan_full_queue():
-        """Очередь: места по возрастанию ТРЕБУЕМОЙ даты (без требуемой — в конец), изделия по возрастанию ДАТЫ ИЗДЕЛИЯ (привезённое — факт
-        поставки, остальные — плановая, без даты — последние); i-му месту — дата i-го изделия. Самые ранние из привезённых и доставляемых
-        достаются самым ранним по монтажу местам."""
-        queue = sorted(ids, key=lambda i: (nd[i] is None, nd[i] or 0, old[i], i))
-        return dict(zip(queue, sorted(old.values())))
+    # Дата изделия В ОЧЕРЕДИ (2026-10-09): привезённое — факт поставки; НЕ привезённое — плановая, но не раньше СЕГОДНЯ (просроченная плановая
+    # дата не значит, что изделие приедет раньше уже привезённых: раньше сегодняшнего дня оно не прибудет); изделие без даты — после всех.
+    today = date.today().toordinal()
+    eff = {i: (old[i] if is_fact[i] else max(old[i], today)) for i in ids}
+    if undated:
+        dated_eff = [eff[i] for i in ids if i not in undated]
+        for i in undated:
+            eff[i] = (max(dated_eff) if dated_eff else today) + 1
 
-    def derive(plan):
-        """Перестановка «место ← изделие» по плану дат: у места новая дата = дата изделия-источника; при одинаковых датах изделие, чья дата
-        и так на месте, остаётся (лишних обменов нет), остальные сопоставляются по номеру."""
-        sources: dict = {}
-        targets: dict = {}
-        for i in ids:
-            sources.setdefault(old[i], []).append(i)
-            targets.setdefault(plan[i], []).append(i)
-        got: dict = {}
-        for day, t_list in targets.items():
-            s_list = sources.get(day, [])
-            fixed = set(s_list) & set(t_list)
-            for t, src in zip([x for x in t_list if x not in fixed], [x for x in s_list if x not in fixed]):
-                got[t] = src
-        return got
-
-    # ЕДИНСТВЕННЫЙ способ раскладки (решение пользователя 2026-10-09: «убрать парные замены, оставить только такую последовательность»):
-    # две отсортированные очереди — места по требуемой дате и изделия по дате поставки — совмещаются по порядку.
-    receives = derive(plan_full_queue())
+    # ЕДИНСТВЕННЫЙ способ раскладки (решение пользователя 2026-10-09: «убрать парные замены, оставить только последовательность»): две
+    # отсортированные очереди — места по требуемой дате (без неё — в конце) и изделия по дате в очереди — совмещаются по порядку.
+    places = sorted(ids, key=lambda i: (nd[i] is None, nd[i] or 0, eff[i], i))
+    bundles = sorted(ids, key=lambda i: (eff[i], i))
+    assign = dict(zip(places, bundles))                    # место → изделие, которое его займёт
+    holder = {b: t for t, b in assign.items()}             # изделие → место, которое оно займёт
+    for t in places:                                       # изделие с той же датой, что уже стоит на месте, остаётся (лишних обменов нет)
+        b = assign[t]
+        if b != t and eff[t] == eff[b]:
+            s_place = holder[t]
+            assign[s_place], holder[b] = b, s_place
+            assign[t], holder[t] = t, t
+    receives = {t: b for t, b in assign.items() if t != b}
 
     seen: set = set()
     cycles: list = []
