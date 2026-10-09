@@ -48,9 +48,9 @@ function ensureStyle() {
 .emfp-parts li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-bottom: 1px solid var(--p-line); }
 .emfp-parts li:last-child { border-bottom: 0; }
 .emfp-parts span:last-child { color: var(--p-muted); white-space: nowrap; }
-.emfp-warn { border-left: 4px solid var(--p-bad); background: var(--p-surface); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+/* замечания и предупреждения о дубле — янтарные: это «обратите внимание», а не отказ (отказ разбора до предпросмотра не доходит) */
+.emfp-warn { border-left: 4px solid #d98e04; background: var(--p-surface); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 .emfp-warn ul { margin: 2px 0 0; padding-left: 16px; }
-.emfp-dup { border-left-color: #d98e04; }
 .emfp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .emfp-btn { padding: 8px 14px; border: 1px solid var(--p-line); border-radius: 7px; background: var(--p-surface); color: var(--p-ink); font: inherit; cursor: pointer; white-space: nowrap; }
 .emfp-btn:hover { border-color: var(--p-accent); }

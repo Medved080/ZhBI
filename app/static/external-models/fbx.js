@@ -31,12 +31,45 @@ function parseWithTrackedBlobUrls(loader, arrayBuffer) {
     blobUrls.push(url);
     return url;
   };
+  // FBXLoader сообщает о том, чего не умеет, через console.warn — по строке на материал при КАЖДОЙ разборке («ReflectionFactor map is not
+  // supported…», «ShininessExponent map…»: карты отражения и глянцевости из Blender). В консоли это шум, а человеку нужно одно — что
+  // пропущено. Поэтому на время СИНХРОННОГО parse() собираем эти сообщения (с числом повторов) и отдаём как замечания разбора — они
+  // видны в предпросмотре файла; остальные предупреждения идут в консоль как раньше.
+  const originalWarn = console.warn;
+  const loaderWarnings = new Map(); // текст → сколько раз
+  console.warn = (...args) => {
+    if (typeof args[0] === "string" && args[0].startsWith("THREE.FBXLoader:")) {
+      let i = 1;
+      const text = args[0].replace(/%s/g, () => String(args[i++]));
+      loaderWarnings.set(text, (loaderWarnings.get(text) || 0) + 1);
+      return;
+    }
+    originalWarn.apply(console, args);
+  };
   try {
     const group = loader.parse(arrayBuffer, "");
-    return { group, blobUrls };
+    return { group, blobUrls, loaderWarnings };
   } finally {
     URL.createObjectURL = original;
+    console.warn = originalWarn;
   }
+}
+
+const MAP_NAME_RU = {
+  ReflectionFactor: "отражение", ShininessExponent: "глянцевость", AmbientColor: "фоновый цвет",
+  SpecularFactor: "уровень блика", VectorDisplacementColor: "векторное смещение",
+};
+
+// Сообщение загрузчика → замечание разбора по-русски. Карты, которых нет в three.js, на геометрию не влияют: модель загрузится
+// без этих текстур (основная текстура цвета остаётся).
+function humanizeLoaderWarning(text, count) {
+  const times = count > 1 ? ` (у ${count} материалов)` : "";
+  const m = /^THREE\.FBXLoader: (\S+) map is not supported in three\.js, skipping texture\.$/.exec(text);
+  if (m) {
+    const ru = MAP_NAME_RU[m[1]];
+    return `Карта «${m[1]}»${ru ? ` (${ru})` : ""} не поддерживается в 3D — текстура пропущена${times}; на форму модели это не влияет.`;
+  }
+  return `Загрузчик FBX: ${text.replace(/^THREE\.FBXLoader:\s*/, "")}${times}`;
 }
 
 // onLoad менеджер вызывает, только когда закончилась хотя бы одна начатая загрузка: у FBX без текстур загрузок нет вовсе,
@@ -129,8 +162,9 @@ export async function loadExternalModelFbx({ arrayBuffer, THREE, FBXLoader, kind
   const textures = waitForTextures(manager, lim.textureTimeoutMs);
 
   const loader = new FBXLoader(manager);
-  const { group: rawGroup, blobUrls } = await runSerialized(() => parseWithTrackedBlobUrls(loader, arrayBuffer));
+  const { group: rawGroup, blobUrls, loaderWarnings } = await runSerialized(() => parseWithTrackedBlobUrls(loader, arrayBuffer));
   textures.settleIfIdle();
+  for (const [text, count] of loaderWarnings) warnings.push(humanizeLoaderWarning(text, count));
 
   removeLightsAndCameras(rawGroup);
   rawGroup.updateMatrixWorld(true);
