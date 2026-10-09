@@ -85,3 +85,9 @@
   .hc-picker { min-width: 0; } .hc-addrow .hc-grow { flex-basis: 100%; min-width: 0; } .hc-root.hc-root .hc-form input[type="text"] { width: 100% !important; }
   .hc-form label, .hc-bar label { flex: 1 1 100%; } .hc-deadline { flex-basis: 100%; }
 }
+
+/* Таблица сопоставления объектов 1С: выпадашка по умолчанию шириной с самое длинное название из 190+ объектов и раздувала таблицу
+   (2026-10-09, замечание пользователя: список шире окна, нужна горизонтальная прокрутка). Ширина — по доступному месту. */
+.hc-root.hc-root .hc-maptbl select { width: 100%; min-width: 180px; max-width: 460px; text-overflow: ellipsis; }
+.hc-maptbl td { min-width: 0; overflow-wrap: anywhere; }
+.hc-maptbl td:first-child { width: 38%; }
