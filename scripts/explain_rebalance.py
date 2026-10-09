@@ -80,8 +80,11 @@ def main() -> int:
         print(f"  кран / стоянка: {zones['crane']} / {zones['stance']}")
         print(f"  статус: {e['current_status']}; фактическая поставка: {e['actual_delivery_date'] or '—'}")
         print(f"  контракт: {cname} (id {e['contract_id']})")
+        fc = conn.execute("SELECT f.smr_start_date AS d FROM schedule_version_dates f WHERE f.element_id = ? AND f.version_id = "
+                          "(SELECT v.id FROM schedule_versions v WHERE v.object_id = ? AND v.kind = 'current' ORDER BY v.loaded_at DESC, v.id DESC LIMIT 1)",
+                          (e["id"], e["object_id"])).fetchone()
         print(f"  плановая поставка: {e['planned_delivery_date'] or '—'}; директивное начало СМР: {e['project_smr_start_date'] or '—'}; "
-              f"ТРЕБУЕМАЯ дата: {need or '—'}")
+              f"актуализированное начало СМР: {(fc['d'] if fc else None) or '—'}; ТРЕБУЕМАЯ дата (актуализация, иначе директивное): {need or '—'}")
         late = days(need, e["planned_delivery_date"])
         print(f"  просрочка плановой относительно требуемой: {('нет данных' if late is None else f'{late} дн.' if late > 0 else 'в срок (запас ' + str(-late) + ' дн.)')}")
         print(f"  входит в балансировку: {'ДА' if reason is None else 'НЕТ — ' + reason}")
