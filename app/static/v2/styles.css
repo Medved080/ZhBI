@@ -285,6 +285,9 @@ table.v2-table { width: 100%; border-collapse: separate; border-spacing: 0; text
 .v2-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 670px; }
 label.v2-field { display: flex; flex-direction: column; gap: 6px; font-size: 0.75rem; color: var(--muted); }
 label.v2-field input, label.v2-field select { font-size: 0.875rem; color: var(--ink); width: 100%; }
+/* Ключевые реквизиты документа (контракт, марка) — крупно и в рамке акцента: по ним человек проверяет, ЧТО он проводит (2026-10-09). Подпись — тёмным и жирным. */
+label.v2-field.v2-key { font-size: 0.8125rem; font-weight: 700; color: var(--ink); }
+#sd-inner label.v2-field.v2-key select, label.v2-field.v2-key select { font-size: 1.0625rem; font-weight: 700; padding: 10px 12px; border: 2px solid var(--accent); border-radius: 8px; background: var(--sel); min-height: 46px; }
 .v2-span { grid-column: 1 / -1; }
 
 /* -------- виджет адреса (app/static/address.js) и мини-карта

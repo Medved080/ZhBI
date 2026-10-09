@@ -296,9 +296,22 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
         x.error = unknownText + (wasNew ? " Проверьте список документов: черновик мог быть создан." : "");
         if (!wasNew) { try { const d = await api.get(`/supplier-changes/${x.id}`); x.error += ` На сервере: ${d.status_title}, изделий: ${d.items.length}, версия ${d.version === x.version ? "не изменилась — сохранение не применено" : "изменилась — сохранение могло примениться; закройте и откройте документ"}.`; } catch (e) { x.error += " Проверить состояние не удалось."; } }
       } else if (isStale(err)) x.error = `${err.detail} Закройте документ и откройте его заново — актуальная версия будет загружена; ваши правки будут потеряны.`;
+      else if (!wasNew && err instanceof ApiError && err.status === 409 && await resyncDoc(x)) return false;
       else x.error = err?.detail || "Не удалось сохранить";
       paint(); return false;
     }
+  }
+  // Состояние на экране разошлось с сервером (документ уже проведён или отменён в другом окне, в другой вкладке или прежним действием, ответ
+  // которого не дошёл): вместо противоречия «Черновик» + «Документ проведён» экран перечитывается с сервера и честно говорит, что случилось.
+  async function resyncDoc(x) {
+    try {
+      const d = await api.get(`/supplier-changes/${x.id}`);
+      if (d.status === x.status || f() !== x) return false;
+      S.f = fromDoc(d);
+      S.message = `Документ № ${d.number} на сервере уже «${d.status_title}» — проведение выполнено или отменено в другом окне либо прежним действием. Показана актуальная версия; несохранённые правки не применены.`;
+      loadFormDataSoon(); paint();
+      return true;
+    } catch (e) { return false; }
   }
   function loadFormDataSoon() { queueMicrotask(() => { if (!dead) loadFormData(true); }); }
 
@@ -397,6 +410,7 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
         } catch (e2) { x.error = `${unknownText} Проверить состояние не удалось — обновите страницу.`; paint(); return; }
       }
       if (isStale(err)) x.error = `${err.detail} Документ изменился — закройте его и откройте заново; ничего не выполнено.`;
+      else if (err instanceof ApiError && err.status === 409 && await resyncDoc(x)) return;
       else x.error = err?.detail || "Операция не выполнена";
       paint();
     }
@@ -780,11 +794,11 @@ export function mountSupplierDocs(container, { screen, objectId, api, rights, gr
       <div class="v2-fields" style="max-width:none; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
         <label class="v2-field">Дата документа<input type="date" data-f="date" value="${esc(x.date)}" ${dis}></label>
         <label class="v2-field">Номер (пусто — выдаст сервер)<input data-f="number" value="${esc(x.number)}" maxlength="30" ${dis} placeholder="авто"></label>
-        <label class="v2-field">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке, изд.|Просрочено"' : ""}>${fromOpts}</select></label>
-        ${swap || rb ? `<label class="v2-field">${rb ? "Марка" : "Марка обмена"}<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке|Всего|Просрочено"' : ""}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
+        <label class="v2-field v2-key">${swap ? "Контракт стороны 1" : rb ? "Контракт (поставщик)" : "Текущий поставщик (контракт)"}<select data-f="from" ${dis}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке, изд.|Просрочено"' : ""}>${fromOpts}</select></label>
+        ${swap || rb ? `<label class="v2-field v2-key">${rb ? "Марка" : "Марка обмена"}<select data-f="mark" ${dis || (!x.from ? "disabled" : "")}${x.kind === "date_rebalance" && !viewOnly ? ' data-cs-heads="К балансировке|Всего|Просрочено"' : ""}>${markOpts}</select>${x.marksError ? `<small class="v2-auth-error">${esc(x.marksError)}</small>` : ""}</label>` : ""}
         ${rb ? `<label class="v2-role-check v2-span"><input type="checkbox" data-a="rb-undated" ${x.undated ? "checked" : ""} ${dis}><span>Включить изделия без плановой даты поставки: в расчёте они считаются самыми последними в очереди поставок своей марки (позже самой поздней даты). Им достаются места, где изделие нужно позже всех; ранние даты и привезённые изделия уходят туда, где нужно раньше. Дата у такого изделия появится, когда оно получит плановую дату обменом.</span></label>` : ""}
         ${rb && x.from === RB_ALL ? `<label class="v2-role-check v2-span"><input type="checkbox" data-a="rb-pool" ${x.pool ? "checked" : ""} ${dis}><span>Общий пул дат: изделия одной марки делят плановые даты разных контрактов (даты переходят между контрактами; контракт изделия не меняется). Без галочки каждый контракт балансируется отдельно.</span></label>` : ""}
-        ${rb ? "" : `<label class="v2-field">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>`}
+        ${rb ? "" : `<label class="v2-field v2-key">${swap ? "Контракт стороны 2 (только с этой маркой)" : "Новый поставщик (контракт)"}<select data-f="to" ${dis || (swap && (!x.from || !x.mark) ? "disabled" : "")}>${toOpts}</select>${x.sideBError ? `<small class="v2-auth-error">${esc(x.sideBError)}</small>` : ""}${swap && !ro && x.from && x.mark && !x.sideBCounts.size && !x.sideBError ? `<small class="v2-muted">Марка «${esc(x.mark)}» больше нигде на объекте к контрактам не привязана.</small>` : ""}</label>`}
         <label class="v2-field v2-span">Причина<input data-f="reason" value="${esc(x.reason)}" ${dis} maxlength="300"></label>
         <label class="v2-field v2-span">Комментарий<input data-f="comment" value="${esc(x.comment)}" ${dis} maxlength="600"></label>
       </div>

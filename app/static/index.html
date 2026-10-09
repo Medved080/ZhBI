@@ -4373,6 +4373,9 @@
   .scd-contract-box h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
     letter-spacing: .03em; color: var(--color-text-muted); }
   .scd-contract-box select { width: 100%; }
+  /* Ключевые реквизиты документа (контракт, марка) — крупно и в рамке акцента (2026-10-09, замечание пользователя: «мелкие и невидимые») */
+  .scd-contract-box select, #scd-mark { font-size: 15px; font-weight: 700; padding: 9px 10px; border: 2px solid var(--color-primary); border-radius: var(--radius); min-height: 42px; }
+  #scd-mark-label { font-weight: 700; color: var(--color-text); }
   .scd-arrow { flex: 0 0 auto; font-size: 20px; color: var(--color-text-muted); text-align: center; }
   /* Средняя колонка: стрелка направления и под ней марка обмена. Ширина
      фиксирована — марка это одно короткое поле, и растягивать его на треть
