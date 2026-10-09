@@ -1714,3 +1714,74 @@ CREATE TABLE IF NOT EXISTS user_ui_state (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (user_id, scope)
 );
+
+
+-- Учёт численности персонала по объектам (2026-10-09, Docs/headcount.md): сколько рабочих подрядчик вывел на объект за день по
+-- виду работ. Приказ П-ОД-38: вносит менеджер проекта (руководитель проекта) или начальник участка до 11:00.
+
+-- Кодификатор видов работ — ОБЩИЙ для всех объектов (не WBS объекта work_types). Загружается xlsx «Справочник по видам работ (PBI)».
+CREATE TABLE IF NOT EXISTS work_codifier (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,         -- «250-01-01»
+    name TEXT NOT NULL,                -- «16.1.1. Комплектация паркинга»
+    parent_name TEXT,
+    section_name TEXT,
+    unit TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    retired_at TEXT,                   -- NULL — действует; вид работ не удаляется, на него ссылается численность
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Пул подрядчиков объекта. Из выгрузки SharePoint приходит только ИНН (иногда вместо него — название), поэтому название может
+-- быть пустым, пока пользователь его не внесёт или запись не свяжется с контрагентом по ИНН.
+CREATE TABLE IF NOT EXISTS headcount_contractors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    counterparty_id INTEGER REFERENCES counterparties (id) ON DELETE SET NULL,
+    name_raw TEXT,
+    inn_raw TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (inn_raw IS NOT NULL OR name_raw IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_contractors_inn ON headcount_contractors (object_id, inn_raw) WHERE inn_raw IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_contractors_name ON headcount_contractors (object_id, name_raw) WHERE inn_raw IS NULL;
+CREATE INDEX IF NOT EXISTS idx_hc_contractors_cp ON headcount_contractors (counterparty_id);
+
+-- Актуальное значение на ключ (объект, дата, подрядчик, вид работ). Прежние значения — в headcount_history.
+CREATE TABLE IF NOT EXISTS headcount_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    work_date TEXT NOT NULL,           -- YYYY-MM-DD
+    contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE RESTRICT,
+    codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
+    workers INTEGER NOT NULL CHECK (workers BETWEEN 1 AND 100000),
+    late INTEGER NOT NULL DEFAULT 0,   -- первое внесение позже срока (рабочий день — до 11:00, выходные — до 11:00 понедельника)
+    source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
+    entered_at TEXT NOT NULL DEFAULT (datetime('now')),
+    entered_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    UNIQUE (object_id, work_date, contractor_id, codifier_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hc_records_date ON headcount_records (work_date, object_id);
+CREATE INDEX IF NOT EXISTS idx_hc_records_contractor ON headcount_records (contractor_id);
+CREATE INDEX IF NOT EXISTS idx_hc_records_codifier ON headcount_records (codifier_id);
+
+-- Все значения по ключу: создание (old_workers NULL), замена, удаление (new_workers NULL). Ключ продублирован: запись могут удалить.
+CREATE TABLE IF NOT EXISTS headcount_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id INTEGER REFERENCES headcount_records (id) ON DELETE SET NULL,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    work_date TEXT NOT NULL,
+    contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE CASCADE,
+    codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
+    old_workers INTEGER,
+    new_workers INTEGER,
+    source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
+    changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    changed_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hc_history_key ON headcount_history (object_id, work_date, contractor_id, codifier_id);
+CREATE INDEX IF NOT EXISTS idx_hc_history_record ON headcount_history (record_id);

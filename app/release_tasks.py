@@ -1171,6 +1171,16 @@ RELEASE_TASKS = [
         "kind": KIND_CLEANUP,
         "run": _clear_retired_object_fields,
     },
+    {
+        "name": "2026-10-09-grant-headcount-baseline",
+        "version": "0.103",
+        "date": "2026-10-09",
+        "title": "Открыть «Численность» ролям по заводской раскладке",
+        "why": "новый раздел прав не выдан никому по умолчанию (app/db._seed_object_roles: нет строки — значит «Нет»); "
+               "без этого у ролей на объектах не появилось бы ни ввода, ни отчётов численности",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_baseline(conn, "headcount"),
+    },
 ]
 
 

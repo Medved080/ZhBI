@@ -609,6 +609,13 @@ _COLUMN_MIGRATIONS = [
     ("object_external_models", "scale_x", "REAL NOT NULL DEFAULT 1"),
     ("object_external_models", "scale_y", "REAL NOT NULL DEFAULT 1"),
     ("object_external_models", "scale_z", "REAL NOT NULL DEFAULT 1"),
+
+    # Учёт численности персонала (2026-10-09, Docs/headcount.md). GUID объекта в 1С: по нему выгрузка факта численности находит
+    # объект; сопоставляет человек вручную при первой загрузке. Не путать с object_uid — тот сквозной между серверами нашей системы.
+    ("objects", "guid_1c", "TEXT"),
+    # Подразделение перестало быть действующим (прежние дивизионы заводятся в тот же справочник как архивные): в выпадашках и отборах
+    # скрыто по умолчанию, у объектов, где оно уже выбрано, остаётся.
+    ("smu_catalog", "archived", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -1816,6 +1823,14 @@ def _ensure_element_uid_index(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_objects_guid_1c_index(conn: sqlite3.Connection) -> None:
+    """Один GUID 1С — один объект. Частичный индекс: у большинства объектов GUID не задан (NULL), пустую строку не храним.
+    Здесь, а не в schema.sql: колонка добавляется миграцией, а executescript отрабатывает раньше миграций."""
+    conn.execute("UPDATE objects SET guid_1c = NULL WHERE guid_1c = ''")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_objects_guid_1c ON objects (guid_1c) WHERE guid_1c IS NOT NULL")
+
+
 # Пространство имён для первичной выдачи object_uid существующим объектам.
 _OBJECT_UID_NAMESPACE = uuid.UUID("6f1d0b6e-3b0c-5c52-9a53-7a1c6d2e9a10")
 
@@ -2642,6 +2657,7 @@ def init_db() -> list:
         _ensure_elements_contract_line_index(conn)
         _ensure_element_uid_index(conn)
         _ensure_activity_category_index(conn)
+        _ensure_objects_guid_1c_index(conn)
         _bootstrap_default_object(conn, changes)
         _migrate_object_uid(conn, changes)   # ПОСЛЕ бутстрапа: ему тоже нужен идентификатор
         # Строго ПОСЛЕ бутстрапа объекта: проекту нужны объекты, которые он

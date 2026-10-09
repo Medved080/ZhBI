@@ -99,7 +99,7 @@ def list_smu(user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         return [dict(r) for r in conn.execute(
-            "SELECT id, name FROM smu_catalog ORDER BY name COLLATE NOCASE"
+            "SELECT id, name, archived FROM smu_catalog ORDER BY name COLLATE NOCASE"
         )]
     finally:
         conn.close()
@@ -150,6 +150,32 @@ def rename_smu(smu_id: int, body: CatalogEntryIn,
         activity.log("smu_rename", user=admin, entity_type="smu_catalog", entity_id=smu_id,
                      old_value=было, new_value=name)
     return {"id": smu_id, "name": name}
+
+
+class SmuArchivedIn(BaseModel):
+    archived: bool
+
+
+@router.put("/smu/{smu_id}/archived")
+def set_smu_archived(smu_id: int, body: SmuArchivedIn,
+                     admin: sqlite3.Row = Depends(require_service_feature("dict_smu", "write"))):
+    """Перевести подразделение в архивные (прежние дивизионы и упразднённые СМУ) или вернуть. Объекты, у которых оно выбрано, не
+    трогаются: архивность прячет запись только из выпадашек и отборов."""
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        row = conn.execute("SELECT * FROM smu_catalog WHERE id = ?", (smu_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="СМУ не найдено")
+        conn.execute("UPDATE smu_catalog SET archived = ?, updated_at = datetime('now') WHERE id = ?",
+                     (1 if body.archived else 0, smu_id))
+        conn.commit()
+    finally:
+        conn.close()
+    if bool(row["archived"]) != body.archived:
+        activity.log("smu_archive", user=admin, entity_type="smu_catalog", entity_id=smu_id, old_value=row["name"],
+                     new_value="архивное" if body.archived else "действующее")
+    return {"id": smu_id, "name": row["name"], "archived": 1 if body.archived else 0}
 
 
 # --------------------------------------------------------------- физлица

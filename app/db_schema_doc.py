@@ -88,6 +88,8 @@ TABLES = [
     ("object_uid", "TEXT", "U", "сквозной идентификатор объекта (uuid): по нему серверы находят объект друг у друга при обмене данными, "
                                  "название для этого не годится — его переименовывают; у существующих выдан из названия и created_at (одинаков "
                                  "на серверах одной линии баз), новым — триггер trg_objects_uid"),
+    ("guid_1c", "TEXT", "U", "GUID объекта в 1С (выгрузка факта численности из SharePoint); сопоставляет человек вручную при первой загрузке, "
+                             "пусто — объект не привязан; один GUID — один объект"),
     ("project_id", "INTEGER", "FK", "проект-владелец → projects.id (RESTRICT)"),
     ("kind", "TEXT", "", "тип учёта: zhbi — изделия по чертежу, mfr — блоки из модели; задаёт состав разделов"),
     ("status", "TEXT", "", "perspective/active/suspended/completed/archived — archived скрыт из крошки и выпадашек"),
@@ -566,6 +568,7 @@ TABLES = [
 ("smu_catalog", "smu_catalog — Справочник СМУ", C_REF, S_REF, [
     ("id", "INTEGER", "PK", "идентификатор записи справочника СМУ"),
     ("name", "TEXT", "U", "название подразделения (СМУ, дивизион)"),
+    ("archived", "INTEGER", "", "1 — подразделение больше не действует (прежние дивизионы): скрыто в выпадашках и отборах, у объектов с ним остаётся"),
     ("created_at", "TEXT", "", "создана"),
     ("updated_at", "TEXT", "", "изменена"),
 ]),
@@ -964,6 +967,55 @@ TABLES = [
     ("result_json", "TEXT", "", "результат первого успешного вызова (id созданных/дополненных отчётов), отдаётся при повторе"),
     ("created_at", "TEXT", "", "момент записи"),
 ]),
+("work_codifier", "work_codifier — Кодификатор видов работ (общий, для учёта численности)", C_REF, S_REF, [
+    ("id", "INTEGER", "PK", "идентификатор вида работ"),
+    ("code", "TEXT", "U", "код кодификатора (250-01-01); ключ при загрузке справочника и выгрузки численности"),
+    ("name", "TEXT", "", "наименование с номером раздела («16.1.1. Комплектация паркинга»)"),
+    ("parent_name", "TEXT", "", "родитель по кодификатору — группа работ"),
+    ("section_name", "TEXT", "", "раздел по кодификатору (26 разделов); верхний уровень иерархии отчёта"),
+    ("unit", "TEXT", "", "единица измерения"),
+    ("sort_order", "INTEGER", "", "порядок в файле справочника"),
+    ("retired_at", "TEXT", "", "когда вид работ выведен из действия (NULL — действует); удалять нельзя — на него ссылается численность"),
+    ("created_at", "TEXT", "", "создан"),
+    ("updated_at", "TEXT", "", "изменён"),
+]),
+("headcount_contractors", "headcount_contractors — Подрядчики объекта в учёте численности", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор подрядчика на объекте"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("counterparty_id", "INTEGER", "FK", "контрагент → counterparties.id (SET NULL); связывается по ИНН, пусто — пока ИНН не внесён или не найден"),
+    ("name_raw", "TEXT", "", "название как внесено или пришло из файла; из выгрузки SharePoint его нет, пока человек не заполнит"),
+    ("inn_raw", "TEXT", "U", "ИНН как пришёл (без проверки: бывают 9-значные и название вместо ИНН); пара (объект, ИНН) уникальна"),
+    ("created_at", "TEXT", "", "создан"),
+    ("updated_at", "TEXT", "", "изменён"),
+]),
+("headcount_records", "headcount_records — Численность: актуальное значение на день", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор записи"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE)"),
+    ("work_date", "TEXT", "U", "день, за который внесена численность (YYYY-MM-DD); выходные вносятся как обычные дни"),
+    ("contractor_id", "INTEGER", "FK", "подрядчик объекта → headcount_contractors.id (RESTRICT); ключ уникален вместе с объектом, днём и видом работ"),
+    ("codifier_id", "INTEGER", "FK", "вид работ → work_codifier.id (RESTRICT)"),
+    ("workers", "INTEGER", "", "число рабочих, 1–100 000; ноль не вносится — отсутствие записи означает «не было»"),
+    ("late", "INTEGER", "", "1 — первое внесение позже срока (рабочий день до 11:00 того же дня, выходные до 11:00 понедельника); при правке не меняется"),
+    ("source", "TEXT", "", "откуда запись: form — форма, import — выгрузка истории, bot — Telegram-бот (второй этап)"),
+    ("entered_at", "TEXT", "", "когда внесена впервые (для импорта — время ввода в SharePoint)"),
+    ("entered_by", "INTEGER", "FK", "кто внёс впервые → users.id (SET NULL)"),
+    ("updated_at", "TEXT", "", "когда число менялось в последний раз"),
+    ("updated_by", "INTEGER", "FK", "кто менял последним → users.id (SET NULL)"),
+]),
+("headcount_history", "headcount_history — Численность: все значения по ключу", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор записи истории"),
+    ("record_id", "INTEGER", "FK", "актуальная запись → headcount_records.id (SET NULL: запись могут удалить, история остаётся)"),
+    ("object_id", "INTEGER", "FK", "объект → objects.id (CASCADE); ключ продублирован, чтобы история пережила удаление записи"),
+    ("work_date", "TEXT", "", "день записи"),
+    ("contractor_id", "INTEGER", "FK", "подрядчик → headcount_contractors.id (CASCADE)"),
+    ("codifier_id", "INTEGER", "FK", "вид работ → work_codifier.id (RESTRICT)"),
+    ("old_workers", "INTEGER", "", "было; NULL — запись создана"),
+    ("new_workers", "INTEGER", "", "стало; NULL — запись удалена"),
+    ("source", "TEXT", "", "form / import / bot"),
+    ("changed_at", "TEXT", "", "когда"),
+    ("changed_by", "INTEGER", "FK", "кто → users.id (SET NULL)"),
+]),
+
 ]
 
 # ------------------------------------------------------------------- связи
@@ -1118,6 +1170,18 @@ FKS = [
     ("report_notes", "object_id", "objects", "id", "CASCADE"),
     ("activity_log", "user_id", "users", "id", "SET NULL"),
     ("activity_log", "impersonator_user_id", "users", "id", "режим «от имени»"),
+    ("headcount_contractors", "object_id", "objects", "id", "CASCADE"),
+    ("headcount_contractors", "counterparty_id", "counterparties", "id", "SET NULL"),
+    ("headcount_records", "object_id", "objects", "id", "CASCADE"),
+    ("headcount_records", "contractor_id", "headcount_contractors", "id", "RESTRICT"),
+    ("headcount_records", "codifier_id", "work_codifier", "id", "RESTRICT"),
+    ("headcount_records", "entered_by", "users", "id", "SET NULL"),
+    ("headcount_records", "updated_by", "users", "id", "SET NULL"),
+    ("headcount_history", "record_id", "headcount_records", "id", "SET NULL"),
+    ("headcount_history", "object_id", "objects", "id", "CASCADE"),
+    ("headcount_history", "contractor_id", "headcount_contractors", "id", "CASCADE"),
+    ("headcount_history", "codifier_id", "work_codifier", "id", "RESTRICT"),
+    ("headcount_history", "changed_by", "users", "id", "SET NULL"),
 ]
 
 # логические связи без внешнего ключа (пунктиром)
