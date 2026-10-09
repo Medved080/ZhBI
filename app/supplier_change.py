@@ -746,6 +746,45 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
                     improved = True
         return derive(plan)
 
+    def fact_first(got):
+        """Привезённые — на самые ранние по потребности места (2026-10-09, решение пользователя: привезённая плита стоит там, где нужно
+        в октябре, а непривезённая слева нужна раньше — их надо поменять, даже если обе в срок). Критерий просрочки (число просроченных,
+        максимум, сумма) такой пары не различает, поэтому это отдельный шаг ПОСЛЕ него: место `a` с более ранней потребностью, где
+        сидит НЕ привезённое изделие, меняется с местом `b` с более поздней потребностью, где сидит привезённое, — только если от
+        этого не растёт ни число просроченных, ни сумма дней, ни максимум. Каждый обмен убирает «инверсию» (раньше нужное место
+        без привезённого, позже нужное — с ним), поэтому цикл конечен; повторный расчёт по результату ничего не меняет."""
+        got = dict(got)
+
+        def src(i):
+            return got.get(i, i)
+        plan = plan_of(got)
+        lates = {i: late(plan[i], i) for i in ids}
+        cnt, tot, mx = sum(1 for v in lates.values() if v > 0), sum(lates.values()), max(lates.values(), default=0)
+        placed = sorted((i for i in ids if nd[i] is not None), key=lambda i: (nd[i], i))
+        again = True
+        while again:
+            again = False
+            delivered = [i for i in reversed(placed) if is_fact[src(i)]]        # места с привезёнными: от самой поздней потребности
+            for a in placed:
+                if is_fact[src(a)]:
+                    continue
+                for b in delivered:
+                    if nd[b] <= nd[a]:
+                        break                      # дальше потребность не позже — менять нечего
+                    la2, lb2 = late(plan[b], a), late(plan[a], b)
+                    n_cnt = cnt - (lates[a] > 0) - (lates[b] > 0) + (la2 > 0) + (lb2 > 0)
+                    n_tot = tot - lates[a] - lates[b] + la2 + lb2
+                    if n_cnt > cnt or n_tot > tot or max(la2, lb2) > mx:
+                        continue
+                    got[a], got[b] = src(b), src(a)
+                    plan[a], plan[b] = plan[b], plan[a]
+                    lates[a], lates[b], cnt, tot = la2, lb2, n_cnt, n_tot
+                    again = True
+                    break
+                if again:
+                    break
+        return {t: x for t, x in got.items() if t != x}
+
     raw_variants = (plan_gain_pairs(), plan_strict_pairs(), plan_min_swaps(True), plan_min_swaps(False))
     raw_full = plan_full_queue()
     # Прежний итог (до перехода на обмен местами): «минимум обменов», а «полная очередь» — только если строго лучше по (просроченным, максимуму).
@@ -761,7 +800,7 @@ def _rebalance_allocate(rows: list, need: dict) -> list:
     # лучший, а при равенстве — с меньшим числом затронутых изделий
     feasible = [g for g in candidates if all(x <= y for x, y in zip(keyed(g)[:3], reference[:3]))]
     receives = min(feasible, key=keyed)
-    receives = polish(prune(receives))
+    receives = fact_first(polish(prune(receives)))
 
     seen: set = set()
     cycles: list = []

@@ -140,6 +140,12 @@ def main() -> int:
         print(f"  согласованность истории после проведения: нарушена у {len(broken)} из {len(ok_before)} изделий")
         if broken:
             bad += 1
+        # повторный расчёт по уже сбалансированному набору ничего не меняет (в том числе шаг «привезённые — на ранние места»)
+        again = sc._rebalance_plan(conn, oid, contract_id, mark, None, flags["pool"], flags.get("include_undated", False))["summary"]
+        print(f"  повторный расчёт после проведения: обменов {again['moved']}")
+        if again["moved"]:
+            bad += 1
+            print("  ✗ повторный расчёт после проведения не пуст — расчёт не идемпотентен")
         mid = snapshot(work)
         changed_mid = diff(before, mid)
         print(f"  проведён: затронуто {done['moved']} изд. ({done['pairs']} пар, {done['chains']} цепочек); таблиц изменено: {len(changed_mid)}")
