@@ -170,3 +170,13 @@
 .hc-root.hc-root .hc-form-grid input[type="text"], .hc-root.hc-root .hc-form-grid input[type="number"] { width: 100% !important; height: 36px; box-sizing: border-box; }
 .hc-root.hc-root input.hc-num.bad { border-color: var(--hc-bad); }
 .hc-root.hc-root .hc-tbl td .hc-num { width: 76px !important; }
+
+/* Дерево видов работ: отступ по уровню, стрелка у веток */
+.hc-tree-cell { display: inline-flex; align-items: baseline; gap: 4px; }
+.hc-tree-btn { border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; width: 20px; padding: 0; font: inherit; flex: 0 0 auto; }
+.hc-tree-btn:hover { color: var(--hc-accent); }
+.hc-tree-gap { display: inline-block; width: 20px; flex: 0 0 auto; }
+.hc-pt tr.hc-pt-row.l1 td { font-weight: 600; background: var(--hc-soft); }
+.hc-pt tr.hc-pt-row.l2 td { font-weight: 500; }
+.hc-pt tr.hc-pt-row.ctx td { color: var(--hc-muted); }
+.hc-pt tr.hc-pt-row.sel td { background: color-mix(in srgb, var(--hc-accent) 18%, var(--hc-bg)); font-weight: 600; }

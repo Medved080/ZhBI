@@ -261,3 +261,13 @@ ok(_names.index("1. Проектно-изыскательские работы")
 _full = hc.list_codifier(object_id=obj, full=True, user=admin)["works"]
 ok(len(_full) >= len(_cod) and "records" in _full[0] and "retired_at" in _full[0], "кодификатор: полный список с использованием и датой вывода")
 print("КОДИФИКАТОР ПРОШЁЛ")
+
+# ---- иерархия кодификатора до конца
+_t = hc.codifier_tree([{"id": 1, "code": "a", "name": "12. Фасады"}, {"id": 2, "code": "b", "name": "12.2. Устройство"}, {"id": 3, "code": "c", "name": "12.2.3. Монтаж"},
+                       {"id": 4, "code": "d", "name": "12.2.3.3. Деталь"}, {"id": 5, "code": "e", "name": "12.5.1. Без промежуточного 12.5"}, {"id": 6, "code": "f", "name": "Без номера"}])
+_lv = {x["id"]: (x["level"], x["parent_id"], x["has_children"]) for x in _t}
+ok(_lv[4] == (4, 3, False) and _lv[3] == (3, 2, True) and _lv[2] == (2, 1, True) and _lv[1] == (1, None, True), "иерархия: 12.2.3.3 — строка 4-го уровня в цепочке 12 → 12.2 → 12.2.3")
+ok(_lv[5] == (2, 1, False), "иерархия: нет промежуточного уровня — цепляется к ближайшему вышестоящему")
+ok(_lv[6] == (1, None, False), "иерархия: позиция без номера — верхний уровень")
+ok([x["id"] for x in _t].index(3) < [x["id"] for x in _t].index(4), "иерархия: родитель идёт перед потомками")
+print("ИЕРАРХИЯ ПРОШЛА")

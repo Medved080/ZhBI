@@ -603,7 +603,7 @@ export function mountHeadcount(el, ctx) {
       ${st.codErr ? `<div class="hc-callout bad" role="alert">${esc(st.codErr)}</div>` : ""}
       ${all.length ? `<div id="hc-c-table"></div>` : `<div class="hc-callout warn">Справочник пуст. ${ctx.canAdmin ? "Загрузите файл «Справочник по видам работ» на вкладке «Загрузка данных»." : "Попросите администратора сервиса загрузить его."}</div>`}`;
     if (all.length) pickTable(pane.querySelector("#hc-c-table"), {
-      items: all, group: (w) => w.section_name || "Без раздела",
+      items: all, tree: true, treeColumn: "name",
       columns: [
         { key: "code", title: "Код", filter: true, cls: "nw", text: (w) => w.code, html: (w) => `<span class="hc-code">${esc(w.code)}</span>` },
         { key: "name", title: "Вид работ", filter: true, text: (w) => w.name, html: (w) => esc(w.name) },
@@ -723,14 +723,39 @@ export function mountHeadcount(el, ctx) {
 // onPick(item) — по щелчку на строке; selectedId — выделенная строка; rowClass(item).
 function pickTable(host, cfg) {
   const cols = cfg.columns, filters = {}, open = new Set();
+  const byId = new Map(cfg.items.map((x) => [x.id, x]));
+  const ancestors = (x) => { const a = []; let q = byId.get(x.parent_id); while (q) { a.push(q); q = byId.get(q.parent_id); } return a; };
+  if (cfg.tree && cfg.selectedId != null) { const sel = byId.get(cfg.selectedId); if (sel) ancestors(sel).forEach((a) => open.add(a.id)); }   // путь к выбранной позиции раскрыт
   if (cfg.selectedId != null && cfg.group) { const sel = cfg.items.find((x) => x.id === cfg.selectedId); if (sel) open.add(cfg.group(sel)); }   // группа выбранной позиции раскрыта
-  host.innerHTML = `<div class="hc-pt-bar">${cfg.group ? `<button type="button" class="hc-btn mini" data-act="open">Развернуть все</button><button type="button" class="hc-btn mini" data-act="close">Свернуть все</button>` : ""}<span class="hc-muted hc-small" data-role="count"></span></div>
+  host.innerHTML = `<div class="hc-pt-bar">${cfg.group || cfg.tree ? `<button type="button" class="hc-btn mini" data-act="open">Развернуть все</button><button type="button" class="hc-btn mini" data-act="close">Свернуть все</button>` : ""}<span class="hc-muted hc-small" data-role="count"></span></div>
     <div class="hc-scroll hc-pt-scroll"><table class="hc-tbl hc-pt"><thead><tr>${cols.map((c) => `<th class="${c.cls || ""}">${esc(c.title)}</th>`).join("")}</tr>
       <tr class="hc-pt-filters">${cols.map((c) => `<th>${c.filter ? `<input type="text" data-f="${c.key}" placeholder="Поиск" autocomplete="off" aria-label="Поиск по колонке «${esc(c.title)}»">` : ""}</th>`).join("")}</tr></thead><tbody></tbody></table></div>`;
   const body = host.querySelector("tbody"), count = host.querySelector('[data-role="count"]');
   const norm = (v) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim();
   const active = () => Object.values(filters).some((v) => norm(v));
+  const treeRender = () => {
+    const list = cfg.items.filter((x) => cols.every((c) => !c.filter || !norm(filters[c.key]) || norm(c.text(x)).includes(norm(filters[c.key]))));
+    const searching = active();
+    let visible;
+    if (searching) { const keep = new Set(); for (const x of list) { keep.add(x.id); ancestors(x).forEach((a) => keep.add(a.id)); } visible = cfg.items.filter((x) => keep.has(x.id)); }   // найденное и путь к нему
+    else visible = cfg.items.filter((x) => ancestors(x).every((a) => open.has(a.id)));
+    const hit = new Set(list.map((x) => x.id));
+    body.innerHTML = visible.map((x) => {
+      const isOpen = searching || open.has(x.id);
+      const cells = cols.map((c) => {
+        const inner = c.html(x);
+        if (c.key !== cfg.treeColumn) return `<td class="${c.cls || ""}">${inner}</td>`;
+        const caret = x.has_children ? `<button type="button" class="hc-tree-btn" data-tg="${x.id}" aria-expanded="${isOpen}" aria-label="${isOpen ? "Свернуть" : "Развернуть"}">${isOpen ? "▾" : "▸"}</button>` : `<span class="hc-tree-gap"></span>`;
+        return `<td class="${c.cls || ""}"><span class="hc-tree-cell" style="padding-left:${(x.level - 1) * 22}px">${caret}<span>${inner}</span></span></td>`;
+      }).join("");
+      return `<tr class="hc-pt-row l${Math.min(x.level, 4)} ${cfg.onPick ? "pick" : ""} ${x.id === cfg.selectedId ? "sel" : ""} ${searching && !hit.has(x.id) ? "ctx" : ""} ${cfg.rowClass ? cfg.rowClass(x) : ""}" data-id="${x.id}" data-level="${x.level}" tabindex="0">${cells}</tr>`;
+    }).join("") || `<tr><td colspan="${cols.length}" class="hc-muted">Ничего не найдено.</td></tr>`;
+    const levels = Math.max(0, ...cfg.items.map((x) => x.level || 1));
+    count.textContent = `Показано: ${list.length.toLocaleString("ru-RU")} из ${cfg.items.length.toLocaleString("ru-RU")}, уровней: ${levels}`;
+    host._visible = list;
+  };
   const render = () => {
+    if (cfg.tree) { treeRender(); return; }
     const list = cfg.items.filter((x) => cols.every((c) => !c.filter || !norm(filters[c.key]) || norm(c.text(x)).includes(norm(filters[c.key]))));
     const groups = new Map();
     for (const x of list) { const g = cfg.group ? cfg.group(x) : ""; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
@@ -747,15 +772,23 @@ function pickTable(host, cfg) {
   host.addEventListener("input", (e) => { const f = e.target.closest("[data-f]"); if (f) { filters[f.dataset.f] = f.value; render(); } });
   host.addEventListener("click", (e) => {
     const act = e.target.closest("[data-act]");
-    if (act) { if (act.dataset.act === "open") cfg.items.forEach((x) => open.add(cfg.group(x))); else open.clear(); render(); return; }
+    if (act) {
+      if (act.dataset.act === "open") cfg.items.forEach((x) => { if (cfg.tree) { if (x.has_children) open.add(x.id); } else open.add(cfg.group(x)); }); else open.clear();
+      render(); return;
+    }
+    const tg = e.target.closest("[data-tg]");
+    if (tg) { const id = Number(tg.dataset.tg); if (open.has(id)) open.delete(id); else open.add(id); render(); return; }
     const grp = e.target.closest(".hc-pt-grp");
     if (grp) { const g = grp.dataset.g; if (open.has(g)) open.delete(g); else open.add(g); render(); return; }
-    const row = e.target.closest(".hc-pt-row.pick");
-    if (row && cfg.onPick) cfg.onPick(cfg.items.find((x) => x.id === Number(row.dataset.id)));
+    const row = e.target.closest(".hc-pt-row");
+    if (!row) return;
+    const item = byId.get(Number(row.dataset.id));
+    if (cfg.onPick) cfg.onPick(item);
+    else if (cfg.tree && item?.has_children) { if (open.has(item.id)) open.delete(item.id); else open.add(item.id); render(); }   // без выбора щелчок по строке сворачивает/разворачивает
   });
   host.addEventListener("keydown", (e) => {
     const t = e.target;
-    if ((e.key === "Enter" || e.key === " ") && t.matches?.(".hc-pt-grp, .hc-pt-row.pick")) { e.preventDefault(); t.click(); return; }
+    if ((e.key === "Enter" || e.key === " ") && t.matches?.(".hc-pt-grp, .hc-pt-row")) { e.preventDefault(); t.click(); return; }
     if (e.key === "Enter" && t.matches?.("[data-f]") && cfg.onPick && host._visible?.length) { e.preventDefault(); cfg.onPick(host._visible[0]); }   // Enter в поиске — первая найденная
   });
   render();
@@ -807,7 +840,7 @@ function pickField(box, items, cfg) {
   const find = (id) => items.find((x) => x.id === id);
   const show = () => { xBtn.hidden = !chosen; };
   const open = () => openPickDialog({
-    title: cfg.title, hint: cfg.hint, items, columns: cfg.columns, group: cfg.group, selectedId: chosen,
+    title: cfg.title, hint: cfg.hint, items, columns: cfg.columns, group: cfg.group, tree: cfg.tree, treeColumn: cfg.treeColumn, selectedId: chosen,
     onPick: (item) => { chosen = item.id; input.value = cfg.label(item); show(); box.dispatchEvent(new Event("change", { bubbles: true })); },
     onClear: () => { chosen = null; input.value = ""; show(); box.dispatchEvent(new Event("change", { bubbles: true })); },
   });
@@ -822,8 +855,8 @@ function pickField(box, items, cfg) {
 // Вид работ — из кодификатора; разделы свёрнуты, поиск отдельно по коду и по названию.
 function workPicker(box, works) {
   return pickField(box, works, {
-    placeholder: "Вид работ не выбран", title: "Выбор вида работ из справочника", hint: "Разделы свёрнуты; поиск — по коду и по названию отдельно. Щёлкните строку, чтобы выбрать.",
-    label: (w) => `${w.code} ${w.name}`, group: (w) => w.section_name || "Без раздела",
+    placeholder: "Вид работ не выбран", title: "Выбор вида работ из справочника", hint: "Справочник — дерево до последнего уровня (разделы свёрнуты): стрелка раскрывает ветку, щелчок по строке выбирает позицию любого уровня. Поиск — по коду и по названию отдельно.",
+    label: (w) => `${w.code} ${w.name}`, tree: true, treeColumn: "name",
     columns: [
       { key: "code", title: "Код", filter: true, cls: "nw", text: (w) => w.code, html: (w) => `<span class="hc-code">${esc(w.code)}</span>` },
       { key: "name", title: "Вид работ", filter: true, text: (w) => w.name, html: (w) => esc(w.name) },

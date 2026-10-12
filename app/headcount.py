@@ -280,6 +280,35 @@ def codifier_sort_key(row) -> tuple:
     return (0, tuple(int(x) for x in m.group(1).split(".")), row["code"]) if m else (1, (), row["code"])
 
 
+def codifier_tree(rows: list) -> list:
+    """Иерархия кодификатора ДО КОНЦА: уровень определяется номером в названии («12.2.3.3» — 4-й уровень; «12.» — 1-й). Родитель — позиция
+    с самым длинным собственным префиксом номера из имеющихся (если промежуточной нет, позиция цепляется к ближайшей вышестоящей).
+    Строка добавляет `parent_id`, `level` (1 — раздел), `has_children`; порядок — как у codifier_sort_key (родитель всегда перед потомками)."""
+    ordered = sorted(rows, key=codifier_sort_key)
+    paths, by_path = {}, {}
+    for r in ordered:
+        m = _LEAD_NUM.match(r["name"] or "")
+        if m:
+            path = tuple(int(x) for x in m.group(1).split("."))
+            paths[r["id"]] = path
+            by_path.setdefault(path, r["id"])
+    level, out, parents = {}, [], set()
+    for r in ordered:
+        path, parent = paths.get(r["id"]), None
+        if path:
+            for n in range(len(path) - 1, 0, -1):
+                if path[:n] in by_path and by_path[path[:n]] != r["id"]:
+                    parent = by_path[path[:n]]
+                    break
+        level[r["id"]] = level[parent] + 1 if parent else 1
+        if parent:
+            parents.add(parent)
+        out.append({**dict(r), "parent_id": parent, "level": level[r["id"]]})
+    for r in out:
+        r["has_children"] = r["id"] in parents
+    return out
+
+
 @router.get("/codifier")
 def list_codifier(object_id: int, full: bool = False, user: sqlite3.Row = Depends(get_current_user)):
     """Виды работ кодификатора, по порядку номеров. Для выбора в форме (`full` не задан) — только действующие. `full=true` — справочник
@@ -293,7 +322,7 @@ def list_codifier(object_id: int, full: bool = False, user: sqlite3.Row = Depend
                 "(SELECT COUNT(*) FROM headcount_records r WHERE r.codifier_id = w.id) AS records FROM work_codifier w").fetchall()
         else:
             rows = conn.execute("SELECT id, code, name, parent_name, section_name, unit FROM work_codifier WHERE retired_at IS NULL").fetchall()
-        return {"works": [dict(r) for r in sorted(rows, key=codifier_sort_key)]}
+        return {"works": codifier_tree(rows)}
     finally:
         conn.close()
 
