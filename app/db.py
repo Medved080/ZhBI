@@ -703,6 +703,64 @@ def _migrate_crane_zone_conversion_constraints(conn: sqlite3.Connection, changes
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _migrate_headcount_itr(conn: sqlite3.Connection, changes: list) -> None:
+    """«Численность»: поле «ИТР» рядом с «Рабочие» (2026-10-12).
+
+    Всё, что исторически вносили как «количество», остаётся в `workers` — теперь это «Рабочие»; ИТР у прежних записей 0, «Итого» —
+    их сумма (в БД не хранится, считается в запросах). Старое ограничение `workers BETWEEN 1 AND 100000` не даёт внести строку «только
+    ИТР», а CHECK в SQLite не меняется на месте, поэтому таблица пересобирается (id сохраняются) по образцу прочих миграций; в журнале
+    изменений добавляются old_itr/new_itr, прежние значения получают 0 там, где было число (NULL — «было/стало пусто» — остаётся)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(headcount_records)")}
+    if not cols or "itr" in cols:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("""CREATE TABLE headcount_records_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+            work_date TEXT NOT NULL,
+            contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE RESTRICT,
+            codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
+            workers INTEGER NOT NULL DEFAULT 0 CHECK (workers BETWEEN 0 AND 100000),
+            itr INTEGER NOT NULL DEFAULT 0 CHECK (itr BETWEEN 0 AND 100000),
+            late INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
+            entered_at TEXT NOT NULL DEFAULT (datetime('now')),
+            entered_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+            UNIQUE (object_id, work_date, contractor_id, codifier_id),
+            CHECK (workers + itr >= 1)
+        )""")
+        old_cols = ("id, object_id, work_date, contractor_id, codifier_id, workers, late, source, entered_at, entered_by, "
+                    "updated_at, updated_by")
+        conn.execute(f"INSERT INTO headcount_records_new ({old_cols}, itr) SELECT {old_cols}, 0 FROM headcount_records")
+        conn.execute("DROP TABLE headcount_records")
+        conn.execute("ALTER TABLE headcount_records_new RENAME TO headcount_records")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_records_date ON headcount_records (work_date, object_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_records_contractor ON headcount_records (contractor_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_records_codifier ON headcount_records (codifier_id)")
+        hist = {r["name"] for r in conn.execute("PRAGMA table_info(headcount_history)")}
+        for col in ("old_itr", "new_itr"):
+            if col not in hist:
+                conn.execute(f"ALTER TABLE headcount_history ADD COLUMN {col} INTEGER")
+        conn.execute("UPDATE headcount_history SET old_itr = 0 WHERE old_workers IS NOT NULL AND old_itr IS NULL")
+        conn.execute("UPDATE headcount_history SET new_itr = 0 WHERE new_workers IS NOT NULL AND new_itr IS NULL")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"FK после пересборки численности: {len(violations)}")
+        conn.commit()
+        changes.append("численность: добавлено поле «ИТР» (прежнее количество — «Рабочие»), таблица пересобрана")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def _allow_cranes_without_outline(conn: sqlite3.Connection, changes: list) -> None:
     """Make the catalog crane outline nullable without changing zone IDs."""
     info = {r["name"]: r for r in conn.execute("PRAGMA table_info(zones)")}
@@ -2647,6 +2705,7 @@ def init_db() -> list:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         _apply_migrations(conn, changes)
         _migrate_crane_zone_conversion_constraints(conn, changes)
+        _migrate_headcount_itr(conn, changes)   # после executescript(schema.sql): таблицы численности уже есть
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)

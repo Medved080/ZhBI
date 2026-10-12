@@ -419,8 +419,9 @@ def apply_history(conn: sqlite3.Connection, file_bytes: bytes, mapping: dict, us
             for old, new, stamp in steps:
                 conn.execute(
                     "INSERT INTO headcount_history (record_id, object_id, work_date, contractor_id, codifier_id, old_workers, "
-                    "new_workers, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, 'import', ?, ?)",
-                    (record_id, object_id, iso, cid, wid, old, new, stamp, user_id))
+                    "new_workers, old_itr, new_itr, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, ?)",
+                    # выгрузка SharePoint знает только «количество» — это «Рабочие»; ИТР в ней нет и у загруженных записей 0
+                    (record_id, object_id, iso, cid, wid, old, new, None if old is None else 0, 0, stamp, user_id))
                 stat["history_rows"] += 1
         if dry_run:
             conn.rollback()

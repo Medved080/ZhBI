@@ -57,6 +57,7 @@
 .hc-tbl tr.dirty td { background: color-mix(in srgb, var(--hc-warn) 12%, var(--hc-bg)); }
 .hc-tbl tr.added td { background: color-mix(in srgb, var(--hc-accent) 8%, var(--hc-bg)); }
 .hc-num { width: 96px; text-align: right; }
+.hc-sum { display: inline-block; min-width: 96px; padding: 6px 8px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .hc-code { font-variant-numeric: tabular-nums; color: var(--hc-muted); font-size: 12px; }
 .hc-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--hc-line); color: var(--hc-muted); white-space: nowrap; }
 .hc-badge.bad { color: var(--hc-bad); border-color: var(--hc-bad); } .hc-badge.warn { color: var(--hc-warn); border-color: var(--hc-warn); }

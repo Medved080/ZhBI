@@ -111,6 +111,12 @@ ok(res["records_updated"] == 1 and res["history_rows"] == 1, "изменивше
 res = hi.apply_history(conn, hist, {G1: o1, G2: o2}, user=admin)
 try: hi.apply_history(conn, hist, {G2: o1}); ok(False, "объект уже привязан к другому GUID")
 except HTTPException as e: ok(e.status_code == 409, "объект с другим GUID — 409")
+# «ИТР» (2026-10-12): в выгрузке SharePoint только «количество» — оно грузится как «Рабочие», ИТР у загруженного 0, «итого» совпадает
+bad_rec = conn.execute("SELECT COUNT(*) FROM headcount_records WHERE source = 'import' AND itr <> 0").fetchone()[0]
+ok(bad_rec == 0, "загруженные записи: ИТР = 0")
+bad_hist = conn.execute("SELECT COUNT(*) FROM headcount_history WHERE source = 'import' AND ((new_workers IS NOT NULL AND new_itr IS NOT 0) "
+                        "OR (old_workers IS NOT NULL AND old_itr IS NOT 0) OR (old_workers IS NULL AND old_itr IS NOT NULL))").fetchone()[0]
+ok(bad_hist == 0, "история загрузки: ИТР 0 там, где есть число; «было пусто» — NULL")
 print("ЗАГРУЗКА: ВСЁ ПРОШЛО")
 
 # подсказки для несопоставленных объектов 1С

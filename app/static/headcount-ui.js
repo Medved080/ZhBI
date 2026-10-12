@@ -26,6 +26,11 @@ const fmtMoment = (s) => {
   const d = new Date(String(s).replace(" ", "T") + (String(s).includes("T") && /[zZ+]/.test(String(s)) ? "" : "Z"));
   return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
+// «Рабочие» и «ИТР» — целые от 0 до 100 000, вместе не меньше 1 («Итого» = их сумма, на сервере не хранится)
+const HC_MAX = 100000;
+const isCount = (v) => /^\d+$/.test(String(v).trim()) && Number(v) <= HC_MAX;
+const pairProblem = (w, i) => (!isCount(w) || !isCount(i) ? `Рабочие и ИТР — целые числа от 0 до ${HC_MAX.toLocaleString("ru-RU")}`
+  : Number(w) + Number(i) < 1 ? "Рабочие и ИТР вместе — не меньше 1" : "");
 const fmtNum = (n) => (n == null ? "" : Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 1 }));
 const fmtOverdue = (min) => (min >= 1440 ? `${Math.floor(min / 1440)} дн.` : min >= 60 ? `${Math.floor(min / 60)} ч` : `${min} мин`);
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -53,7 +58,7 @@ export function mountHeadcount(el, ctx) {
     tab: "input", works: null, contractors: null, loadError: "",
     date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
     contractorForm: null, facets: null,
-    rep: { preset: "objects", obj: null, bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
+    rep: { preset: "objects", obj: null, staff: "total", bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
     data: { mode: "records", obj: null, from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
   };
@@ -126,8 +131,8 @@ export function mountHeadcount(el, ctx) {
       ${st.dayError ? `<div class="hc-callout bad" role="alert">${esc(st.dayError)}</div>` : ""}
       <p id="hc-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
       ${d && !d.rows.length && d.last_date && d.last_date !== st.date ? `<div class="hc-callout">За этот день данных нет. Последний день с данными по объекту — <button type="button" class="hc-link" id="hc-lastday">${esc(fmtDate(d.last_date))}</button>.</div>` : ""}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Человек</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
-        <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Рабочие</th><th class="num">ИТР</th><th class="num">Итого</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
+        <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total-w"></td><td class="num" id="hc-total-i"></td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
       ${ctx.canWrite && !future ? `<div class="hc-add" id="hc-add"></div>
         <div class="hc-bar"><button type="button" class="hc-btn primary" id="hc-save">Сохранить</button><button type="button" class="hc-btn" id="hc-copy" title="Добавить в карточку строки предыдущего дня, которых за этот день ещё нет">Заполнить как за предыдущий день</button><span class="hc-muted" id="hc-dirty"></span></div>` : (ctx.canWrite ? "" : `<p class="hc-muted">Только просмотр: у вас нет права вносить численность на этом объекте.</p>`)}
       <div id="hc-history"></div>`;
@@ -154,6 +159,10 @@ export function mountHeadcount(el, ctx) {
   const contractorLabel = (id) => st.contractors.find((c) => c.id === id)?.display || "—";
   const workLabel = (id) => { const w = st.works.find((x) => x.id === id); return w ? `${w.code} ${w.name}` : "—"; };
 
+  // Значения строки на экране: введённое человеком (до сохранения) или то, что в БД
+  const rowVals = (r) => { const c = st.changed.get(r.id); return c ? { w: c.workers, i: c.itr } : { w: String(r.workers), i: String(r.itr ?? 0) }; };
+  const numOf = (v) => (isCount(v) ? Number(v) : 0);
+
   function paintRows() {
     const rows = st.day?.rows || [];
     const body = pane.querySelector("#hc-rows");
@@ -162,33 +171,46 @@ export function mountHeadcount(el, ctx) {
       r.inn_status === "unverified" ? `<span class="hc-badge warn">ИНН не проверен</span>` : "",
       r.source === "import" ? `<span class="hc-badge">из SharePoint</span>` : "",
     ].join(" ");
+    const field = (r, f, v) => ctx.canWrite
+      ? `<input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-edit="${r.id}" data-f="${f}" value="${esc(v)}" aria-label="${f === "workers" ? "Рабочие" : "ИТР"}: ${esc(r.contractor)}, ${esc(r.work_name)}">`
+      : esc(v);
     body.innerHTML = rows.length || st.added.length ? [
-      ...rows.map((r) => `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${esc(r.contractor)}</td><td><span class="hc-code">${esc(r.work_code)}</span> ${esc(r.work_name)}</td>
-        <td class="num">${ctx.canWrite ? `<input type="number" min="1" max="100000" step="1" class="hc-num" data-edit="${r.id}" value="${st.changed.has(r.id) ? esc(st.changed.get(r.id)) : r.workers}" aria-label="Человек: ${esc(r.contractor)}, ${esc(r.work_name)}">` : r.workers}</td>
+      ...rows.map((r) => { const v = rowVals(r); return `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${esc(r.contractor)}</td><td><span class="hc-code">${esc(r.work_code)}</span> ${esc(r.work_name)}</td>
+        <td class="num">${field(r, "workers", v.w)}</td><td class="num">${field(r, "itr", v.i)}</td><td class="num"><strong data-rowtotal="${r.id}">${numOf(v.w) + numOf(v.i)}</strong></td>
         <td class="hc-small">${esc(fmtMoment(r.entered_at))}${r.entered_by ? " · " + esc(r.entered_by) : ""} ${flags(r)}${r.changes ? ` <button type="button" class="hc-link" data-hist="${r.id}">правок: ${r.changes}</button>` : ` <button type="button" class="hc-link" data-hist="${r.id}">история</button>`}</td>
-        <td>${ctx.canWrite ? `<button type="button" class="hc-btn danger mini" data-del="${r.id}" aria-label="Удалить строку">✕</button>` : ""}</td></tr>`),
-      ...st.added.map((a, i) => `<tr class="added"><td>${esc(contractorLabel(a.contractor_id))}</td><td>${esc(workLabel(a.codifier_id))}</td><td class="num">${esc(a.workers)}</td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
+        <td>${ctx.canWrite ? `<button type="button" class="hc-btn danger mini" data-del="${r.id}" aria-label="Удалить строку">✕</button>` : ""}</td></tr>`; }),
+      ...st.added.map((a, i) => `<tr class="added"><td>${esc(contractorLabel(a.contractor_id))}</td><td>${esc(workLabel(a.codifier_id))}</td><td class="num">${esc(a.workers)}</td><td class="num">${esc(a.itr)}</td><td class="num"><strong>${a.workers + a.itr}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
         <td><button type="button" class="hc-btn mini" data-unadd="${i}" aria-label="Убрать строку из карточки">✕</button></td></tr>`),
-    ].join("") : `<tr><td colspan="5" class="hc-muted">За этот день численность не внесена.</td></tr>`;
-    const total = rows.reduce((s, r) => s + (st.changed.has(r.id) ? Number(st.changed.get(r.id)) || 0 : r.workers), 0) + st.added.reduce((s, a) => s + a.workers, 0);
-    pane.querySelector("#hc-total").textContent = total || "";
+    ].join("") : `<tr><td colspan="7" class="hc-muted">За этот день численность не внесена.</td></tr>`;
+    paintTotals();
     body.querySelectorAll("[data-edit]").forEach((i) => i.addEventListener("input", () => {
-      const id = Number(i.dataset.edit), row = rows.find((r) => r.id === id), v = i.value;
-      if (String(row.workers) === v || v === "") st.changed.delete(id); else st.changed.set(id, v);
-      i.closest("tr").classList.toggle("dirty", st.changed.has(id));
-      paintDirty();
+      const id = Number(i.dataset.edit), row = rows.find((r) => r.id === id), tr = i.closest("tr");
+      const w = tr.querySelector('[data-f="workers"]').value, it = tr.querySelector('[data-f="itr"]').value;
+      if (w === String(row.workers) && it === String(row.itr ?? 0)) st.changed.delete(id); else st.changed.set(id, { workers: w, itr: it });
+      tr.classList.toggle("dirty", st.changed.has(id));
+      tr.querySelector("[data-rowtotal]").textContent = numOf(w) + numOf(it);
+      paintTotals(); paintDirty();
     }));
     body.querySelectorAll("[data-unadd]").forEach((b) => b.addEventListener("click", () => { st.added.splice(Number(b.dataset.unadd), 1); paintRows(); paintDirty(); }));
     body.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => removeRow(Number(b.dataset.del))));
     body.querySelectorAll("[data-hist]").forEach((b) => b.addEventListener("click", () => showHistory(rows.find((r) => r.id === Number(b.dataset.hist)))));
   }
 
+  // Итоги дня под таблицей — с учётом ещё не сохранённых правок и добавленных строк
+  function paintTotals() {
+    const rows = st.day?.rows || [];
+    const tw = rows.reduce((n, r) => n + numOf(rowVals(r).w), 0) + st.added.reduce((n, a) => n + a.workers, 0);
+    const ti = rows.reduce((n, r) => n + numOf(rowVals(r).i), 0) + st.added.reduce((n, a) => n + a.itr, 0);
+    const set = (id, v) => { const n = pane.querySelector(id); if (n) n.textContent = v || ""; };
+    set("#hc-total-w", tw); set("#hc-total-i", ti); set("#hc-total", tw + ti);
+  }
+
   function paintDirty() {
     const n = pane.querySelector("#hc-dirty"); if (!n) return;
-    const bad = [...st.changed.values()].some((v) => !(Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 100000));
-    n.textContent = bad ? "Число рабочих — целое от 1 до 100 000" : hasChanges() ? `К сохранению: изменено ${st.changed.size}, добавлено ${st.added.length}` : "";
-    n.className = `hc-muted ${bad ? "bad" : ""}`;
-    const b = pane.querySelector("#hc-save"); if (b) b.disabled = st.saving || bad || !hasChanges();
+    const problem = [...st.changed.values()].map((c) => pairProblem(c.workers, c.itr)).find(Boolean) || "";
+    n.textContent = problem || (hasChanges() ? `К сохранению: изменено ${st.changed.size}, добавлено ${st.added.length}` : "");
+    n.className = `hc-muted ${problem ? "bad" : ""}`;
+    const b = pane.querySelector("#hc-save"); if (b) b.disabled = st.saving || !!problem || !hasChanges();
   }
 
   // ---- строка добавления: подрядчик + вид работ + число ----
@@ -197,29 +219,37 @@ export function mountHeadcount(el, ctx) {
     if (!st.contractors.length) { box.innerHTML = `<p class="hc-muted">Сначала добавьте подрядчиков объекта на вкладке «Подрядчики».</p>`; return; }
     box.innerHTML = `<div class="hc-addrow"><label>Подрядчик<select id="hc-a-ctr">${st.contractors.map((c) => `<option value="${c.id}">${esc(c.display)}</option>`).join("")}</select></label>
       <label class="hc-grow">Вид работ<div class="hc-picker" id="hc-a-work"></div></label>
-      <label>Человек<input type="number" min="1" max="100000" step="1" id="hc-a-num" class="hc-num"></label>
+      <label>Рабочие<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-w" class="hc-num"></label>
+      <label>ИТР<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-i" class="hc-num"></label>
+      <label>Итого<output id="hc-a-sum" class="hc-num hc-sum" aria-live="polite">0</output></label>
       <button type="button" class="hc-btn" id="hc-a-go">Добавить в карточку</button></div><p class="hc-msg bad" id="hc-a-err" role="alert"></p>`;
     const picker = workPicker(box.querySelector("#hc-a-work"), st.works);
     const err = box.querySelector("#hc-a-err");
+    const wIn = box.querySelector("#hc-a-w"), iIn = box.querySelector("#hc-a-i"), sum = box.querySelector("#hc-a-sum");
+    const val = (el) => (el.value.trim() === "" ? "0" : el.value);   // пустое поле — 0: вносят чаще что-то одно
+    const upd = () => { sum.textContent = numOf(val(wIn)) + numOf(val(iIn)); };
+    wIn.addEventListener("input", upd); iIn.addEventListener("input", upd);
     const add = () => {
-      const contractor_id = Number(box.querySelector("#hc-a-ctr").value), codifier_id = picker.value(), workers = Number(box.querySelector("#hc-a-num").value);
+      const contractor_id = Number(box.querySelector("#hc-a-ctr").value), codifier_id = picker.value();
       err.textContent = "";
       if (!codifier_id) { err.textContent = "Выберите вид работ"; return; }
-      if (!Number.isInteger(workers) || workers < 1 || workers > 100000) { err.textContent = "Число рабочих — целое от 1 до 100 000"; return; }
+      const problem = pairProblem(val(wIn), val(iIn));
+      if (problem) { err.textContent = problem; return; }
       if ((st.day?.rows || []).some((r) => r.contractor_id === contractor_id && r.codifier_id === codifier_id) || st.added.some((a) => a.contractor_id === contractor_id && a.codifier_id === codifier_id)) {
-        err.textContent = "Карточка содержит дубликат численности, сохранение невозможно: по этому подрядчику и виду работ за день строка уже есть — измените число в ней."; return;
+        err.textContent = "Карточка содержит дубликат численности, сохранение невозможно: по этому подрядчику и виду работ за день строка уже есть — измените её в таблице.";
+        return;
       }
-      st.added.push({ contractor_id, codifier_id, workers });
-      box.querySelector("#hc-a-num").value = ""; picker.clear(); paintRows(); paintDirty();
+      st.added.push({ contractor_id, codifier_id, workers: Number(val(wIn)), itr: Number(val(iIn)) });
+      wIn.value = ""; iIn.value = ""; upd(); picker.clear(); paintRows(); paintDirty();
     };
     box.querySelector("#hc-a-go").addEventListener("click", add);
-    box.querySelector("#hc-a-num").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    for (const el of [wIn, iIn]) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
   }
 
   async function save() {
     if (st.saving || !hasChanges()) return;
     const rows = [
-      ...(st.day?.rows || []).filter((r) => st.changed.has(r.id)).map((r) => ({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: Number(st.changed.get(r.id)) })),
+      ...(st.day?.rows || []).filter((r) => st.changed.has(r.id)).map((r) => ({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: Number(st.changed.get(r.id).workers), itr: Number(st.changed.get(r.id).itr) })),
       ...st.added,
     ];
     st.saving = true; paintDirty(); setMsg("Сохранение…");
@@ -234,7 +264,7 @@ export function mountHeadcount(el, ctx) {
 
   async function removeRow(id) {
     const r = st.day.rows.find((x) => x.id === id);
-    if (!(await ctx.confirm(`Удалить строку?\n\n${r.contractor}\n${r.work_code} ${r.work_name}\nЧеловек: ${r.workers}\n\nЗначение останется в истории изменений.`, { danger: true }))) return;
+    if (!(await ctx.confirm(`Удалить строку?\n\n${r.contractor}\n${r.work_code} ${r.work_name}\nРабочие: ${r.workers}, ИТР: ${r.itr ?? 0}, итого: ${r.total ?? r.workers}\n\nЗначение останется в истории изменений.`, { danger: true }))) return;
     try { await api.delete(`/objects/${ctx.objectId}/headcount/records/${id}`); st.changed.delete(id); await loadDay(); setMsg("Строка удалена.", "ok"); }
     catch (e) { setMsg(errText(e), "bad"); }
   }
@@ -244,7 +274,7 @@ export function mountHeadcount(el, ctx) {
       const prev = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${addDays(st.date, -1)}`);
       const have = new Set([...(st.day?.rows || []).map((r) => `${r.contractor_id}:${r.codifier_id}`), ...st.added.map((a) => `${a.contractor_id}:${a.codifier_id}`)]);
       const fresh = (prev.rows || []).filter((r) => !have.has(`${r.contractor_id}:${r.codifier_id}`));
-      fresh.forEach((r) => st.added.push({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: r.workers }));
+      fresh.forEach((r) => st.added.push({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: r.workers, itr: r.itr ?? 0 }));
       paintRows(); paintDirty();
       setMsg(fresh.length ? `Добавлено строк из предыдущего дня: ${fresh.length}. Проверьте числа и сохраните.` : "За предыдущий день нечего добавить.", fresh.length ? "ok" : "");
     } catch (e) { setMsg(errText(e), "bad"); }
@@ -255,8 +285,8 @@ export function mountHeadcount(el, ctx) {
     box.innerHTML = `<p class="hc-muted">Загрузка истории…</p>`;
     try {
       const d = await api.get(`/objects/${ctx.objectId}/headcount/history?date_from=${row.date}&date_to=${row.date}&contractor_id=${row.contractor_id}&codifier_id=${row.codifier_id}`);
-      box.innerHTML = `<h4>История: ${esc(row.contractor)} · ${esc(row.work_code)} · ${esc(fmtDate(row.date))}</h4><table class="hc-tbl"><thead><tr><th>Когда</th><th>Кто</th><th class="num">Было</th><th class="num">Стало</th><th>Источник</th></tr></thead><tbody>${
-        d.history.map((h) => `<tr><td>${esc(fmtMoment(h.changed_at))}</td><td>${esc(h.changed_by || "—")}</td><td class="num">${h.old ?? "—"}</td><td class="num">${h.new ?? "удалено"}</td><td>${h.source === "import" ? "загрузка из SharePoint" : h.source === "bot" ? "бот" : "форма"}</td></tr>`).join("")}</tbody></table>`;
+      box.innerHTML = `<h4>История: ${esc(row.contractor)} · ${esc(row.work_code)} · ${esc(fmtDate(row.date))}</h4><table class="hc-tbl"><thead><tr><th>Когда</th><th>Кто</th><th class="num">Рабочие было</th><th class="num">Рабочие стало</th><th class="num">ИТР было</th><th class="num">ИТР стало</th><th>Источник</th></tr></thead><tbody>${
+        d.history.map((h) => `<tr><td>${esc(fmtMoment(h.changed_at))}</td><td>${esc(h.changed_by || "—")}</td><td class="num">${h.old ?? "—"}</td><td class="num">${h.new ?? "удалено"}</td><td class="num">${h.old_itr ?? "—"}</td><td class="num">${h.new_itr ?? (h.new == null ? "удалено" : "—")}</td><td>${h.source === "import" ? "загрузка из SharePoint" : h.source === "bot" ? "бот" : "форма"}</td></tr>`).join("")}</tbody></table>`;
       box.scrollIntoView({ block: "nearest" });
     } catch (e) { box.innerHTML = `<div class="hc-callout bad" role="alert">${esc(errText(e))}</div>`; }
   }
@@ -319,15 +349,17 @@ export function mountHeadcount(el, ctx) {
       </div>
       <div class="hc-filters">
         <label class="hc-f-obj">Объект<select id="hc-r-obj">${objectOptions(r.obj)}</select></label>
+        <label>Показатель<select id="hc-r-staff" title="Итого — рабочие и ИТР вместе"><option value="total" ${r.staff === "total" ? "selected" : ""}>Итого</option><option value="workers" ${r.staff === "workers" ? "selected" : ""}>Рабочие</option><option value="itr" ${r.staff === "itr" ? "selected" : ""}>ИТР</option></select></label>
         <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}" title="Пусто — последний день с данными"></label>
         <label>Период с<input type="date" id="hc-r-from" value="${esc(r.from)}"></label>
         <label>по<input type="date" id="hc-r-to" value="${esc(r.to)}"></label>
         <button type="button" class="hc-btn primary" id="hc-r-go">Обновить</button>
         ${ctx.download ? `<button type="button" class="hc-btn" id="hc-r-xlsx" title="Выгрузить отчёт в Excel">В Excel</button>` : ""}
       </div>
-      <p class="hc-muted hc-small">Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
+      <p class="hc-muted hc-small">Показатель «Итого» — рабочие и ИТР вместе; «Рабочие» и «ИТР» показывают одно слагаемое. Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
       <div id="hc-r-body"></div>`;
     pane.querySelector("#hc-r-obj").addEventListener("change", (e) => { r.obj = e.target.value; loadReport(); });
+    pane.querySelector("#hc-r-staff").addEventListener("change", (e) => { r.staff = e.target.value; loadReport(); });
     pane.querySelector("#hc-r-smu")?.addEventListener("change", (e) => { r.bySmu = e.target.checked; r.toggled = new Set(); loadReport(); });
     pane.querySelector("#hc-r-open").addEventListener("click", () => { r.expand = "all"; r.toggled = new Set(); paintReportBody(); });
     pane.querySelector("#hc-r-close").addEventListener("click", () => { r.expand = null; r.toggled = new Set(); paintReportBody(); });
@@ -347,6 +379,7 @@ export function mountHeadcount(el, ctx) {
     if (r.asOfUser && r.asOf) q.set("as_of", r.asOf);   // не задана человеком — сервер берёт последний день с данными
     if (r.from && r.to) { q.set("date_from", r.from); q.set("date_to", r.to); }
     if (r.obj && r.obj !== "all") q.set("object_ids", r.obj);
+    if (r.staff && r.staff !== "total") q.set("staff", r.staff);
     return q.toString();
   }
 
@@ -478,18 +511,18 @@ export function mountHeadcount(el, ctx) {
     const from = r.offset + 1, to = r.offset + r.items.length;
     const sourceText = (x) => (x === "import" ? "загрузка из SharePoint" : x === "bot" ? "бот" : "форма");
     const head = `<div class="hc-bar"><span><strong>${from.toLocaleString("ru-RU")}–${to.toLocaleString("ru-RU")}</strong> из ${r.total.toLocaleString("ru-RU")}</span>
-      ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: <strong>${r.sum_workers.toLocaleString("ru-RU")}</strong></span>` : ""}
+      ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: итого <strong>${(r.sum_total ?? r.sum_workers).toLocaleString("ru-RU")}</strong> (рабочие ${r.sum_workers.toLocaleString("ru-RU")}, ИТР ${(r.sum_itr ?? 0).toLocaleString("ru-RU")})</span>` : ""}
       <button type="button" class="hc-btn mini" id="hc-d-prev" ${r.offset <= 0 ? "disabled" : ""}>◀ Назад</button><button type="button" class="hc-btn mini" id="hc-d-next" ${to >= r.total ? "disabled" : ""}>Вперёд ▶</button></div>`;
     const objCol = (name) => (all ? `<td>${esc(name)}</td>` : "");
     const rows = d.mode === "records" ? r.items.map((i) => `<tr><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
-        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td>
+        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td><td class="num">${i.itr ?? 0}</td><td class="num"><strong>${i.total ?? i.workers}</strong></td>
         <td class="hc-small"><span class="nw">${esc(fmtMoment(i.entered_at))}</span>${i.entered_by ? " · " + esc(i.entered_by) : ""}<br>${i.late ? `<span class="hc-badge bad">просрочено${i.overdue_minutes ? " на " + fmtOverdue(i.overdue_minutes) : ""}</span> ` : ""}<span class="hc-badge">${esc(sourceText(i.source))}</span>${i.changes ? ` <span class="hc-badge" title="Последняя правка: ${esc(fmtMoment(i.updated_at))}${i.updated_by ? " · " + esc(i.updated_by) : ""}">правок: ${i.changes}</span>` : ""}</td></tr>`).join("")
       : r.items.map((i) => `<tr><td class="hc-small"><span class="nw">${esc(fmtMoment(i.changed_at))}</span><br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
-        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td></tr>`).join("");
+        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td><td class="num">${i.old_itr ?? "—"} → ${i.new_itr ?? (i.new == null ? "удалено" : "—")}</td></tr>`).join("");
     const heads = d.mode === "records"
-      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Человек", "Внесено (кто и когда)"]
-      : ["Когда и кто изменил", "День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Было → стало"];
-    box.innerHTML = `${head}<div class="hc-scroll"><table class="hc-tbl"><thead><tr>${heads.map((h) => `<th class="${h === "Человек" || h === "Было → стало" ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие", "ИТР", "Итого", "Внесено (кто и когда)"]
+      : ["Когда и кто изменил", "День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие: было → стало", "ИТР: было → стало"];
+    box.innerHTML = `${head}<div class="hc-scroll"><table class="hc-tbl"><thead><tr>${heads.map((h) => `<th class="${["Рабочие", "ИТР", "Итого", "Рабочие: было → стало", "ИТР: было → стало"].includes(h) ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
     box.querySelector("#hc-d-prev").addEventListener("click", () => { d.offset = Math.max(0, d.offset - d.limit); loadData(); });
     box.querySelector("#hc-d-next").addEventListener("click", () => { d.offset += d.limit; loadData(); });
   }

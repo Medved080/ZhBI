@@ -1756,14 +1756,16 @@ CREATE TABLE IF NOT EXISTS headcount_records (
     work_date TEXT NOT NULL,           -- YYYY-MM-DD
     contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE RESTRICT,
     codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
-    workers INTEGER NOT NULL CHECK (workers BETWEEN 1 AND 100000),
+    workers INTEGER NOT NULL DEFAULT 0 CHECK (workers BETWEEN 0 AND 100000),   -- «Рабочие» (исторически — всё «количество»)
+    itr INTEGER NOT NULL DEFAULT 0 CHECK (itr BETWEEN 0 AND 100000),            -- «ИТР» (2026-10-12); «Итого» = workers + itr, не хранится
     late INTEGER NOT NULL DEFAULT 0,   -- первое внесение позже срока (рабочий день — до 11:00, выходные — до 11:00 понедельника)
     source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
     entered_at TEXT NOT NULL DEFAULT (datetime('now')),
     entered_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
-    UNIQUE (object_id, work_date, contractor_id, codifier_id)
+    UNIQUE (object_id, work_date, contractor_id, codifier_id),
+    CHECK (workers + itr >= 1)
 );
 CREATE INDEX IF NOT EXISTS idx_hc_records_date ON headcount_records (work_date, object_id);
 CREATE INDEX IF NOT EXISTS idx_hc_records_contractor ON headcount_records (contractor_id);
@@ -1779,6 +1781,8 @@ CREATE TABLE IF NOT EXISTS headcount_history (
     codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
     old_workers INTEGER,
     new_workers INTEGER,
+    old_itr INTEGER,                   -- «ИТР» до/после (2026-10-12); NULL вместе с old_workers/new_workers: «было/стало пусто»
+    new_itr INTEGER,
     source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
     changed_at TEXT NOT NULL DEFAULT (datetime('now')),
     changed_by INTEGER REFERENCES users (id) ON DELETE SET NULL

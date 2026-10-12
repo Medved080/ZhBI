@@ -1,6 +1,8 @@
 """Учёт численности персонала по объектам — API (2026-10-09, Docs/headcount.md).
 
-Что хранится. Сколько рабочих подрядчик вывел на объект за день по виду работ (кодификатор). Ключ записи — (объект, день,
+Что хранится. Сколько рабочих и ИТР подрядчик вывел на объект за день по виду работ (кодификатор). С 2026-10-12 число разделено на
+«Рабочие» (`workers`; сюда относится всё, что исторически вносили как «количество») и «ИТР» (`itr`); «Итого» = рабочие + ИТР, в БД не
+хранится — считается в запросах и в ответах API (`total`). Ключ записи — (объект, день,
 подрядчик, вид работ): повторный ввод по ключу заменяет число, прежнее остаётся в `headcount_history`. Вносит менеджер проекта
 (руководитель проекта) или начальник участка; право — раздел `headcount` (app/features.py).
 
@@ -34,6 +36,7 @@ MSK = ZoneInfo("Europe/Moscow")
 DEADLINE_TIME = time(11, 0)
 MAX_WORKERS = 100_000
 MAX_ROWS_PER_SAVE = 500
+STAFF_TITLES = {"total": "Итого", "workers": "Рабочие", "itr": "ИТР"}
 SOURCES = ("form", "import", "bot")
 
 router = APIRouter(prefix="/objects/{object_id}/headcount", tags=["headcount"])
@@ -286,6 +289,7 @@ class RowIn(BaseModel):
     contractor_id: int
     codifier_id: int
     workers: int
+    itr: Optional[int] = None   # не передан — у существующей записи остаётся прежним, у новой 0 (старый клиент про ИТР не знает)
 
 
 class SaveIn(BaseModel):
@@ -320,8 +324,8 @@ def _record_out(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"], "date": row["work_date"], "contractor_id": row["contractor_id"], "contractor": contractor["display"],
         "inn_status": contractor["inn_status"], "codifier_id": row["codifier_id"], "work_code": row["work_code"],
-        "work_name": row["work_name"], "section": row["section_name"], "workers": row["workers"],
-        "late": bool(row["late"]), "overdue_minutes": overdue_minutes, "source": row["source"],
+        "work_name": row["work_name"], "section": row["section_name"], "workers": row["workers"], "itr": row["itr"],
+        "total": row["workers"] + row["itr"], "late": bool(row["late"]), "overdue_minutes": overdue_minutes, "source": row["source"],
         "entered_at": row["entered_at"], "entered_by": _user_name(row, "ue"),
         "updated_at": row["updated_at"], "updated_by": _user_name(row, "uu"),
         "changes": max(0, row["changes"] - 1),   # первое внесение — тоже строка истории, «правок» меньше на одну
@@ -345,7 +349,8 @@ def _day_payload(conn, object_id: int, work_date: date) -> dict:
                         (object_id, now_msk().date().isoformat())).fetchone()[0]
     return {
         "date": work_date.isoformat(), "last_date": last, "deadline": due.isoformat(), "overdue_now": now_msk() > due,
-        "rows": items, "total": sum(i["workers"] for i in items),
+        "rows": items, "total": sum(i["total"] for i in items),
+        "total_workers": sum(i["workers"] for i in items), "total_itr": sum(i["itr"] for i in items),
     }
 
 
@@ -370,8 +375,8 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         raise HTTPException(status_code=400, detail="Численность за будущую дату внести нельзя")
     seen = set()
     for row in body.rows:
-        if not 1 <= row.workers <= MAX_WORKERS:
-            raise HTTPException(status_code=400, detail=f"Число рабочих — целое от 1 до {MAX_WORKERS}")
+        if not 0 <= row.workers <= MAX_WORKERS or (row.itr is not None and not 0 <= row.itr <= MAX_WORKERS):
+            raise HTTPException(status_code=400, detail=f"Рабочие и ИТР — целые числа от 0 до {MAX_WORKERS}")
         key = (row.contractor_id, row.codifier_id)
         if key in seen:
             raise HTTPException(status_code=400, detail="Карточка содержит дубликат численности, сохранение невозможно")
@@ -393,23 +398,28 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
             if row.codifier_id not in works:
                 raise HTTPException(status_code=400, detail="Вид работ не найден в кодификаторе")
             current = conn.execute(
-                "SELECT id, workers FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
+                "SELECT id, workers, itr FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
                 (object_id, iso, row.contractor_id, row.codifier_id)).fetchone()
+            new_itr = row.itr if row.itr is not None else (current["itr"] if current is not None else 0)
+            if row.workers + new_itr < 1:
+                raise HTTPException(status_code=400, detail="Рабочие и ИТР вместе — не меньше 1: пустую строку не вносят (чтобы убрать запись, удалите её)")
             if current is None:
                 if works[row.codifier_id]:
                     raise HTTPException(status_code=400, detail="Вид работ выведен из действия: новую численность по нему не вносят")
                 cur = conn.execute(
-                    "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, late, source, "
-                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, 'form', ?, ?, ?, ?)",
-                    (object_id, iso, row.contractor_id, row.codifier_id, row.workers, late, stamp, user["id"], stamp, user["id"]))
-                _history(conn, cur.lastrowid, object_id, iso, row.contractor_id, row.codifier_id, None, row.workers, "form", stamp, user["id"])
+                    "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, late, source, "
+                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, 'form', ?, ?, ?, ?)",
+                    (object_id, iso, row.contractor_id, row.codifier_id, row.workers, new_itr, late, stamp, user["id"], stamp, user["id"]))
+                _history(conn, cur.lastrowid, object_id, iso, row.contractor_id, row.codifier_id, None, row.workers, "form", stamp, user["id"],
+                         old_itr=None, new_itr=new_itr)
                 created += 1
-            elif current["workers"] == row.workers:
+            elif current["workers"] == row.workers and current["itr"] == new_itr:
                 unchanged += 1
             else:
-                conn.execute("UPDATE headcount_records SET workers = ?, updated_at = ?, updated_by = ?, source = 'form' WHERE id = ?",
-                             (row.workers, stamp, user["id"], current["id"]))
-                _history(conn, current["id"], object_id, iso, row.contractor_id, row.codifier_id, current["workers"], row.workers, "form", stamp, user["id"])
+                conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, updated_at = ?, updated_by = ?, source = 'form' WHERE id = ?",
+                             (row.workers, new_itr, stamp, user["id"], current["id"]))
+                _history(conn, current["id"], object_id, iso, row.contractor_id, row.codifier_id, current["workers"], row.workers, "form", stamp,
+                         user["id"], old_itr=current["itr"], new_itr=new_itr)
                 changed += 1
         conn.commit()
         payload = _day_payload(conn, object_id, work_date)
@@ -421,11 +431,12 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
     return {"created": created, "changed": changed, "unchanged": unchanged, "late": bool(late), **payload}
 
 
-def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id) -> None:
+def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id, *, old_itr=None, new_itr=None) -> None:
+    """Строка журнала: «Рабочие» было/стало и «ИТР» было/стало. NULL в паре — «было пусто» (создание) или «стало пусто» (удаление)."""
     conn.execute(
         "INSERT INTO headcount_history (record_id, object_id, work_date, contractor_id, codifier_id, old_workers, new_workers, "
-        "source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id))
+        "old_itr, new_itr, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (record_id, object_id, iso, contractor_id, codifier_id, old, new, old_itr, new_itr, source, stamp, user_id))
 
 
 @router.delete("/records/{record_id}")
@@ -437,13 +448,14 @@ def delete_record(object_id: int, record_id: int, user: sqlite3.Row = Depends(ge
         row = conn.execute("SELECT * FROM headcount_records WHERE id = ? AND object_id = ?", (record_id, object_id)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Запись численности не найдена")
-        _history(conn, record_id, object_id, row["work_date"], row["contractor_id"], row["codifier_id"], row["workers"], None, "form", _db_now(), user["id"])
+        _history(conn, record_id, object_id, row["work_date"], row["contractor_id"], row["codifier_id"], row["workers"], None, "form", _db_now(),
+                 user["id"], old_itr=row["itr"], new_itr=None)
         conn.execute("DELETE FROM headcount_records WHERE id = ?", (record_id,))
         conn.commit()
     finally:
         conn.close()
-    activity.log("headcount_delete", user=user, entity_type="object", entity_id=object_id, old_value=str(row["workers"]),
-                 details={"дата": row["work_date"], "подрядчик": row["contractor_id"], "вид работ": row["codifier_id"]})
+    activity.log("headcount_delete", user=user, entity_type="object", entity_id=object_id, old_value=str(row["workers"] + row["itr"]),
+                 details={"рабочие": row["workers"], "ИТР": row["itr"], "дата": row["work_date"], "подрядчик": row["contractor_id"], "вид работ": row["codifier_id"]})
     return {"deleted": record_id}
 
 
@@ -475,6 +487,9 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
             "id": r["id"], "date": r["work_date"], "contractor": _contractor_out_from_parts(
                 r["name_raw"], r["counterparty_name"], r["inn_raw"])["display"],
             "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
+            "old_itr": r["old_itr"], "new_itr": r["new_itr"],
+            "old_total": None if r["old_workers"] is None else r["old_workers"] + (r["old_itr"] or 0),
+            "new_total": None if r["new_workers"] is None else r["new_workers"] + (r["new_itr"] or 0),
             "source": r["source"], "changed_at": r["changed_at"], "changed_by": _user_name(r, "u"),
         } for r in rows]}
     finally:
@@ -484,6 +499,9 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
 # ------------------------------------------------------------------ отчёт по факту
 
 # уровень → (выражение ключа, выражение подписи). Подрядчики разных объектов с одним ИНН сводятся в одну строку.
+# что суммировать в отчёте: «Итого» — рабочие + ИТР (по умолчанию), либо одно из слагаемых
+STAFF_EXPR = {"total": "(r.workers + r.itr)", "workers": "r.workers", "itr": "r.itr"}
+
 _LEVELS = {
     "smu": ("COALESCE(CAST(o.smu_id AS TEXT), '')", "COALESCE(s.name, 'Без подразделения')"),
     "object": ("CAST(o.id AS TEXT)", "o.name"),
@@ -512,10 +530,15 @@ def report(levels: str = Query("object", description="Уровни через з
            object_ids: Optional[str] = Query(None, description="Объекты через запятую; по умолчанию все доступные"),
            smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = Query(
                None, description="Код кодификатора или его начало (130 — весь раздел)"),
-           contractor_inn: Optional[str] = None, user: sqlite3.Row = Depends(get_current_user)):
+           contractor_inn: Optional[str] = None,
+           staff: str = Query("total", description="Что считать: total — итого (рабочие + ИТР), workers — рабочие, itr — ИТР"),
+           user: sqlite3.Row = Depends(get_current_user)):
     """Факт численности: за опорный день, среднее за неделю (7 дней по опорный включительно), среднее за месяц опорного дня и, если заданы
     `date_from`/`date_to`, сумма человек-дней и среднее за период. Плана и отклонений нет (первый этап, решение 2026-10-09).
     Показатели складываются вверх по иерархии — см. докстроку модуля."""
+    if staff not in STAFF_EXPR:
+        raise HTTPException(status_code=400, detail="staff: total, workers или itr")
+    amount = STAFF_EXPR[staff]
     level_list = [x.strip() for x in levels.split(",") if x.strip()]
     if not level_list or any(x not in _LEVELS for x in level_list) or len(set(level_list)) != len(level_list):
         raise HTTPException(status_code=400, detail="levels: список без повторов из smu, object, section, work, contractor")
@@ -562,10 +585,10 @@ def report(levels: str = Query("object", description="Уровни через з
         group = ", ".join(f"k_{x}" for x in level_list)
         extra = ""
         if p_from and p_to:
-            extra = ", COALESCE(SUM(CASE WHEN r.work_date BETWEEN ? AND ? THEN r.workers END), 0) AS period_sum"
-        sql = (f"SELECT {keys}, COALESCE(SUM(CASE WHEN r.work_date = ? THEN r.workers END), 0) AS fact_day, "
-               "COALESCE(SUM(CASE WHEN r.work_date BETWEEN ? AND ? THEN r.workers END), 0) AS week_sum, "
-               "COALESCE(SUM(CASE WHEN r.work_date BETWEEN ? AND ? THEN r.workers END), 0) AS month_sum"
+            extra = f", COALESCE(SUM(CASE WHEN r.work_date BETWEEN ? AND ? THEN {amount} END), 0) AS period_sum"
+        sql = (f"SELECT {keys}, COALESCE(SUM(CASE WHEN r.work_date = ? THEN {amount} END), 0) AS fact_day, "
+               f"COALESCE(SUM(CASE WHEN r.work_date BETWEEN ? AND ? THEN {amount} END), 0) AS week_sum, "
+               f"COALESCE(SUM(CASE WHEN r.work_date BETWEEN ? AND ? THEN {amount} END), 0) AS month_sum"
                f"{extra} {join} GROUP BY {group} ORDER BY {', '.join(f'l_{x}' for x in level_list)}")
         sql_params = [ref.isoformat(), week_from.isoformat(), ref.isoformat(), month_from.isoformat(), ref.isoformat()]
         if extra:
@@ -595,11 +618,11 @@ def report(levels: str = Query("object", description="Уровни через з
 
         year_from = (p_from or ref.replace(month=1, day=1)).replace(day=1)
         month_rows = conn.execute(
-            "SELECT substr(r.work_date, 1, 7) AS m, SUM(r.workers) AS s, COUNT(DISTINCT r.work_date) AS d " + join +
+            f"SELECT substr(r.work_date, 1, 7) AS m, SUM({amount}) AS s, COUNT(DISTINCT r.work_date) AS d " + join +
             " AND r.work_date >= ? AND r.work_date <= ? GROUP BY m ORDER BY m",
             (*params, year_from.isoformat(), (p_to or ref).isoformat())).fetchall()
         months = [{"month": m["m"], "avg": round(m["s"] / m["d"], 3) if m["d"] else 0, "days": m["d"]} for m in month_rows]
-        return {"levels": level_list, "as_of": ref.isoformat(), "week_from": week_from.isoformat(), "month_from": month_from.isoformat(),
+        return {"staff": staff, "levels": level_list, "as_of": ref.isoformat(), "week_from": week_from.isoformat(), "month_from": month_from.isoformat(),
                 "week_days": week_days, "month_days": month_days, "period_days": period_days, "rows": out_rows,
                 "total": total, "months": months,
                 "objects": conn.execute("SELECT COUNT(DISTINCT r.object_id) " + join + " AND r.work_date <= ?", (*params, ref.isoformat())).fetchone()[0]}
@@ -613,7 +636,7 @@ LEVEL_TITLES = {"smu": "Подразделение", "object": "Объект", "
 @global_router.get("/report.xlsx")
 def report_xlsx(levels: str = Query("object"), as_of: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
                 object_ids: Optional[str] = None, smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = None,
-                contractor_inn: Optional[str] = None, user: sqlite3.Row = Depends(get_current_user)):
+                contractor_inn: Optional[str] = None, staff: str = Query("total"), user: sqlite3.Row = Depends(get_current_user)):
     """Тот же отчёт, что `/headcount/report`, одним листом Excel: по строке на сочетание выбранных уровней, итог внизу. Права те же."""
     from io import BytesIO
     from openpyxl import Workbook
@@ -621,10 +644,11 @@ def report_xlsx(levels: str = Query("object"), as_of: Optional[str] = None, date
     from openpyxl.utils import get_column_letter
 
     d = report(levels=levels, as_of=as_of, date_from=date_from, date_to=date_to, object_ids=object_ids, smu_id=smu_id, section=section,
-               work_code=work_code, contractor_inn=contractor_inn, user=user)
+               work_code=work_code, contractor_inn=contractor_inn, staff=staff, user=user)
     day = date.fromisoformat(d["as_of"]).strftime("%d.%m.%Y")
+    staff_note = "" if staff == "total" else f" ({STAFF_TITLES[staff]})"
     has_period = d["total"].get("period_sum") is not None
-    heads = [LEVEL_TITLES[x] for x in d["levels"]] + [f"Факт на {day}", "Среднее за неделю", "Среднее за месяц"]
+    heads = [LEVEL_TITLES[x] for x in d["levels"]] + [f"Факт на {day}{staff_note}", "Среднее за неделю", "Среднее за месяц"]
     if has_period:
         heads += ["Человек-дней за период", "Среднее за период"]
     wb = Workbook()
@@ -654,7 +678,7 @@ def report_xlsx(levels: str = Query("object"), as_of: Optional[str] = None, date
             row[0].number_format = "0.0"
     buf = BytesIO()
     wb.save(buf)
-    name = f"Численность_на_{day}.xlsx"
+    name = f"Численность{'' if staff == 'total' else '_' + STAFF_TITLES[staff]}_на_{day}.xlsx"
     from urllib.parse import quote
     return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename=\"headcount.xlsx\"; filename*=UTF-8''{quote(name)}"})
@@ -708,7 +732,7 @@ def _data_filters(conn, user, *, alias: str, object_ids: Optional[str], date_fro
 _DATA_FROM = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id JOIN work_codifier w ON w.id = r.codifier_id "
               "JOIN headcount_contractors c ON c.id = r.contractor_id LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
               "LEFT JOIN users ue ON ue.id = r.entered_by LEFT JOIN users uu ON uu.id = r.updated_by ")
-_DATA_COLS = ("SELECT r.id, r.object_id, o.name AS object_name, r.work_date, r.workers, r.late, r.source, r.entered_at, r.updated_at, "
+_DATA_COLS = ("SELECT r.id, r.object_id, o.name AS object_name, r.work_date, r.workers, r.itr, r.late, r.source, r.entered_at, r.updated_at, "
               "w.code AS work_code, w.name AS work_name, w.section_name, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn, "
               "ue.last_name AS ue_last, ue.first_name AS ue_first, uu.last_name AS uu_last, uu.first_name AS uu_first, "
               "(SELECT COUNT(*) FROM headcount_history h WHERE h.object_id = r.object_id AND h.work_date = r.work_date "
@@ -726,7 +750,8 @@ def _data_item(r) -> dict:
     return {
         "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"], "contractor": parts["display"],
         "inn": r["inn_raw"], "inn_status": parts["inn_status"], "section": r["section_name"], "work_code": r["work_code"],
-        "work_name": r["work_name"], "workers": r["workers"], "late": bool(r["late"]), "overdue_minutes": overdue,
+        "work_name": r["work_name"], "workers": r["workers"], "itr": r["itr"], "total": r["workers"] + r["itr"],
+        "late": bool(r["late"]), "overdue_minutes": overdue,
         "source": r["source"], "entered_at": r["entered_at"], "entered_by": _user_name(r, "ue"), "updated_at": r["updated_at"],
         "updated_by": _user_name(r, "uu"), "changes": max(0, r["hist"] - 1),
     }
@@ -770,11 +795,13 @@ def list_records(object_ids: Optional[str] = None, date_from: Optional[str] = No
         flt = _data_filters(conn, user, alias="r", object_ids=object_ids, date_from=date_from, date_to=date_to,
                             contractor_q=contractor_q, work_code=work_code, source=source, late=late)
         if flt is None:
-            return {"items": [], "total": 0, "sum_workers": 0, "offset": offset, "limit": limit, "all_total": _all_readable_total(conn, user)}
+            return {"items": [], "total": 0, "sum_workers": 0, "sum_itr": 0, "sum_total": 0, "offset": offset, "limit": limit, "all_total": _all_readable_total(conn, user)}
         where, params = " AND ".join(flt[0]), flt[1]
-        total, sum_w = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(r.workers), 0) {_DATA_FROM} WHERE {where}", params).fetchone()
+        total, sum_w, sum_i = conn.execute(
+            f"SELECT COUNT(*), COALESCE(SUM(r.workers), 0), COALESCE(SUM(r.itr), 0) {_DATA_FROM} WHERE {where}", params).fetchone()
         rows = conn.execute(f"{_DATA_COLS}{_DATA_FROM} WHERE {where} {_DATA_ORDER} LIMIT ? OFFSET ?", (*params, limit, offset)).fetchall()
-        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "offset": offset, "limit": limit,
+        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "sum_itr": sum_i, "sum_total": sum_w + sum_i,
+                "offset": offset, "limit": limit,
                 "all_total": _all_readable_total(conn, user) if not total else total}
     finally:
         conn.close()
@@ -797,7 +824,7 @@ def list_history_log(object_ids: Optional[str] = None, date_from: Optional[str] 
                "LEFT JOIN users u ON u.id = h.changed_by ")
         total = conn.execute(f"SELECT COUNT(*) {frm} WHERE {where}", params).fetchone()[0]
         rows = conn.execute(
-            "SELECT h.id, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.source, h.changed_at, "
+            "SELECT h.id, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.old_itr, h.new_itr, h.source, h.changed_at, "
             "w.code AS work_code, w.name AS work_name, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn, "
             f"u.last_name AS u_last, u.first_name AS u_first {frm} WHERE {where} ORDER BY h.changed_at DESC, h.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset)).fetchall()
@@ -805,6 +832,7 @@ def list_history_log(object_ids: Optional[str] = None, date_from: Optional[str] 
             "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"],
             "contractor": _contractor_out_from_parts(r["name_raw"], r["cpn"], r["inn_raw"])["display"],
             "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
+            "old_itr": r["old_itr"], "new_itr": r["new_itr"],
             "source": r["source"], "changed_at": r["changed_at"], "changed_by": _user_name(r, "u")} for r in rows],
             "total": total, "offset": offset, "limit": limit}
     finally:
@@ -855,12 +883,12 @@ def records_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] = No
     finally:
         conn.close()
     items = [_data_item(r) for r in rows]
-    heads = ["Дата", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Человек", "Просрочено", "Опоздание, мин",
-             "Источник", "Внесено", "Кем внесено", "Изменено", "Кем изменено", "Правок"]
+    heads = ["Дата", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Рабочие", "ИТР", "Итого", "Просрочено",
+             "Опоздание, мин", "Источник", "Внесено", "Кем внесено", "Изменено", "Кем изменено", "Правок"]
     body = [[date.fromisoformat(i["date"]), i["object"], i["contractor"], i["inn"], i["section"], i["work_code"], i["work_name"], i["workers"],
-             "да" if i["late"] else "", i["overdue_minutes"], SOURCE_TITLES.get(i["source"], i["source"]), _moment_xlsx(i["entered_at"]),
+             i["itr"], i["total"], "да" if i["late"] else "", i["overdue_minutes"], SOURCE_TITLES.get(i["source"], i["source"]), _moment_xlsx(i["entered_at"]),
              i["entered_by"], _moment_xlsx(i["updated_at"]), i["updated_by"], i["changes"]] for i in items]
-    resp = _xlsx_response(heads, body, [12, 34, 38, 14, 34, 14, 50, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
+    resp = _xlsx_response(heads, body, [12, 34, 38, 14, 34, 14, 50, 10, 8, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
     return resp
 
 
@@ -879,12 +907,14 @@ def history_log_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] 
             break
         items.extend(more)
         offset += 500
-    heads = ["Когда изменено", "Кто", "День численности", "Объект", "Подрядчик", "Код вида работ", "Вид работ", "Было", "Стало", "Источник"]
+    heads = ["Когда изменено", "Кто", "День численности", "Объект", "Подрядчик", "Код вида работ", "Вид работ", "Рабочие было", "Рабочие стало",
+             "ИТР было", "ИТР стало", "Источник"]
     body = [[_moment_xlsx(i["changed_at"]), i["changed_by"], date.fromisoformat(i["date"]), i["object"], i["contractor"], i["work_code"], i["work_name"],
-             i["old"], i["new"] if i["new"] is not None else "удалено", SOURCE_TITLES.get(i["source"], i["source"])] for i in items]
-    return _xlsx_response(heads, body, [17, 24, 14, 34, 38, 14, 50, 8, 10, 22], "Численность_журнал_изменений.xlsx")
+             i["old"], i["new"] if i["new"] is not None else "удалено", i["old_itr"], i["new_itr"] if i["new_itr"] is not None else ("удалено" if i["new"] is None else None),
+             SOURCE_TITLES.get(i["source"], i["source"])] for i in items]
+    return _xlsx_response(heads, body, [17, 24, 14, 34, 38, 14, 50, 12, 13, 10, 11, 22], "Численность_журнал_изменений.xlsx")
 
 
 def _empty_report(level_list: list, ref: date) -> dict:
-    return {"levels": level_list, "as_of": ref.isoformat(), "rows": [], "total": {"fact_day": 0, "week_avg": 0, "month_avg": 0},
+    return {"staff": "total", "levels": level_list, "as_of": ref.isoformat(), "rows": [], "total": {"fact_day": 0, "week_avg": 0, "month_avg": 0},
             "months": [], "objects": 0}

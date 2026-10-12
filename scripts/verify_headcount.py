@@ -106,7 +106,7 @@ for i in range(7):
     put(obj2, a2, "130-03", base + timedelta(days=i), 4)
 put(obj, a, "340-03-02", base + timedelta(days=6), 3)
 def rep(**kw):
-    d = dict(levels="object", as_of="2026-09-07", date_from=None, date_to=None, object_ids=f"{obj},{obj2}", smu_id=None, section=None, work_code=None, contractor_inn=None)
+    d = dict(levels="object", as_of="2026-09-07", date_from=None, date_to=None, object_ids=f"{obj},{obj2}", smu_id=None, section=None, work_code=None, contractor_inn=None, staff="total")
     d.update(kw); return hc.report(**d, user=admin)
 j = rep()
 by = {x["object"]["key"]: x for x in j["rows"]}
@@ -139,7 +139,7 @@ for name, fn, kw in [
 ]:
     try: fn(**kw, user=nobody); ok(False, f"{name}: без прав должен быть отказ")
     except HTTPException as e: ok(e.status_code == 403, f"{name}: без грантов — 403")
-j = hc.report(levels="object", as_of="2026-09-07", date_from=None, date_to=None, object_ids=None, smu_id=None, section=None, work_code=None, contractor_inn=None, user=nobody)
+j = hc.report(levels="object", as_of="2026-09-07", date_from=None, date_to=None, object_ids=None, smu_id=None, section=None, work_code=None, contractor_inn=None, staff="total", user=nobody)
 ok(j["rows"] == [] and j["objects"] == 0, "отчёт без грантов: пусто, чужие объекты не видны")
 print("ПРАВА ПРОШЛИ")
 
@@ -192,3 +192,64 @@ ok({o["id"] for o in fc} == {obj, obj2} and all(o["records"] > 0 and o["date_fro
 ok(hc.facets(user=nobody)["objects"] == [], "facets: без грантов — пусто")
 ok(rep(object_ids=f"{obj},{obj2}")["objects"] == 2, "отчёт: число объектов — по данным, а не по всем доступным")
 print("ОТБОР ПО ОБЪЕКТАМ ПРОШЁЛ")
+
+# ---- «Рабочие» / «ИТР» / «Итого» (2026-10-12)
+itr_day = date(2026, 6, 10)   # день вне прочих сценариев: цифры считаем от нуля
+def day_rows(o, d): return {(r["contractor_id"], r["codifier_id"]): r for r in hc.get_day(object_id=o, day=d.isoformat(), user=admin)["rows"]}
+hc.save_records(object_id=obj, body=hc.SaveIn(date=itr_day.isoformat(), rows=[
+    hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=10, itr=2),
+    hc.RowIn(contractor_id=a, codifier_id=w["130-03"], workers=0, itr=5)]), user=admin)
+rows = day_rows(obj, itr_day)
+r1, r2 = rows[(a, w["130-01-01"])], rows[(a, w["130-03"])]
+ok((r1["workers"], r1["itr"], r1["total"]) == (10, 2, 12), "рабочие 10 + ИТР 2 → итого 12")
+ok((r2["workers"], r2["itr"], r2["total"]) == (0, 5, 5), "строка «только ИТР»: рабочие 0, ИТР 5, итого 5")
+dd = hc.get_day(object_id=obj, day=itr_day.isoformat(), user=admin)
+ok((dd["total"], dd["total_workers"], dd["total_itr"]) == (17, 10, 7), "итоги дня: 17 = 10 + 7")
+# старый клиент не знает про ИТР (itr не передан): ИТР существующей строки остаётся
+hc.save_records(object_id=obj, body=hc.SaveIn(date=itr_day.isoformat(), rows=[hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=11)]), user=admin)
+r1 = day_rows(obj, itr_day)[(a, w["130-01-01"])]
+ok((r1["workers"], r1["itr"]) == (11, 2), "itr не передан — прежнее значение ИТР сохраняется")
+# явный itr=0 сбрасывает
+hc.save_records(object_id=obj, body=hc.SaveIn(date=itr_day.isoformat(), rows=[hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=11, itr=0)]), user=admin)
+ok(day_rows(obj, itr_day)[(a, w["130-01-01"])]["itr"] == 0, "itr=0 явно — ИТР обнулён")
+# повтор без изменений
+res = hc.save_records(object_id=obj, body=hc.SaveIn(date=itr_day.isoformat(), rows=[hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=11, itr=0)]), user=admin)
+ok(res["unchanged"] == 1 and res["changed"] == 0, "те же числа — без изменений")
+# проверки
+for bad, why in [(dict(workers=0, itr=0), "0 и 0"), (dict(workers=-1, itr=3), "отрицательные рабочие"), (dict(workers=3, itr=-1), "отрицательные ИТР"),
+                 (dict(workers=100001, itr=0), "рабочих больше 100 000"), (dict(workers=1, itr=100001), "ИТР больше 100 000")]:
+    rr = call(hc.save_records, object_id=obj, body=hc.SaveIn(date=itr_day.isoformat(), rows=[hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], **bad)]))
+    ok(rr.status_code == 400, f"{why} — 400")
+# история несёт обе пары
+h = hc.get_history(object_id=obj, date_from=itr_day.isoformat(), date_to=itr_day.isoformat(), contractor_id=a, codifier_id=w["130-01-01"], limit=50, user=admin)["history"]
+ok(h[-1]["old"] is None and h[-1]["new"] == 10 and h[-1]["old_itr"] is None and h[-1]["new_itr"] == 2, "история: создание с рабочими 10 и ИТР 2")
+ok(any(x["old_itr"] == 2 and x["new_itr"] == 0 and x["old"] == 11 and x["new"] == 11 for x in h), "история: правка только ИТР 2 → 0")
+# отчёт: Итого / Рабочие / ИТР
+def day_sum(staff):
+    j = rep(object_ids=str(obj), as_of=itr_day.isoformat(), levels="object", staff=staff)
+    return j["staff"], j["total"]["fact_day"]
+tot = day_sum("total"); wk = day_sum("workers"); it = day_sum("itr")
+ok(tot == ("total", 16) and wk == ("workers", 11) and it == ("itr", 5), f"отчёт на день: итого 16, рабочие 11, ИТР 5 (получено {tot}, {wk}, {it})")
+ok(call(hc.report, levels="object", as_of=None, date_from=None, date_to=None, object_ids=None, smu_id=None, section=None, work_code=None,
+        contractor_inn=None, staff="all").status_code == 400, "отчёт: неизвестный показатель — 400")
+# просмотр данных и Excel
+lr = hc.list_records(object_ids=str(obj), date_from=itr_day.isoformat(), date_to=itr_day.isoformat(), contractor_q=None, work_code=None, source=None, late=False, limit=50, offset=0, user=admin)
+ok((lr["sum_workers"], lr["sum_itr"], lr["sum_total"]) == (11, 5, 16) and all("itr" in i and "total" in i for i in lr["items"]), "«Все данные»: итоги рабочие 11, ИТР 5, итого 16")
+x = hc.records_xlsx(object_ids=str(obj), date_from=itr_day.isoformat(), date_to=itr_day.isoformat(), contractor_q=None, work_code=None, source=None, late=False, user=admin)
+from io import BytesIO
+from openpyxl import load_workbook
+wb = load_workbook(BytesIO(x.body)); wsx = wb.active
+heads = [c.value for c in wsx[1]]
+ok(heads[7:10] == ["Рабочие", "ИТР", "Итого"], "Excel записей: колонки Рабочие / ИТР / Итого")
+ok(sorted(r[9] for r in wsx.iter_rows(min_row=2, values_only=True)) == [5, 11], "Excel записей: «Итого» по строкам 5 и 11")
+xr = hc.report_xlsx(levels="object", as_of=itr_day.isoformat(), date_from=None, date_to=None, object_ids=str(obj), smu_id=None, section=None, work_code=None,
+                    contractor_inn=None, staff="itr", user=admin)
+ok("ИТР" in [c.value for c in load_workbook(BytesIO(xr.body)).active[1]][1], "Excel отчёта по ИТР: показатель назван в шапке")
+xh = hc.history_log_xlsx(object_ids=str(obj), date_from=itr_day.isoformat(), date_to=itr_day.isoformat(), contractor_q=None, work_code=None, source=None, user=admin)
+ok("ИТР было" in [c.value for c in load_workbook(BytesIO(xh.body)).active[1]], "Excel журнала: колонки ИТР было/стало")
+# удаление: в истории обе пары
+rid = day_rows(obj, itr_day)[(a, w["130-03"])]["id"]
+hc.delete_record(object_id=obj, record_id=rid, user=admin)
+h = hc.get_history(object_id=obj, date_from=itr_day.isoformat(), date_to=itr_day.isoformat(), contractor_id=a, codifier_id=w["130-03"], limit=50, user=admin)["history"]
+ok(h[0]["new"] is None and h[0]["new_itr"] is None and h[0]["old"] == 0 and h[0]["old_itr"] == 5, "удаление «только ИТР»: в журнале было 0/5, стало пусто")
+print("ИТР / РАБОЧИЕ / ИТОГО ПРОШЛИ")
