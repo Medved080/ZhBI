@@ -228,7 +228,7 @@ ZHBI_CALC_ASSETS_DIR=…/data/calc/assets .venv312/bin/python scripts/verify_cal
 ZHBI_CALC_ASSETS_DIR=…/data/calc/assets .venv312/bin/python scripts/verify_calc_readings.py   # слой чтений: 10 проверок
 ```
 
-Python локального окружения ЖБИ (`.venv`, 3.9) для подсистемы не годится: нужен 3.12 как в Docker
+Python локального окружения ЖБИ (`.venv`, 3.9) для подсистемы не годится: нужен 3.12 как в Docker. С 2026-10-12 сервер на Python старше 3.12 не стартует вовсе (`MIN_PYTHON` в `app/main.py`, проверка первой строкой `on_startup`): раньше он молча запускался без калькулятора, `/calc/` отвечал 404, а кнопка «Открыть в калькуляторе» пропадала. Осознанный запуск на старом Python (тестовый стенд без калькулятора) — `ZHBI_ALLOW_OLD_PYTHON=1` (задан в `scripts/real_auth_server.py` и `scripts/dev_rmr_stand.py`)
 (`python3.12 -m venv .venv312 && .venv312/bin/pip install -r requirements.txt`).
 
 ## Не сделано / открытые вопросы

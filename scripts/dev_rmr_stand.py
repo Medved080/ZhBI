@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("ZHBI_DB_PATH", "data/zhbi.anon.db")
+os.environ.setdefault("ZHBI_ALLOW_OLD_PYTHON", "1")      # тестовый стенд: запуск на любом Python
 
 import uvicorn
 

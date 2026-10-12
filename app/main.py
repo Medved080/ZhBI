@@ -5,6 +5,7 @@ import threading
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -256,6 +257,26 @@ from app.upload_limits import (
     read_upload_limited,
 )
 from app.users import router as users_router, sessions_router
+
+# Минимальный Python сервиса. Подсистема «Калькулятор» (app/calc) использует синтаксис 3.10+ и на более старом Python молча не подключается:
+# сервер стартует, но /calc/ отвечает 404, а кнопка «Открыть в калькуляторе» пропадает. 2026-10-12 так вышло, когда дашборд перезапустил сервер
+# из .venv (Python 3.9) вместо .venv312. Поэтому на старом Python сервер не стартует вовсе; импорт app.main скриптами это не затрагивает.
+MIN_PYTHON = (3, 12)
+
+
+def _require_supported_python():
+    if sys.version_info[:2] >= MIN_PYTHON:
+        return
+    have = "%d.%d" % sys.version_info[:2]
+    if os.environ.get("ZHBI_ALLOW_OLD_PYTHON") == "1":
+        print(f"[startup] ВНИМАНИЕ: Python {have} (нужен {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+), запуск разрешён ZHBI_ALLOW_OLD_PYTHON=1: подсистема «Калькулятор» недоступна.")
+        return
+    raise RuntimeError(
+        f"Сервер запущен на Python {have}, а ЖБИ требует {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+: на более старом подсистема «Калькулятор» молча не подключается "
+        f"(/calc/ отвечает 404, пропадает кнопка «Открыть в калькуляторе»). Запустите через .venv312: "
+        f".venv312/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 (или scripts/start_8000.sh). "
+        f"Тестовый стенд без калькулятора на старом Python: задайте ZHBI_ALLOW_OLD_PYTHON=1.")
+
 
 # Интерактивная документация (/docs, /redoc) и схема (/openapi.json)
 # анонимному пользователю сети не нужны и раскрывают всю карту API —
@@ -725,6 +746,7 @@ def _warn_unknown_menu_features() -> None:
 
 @app.on_event("startup")
 def on_startup():
+    _require_supported_python()      # до миграций и любых записей в базу: на неподходящем Python сервер не стартует
     # Обычный старт НЕ импортирует ничего из Input/ (живой запрос
     # пользователя 2026-07-29: "убрать загрузку данных при старте системы,
     # данные загружаем только интерактивно").

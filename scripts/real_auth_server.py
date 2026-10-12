@@ -43,6 +43,7 @@ for login in USERS:
     c.execute("UPDATE users SET password_hash=?, password_salt=?, must_change_password=0, auth_method='local' WHERE domain_login=?", (h, salt, login))
 c.commit(); c.close()
 
+os.environ.setdefault("ZHBI_ALLOW_OLD_PYTHON", "1")      # тестовый стенд: запуск на любом Python (сервер на старом Python иначе не стартует)
 import uvicorn  # noqa: E402
 
 print(f"настоящий сервер: http://127.0.0.1:{port}/v2  (копия БД: {dst}; логины {', '.join(USERS)}; пароль {TEST_PASSWORD})", flush=True)
