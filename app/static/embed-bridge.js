@@ -194,6 +194,7 @@
     }).filter(Boolean);
     const sel = st.selected ? { kind: st.selected.kind, id: st.selected.id } : null;
     return {
+      restored: !!(typeof uiState !== "undefined" && uiState.fetchedData),   // сохранённое состояние рабочего места найдено на сервере
       hasData, hasModel: !/ещё не загружались/.test(byId("revit-plan-head")?.textContent || ""), head: (byId("revit-plan-head")?.textContent || "").trim(), status: (byId("revit-plan-status")?.textContent || "").trim(),
       truncated: !!(st.data && st.data.truncated),
       elements: hasData && st.data.elements ? st.data.elements.length : 0,

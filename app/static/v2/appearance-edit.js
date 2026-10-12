@@ -59,6 +59,10 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
         <button type="button" class="v2-btn v2-primary" id="ap-view3d-save">Сохранить ракурс 3D</button>
       </div>
       <p id="ap-view-status" class="v2-muted" role="status" aria-live="polite"></p>
+      <h3 class="v2-report-h">Настройки схемы по рабочим местам</h3>
+      <label class="v2-role-check"><input type="checkbox" id="ap-separate" disabled><span>Хранить фильтры и «Вид» отдельно для каждого рабочего места (Модель, АРМ прораба, АРМ комплектовщика)</span></label>
+      <p class="v2-muted">Фильтры, зоны, режим 2D/3D, подписи, внешние модели и камера запоминаются за вами по каждому объекту и возвращаются при следующем открытии. По умолчанию они общие для всех рабочих мест объекта; с галочкой у каждого места свой набор (первый раз он берётся из общего). «Модель МФР» хранит свой набор всегда. Настройка личная, общая для V1 и V2.</p>
+      <p id="ap-separate-status" class="v2-muted" role="status" aria-live="polite"></p>
       <h3 class="v2-report-h">Тени и солнце в 3D</h3>
       <label class="v2-role-check"><input type="checkbox" id="ap-shadows" ${lsGet(SHADOWS_KEY) === "1" ? "checked" : ""}><span>Солнце и тени — силуэт здания на земле и затенение элементов друг другом</span></label>
       <p class="v2-muted">В режиме «3D лёгкий» тени не включаются: он рассчитан на слабые компьютеры и удалённый рабочий стол.</p>
@@ -146,9 +150,34 @@ export function mountAppearanceEdit(el, { screen, structure, objectId, api, user
     } catch (e) { setViewStatus(known ? "Сохранено, но перечитать не удалось — обновите страницу." : `Неизвестно, сохранено ли (${errText(e)}).`); }
     finally { viewBusy = false; if (!dead) paint(); }
   }
+  // «Раздельно по рабочим местам»: личная настройка на сервере (область «prefs:scene» личного состояния интерфейса). Исход при обрыве
+  // связи неизвестен — повторно не шлём, сначала перечитываем.
+  let sepBusy = false;
+  const sepStatus = (t) => { const n = $("#ap-separate-status"); if (n) n.textContent = t; };
+  const readSeparate = async () => !!((await api.get("/me/ui-state?scope=prefs%3Ascene")).data?.separate);
+  readSeparate().then((on) => { if (dead) return; const c = $("#ap-separate"); if (c) { c.checked = on; c.disabled = false; } })
+    .catch(() => { sepStatus("Не удалось прочитать настройку — обновите страницу."); });
+  async function saveSeparate(on) {
+    if (sepBusy) return;
+    const box = $("#ap-separate");
+    sepBusy = true; box.disabled = true; sepStatus("Сохранение…");
+    let known = true;
+    try { await api.put("/me/ui-state", { scope: "prefs:scene", data: { separate: on } }); }
+    catch (e) {
+      if (e instanceof ApiError && e.status > 0 && e.status < 500) { box.checked = !on; sepBusy = false; box.disabled = false; sepStatus(`Не удалось сохранить: ${errText(e)}`); return; }
+      known = false;
+    }
+    try {
+      const now = await readSeparate();
+      box.checked = now;
+      sepStatus(now === on ? (known ? "Сохранено и подтверждено чтением. Действует при следующем открытии схемы." : "Сервер сохранил настройку, хотя ответ не дошёл.") : "Сервер вернул другое значение — проверьте.");
+    } catch (e) { sepStatus(known ? "Сохранено, но перечитать не удалось — обновите страницу." : `Неизвестно, сохранено ли (${errText(e)}). Обновите страницу и проверьте.`); }
+    finally { sepBusy = false; if (!dead) box.disabled = false; }
+  }
   // Тени и солнце: записываются сразу при переключении (как в V1), без запроса к серверу.
   el.addEventListener("change", (e) => {
     const n = $("#ap-light-status");
+    if (e.target.id === "ap-separate") { saveSeparate(e.target.checked); return; }
     if (e.target.id === "ap-shadows") {
       const ok = lsSet(SHADOWS_KEY, e.target.checked ? "1" : "0");
       if (n) n.textContent = ok ? (e.target.checked ? "Тени включены на этом компьютере." : "Тени выключены на этом компьютере.") : "Браузер не дал сохранить настройку (хранилище недоступно).";

@@ -232,6 +232,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     const p = new URLSearchParams({ embed: "scene", object_id: String(curObject) });
     // Схема прораба — та же схема ЖБИ (его постоянную панель отбора рисует оболочка), поэтому кадр открывается как «Модель»
     if (ws === "mfr" || ws === "picker") p.set("ws", ws);
+    // Область сохранённого состояния схемы: у АРМ прораба своя (при раздельных настройках), хотя кадр открыт как «Модель»
+    if (ws === "foreman") p.set("scope_ws", "foreman");
     frame.setAttribute("data-zhbi-scene", p.toString());
     frame.srcdoc = html;
     stage.prepend(frame);
@@ -253,6 +255,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     const m = s.mfr;
     if (!mfr || !s.loaded || !m?.hasData || !m.levels?.length || mfrAutoLevel.has(s.objectId)) return;
     mfrAutoLevel.add(s.objectId);
+    if (m.restored) return;   // человек уже выставлял отбор на этом объекте — он вернулся с сервера, этаж за него не выбираем
     if (m.levels.some((l) => l.on)) return;
     const first = m.levels.find((l) => /^1 этаж/.test(l.label)) || m.levels.find((l) => l.count > 0 && !/^без /.test(l.label));
     if (first) send("mfrPick", { kind: "level", id: first.id });

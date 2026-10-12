@@ -1800,6 +1800,7 @@ async function switchObject(objectId) {
   // прежнего объекта останется.
   Object.values(state.placementFilters).forEach((набор) => набор.clear());
   resetAllDateFilters();
+  uiStateResetScene();   // зоны, внешние модели и подсветка отставания — тоже у каждого объекта свои
   // Третья структура фильтров — отбор по изменениям: в нём лежат id
   // элементов ПРЕЖНЕГО объекта, и без сброса новая схема оказалась бы
   // пустой без единого объяснения.
@@ -5649,6 +5650,8 @@ function вспомнить(ключ) {
 
 function setWorkspace(ws) {
   if (ws === workspace) return;
+  const прежнееМесто = workspace;
+  uiStateFlush(true);   // состояние прежнего рабочего места — под ПРЕЖНЕЙ областью, пока workspace ещё не сменён
   closeObjectHome();   // заглавная страница объекта закрывается при смене рабочего места
   workspace = ws;
   запомнить(WS_KEY, ws);
@@ -5745,6 +5748,11 @@ function setWorkspace(ws) {
     applyPlacementFilters();
     renderLegend();
     if (!picker) renderPlacementFilters();
+  }
+  // «Раздельные настройки по рабочим местам»: у нового места своя область — перечитываем состояние из неё (в кадре V2 область
+  // определяется адресом кадра и при переходе по ссылке не меняется, поэтому перечитывание не нужно)
+  if (uiState.separate && !EMBED_SCENE && !мфр && прежнееМесто !== "mfr" && state.objectId && state.elements.length) {
+    uiStateRescope().catch((e) => console.warn("Не удалось перечитать состояние рабочего места:", e.message));
   }
 }
 
@@ -7826,6 +7834,7 @@ async function loadPlanInner(preserveView = true) {
   if (сохранённоеСостояние) { if (window.zhbiTimeline) zhbiTimeline.restore(сохранённоеСостояние.tl); await uiStateApplyView(сохранённоеСостояние); }
   if (window.zhbiTimeline) zhbiTimeline.onPlanLoaded();   // срез состояния: история статусов объекта и штриховка
   uiStateMarkReady();
+  uiStateAfterLoad();   // без await: схема уже показана, «Изменения» подтянутся по ответу сервера
 }
 
 // ==================== ЛИЧНОЕ СОСТОЯНИЕ СХЕМЫ НА СЕРВЕРЕ (2026-10-08) ====================
@@ -7843,14 +7852,86 @@ const uiState = { needRestore: true, ready: false, scope: null, lastSaved: null,
   // (её задаёт администратор, «Видимость подписей по типам»): так позднее изменение умолчаний не затирается чужой личной настройкой
   labels: { vis: {}, dates: {} }, labelBase: { vis: {}, dates: {} } };
 
-function uiStateScope() { return state.objectId ? `scene:${state.objectId}` : null; }
+// Рабочее место, под которым пишется состояние. В кадре V2 — из адреса кадра (переменная workspace движка выставляется позже, при
+// переходе по ссылке уже ПОСЛЕ первой загрузки схемы), в V1 — текущее.
+function uiStateWs() {
+  // scope_ws — рабочее место для области состояния, когда кадр открыт как «Модель», а на деле это АРМ прораба (оболочка V2)
+  const ws = EMBED_SCENE ? (EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) : workspace;
+  return ["model", "mfr", "picker", "foreman"].includes(ws) ? ws : "model";
+}
+
+// Область: у объекта МФР — «mfr:<id>»; у ЖБИ — «scene:<id>» (общая для «Модели», «АРМ прораба» и «АРМ комплектовщика», как было) или,
+// если человек включил «раздельные настройки по рабочим местам» (uiState.separate), — «scene:<id>:<рабочее место>».
+function uiStateScope() {
+  if (!state.objectId) return null;
+  const ws = uiStateWs();
+  if (ws === "mfr") return `mfr:${state.objectId}`;
+  return uiState.separate ? `scene:${state.objectId}:${ws}` : `scene:${state.objectId}`;
+}
+
+// Опция учётной записи «раздельные настройки по рабочим местам»: хранится там же, в user_ui_state, области «prefs:scene».
+// Читается один раз при старте, до первой загрузки схемы (от неё зависит, КАКУЮ область читать).
+async function uiStateLoadPrefs() {
+  try {
+    const r = await api("/me/ui-state?scope=prefs%3Ascene");
+    uiState.separate = !!(r.data && r.data.separate);
+  } catch (e) { uiState.separate = false; }
+}
+
+// Включение/выключение опции в V1: сначала сохраняем текущее состояние под ПРЕЖНЕЙ областью, потом меняем опцию и перечитываем
+// состояние уже из новой (при первом обращении к новой области она берёт значения из общей — см. uiStateStartFetch).
+async function uiStateSetSeparate(on) {
+  uiStateFlush(true);
+  try {
+    await api("/me/ui-state", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "prefs:scene", data: { separate: !!on } }) });
+  } catch (e) { showToast("Не удалось сохранить настройку: " + e.message, "error"); return false; }
+  uiState.separate = !!on;
+  if (state.objectId && uiStateWs() !== "mfr" && state.elements.length) await uiStateRescope();
+  return true;
+}
+
+// Состояние прежней области записано, область сменилась (другое рабочее место или другая опция): всё, что человек выставил на схеме,
+// возвращается к умолчаниям и перечитывается из новой области — так же, как при смене объекта.
+async function uiStateRescope() {
+  Object.values(state.placementFilters).forEach((набор) => набор.clear());
+  resetAllDateFilters();
+  resetChangeFilter();
+  uiStateResetScene();
+  uiState.needRestore = true; uiState.ready = false;
+  uiState.labels = { vis: {}, dates: {} };
+  await loadPlan(true);
+}
+
+// «Вид» схемы ЖБИ к умолчаниям: зоны и стоянки выключены, внешние модели показаны, подсветка отставания снята. Вызывается при
+// смене объекта и области; потом поверх накладывается сохранённое (uiStateApplyFilters / uiStateApplyView).
+function uiStateResetScene() {
+  state.zoneVisibility["Захватка"] = false;
+  state.zoneVisibility["Кран"] = false;
+  state.stanceZoneVisible.clear();
+  for (const id of UI_STATE_EXT_IDS.map(([, boxId]) => boxId)) {
+    const c = document.getElementById(id);
+    if (c && !c.checked) { c.checked = true; c.dispatchEvent(new Event("change")); }
+  }
+  if (window.zhbiTimeline) zhbiTimeline.restore({ hatchMont: "off", hatchDeliv: "off" });
+}
+const UI_STATE_EXT_IDS = [["models", "zhbi-show-external-models"], ["facades", "zhbi-show-external-facades"]];
 
 function uiStateStartFetch() {
   const scope = uiStateScope();
   uiState.ready = false;
   uiState.scope = scope;
   if (!scope || !uiState.needRestore) return null;
-  return api(`/me/ui-state?scope=${encodeURIComponent(scope)}`).then((r) => ({ scope, ok: true, data: r.data })).catch(() => ({ scope, ok: false, data: null }));
+  const read = (name) => api(`/me/ui-state?scope=${encodeURIComponent(name)}`);
+  const shared = `scene:${state.objectId}`;
+  return read(scope).then(async (r) => {
+    let data = r.data;
+    // Раздельная область, в которую ещё ничего не писали, стартует с общих настроек объекта — человек не теряет то, что уже выставил
+    if (data == null && scope !== shared && scope.startsWith("scene:")) {
+      try { data = (await read(shared)).data; } catch (e) { /* нет общей — стартуем с умолчаний */ }
+    }
+    return { scope, ok: true, data };
+  }).catch(() => ({ scope, ok: false, data: null }));
 }
 
 async function uiStateTake(promise) {
@@ -7871,6 +7952,7 @@ function uiStateMarkReady() {
 }
 
 function uiStateSnapshot() {
+  if (uiStateWs() === "mfr") return mfrUiSnapshot();
   const filters = {};
   for (const [key, set] of Object.entries(state.placementFilters)) if (set.size) filters[key] = [...set];
   const dates = {};
@@ -7889,6 +7971,13 @@ function uiStateSnapshot() {
   if (Object.keys(uiState.labels.dates).length) snap.labelDates = { ...uiState.labels.dates };
   if (window.zhbiTimeline) snap.tl = zhbiTimeline.snapshot();
   if (state.guidFilter.text.trim()) snap.guid = state.guidFilter.text;
+  // Внешние 3D-модели (вкладка «Вид»): только то, что человек выключил — по умолчанию показаны обе
+  const ext = {};
+  for (const [key, boxId] of UI_STATE_EXT_IDS) { const c = document.getElementById(boxId); if (c && !c.checked) ext[key] = false; }
+  if (Object.keys(ext).length) snap.ext = ext;
+  // Отбор «Изменения» (вкладка «Фильтры»): сами id изделий не храним — их заново спрашивает сервер при открытии
+  const cf = state.changeFilter;
+  if (cf.on) snap.chg = { from: cf.from, to: cf.to, scope: cf.scope, users: [...cf.userIds] };
   if (state.view) snap.view2d = { x: state.view.x, y: state.view.y, w: state.view.w, h: state.view.h };
   if (v3.camera && v3.controls) {
     const p = v3.camera.position, t = v3.controls.target;
@@ -7916,6 +8005,21 @@ function uiStateApplyFilters(saved) {
   }
   if (Array.isArray(saved.stances)) saved.stances.forEach((k) => state.stanceZoneVisible.add(k));
   if (typeof saved.guid === "string") state.guidFilter.text = saved.guid.slice(0, 20000);
+  if (saved.ext && typeof saved.ext === "object") {
+    for (const [key, boxId] of UI_STATE_EXT_IDS) {
+      const c = document.getElementById(boxId);
+      if (c && saved.ext[key] === false && c.checked) { c.checked = false; c.dispatchEvent(new Event("change")); }
+    }
+  }
+  if (saved.chg && typeof saved.chg === "object") {
+    const f = state.changeFilter, c = saved.chg;
+    f.on = true;
+    f.from = typeof c.from === "string" ? c.from.slice(0, 10) : "";
+    f.to = typeof c.to === "string" ? c.to.slice(0, 10) : "";
+    f.scope = ["mine", "all", "some"].includes(c.scope) ? c.scope : "mine";
+    f.userIds = new Set(Array.isArray(c.users) ? c.users.filter((n) => Number.isInteger(n)) : []);
+    uiState.needChangeRefresh = true;   // ids изделий спрашиваем у сервера после отрисовки схемы (uiStateAfterLoad)
+  }
   for (const [key, field] of [["labels", "vis"], ["labelDates", "dates"]]) {
     uiState.labels[field] = {};
     if (saved[key] && typeof saved[key] === "object") for (const [type, on] of Object.entries(saved[key])) if (typeof on === "boolean") uiState.labels[field][type] = on;
@@ -7945,7 +8049,8 @@ async function uiStateApplyView(saved) {
       const b = state.initialView;
       if (!b || (v.x < b.x + b.w && v.x + v.w > b.x && v.y < b.y + b.h && v.y + v.h > b.y)) setView({ x: v.x, y: v.y, w: v.w, h: v.h });
     }
-    if (["3d", "3d-light"].includes(saved.mode) && !state.view3d.active) {
+    if (saved.mode === "2d" && state.view3d.active) await setViewMode("2d");
+    if (["3d", "3d-light"].includes(saved.mode) && (!state.view3d.active || (saved.mode === "3d-light") !== state.lowSpec)) {
       await setViewMode(saved.mode);
       const c = saved.cam3d, v3 = state.view3d;
       if (Array.isArray(c) && c.length === 6 && c.every(num) && v3.camera && v3.controls) {
@@ -7956,6 +8061,22 @@ async function uiStateApplyView(saved) {
       }
     }
   } catch (e) { console.warn("Не удалось восстановить вид схемы:", e.message); }
+}
+
+// Отбор «Изменения» восстановлен из сохранённого: сервер пересчитывает набор изделий за период. Если он отказал (например, потеряно право
+// смотреть изменения всех пользователей) — отбор снимаем, а не оставляем пустую схему без объяснения.
+async function uiStateAfterLoad() {
+  if (!uiState.needChangeRefresh) return;
+  uiState.needChangeRefresh = false;
+  const scope = uiState.scope;
+  try { await ensureMyWorkUsers(); } catch (e) { /* список пользователей — не обязателен */ }
+  await refreshChangedElementIds();
+  if (scope !== uiStateScope()) return;
+  if (state.changeFilter.error) {
+    resetChangeFilter();
+    onPlacementFilterChange();
+    showToast("Сохранённый отбор «Изменения» снят: " + (state.changeFilter.error || "сервер отказал"), "warning");
+  }
 }
 
 function uiStateFlush(keepalive = false) {
@@ -11339,6 +11460,7 @@ document.getElementById("menu-view-mode").addEventListener("click", () => {
   document.getElementById("view3d-pitch").value = pitch;
   document.getElementById("view3d-yaw").value = yaw;
   document.getElementById("shadows-3d").checked = state.shadows3d;
+  document.getElementById("ui-state-separate").checked = !!uiState.separate;
   document.querySelectorAll('input[name="sun-3d-mode"]').forEach(r => { r.checked = r.value === state.sun3dMode; });
   document.getElementById("menu-view-backdrop").classList.add("open");
 });
@@ -11420,6 +11542,14 @@ document.querySelectorAll('input[name="menu-view"]').forEach(r => r.addEventList
 // (см. apply3DShadowSetting): человек ставит галочку именно чтобы посмотреть,
 // как станет. Если 3D ещё не открывали, сцены нет — тени включатся при входе
 // в неё, состояние настройки уже в state.
+document.getElementById("ui-state-separate").addEventListener("change", async (e) => {
+  const box = e.target;
+  box.disabled = true;
+  const ok = await uiStateSetSeparate(box.checked);
+  if (!ok) box.checked = !!uiState.separate;
+  box.disabled = false;
+});
+
 document.getElementById("shadows-3d").addEventListener("change", (e) => {
   state.shadows3d = e.target.checked;
   localStorage.setItem(SHADOWS_3D_KEY, state.shadows3d ? "1" : "0");
@@ -28876,6 +29006,7 @@ async function bootApp() {
   // возвращал бы 422, и порог молча оставался нулевым.
   await loadLateThreshold();
   await loadSourceFiles();
+  await uiStateLoadPrefs();   // опция «раздельные настройки по рабочим местам» — от неё зависит, какую область читать
   await loadPlan(false); // первая загрузка — вписать схему целиком
   startPolling();        // совместная работа: подхватывать чужие правки
   // «Что нового» — САМО, пока человек не нажал «Ознакомился» (2026-08-03,
@@ -30843,6 +30974,8 @@ function darken(hex, k = 0.55) {
 async function openMfrWorkspace() {
   if (revitPlanState.objectId === state.objectId && revitPlanState.data) return;
   revitPlanState.objectId = state.objectId;
+  uiState.needRestore = true; uiState.ready = false;   // у каждого объекта МФР — свои сохранённые фильтры и «Вид»
+  const состояниеМфр = uiStateStartFetch();
   revitPlanState.elementLayerTouchedObjectId = null;
   for (const g of REVIT_GROUPS) revitPlanState[g].clear();
   document.getElementById("revit-plan-card").textContent = "Нажмите на элемент или блок плана.";
@@ -30884,9 +31017,125 @@ async function openMfrWorkspace() {
   document.getElementById("mfr-dynamics-from").value = "";
   document.getElementById("mfr-dynamics-to").value = "";
   updateMfrDynamicsCaption();
+  mfrUiResetLayers();
+  const сохранённоеМфр = await uiStateTake(состояниеМфр);
+  if (сохранённоеМфр) mfrUiApplyEarly(сохранённоеМфр);
   await loadRevitColors();      // раньше отбора: план рисуется сразу после него
   await loadRevitPlanFilters();
   await loadMfrChessOptions();
+  if (сохранённоеМфр) await mfrUiApplyLate(сохранённоеМфр);
+  uiStateMarkReady();
+}
+
+// ---- Личное состояние рабочего места МФР (вкладки «Фильтры» и «Вид»), область «mfr:<id объекта>» ----
+const MFR_UI_LAYERS = [["elements", "mfr-show-elements", false], ["blocks", "mfr-show-blocks", true], ["axes", "mfr-show-axes", false],
+  ["facades", "mfr-show-facades", false], ["plans", "mfr-show-plans", false], ["extFacades", "mfr-show-external-facades", true],
+  ["extModels", "mfr-show-external-models", false]];
+
+function mfrUiResetLayers() {
+  mfrFacadesWanted = false;
+  for (const [, id, def] of MFR_UI_LAYERS) {
+    const c = document.getElementById(id);
+    if (!c) continue;
+    c.disabled = false;
+    c.parentElement.title = "";
+    if (c.checked !== def) { c.checked = def; if (id.includes("external")) c.dispatchEvent(new Event("change")); }
+  }
+  syncMfrElementCategoriesDisabled();
+}
+
+function mfrUiSnapshot() {
+  const rs = revitPlanState;
+  const layers = {};
+  for (const [key, id] of MFR_UI_LAYERS) {
+    const c = document.getElementById(id);
+    if (c) layers[key] = (key === "facades" && c.disabled) ? mfrFacadesWanted : c.checked;
+  }
+  const bp = blockProgressFilter;
+  return {
+    v: 1, mfr: true,
+    levels: [...rs.levels], sections: [...rs.sections], parts: [...rs.parts], categories: [...rs.categories],
+    layers,
+    mode: document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode || "2d",
+    bp: { tracks: [...bp.trackCodes], statuses: [...bp.statuses], deadlines: [...bp.deadlines],
+      period: { active: !!bp.period.active, field: bp.period.field, from: bp.period.from, to: bp.period.to } },
+    chess: { track: mfrChessTrackCode, mode: mfrChessMode },
+    dyn: { active: !!mfrDynamics.active, from: mfrDynamics.from, to: mfrDynamics.to },
+  };
+}
+
+// Первая часть: то, что должно быть выставлено ДО загрузки состава модели и первой отрисовки плана — отбор, слои, режим 2D/3D
+function mfrUiApplyEarly(saved) {
+  const strs = (a) => (Array.isArray(a) ? a.filter((v) => typeof v === "string") : []);
+  const rs = revitPlanState;
+  for (const group of ["levels", "sections", "parts", "categories"]) {
+    rs[group].clear();
+    strs(saved[group]).forEach((v) => rs[group].add(v));
+  }
+  if (saved.layers && typeof saved.layers === "object") {
+    rs.elementLayerTouchedObjectId = rs.objectId;   // слои выбрал человек — автовключение «Элементов» его выбор не перебивает
+    for (const [key, id] of MFR_UI_LAYERS) {
+      const c = document.getElementById(id);
+      if (!c || typeof saved.layers[key] !== "boolean") continue;
+      if (key === "facades") mfrFacadesWanted = saved.layers[key];
+      if (c.checked !== saved.layers[key]) { c.checked = saved.layers[key]; if (id.includes("external")) c.dispatchEvent(new Event("change")); }
+    }
+    syncMfrFacadesToggle();
+    syncMfrElementCategoriesDisabled();
+  }
+  if (["2d", "3d"].includes(saved.mode)) {
+    for (const b of document.querySelectorAll("#mfr-view-switch .view-mode-btn")) b.classList.toggle("active", b.dataset.mfrMode === saved.mode);
+    запомнить(MFR_MODE_KEY, saved.mode);
+  }
+  const bp = saved.bp;
+  if (bp && typeof bp === "object") {
+    blockProgressFilter.statuses = new Set(strs(bp.statuses).filter((v) => ["plan", "in_progress", "done"].includes(v)));
+    blockProgressFilter.deadlines = new Set(strs(bp.deadlines));
+    document.querySelectorAll(".bp-status-check").forEach((cb) => { cb.checked = blockProgressFilter.statuses.has(cb.value); });
+    document.querySelectorAll(".bp-deadline-check").forEach((cb) => { cb.checked = blockProgressFilter.deadlines.has(cb.value); });
+    const p = bp.period;
+    if (p && typeof p === "object") {
+      const iso = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+      blockProgressFilter.period = { active: !!p.active, field: p.field === "forecast" ? "forecast" : "plan", from: iso(p.from), to: iso(p.to) };
+      document.getElementById("mfr-period-toggle").checked = blockProgressFilter.period.active;
+      document.getElementById("mfr-period-field").value = blockProgressFilter.period.field;
+      document.getElementById("mfr-period-from").value = blockProgressFilter.period.from || "";
+      document.getElementById("mfr-period-to").value = blockProgressFilter.period.to || "";
+      document.getElementById("mfr-period-dates").style.display = blockProgressFilter.period.active ? "" : "none";
+      updateMfrPeriodTitle();
+    }
+  }
+}
+
+// Вторая часть: нужны уже загруженные списки досок («Шахматка», «Виды работ») и данные плана
+async function mfrUiApplyLate(saved) {
+  try {
+    const bp = saved.bp;
+    if (bp && typeof bp === "object" && Array.isArray(bp.tracks)) {
+      const known = new Set(mfrChessTracks.map((t) => String(t["код"])));
+      blockProgressFilter.trackCodes = new Set(bp.tracks.filter((v) => typeof v === "string" && (!known.size || known.has(v))));
+      renderMfrWorktypesList();
+      renderBlockProgressPanel();
+    }
+    const ch = saved.chess;
+    if (ch && typeof ch === "object") {
+      if (["progress", "deadline"].includes(ch.mode)) {
+        mfrChessMode = ch.mode;
+        document.querySelectorAll('input[name="mfr-chess-mode"]').forEach((r) => { r.checked = r.value === ch.mode; });
+      }
+      if (typeof ch.track === "string" && mfrChessTracks.some((t) => String(t["код"]) === ch.track)) await selectMfrChessTrack(ch.track);
+    }
+    const d = saved.dyn;
+    if (d && typeof d === "object" && d.active) {
+      const iso = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+      mfrDynamics = { active: true, from: iso(d.from), to: iso(d.to) };
+      document.getElementById("mfr-dynamics-toggle").checked = true;
+      document.getElementById("mfr-dynamics-dates").style.display = "";
+      document.getElementById("mfr-dynamics-from").value = mfrDynamics.from || "";
+      document.getElementById("mfr-dynamics-to").value = mfrDynamics.to || "";
+      await reloadMfrDynamics();
+    }
+  } catch (e) { console.warn("Не удалось восстановить состояние рабочего места МФР:", e.message); }
 }
 
 // Вкладки правой панели МФР (живой запрос пользователя) — по образцу
