@@ -148,7 +148,7 @@ export function mountShellNav(el, {
     return [...rest, ...known.map((id) => byId.get(id))];
   }
   function groupItemsOf(groupId) {
-    return registry.screens.filter((s) => s.group === groupId && allowedScreen(s));
+    return registry.screens.filter((s) => s.group === groupId && s.listed !== false && allowedScreen(s));
   }
   // Избранные — отдельным блоком СВЕРХУ списка группы (п.4 задания); relative-порядок внутри каждого из двух
   // блоков (избранное/остальное) берётся из ОДНОГО общего `order` — блоки лишь РАЗДВИГАЮТ уже упорядоченный список.
