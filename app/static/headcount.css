@@ -133,3 +133,4 @@
 .hc-tbl tr.retired td { color: var(--hc-muted); text-decoration: line-through; }
 .hc-tbl tr.retired td:last-child { text-decoration: none; }
 .hc-pick-btn { font-size: 16px; line-height: 1; min-width: 30px; } .hc-pick-x { font-size: 13px; }
+.hc-addrow .hc-ctr-f { flex: 1 1 280px; min-width: 240px; max-width: 460px; }

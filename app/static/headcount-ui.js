@@ -217,21 +217,25 @@ export function mountHeadcount(el, ctx) {
   function paintAdd() {
     const box = pane.querySelector("#hc-add");
     if (!st.contractors.length) { box.innerHTML = `<p class="hc-muted">Сначала добавьте подрядчиков объекта на вкладке «Подрядчики».</p>`; return; }
-    box.innerHTML = `<div class="hc-addrow"><label>Подрядчик<select id="hc-a-ctr">${st.contractors.map((c) => `<option value="${c.id}">${esc(c.display)}</option>`).join("")}</select></label>
+    box.innerHTML = `<div class="hc-addrow"><label class="hc-ctr-f">Подрядчик<div class="hc-picker" id="hc-a-ctr"></div></label>
       <label class="hc-grow">Вид работ<div class="hc-picker" id="hc-a-work"></div></label>
       <label>Рабочие<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-w" class="hc-num"></label>
       <label>ИТР<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-i" class="hc-num"></label>
       <label>Итого<input type="text" id="hc-a-sum" class="hc-num hc-total-in" value="0" readonly tabindex="-1" aria-label="Итого: рабочие плюс ИТР"></label>
       <button type="button" class="hc-btn" id="hc-a-go">Добавить в карточку</button></div><p class="hc-msg bad" id="hc-a-err" role="alert"></p>`;
     const picker = workPicker(box.querySelector("#hc-a-work"), st.works);
+    const ctrPicker = contractorPicker(box.querySelector("#hc-a-ctr"), st.contractors);
+    // подрядчик, с которым вносили последнюю строку, остаётся выбранным (за день вносят по несколько видов работ одного подрядчика)
+    if (st.lastCtr && st.contractors.some((c) => c.id === st.lastCtr)) ctrPicker.set(st.lastCtr); else if (st.contractors.length === 1) ctrPicker.set(st.contractors[0].id);
     const err = box.querySelector("#hc-a-err");
     const wIn = box.querySelector("#hc-a-w"), iIn = box.querySelector("#hc-a-i"), sum = box.querySelector("#hc-a-sum");
     const val = (el) => (el.value.trim() === "" ? "0" : el.value);   // пустое поле — 0: вносят чаще что-то одно
     const upd = () => { sum.value = numOf(val(wIn)) + numOf(val(iIn)); };
     wIn.addEventListener("input", upd); iIn.addEventListener("input", upd);
     const add = () => {
-      const contractor_id = Number(box.querySelector("#hc-a-ctr").value), codifier_id = picker.value();
+      const contractor_id = ctrPicker.value(), codifier_id = picker.value();
       err.textContent = "";
+      if (!contractor_id) { err.textContent = "Выберите подрядчика"; return; }
       if (!codifier_id) { err.textContent = "Выберите вид работ"; return; }
       const problem = pairProblem(val(wIn), val(iIn));
       if (problem) { err.textContent = problem; return; }
@@ -239,6 +243,7 @@ export function mountHeadcount(el, ctx) {
         err.textContent = "Карточка содержит дубликат численности, сохранение невозможно: по этому подрядчику и виду работ за день строка уже есть — измените её в таблице.";
         return;
       }
+      st.lastCtr = contractor_id;
       st.added.push({ contractor_id, codifier_id, workers: Number(val(wIn)), itr: Number(val(iIn)) });
       wIn.value = ""; iIn.value = ""; upd(); picker.clear(); paintRows(); paintDirty();
     };
@@ -667,21 +672,25 @@ export function mountHeadcount(el, ctx) {
 }
 
 // Выбор вида работ из кодификатора: поле поиска по коду и названию + список совпадений (593 строки — обычный select неудобен).
-function workPicker(box, works) {
+// Выпадающий выбор с поиском: поле со стрелкой, список поверх прокруток, ввод текста сужает список, «✕» сбрасывает выбор.
+// cfg: placeholder, openTitle, label(item) — текст в поле, search(item) — по чему искать (по умолчанию label), html(item) — строка списка,
+// group(item) — необязательный заголовок группы (элементы одной группы идут подряд). У элементов есть числовой `id`.
+function comboPicker(box, items, cfg) {
   let chosen = null;
-  box.innerHTML = `<div class="hc-pickbox"><input type="text" class="hc-pick-in" placeholder="Выберите вид работ из справочника…" autocomplete="off" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+  const searchOf = cfg.search || cfg.label;
+  box.innerHTML = `<div class="hc-pickbox"><input type="text" class="hc-pick-in" placeholder="${esc(cfg.placeholder)}" autocomplete="off" role="combobox" aria-expanded="false" aria-haspopup="listbox">
     <button type="button" class="hc-pick-x" title="Сбросить выбор" aria-label="Сбросить выбор" hidden>✕</button>
-    <button type="button" class="hc-pick-btn" title="Открыть справочник видов работ" aria-label="Открыть справочник видов работ" tabindex="-1">▾</button></div><ul class="hc-pick-list" role="listbox" hidden></ul>`;
+    <button type="button" class="hc-pick-btn" title="${esc(cfg.openTitle)}" aria-label="${esc(cfg.openTitle)}" tabindex="-1">▾</button></div><ul class="hc-pick-list" role="listbox" hidden></ul>`;
   const input = box.querySelector("input"), list = box.querySelector("ul"), xBtn = box.querySelector(".hc-pick-x"), arrow = box.querySelector(".hc-pick-btn"), field = box.querySelector(".hc-pickbox");
-  const label = (w) => `${w.code} ${w.name}`;
+  const find = (id) => items.find((x) => x.id === id);
   const render = (filter) => {
-    const q = (filter || "").trim().toLowerCase();
-    const hit = q ? works.filter((w) => label(w).toLowerCase().includes(q)) : works;   // без ограничения числа: виден весь справочник
-    let sec = null;
-    list.innerHTML = hit.length ? hit.map((w) => {
-      const s2 = w.section_name || "Без раздела", head = s2 !== sec ? `<li class="hc-pick-sec" role="presentation">${esc(s2)}</li>` : "";
-      sec = s2;
-      return `${head}<li role="option" data-id="${w.id}" ${w.id === chosen ? 'aria-selected="true" class="sel"' : ""}><span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}</li>`;
+    const q = (filter || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const hit = q ? items.filter((x) => searchOf(x).toLowerCase().replace(/\s+/g, " ").includes(q)) : items;   // без ограничения числа: виден весь список
+    let grp = null;
+    list.innerHTML = hit.length ? hit.map((x) => {
+      const g = cfg.group ? cfg.group(x) : null, head = cfg.group && g !== grp ? `<li class="hc-pick-sec" role="presentation">${esc(g)}</li>` : "";
+      grp = g;
+      return `${head}<li role="option" data-id="${x.id}" ${x.id === chosen ? 'aria-selected="true" class="sel"' : ""}>${cfg.html(x)}</li>`;
     }).join("") : `<li class="hc-muted">Ничего не найдено</li>`;
     list.hidden = false; input.setAttribute("aria-expanded", "true");
     // список поверх всех прокруток (окно V1 и страница V2 обрезают абсолютно позиционированное): позиция по полю, вниз или вверх
@@ -693,8 +702,8 @@ function workPicker(box, works) {
   };
   const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); };
   const show = () => { xBtn.hidden = !chosen; };
-  const pick = (li) => { chosen = Number(li.dataset.id); input.value = label(works.find((x) => x.id === chosen)); show(); close(); };
-  const open = () => { if (chosen) input.select(); render(chosen ? "" : input.value); };   // выбранное значение не фильтрует список: виден весь справочник
+  const pick = (li) => { chosen = Number(li.dataset.id); input.value = cfg.label(find(chosen)); show(); close(); };
+  const open = () => { if (chosen) input.select(); render(chosen ? "" : input.value); };   // выбранное значение не фильтрует список: виден весь
   input.addEventListener("input", () => { chosen = null; show(); render(input.value); });
   input.addEventListener("focus", open);
   input.addEventListener("click", () => { if (list.hidden) open(); });
@@ -709,5 +718,23 @@ function workPicker(box, works) {
   document.addEventListener("click", (e) => { if (!box.contains(e.target)) close(); });
   window.addEventListener("scroll", (e) => { if (!list.hidden && !list.contains(e.target)) close(); }, true);
   return { value: () => chosen, clear: () => { chosen = null; input.value = ""; show(); close(); },
-    set: (id) => { const w = works.find((x) => x.id === id); if (w) { chosen = id; input.value = label(w); show(); } } };
+    set: (id) => { const x = find(id); if (x) { chosen = id; input.value = cfg.label(x); show(); } } };
+}
+
+// Вид работ — из кодификатора, сгруппирован по разделам.
+function workPicker(box, works) {
+  return comboPicker(box, works, {
+    placeholder: "Выберите вид работ из справочника…", openTitle: "Открыть справочник видов работ",
+    label: (w) => `${w.code} ${w.name}`, group: (w) => w.section_name || "Без раздела",
+    html: (w) => `<span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}`,
+  });
+}
+
+// Подрядчик объекта — поиск по названию, названию контрагента и ИНН.
+function contractorPicker(box, contractors) {
+  return comboPicker(box, contractors, {
+    placeholder: "Выберите подрядчика: поиск по названию или ИНН…", openTitle: "Открыть список подрядчиков",
+    label: (c) => c.display, search: (c) => `${c.name || ""} ${c.counterparty_name || ""} ${c.inn || ""}`,
+    html: (c) => `${esc(c.name || c.counterparty_name || "")}${c.inn ? ` <span class="hc-code">ИНН ${esc(c.inn)}</span>` : ""}${c.inn_note ? ` <span class="hc-badge warn">${esc(c.inn_note)}</span>` : ""}`,
+  });
 }
