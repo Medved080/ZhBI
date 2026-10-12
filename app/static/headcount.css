@@ -134,3 +134,39 @@
 .hc-tbl tr.retired td:last-child { text-decoration: none; }
 .hc-pick-btn { font-size: 16px; line-height: 1; min-width: 30px; } .hc-pick-x { font-size: 13px; }
 .hc-addrow .hc-ctr-f { flex: 1 1 280px; min-width: 240px; max-width: 460px; }
+
+/* Поле выбора + всплывающая форма выбора (таблица со сворачиваемыми группами и поиском по колонкам) */
+.hc-pickbox { display: flex; gap: 6px; align-items: stretch; position: static; }
+.hc-pick-inwrap { position: relative; flex: 1 1 auto; min-width: 0; }
+.hc-root.hc-root .hc-pick-inwrap .hc-pick-in { width: 100% !important; padding-right: 30px; cursor: pointer; text-overflow: ellipsis; }
+.hc-pick-inwrap .hc-pick-x { position: absolute; right: 2px; top: 1px; bottom: 1px; border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; padding: 0 8px; font-size: 13px; }
+.hc-pick-inwrap .hc-pick-x:hover { color: var(--hc-bad); }
+.hc-pick-open { white-space: nowrap; flex: 0 0 auto; }
+.hc-dlg-back { position: fixed; inset: 0; z-index: 100000; background: rgba(15, 20, 30, .5); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.hc-dlg { background: var(--hc-bg); color: var(--hc-ink); border: 1px solid var(--hc-line); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  width: min(1100px, 100%); max-height: min(86vh, 100%); display: flex; flex-direction: column; padding: 14px 16px; }
+.hc-dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hc-dlg-head h3 { margin: 0; font-size: 17px; }
+.hc-dlg-hint { margin: 6px 0 8px; }
+.hc-dlg-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.hc-dlg-foot { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.hc-pt-bar { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; flex-wrap: wrap; }
+.hc-pt-scroll { max-height: 60vh; overflow: auto; border: 1px solid var(--hc-line); border-radius: 8px; }
+.hc-dlg .hc-pt-scroll { max-height: calc(86vh - 190px); }
+.hc-pt thead { position: sticky; top: 0; z-index: 3; }
+.hc-pt thead th { position: static; background: var(--hc-soft); }
+.hc-pt-filters th { padding: 4px 6px; }
+.hc-root.hc-root .hc-pt-filters input { width: 100%; height: 30px; min-height: 30px; font-size: 13px; padding: 0 8px; box-sizing: border-box; }
+.hc-pt tr.hc-pt-grp td { background: var(--hc-soft); font-weight: 600; cursor: pointer; user-select: none; }
+.hc-pt tr.hc-pt-grp:hover td { background: color-mix(in srgb, var(--hc-accent) 12%, var(--hc-bg)); }
+.hc-pt-caret { display: inline-block; width: 16px; color: var(--hc-muted); }
+.hc-pt tr.pick { cursor: pointer; } .hc-pt tr.pick:hover td, .hc-pt tr.pick:focus td { background: color-mix(in srgb, var(--hc-accent) 10%, var(--hc-bg)); outline: none; }
+.hc-pt tr.sel td { background: color-mix(in srgb, var(--hc-accent) 18%, var(--hc-bg)); font-weight: 600; }
+.hc-pt tr.retired td { color: var(--hc-muted); text-decoration: line-through; } .hc-pt tr.retired td:last-child { text-decoration: none; }
+.hc-dlg.narrow { width: min(620px, 100%); }
+.hc-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
+.hc-form-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--hc-muted); min-width: 0; }
+.hc-form-grid .hc-span2 { grid-column: 1 / -1; }
+.hc-root.hc-root .hc-form-grid input[type="text"], .hc-root.hc-root .hc-form-grid input[type="number"] { width: 100% !important; height: 36px; box-sizing: border-box; }
+.hc-root.hc-root input.hc-num.bad { border-color: var(--hc-bad); }
+.hc-root.hc-root .hc-tbl td .hc-num { width: 76px !important; }
