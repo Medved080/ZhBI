@@ -7680,6 +7680,7 @@ async function openObjectHome(objectId) {
       </div>
       <div class="ohv-actions">
         <button type="button" class="btn btn-primary" id="ohv-open">${закрыть}</button>
+        ${can("headcount", "read") ? '<button type="button" class="btn btn-primary" id="ohv-headcount">Ввод численности</button>' : ""}
         <button type="button" class="btn btn-secondary" id="ohv-edit">Изменить реквизиты</button>
       </div>
     </div>
@@ -7712,6 +7713,8 @@ async function openObjectHome(objectId) {
   box.scrollTop = 0;
   const править = () => { closeObjectHome(); openCatalog(); };
   document.getElementById("ohv-open").addEventListener("click", closeObjectHome);
+  // «Ввод численности» — окно учёта численности поверх схемы объекта (то же, что «Действия → Численность»)
+  document.getElementById("ohv-headcount")?.addEventListener("click", () => { closeObjectHome(); openHeadcount(); });
   // Фото не загрузилось — вместо пустой рамки та же заглушка.
   const фото = box.querySelector(".ohv-photo img");
   фото?.addEventListener("error", () => { if (фото.getAttribute("src") !== фото.dataset.fallback) { фото.src = фото.dataset.fallback; фото.closest(".ohv-photo")?.classList.add("ohv-photo-empty"); } });

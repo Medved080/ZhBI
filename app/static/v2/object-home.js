@@ -15,7 +15,8 @@ const TEAM = [["dir_project", "Директор проекта"], ["head_project
   ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 // Куда можно перейти с карточки: (экран, подпись). Показываются только доступные на этом объекте.
 const LINKS = [["ws-model", "Модель: схема 2D/3D"], ["ws-mfr", "Модель МФР"], ["ws-picker", "АРМ комплектовщика"], ["ws-foreman", "АРМ прораба"],
-  ["report-status", "Статус монтажа"], ["report-dynamics", "Динамика поставки и монтажа"], ["report-completion", "Статус комплектации"]];
+  ["report-status", "Статус монтажа"], ["report-dynamics", "Динамика поставки и монтажа"], ["report-completion", "Статус комплектации"],
+  ["headcount", "Ввод численности"]];
 
 let mapModule = null;
 function ensureMapModule(api) {
