@@ -162,6 +162,10 @@ export function mountHeadcount(el, ctx) {
   // Значения строки на экране: введённое человеком (до сохранения) или то, что в БД
   const rowVals = (r) => { const c = st.changed.get(r.id); return c ? { w: c.workers, i: c.itr } : { w: String(r.workers), i: String(r.itr ?? 0) }; };
   const numOf = (v) => (isCount(v) ? Number(v) : 0);
+  const effIds = (r) => { const c = st.changed.get(r.id) || {}; return { ctr: c.contractor_id ?? r.contractor_id, work: c.codifier_id ?? r.codifier_id }; };
+  // Занята ли пара «подрядчик + вид работ» другой строкой карточки (внесённой — с учётом её ещё не сохранённой правки, или добавленной)
+  const pairTaken = (ctr, work, skip) => (st.day?.rows || []).some((r) => !(skip.kind === "saved" && skip.ref === r.id) && effIds(r).ctr === ctr && effIds(r).work === work)
+    || st.added.some((a, i) => !(skip.kind === "added" && skip.ref === i) && a.contractor_id === ctr && a.codifier_id === work);
 
   function paintRows() {
     const rows = st.day?.rows || [];
@@ -174,19 +178,24 @@ export function mountHeadcount(el, ctx) {
     const field = (r, f, v) => ctx.canWrite
       ? `<input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-edit="${r.id}" data-f="${f}" value="${esc(v)}" aria-label="${f === "workers" ? "Рабочие" : "ИТР"}: ${esc(r.contractor)}, ${esc(r.work_name)}">`
       : esc(v);
+    // Подрядчик и вид работ в строке — кнопки-ячейки: щелчок открывает форму выбора (справочник), выбранное подставляется в эту же строку.
+    const cellPick = (kind, ref, type, inner) => ctx.canWrite
+      ? `<button type="button" class="hc-cell-pick" data-pick="${type}" data-kind="${kind}" data-ref="${ref}" title="Изменить: выбрать из справочника">${inner}<span class="hc-cell-ed" aria-hidden="true">✎</span></button>` : inner;
+    const workHtml = (id) => { const w = st.works.find((x) => x.id === id); return w ? `<span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}` : "—"; };
     body.innerHTML = rows.length || st.added.length ? [
-      ...rows.map((r) => { const v = rowVals(r); return `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${esc(r.contractor)}</td><td><span class="hc-code">${esc(r.work_code)}</span> ${esc(r.work_name)}</td>
+      ...rows.map((r) => { const v = rowVals(r), e = effIds(r); return `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${cellPick("saved", r.id, "ctr", esc(contractorLabel(e.ctr)))}</td><td>${cellPick("saved", r.id, "work", workHtml(e.work))}</td>
         <td class="num">${field(r, "workers", v.w)}</td><td class="num">${field(r, "itr", v.i)}</td><td class="num"><strong data-rowtotal="${r.id}">${numOf(v.w) + numOf(v.i)}</strong></td>
         <td class="hc-small">${esc(fmtMoment(r.entered_at))}${r.entered_by ? " · " + esc(r.entered_by) : ""} ${flags(r)}${r.changes ? ` <button type="button" class="hc-link" data-hist="${r.id}">правок: ${r.changes}</button>` : ` <button type="button" class="hc-link" data-hist="${r.id}">история</button>`}</td>
-        <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-edit-row="saved:${r.id}" title="Изменить строку" aria-label="Изменить строку">✎</button> <button type="button" class="hc-btn danger mini" data-del="${r.id}" title="Удалить строку" aria-label="Удалить строку">✕</button>` : ""}</td></tr>`; }),
-      ...st.added.map((a, i) => `<tr class="added"><td>${esc(contractorLabel(a.contractor_id))}</td><td>${esc(workLabel(a.codifier_id))}</td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="workers" value="${esc(a.workers)}" aria-label="Рабочие (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="itr" value="${esc(a.itr)}" aria-label="ИТР (строка ещё не сохранена)"></td><td class="num"><strong data-add-total="${i}">${a.workers + a.itr}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
-        <td class="nw"><button type="button" class="hc-btn mini" data-edit-row="added:${i}" title="Изменить строку" aria-label="Изменить строку">✎</button> <button type="button" class="hc-btn mini" data-unadd="${i}" title="Убрать строку из карточки" aria-label="Убрать строку из карточки">✕</button></td></tr>`),
+        <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn danger mini" data-del="${r.id}" title="Удалить строку" aria-label="Удалить строку">✕</button>` : ""}</td></tr>`; }),
+      ...st.added.map((a, i) => `<tr class="added"><td>${cellPick("added", i, "ctr", esc(contractorLabel(a.contractor_id)))}</td><td>${cellPick("added", i, "work", workHtml(a.codifier_id))}</td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="workers" value="${esc(a.workers)}" aria-label="Рабочие (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="itr" value="${esc(a.itr)}" aria-label="ИТР (строка ещё не сохранена)"></td><td class="num"><strong data-add-total="${i}">${a.workers + a.itr}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
+        <td class="nw"><button type="button" class="hc-btn mini" data-unadd="${i}" title="Убрать строку из карточки" aria-label="Убрать строку из карточки">✕</button></td></tr>`),
     ].join("") : `<tr><td colspan="7" class="hc-muted">За этот день численность не внесена.</td></tr>`;
     paintTotals();
     body.querySelectorAll("[data-edit]").forEach((i) => i.addEventListener("input", () => {
       const id = Number(i.dataset.edit), row = rows.find((r) => r.id === id), tr = i.closest("tr");
       const w = tr.querySelector('[data-f="workers"]').value, it = tr.querySelector('[data-f="itr"]').value;
-      if (w === String(row.workers) && it === String(row.itr ?? 0)) st.changed.delete(id); else st.changed.set(id, { workers: w, itr: it });
+      const prev = st.changed.get(id) || {}, moved = prev.contractor_id != null || prev.codifier_id != null;
+      if (w === String(row.workers) && it === String(row.itr ?? 0) && !moved) st.changed.delete(id); else st.changed.set(id, { ...prev, workers: w, itr: it });
       tr.classList.toggle("dirty", st.changed.has(id));
       tr.querySelector("[data-rowtotal]").textContent = numOf(w) + numOf(it);
       paintTotals(); paintDirty();
@@ -199,51 +208,34 @@ export function mountHeadcount(el, ctx) {
       i.classList.toggle("bad", !isCount(w) || !isCount(it));
       paintTotals(); paintDirty();
     }));
-    body.querySelectorAll("[data-edit-row]").forEach((b) => b.addEventListener("click", () => { const [kind, ref] = b.dataset.editRow.split(":"); editRow(kind, Number(ref)); }));
+    body.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => pickForRow(b.dataset.kind, Number(b.dataset.ref), b.dataset.pick)));
     body.querySelectorAll("[data-unadd]").forEach((b) => b.addEventListener("click", () => { st.added.splice(Number(b.dataset.unadd), 1); paintRows(); paintDirty(); }));
     body.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => removeRow(Number(b.dataset.del))));
     body.querySelectorAll("[data-hist]").forEach((b) => b.addEventListener("click", () => showHistory(rows.find((r) => r.id === Number(b.dataset.hist)))));
   }
 
-  // Окно правки строки. Добавленная (ещё не сохранённая) строка: можно сменить подрядчика, вид работ и числа. Внесённая: числа (подрядчик и вид работ —
-  // часть ключа записи, их не меняют: удалить строку и добавить новую).
-  function editRow(kind, ref) {
-    const isAdded = kind === "added", rec = isAdded ? null : st.day.rows.find((r) => r.id === ref), a = isAdded ? st.added[ref] : null;
-    if (!isAdded && !rec) return;
-    const init = isAdded ? { contractor_id: a.contractor_id, codifier_id: a.codifier_id, workers: String(a.workers), itr: String(a.itr) }
-      : { contractor_id: rec.contractor_id, codifier_id: rec.codifier_id, workers: rowVals(rec).w, itr: rowVals(rec).i };
-    const dlg = openDialog({ title: isAdded ? "Строка карточки (не сохранена)" : "Изменение численности", narrow: true,
-      hint: isAdded ? "Измените любое поле и нажмите «Применить к карточке»; в базу строка попадёт после «Сохранить»." : "Подрядчика и вид работ у внесённой строки изменить нельзя — удалите строку и добавьте новую. Числа правятся и сохраняются кнопкой «Сохранить».",
-      footHtml: `<button type="button" class="hc-btn primary" data-apply>${isAdded ? "Применить к карточке" : "Применить"}</button>` });
-    dlg.body.innerHTML = `<div class="hc-form-grid">
-      <label class="hc-span2">Подрядчик${isAdded ? `<div id="re-ctr"></div>` : `<input type="text" readonly value="${esc(contractorLabel(init.contractor_id))}">`}</label>
-      <label class="hc-span2">Вид работ${isAdded ? `<div id="re-work"></div>` : `<input type="text" readonly value="${esc(workLabel(init.codifier_id))}">`}</label>
-      <label>Рабочие<input type="number" min="0" max="${HC_MAX}" step="1" id="re-w" class="hc-num" value="${esc(init.workers)}"></label>
-      <label>ИТР<input type="number" min="0" max="${HC_MAX}" step="1" id="re-i" class="hc-num" value="${esc(init.itr)}"></label>
-      <label>Итого<input type="text" id="re-sum" class="hc-num hc-total-in" readonly tabindex="-1" value="${numOf(init.workers) + numOf(init.itr)}"></label></div>
-      <p class="hc-msg bad" id="re-err" role="alert"></p>`;
-    const q = (sel) => dlg.body.querySelector(sel);
-    const ctrP = isAdded ? contractorPicker(q("#re-ctr"), st.contractors) : null, workP = isAdded ? workPicker(q("#re-work"), st.works) : null;
-    if (isAdded) { ctrP.set(init.contractor_id); workP.set(init.codifier_id); }
-    const upd = () => { q("#re-sum").value = numOf(q("#re-w").value) + numOf(q("#re-i").value); };
-    q("#re-w").addEventListener("input", upd); q("#re-i").addEventListener("input", upd);
-    const apply = () => {
-      const w = q("#re-w").value.trim() === "" ? "0" : q("#re-w").value, it = q("#re-i").value.trim() === "" ? "0" : q("#re-i").value, err = q("#re-err");
-      const problem = pairProblem(w, it);
-      if (problem) { err.textContent = problem; return; }
-      if (isAdded) {
-        const contractor_id = ctrP.value(), codifier_id = workP.value();
-        if (!contractor_id) { err.textContent = "Выберите подрядчика"; return; }
-        if (!codifier_id) { err.textContent = "Выберите вид работ"; return; }
-        const clash = (st.day?.rows || []).some((r) => r.contractor_id === contractor_id && r.codifier_id === codifier_id) || st.added.some((x, k) => k !== ref && x.contractor_id === contractor_id && x.codifier_id === codifier_id);
-        if (clash) { err.textContent = "Карточка содержит дубликат численности, сохранение невозможно: по этому подрядчику и виду работ за день строка уже есть."; return; }
-        st.added[ref] = { contractor_id, codifier_id, workers: Number(w), itr: Number(it) };
-      } else if (w === String(rec.workers) && it === String(rec.itr ?? 0)) st.changed.delete(rec.id); else st.changed.set(rec.id, { workers: w, itr: it });
-      dlg.close(); paintRows(); paintDirty();
-    };
-    dlg.foot.addEventListener("click", (e) => { if (e.target.closest("[data-apply]")) apply(); });
-    dlg.body.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches("input[type=number]")) { e.preventDefault(); apply(); } });
-    (q("#re-w")).focus();
+  // Смена подрядчика / вида работ в строке: форма выбора, результат подставляется в эту же строку. Внесённая строка при сохранении переезжает на новый
+  // ключ (в истории — удаление на старом и создание на новом, «внесено когда/кем» и просрочка сохраняются). Занятая другой строкой пара — отказ.
+  function pickForRow(kind, ref, type) {
+    const saved = kind === "saved", row = saved ? st.day.rows.find((r) => r.id === ref) : st.added[ref];
+    if (!row) return;
+    const cur = saved ? effIds(row) : { ctr: row.contractor_id, work: row.codifier_id };
+    openPickDialog({
+      ...(type === "ctr" ? CTR_CFG : WORK_CFG), items: type === "ctr" ? st.contractors : st.works, selectedId: type === "ctr" ? cur.ctr : cur.work,
+      onPick: (item) => {
+        const ctr = type === "ctr" ? item.id : cur.ctr, work = type === "work" ? item.id : cur.work;
+        if (pairTaken(ctr, work, { kind, ref })) { setMsg("За этот день такая строка (подрядчик + вид работ) уже есть — выберите другую пару или правьте числа в имеющейся.", "bad"); return; }
+        if (saved) {
+          const prev = st.changed.get(row.id) || { workers: String(row.workers), itr: String(row.itr ?? 0) }, next = { ...prev };
+          if (ctr === row.contractor_id) delete next.contractor_id; else next.contractor_id = ctr;
+          if (work === row.codifier_id) delete next.codifier_id; else next.codifier_id = work;
+          if (next.contractor_id == null && next.codifier_id == null && next.workers === String(row.workers) && next.itr === String(row.itr ?? 0)) st.changed.delete(row.id);
+          else st.changed.set(row.id, next);
+        } else { row.contractor_id = ctr; row.codifier_id = work; }
+        setMsg("");
+        paintRows(); paintDirty();
+      },
+    });
   }
 
   // Итоги дня под таблицей — с учётом ещё не сохранённых правок и добавленных строк
@@ -289,7 +281,7 @@ export function mountHeadcount(el, ctx) {
       if (!codifier_id) { err.textContent = "Выберите вид работ"; return; }
       const problem = pairProblem(val(wIn), val(iIn));
       if (problem) { err.textContent = problem; return; }
-      if ((st.day?.rows || []).some((r) => r.contractor_id === contractor_id && r.codifier_id === codifier_id) || st.added.some((a) => a.contractor_id === contractor_id && a.codifier_id === codifier_id)) {
+      if (pairTaken(contractor_id, codifier_id, { kind: "none", ref: -1 })) {
         err.textContent = "Карточка содержит дубликат численности, сохранение невозможно: по этому подрядчику и виду работ за день строка уже есть — измените её в таблице.";
         return;
       }
@@ -304,14 +296,18 @@ export function mountHeadcount(el, ctx) {
   async function save() {
     if (st.saving || !hasChanges()) return;
     const rows = [
-      ...(st.day?.rows || []).filter((r) => st.changed.has(r.id)).map((r) => ({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: Number(st.changed.get(r.id).workers), itr: Number(st.changed.get(r.id).itr) })),
+      ...(st.day?.rows || []).filter((r) => st.changed.has(r.id)).map((r) => {
+        const c = st.changed.get(r.id), e = effIds(r), row = { contractor_id: e.ctr, codifier_id: e.work, workers: Number(c.workers), itr: Number(c.itr) };
+        if (e.ctr !== r.contractor_id || e.work !== r.codifier_id) row.move_from = r.id;   // сменили ключ записи: она переезжает
+        return row;
+      }),
       ...st.added,
     ];
     st.saving = true; paintDirty(); setMsg("Сохранение…");
     try {
       const res = await api.put(`/objects/${ctx.objectId}/headcount/records`, { date: st.date, rows });
       st.day = res; st.added = []; st.changed = new Map(); st.history = null; st.facets = null;
-      st.msg = `Сохранено: добавлено ${res.created}, изменено ${res.changed}${res.late ? ". Внесено позже срока — записи отмечены как просроченные." : "."}`; st.msgKind = res.late ? "warn" : "ok";
+      st.msg = `Сохранено: добавлено ${res.created}, изменено ${res.changed}${res.moved ? `, перенесено на другого подрядчика / вид работ ${res.moved}` : ""}${res.late ? ". Внесено позже срока — записи отмечены как просроченные." : "."}`; st.msgKind = res.late ? "warn" : "ok";
     } catch (e) { st.msg = errText(e); st.msgKind = "bad"; }   // введённое остаётся на месте
     st.saving = false;
     if (!dead && st.tab === "input") paintInput();
@@ -605,8 +601,8 @@ export function mountHeadcount(el, ctx) {
     if (all.length) pickTable(pane.querySelector("#hc-c-table"), {
       items: all, tree: true, treeColumn: "name",
       columns: [
-        { key: "code", title: "Код", filter: true, cls: "nw", text: (w) => w.code, html: (w) => `<span class="hc-code">${esc(w.code)}</span>` },
         { key: "name", title: "Вид работ", filter: true, text: (w) => w.name, html: (w) => esc(w.name) },
+        { key: "code", title: "Код", filter: true, cls: "nw", text: (w) => w.code, html: (w) => `<span class="hc-code">${esc(w.code)}</span>` },
         { key: "unit", title: "Ед.", cls: "nw", text: (w) => w.unit || "", html: (w) => esc(w.unit || "") },
         { key: "records", title: "Записей численности", cls: "num", text: (w) => String(w.records || ""), html: (w) => (w.records ? w.records.toLocaleString("ru-RU") : "") },
         { key: "state", title: "", cls: "nw", text: (w) => (w.retired_at ? "выведен" : ""), html: (w) => (w.retired_at ? `<span class="hc-badge warn">выведен из действия</span>` : "") },
@@ -831,49 +827,48 @@ function openPickDialog(cfg) {
   return dlg;
 }
 
-// Поле выбора: показывает выбранное значение, кнопка «Выбрать…» (и щелчок по полю) открывает всплывающую форму со справочником.
+// Поле выбора: показывает выбранное значение (длинное название переносится на следующую строку, а не обрезается), кнопка «Выбрать…» и щелчок
+// по полю открывают всплывающую форму со справочником; «✕» сбрасывает выбор.
 function pickField(box, items, cfg) {
   let chosen = null;
-  box.innerHTML = `<div class="hc-pickbox"><div class="hc-pick-inwrap"><input type="text" class="hc-pick-in" readonly placeholder="${esc(cfg.placeholder)}" aria-haspopup="dialog">
+  box.innerHTML = `<div class="hc-pickbox"><div class="hc-pick-inwrap"><div class="hc-pick-in hc-pick-show" tabindex="0" role="button" aria-haspopup="dialog"><span class="hc-pick-ph">${esc(cfg.placeholder)}</span></div>
     <button type="button" class="hc-pick-x" title="Сбросить выбор" aria-label="Сбросить выбор" hidden>✕</button></div><button type="button" class="hc-btn hc-pick-open">Выбрать…</button></div>`;
-  const input = box.querySelector("input"), xBtn = box.querySelector(".hc-pick-x"), openBtn = box.querySelector(".hc-pick-open");
+  const input = box.querySelector(".hc-pick-show"), xBtn = box.querySelector(".hc-pick-x"), openBtn = box.querySelector(".hc-pick-open");
   const find = (id) => items.find((x) => x.id === id);
-  const show = () => { xBtn.hidden = !chosen; };
+  const paintValue = () => { const x = chosen && find(chosen); input.innerHTML = x ? esc(cfg.label(x)) : `<span class="hc-pick-ph">${esc(cfg.placeholder)}</span>`; xBtn.hidden = !chosen; };
+  const emit = () => box.dispatchEvent(new Event("change", { bubbles: true }));
   const open = () => openPickDialog({
-    title: cfg.title, hint: cfg.hint, items, columns: cfg.columns, group: cfg.group, tree: cfg.tree, treeColumn: cfg.treeColumn, selectedId: chosen,
-    onPick: (item) => { chosen = item.id; input.value = cfg.label(item); show(); box.dispatchEvent(new Event("change", { bubbles: true })); },
-    onClear: () => { chosen = null; input.value = ""; show(); box.dispatchEvent(new Event("change", { bubbles: true })); },
+    ...cfg, items, selectedId: chosen,
+    onPick: (item) => { chosen = item.id; paintValue(); emit(); },
+    onClear: () => { chosen = null; paintValue(); emit(); },
   });
   input.addEventListener("click", open);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") { e.preventDefault(); open(); } });
   openBtn.addEventListener("click", open);
-  xBtn.addEventListener("click", () => { chosen = null; input.value = ""; show(); box.dispatchEvent(new Event("change", { bubbles: true })); });
-  return { value: () => chosen, clear: () => { chosen = null; input.value = ""; show(); },
-    set: (id) => { const x = find(id); if (x) { chosen = id; input.value = cfg.label(x); show(); } } };
+  xBtn.addEventListener("click", () => { chosen = null; paintValue(); emit(); });
+  return { value: () => chosen, clear: () => { chosen = null; paintValue(); },
+    set: (id) => { if (find(id)) { chosen = id; paintValue(); } } };
 }
 
-// Вид работ — из кодификатора; разделы свёрнуты, поиск отдельно по коду и по названию.
-function workPicker(box, works) {
-  return pickField(box, works, {
-    placeholder: "Вид работ не выбран", title: "Выбор вида работ из справочника", hint: "Справочник — дерево до последнего уровня (разделы свёрнуты): стрелка раскрывает ветку, щелчок по строке выбирает позицию любого уровня. Поиск — по коду и по названию отдельно.",
-    label: (w) => `${w.code} ${w.name}`, tree: true, treeColumn: "name",
-    columns: [
-      { key: "code", title: "Код", filter: true, cls: "nw", text: (w) => w.code, html: (w) => `<span class="hc-code">${esc(w.code)}</span>` },
-      { key: "name", title: "Вид работ", filter: true, text: (w) => w.name, html: (w) => esc(w.name) },
-      { key: "unit", title: "Ед.", cls: "nw", text: (w) => w.unit || "", html: (w) => esc(w.unit || "") },
-    ],
-  });
-}
-
-// Подрядчик объекта — таблица подрядчиков, поиск отдельно по названию, ИНН и контрагенту.
-function contractorPicker(box, contractors) {
-  return pickField(box, contractors, {
-    placeholder: "Подрядчик не выбран", title: "Выбор подрядчика", hint: "Поиск — в полях под заголовками колонок (название, ИНН, контрагент). Щёлкните строку, чтобы выбрать.",
-    label: (c) => c.display,
-    columns: [
-      { key: "name", title: "Наименование", filter: true, text: (c) => `${c.name || ""} ${c.counterparty_name || ""}`, html: (c) => esc(c.name || c.counterparty_name || "—") },
-      { key: "inn", title: "ИНН", filter: true, cls: "nw", text: (c) => c.inn || "", html: (c) => `${c.inn ? esc(c.inn) : '<span class="hc-muted">нет</span>'}${c.inn_note ? ` <span class="hc-badge warn">${esc(c.inn_note)}</span>` : ""}` },
-      { key: "cp", title: "Контрагент в справочнике", filter: true, text: (c) => c.counterparty_name || "", html: (c) => (c.counterparty_id ? esc(c.counterparty_name || "") : '<span class="hc-muted">не связан</span>') },
-    ],
-  });
-}
+// Настройки форм выбора. Вид работ: сначала «Вид работ» (с отступом по уровню дерева), затем «Код». Подрядчик: наименование, ИНН, контрагент.
+const WORK_CFG = {
+  placeholder: "Вид работ не выбран", title: "Выбор вида работ из справочника",
+  hint: "Справочник — дерево до последнего уровня (разделы свёрнуты): стрелка раскрывает ветку, щелчок по строке выбирает позицию любого уровня. Поиск — по названию и по коду отдельно.",
+  label: (w) => `${w.code} ${w.name}`, tree: true, treeColumn: "name",
+  columns: [
+    { key: "name", title: "Вид работ", filter: true, text: (w) => w.name, html: (w) => esc(w.name) },
+    { key: "code", title: "Код", filter: true, cls: "nw", text: (w) => w.code, html: (w) => `<span class="hc-code">${esc(w.code)}</span>` },
+    { key: "unit", title: "Ед.", cls: "nw", text: (w) => w.unit || "", html: (w) => esc(w.unit || "") },
+  ],
+};
+const CTR_CFG = {
+  placeholder: "Подрядчик не выбран", title: "Выбор подрядчика", hint: "Поиск — в полях под заголовками колонок (название, ИНН, контрагент). Щёлкните строку, чтобы выбрать.",
+  label: (c) => c.display,
+  columns: [
+    { key: "name", title: "Наименование", filter: true, text: (c) => `${c.name || ""} ${c.counterparty_name || ""}`, html: (c) => esc(c.name || c.counterparty_name || "—") },
+    { key: "inn", title: "ИНН", filter: true, cls: "nw", text: (c) => c.inn || "", html: (c) => `${c.inn ? esc(c.inn) : '<span class="hc-muted">нет</span>'}${c.inn_note ? ` <span class="hc-badge warn">${esc(c.inn_note)}</span>` : ""}` },
+    { key: "cp", title: "Контрагент в справочнике", filter: true, text: (c) => c.counterparty_name || "", html: (c) => (c.counterparty_id ? esc(c.counterparty_name || "") : '<span class="hc-muted">не связан</span>') },
+  ],
+};
+const workPicker = (box, works) => pickField(box, works, WORK_CFG);
+const contractorPicker = (box, contractors) => pickField(box, contractors, CTR_CFG);

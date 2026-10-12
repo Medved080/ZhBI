@@ -665,7 +665,8 @@ function hcSaveProblem(body) {
   if (!Array.isArray(body.rows) || !body.rows.length || body.rows.length > 500) return "строк нет или больше 500";
   const seen = new Set();
   for (const r of body.rows) {
-    if (!isObj(r) || Object.keys(r).some((k) => !["contractor_id", "codifier_id", "workers", "itr"].includes(k))) return "строка неверной формы";
+    if (!isObj(r) || Object.keys(r).some((k) => !["contractor_id", "codifier_id", "workers", "itr", "move_from"].includes(k))) return "строка неверной формы";
+    if (r.move_from !== undefined && (!Number.isInteger(r.move_from) || r.move_from <= 0)) return "move_from — идентификатор записи";
     if (!Number.isInteger(r.contractor_id) || !Number.isInteger(r.codifier_id) || !Number.isInteger(r.workers) || r.workers < 0 || r.workers > 100000) return "число рабочих — целое от 0 до 100 000";
     if (r.itr !== undefined && (!Number.isInteger(r.itr) || r.itr < 0 || r.itr > 100000)) return "число ИТР — целое от 0 до 100 000";
     if (r.workers + (r.itr ?? 0) < 1) return "рабочие и ИТР вместе — не меньше 1";

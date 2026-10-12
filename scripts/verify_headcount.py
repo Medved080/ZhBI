@@ -271,3 +271,28 @@ ok(_lv[5] == (2, 1, False), "иерархия: нет промежуточног
 ok(_lv[6] == (1, None, False), "иерархия: позиция без номера — верхний уровень")
 ok([x["id"] for x in _t].index(3) < [x["id"] for x in _t].index(4), "иерархия: родитель идёт перед потомками")
 print("ИЕРАРХИЯ ПРОШЛА")
+
+# ---- смена подрядчика / вида работ у внесённой строки (re-key), в том числе обмен ключами
+mv_c1 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-1 ООО", inn="7701111111"), user=admin)["id"]
+mv_c2 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-2 ООО", inn="7702222222"), user=admin)["id"]
+D = "2026-02-02"
+def save(rows): return hc.save_records(object_id=obj, body=hc.SaveIn(date=D, rows=rows), user=admin)
+r0 = save([hc.RowIn(contractor_id=mv_c1, codifier_id=w["130-01-01"], workers=10, itr=1), hc.RowIn(contractor_id=mv_c2, codifier_id=w["130-03"], workers=5, itr=0)])
+recA = [x for x in r0["rows"] if x["contractor_id"] == mv_c1][0]; recB = [x for x in r0["rows"] if x["contractor_id"] == mv_c2][0]
+r1 = save([hc.RowIn(contractor_id=mv_c1, codifier_id=w["340-03-02"], workers=12, itr=1, move_from=recA["id"])])
+ok(r1["moved"] == 1 and r1["created"] == 0, "re-key: запись переехала на новый вид работ")
+keys = {(x["contractor_id"], x["codifier_id"]): x for x in r1["rows"]}
+ok((mv_c1, w["130-01-01"]) not in keys and keys[(mv_c1, w["340-03-02"])]["workers"] == 12, "re-key: на старом ключе записи нет, на новом — с новым числом")
+ok(keys[(mv_c1, w["340-03-02"])]["entered_at"] == recA["entered_at"] and keys[(mv_c1, w["340-03-02"])]["late"] == recA["late"], "re-key: «внесено когда» и просрочка сохранены")
+hh = hc.get_history(object_id=obj, date_from=D, date_to=D, contractor_id=mv_c1, codifier_id=w["130-01-01"], limit=50, user=admin)["history"]
+ok(hh and hh[0]["new"] is None and hh[0]["old"] == 10, "re-key: в истории старого ключа — удаление")
+try: save([hc.RowIn(contractor_id=mv_c2, codifier_id=w["130-03"], workers=9, itr=0, move_from=keys[(mv_c1, w["340-03-02"])]["id"])]); ok(False, "конфликт")
+except HTTPException as e: ok(e.status_code == 409, "re-key: на новом ключе уже есть другая запись — 409")
+ok(len(hc.get_day(object_id=obj, day=D, user=admin)["rows"]) == 2, "re-key: при отказе ничего не изменилось")
+a2 = keys[(mv_c1, w["340-03-02"])]
+r3 = save([hc.RowIn(contractor_id=mv_c2, codifier_id=w["130-03"], workers=12, itr=1, move_from=a2["id"]), hc.RowIn(contractor_id=mv_c1, codifier_id=w["340-03-02"], workers=5, itr=0, move_from=recB["id"])])
+k3 = {(x["contractor_id"], x["codifier_id"]): x["workers"] for x in r3["rows"]}
+ok(r3["moved"] == 2 and k3 == {(mv_c2, w["130-03"]): 12, (mv_c1, w["340-03-02"]): 5}, "re-key: обмен ключами двух строк за одно сохранение")
+try: save([hc.RowIn(contractor_id=mv_c1, codifier_id=w["130-01-01"], workers=1, move_from=999999)]); ok(False, "чужая запись")
+except HTTPException as e: ok(e.status_code == 404, "re-key: запись не найдена — 404")
+print("RE-KEY ПРОШЁЛ")

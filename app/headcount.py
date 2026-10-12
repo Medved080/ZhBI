@@ -334,6 +334,7 @@ class RowIn(BaseModel):
     codifier_id: int
     workers: int
     itr: Optional[int] = None   # не передан — у существующей записи остаётся прежним, у новой 0 (старый клиент про ИТР не знает)
+    move_from: Optional[int] = None   # id внесённой записи, у которой в строке сменили подрядчика и/или вид работ (ключ записи): запись переезжает на новый ключ
 
 
 class SaveIn(BaseModel):
@@ -427,15 +428,32 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         seen.add(key)
     iso = work_date.isoformat()
     late = 1 if is_late(work_date, now) else 0
-    created = changed = unchanged = 0
+    created = changed = unchanged = moved = 0
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
         begin_write(conn)
+        # Строки, у которых сменили подрядчика / вид работ (ключ записи): старые записи снимаются СРАЗУ ВСЕ (в истории — удаление на старом
+        # ключе), потом строки вносятся как обычно, но с прежними «внесено когда/кем», просрочкой и источником. Так работает и обмен ключами
+        # между двумя строками. Если на новом ключе уже есть другая запись — отказ, ничего не меняется.
+        moved_meta = {}
+        for row in body.rows:
+            if row.move_from is None:
+                continue
+            rec = conn.execute("SELECT * FROM headcount_records WHERE id = ? AND object_id = ? AND work_date = ?", (row.move_from, object_id, iso)).fetchone()
+            if rec is None:
+                raise HTTPException(status_code=404, detail="Исправляемая запись не найдена (возможно, её уже удалили) — обновите страницу")
+            if (rec["contractor_id"], rec["codifier_id"]) == (row.contractor_id, row.codifier_id):
+                continue
+            moved_meta[(row.contractor_id, row.codifier_id)] = rec
+        stamp = _db_now()
+        for rec in moved_meta.values():
+            _history(conn, rec["id"], object_id, iso, rec["contractor_id"], rec["codifier_id"], rec["workers"], None, "form", stamp, user["id"],
+                     old_itr=rec["itr"], new_itr=None)
+            conn.execute("DELETE FROM headcount_records WHERE id = ?", (rec["id"],))
         contractors = {r["id"] for r in conn.execute(
             "SELECT id FROM headcount_contractors WHERE object_id = ?", (object_id,))}
         works = {r["id"]: r["retired_at"] for r in conn.execute("SELECT id, retired_at FROM work_codifier")}
-        stamp = _db_now()
         for row in body.rows:
             if row.contractor_id not in contractors:
                 raise HTTPException(status_code=400, detail="Подрядчик не относится к этому объекту")
@@ -444,7 +462,10 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
             current = conn.execute(
                 "SELECT id, workers, itr FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
                 (object_id, iso, row.contractor_id, row.codifier_id)).fetchone()
-            new_itr = row.itr if row.itr is not None else (current["itr"] if current is not None else 0)
+            meta = moved_meta.get((row.contractor_id, row.codifier_id))
+            if meta is not None and current is not None:
+                raise HTTPException(status_code=409, detail="После смены подрядчика или вида работ такая строка за день уже есть — выберите другую пару")
+            new_itr = row.itr if row.itr is not None else (current["itr"] if current is not None else (meta["itr"] if meta is not None else 0))
             if row.workers + new_itr < 1:
                 raise HTTPException(status_code=400, detail="Рабочие и ИТР вместе — не меньше 1: пустую строку не вносят (чтобы убрать запись, удалите её)")
             if current is None:
@@ -452,11 +473,16 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
                     raise HTTPException(status_code=400, detail="Вид работ выведен из действия: новую численность по нему не вносят")
                 cur = conn.execute(
                     "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, late, source, "
-                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, 'form', ?, ?, ?, ?)",
-                    (object_id, iso, row.contractor_id, row.codifier_id, row.workers, new_itr, late, stamp, user["id"], stamp, user["id"]))
+                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (object_id, iso, row.contractor_id, row.codifier_id, row.workers, new_itr,
+                     meta["late"] if meta is not None else late, "form" if meta is None else meta["source"],
+                     meta["entered_at"] if meta is not None else stamp, meta["entered_by"] if meta is not None else user["id"], stamp, user["id"]))
                 _history(conn, cur.lastrowid, object_id, iso, row.contractor_id, row.codifier_id, None, row.workers, "form", stamp, user["id"],
                          old_itr=None, new_itr=new_itr)
-                created += 1
+                if meta is not None:
+                    moved += 1
+                else:
+                    created += 1
             elif current["workers"] == row.workers and current["itr"] == new_itr:
                 unchanged += 1
             else:
@@ -469,10 +495,10 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         payload = _day_payload(conn, object_id, work_date)
     finally:
         conn.close()
-    if created or changed:
+    if created or changed or moved:
         activity.log("headcount_set", user=user, entity_type="object", entity_id=object_id, new_value=iso,
-                     details={"добавлено": created, "изменено": changed, "без изменений": unchanged, "просрочено": bool(late)})
-    return {"created": created, "changed": changed, "unchanged": unchanged, "late": bool(late), **payload}
+                     details={"добавлено": created, "изменено": changed, "перенесено на другой ключ": moved, "без изменений": unchanged, "просрочено": bool(late)})
+    return {"created": created, "changed": changed, "moved": moved, "unchanged": unchanged, "late": bool(late), **payload}
 
 
 def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id, *, old_itr=None, new_itr=None) -> None:
