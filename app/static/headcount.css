@@ -119,3 +119,17 @@
 .hc-tbl tr.unmapped td { background: color-mix(in srgb, var(--hc-warn) 10%, var(--hc-bg)); }
 .hc-suggest { margin-top: 4px; } .hc-suggest .hc-link { font-size: 12px; text-align: left; }
 .hc-check-inline { margin-left: 16px; white-space: nowrap; color: var(--hc-ink); } .hc-root.hc-root .hc-check-inline input { width: auto; vertical-align: middle; }
+
+/* Выбор вида работ — похож на выпадающий список (поле + стрелка), а не на строку ввода; список сгруппирован по разделам кодификатора */
+.hc-pickbox { position: relative; display: flex; align-items: stretch; }
+.hc-root.hc-root .hc-pickbox .hc-pick-in { padding-right: 58px; cursor: pointer; text-overflow: ellipsis; }
+.hc-pick-btn, .hc-pick-x { position: absolute; top: 1px; bottom: 1px; border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; font: inherit; padding: 0 9px; }
+.hc-pick-btn { right: 1px; border-left: 1px solid var(--hc-line); border-radius: 0 5px 5px 0; background: color-mix(in srgb, var(--hc-accent) 7%, var(--hc-bg)); color: var(--hc-ink); }
+.hc-pick-x { right: 30px; } .hc-pick-x:hover, .hc-pick-btn:hover { color: var(--hc-accent); }
+.hc-pick-list .hc-pick-sec { position: sticky; top: 0; background: var(--hc-soft); color: var(--hc-muted); font-size: 12px; font-weight: 600; cursor: default; padding: 4px 10px; }
+.hc-pick-list .hc-pick-sec:hover { background: var(--hc-soft); }
+.hc-pick-list li.sel { background: color-mix(in srgb, var(--hc-accent) 14%, var(--hc-bg)); font-weight: 600; }
+.hc-tbl tr.hc-sec-row td { background: var(--hc-soft); font-weight: 600; position: sticky; top: 0; }
+.hc-tbl tr.retired td { color: var(--hc-muted); text-decoration: line-through; }
+.hc-tbl tr.retired td:last-child { text-decoration: none; }
+.hc-pick-btn { font-size: 16px; line-height: 1; min-width: 30px; } .hc-pick-x { font-size: 13px; }

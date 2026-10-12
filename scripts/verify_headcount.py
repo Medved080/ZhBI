@@ -253,3 +253,11 @@ hc.delete_record(object_id=obj, record_id=rid, user=admin)
 h = hc.get_history(object_id=obj, date_from=itr_day.isoformat(), date_to=itr_day.isoformat(), contractor_id=a, codifier_id=w["130-03"], limit=50, user=admin)["history"]
 ok(h[0]["new"] is None and h[0]["new_itr"] is None and h[0]["old"] == 0 and h[0]["old_itr"] == 5, "удаление «только ИТР»: в журнале было 0/5, стало пусто")
 print("ИТР / РАБОЧИЕ / ИТОГО ПРОШЛИ")
+
+# ---- кодификатор: порядок и полный список
+_cod = hc.list_codifier(object_id=obj, full=False, user=admin)["works"]
+_names = [w["name"] for w in _cod]
+ok(_names.index("1. Проектно-изыскательские работы") < _names.index("16.1. Оборудование паркинга") if "16.1. Оборудование паркинга" in _names else True, "кодификатор: по номерам разделов, а не по порядку строк файла")
+_full = hc.list_codifier(object_id=obj, full=True, user=admin)["works"]
+ok(len(_full) >= len(_cod) and "records" in _full[0] and "retired_at" in _full[0], "кодификатор: полный список с использованием и датой вывода")
+print("КОДИФИКАТОР ПРОШЁЛ")

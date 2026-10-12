@@ -55,14 +55,14 @@ export function mountHeadcount(el, ctx) {
   const { api } = ctx;
   let dead = false;
   const st = {
-    tab: "input", works: null, contractors: null, loadError: "",
+    tab: ctx.startTab || "input", works: null, contractors: null, loadError: "", cod: null, codErr: "", codQ: "", codSec: "",
     date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
     contractorForm: null, facets: null,
     rep: { preset: "objects", obj: null, staff: "total", bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
     data: { mode: "records", obj: null, from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
   };
-  const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"], ["data", "Все данные"]];
+  const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"], ["data", "Все данные"], ["codifier", "Виды работ"]];
   if (ctx.canAdmin) tabs.push(["admin", "Загрузка данных"]);
 
   el.classList.add("hc-root");
@@ -103,7 +103,7 @@ export function mountHeadcount(el, ctx) {
     if (st.loadError) { pane.innerHTML = `<div class="hc-callout bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(st.loadError)} <button type="button" class="hc-btn" id="hc-retry">Повторить</button></div>`; pane.querySelector("#hc-retry").addEventListener("click", () => { st.loadError = ""; loadRefs(); }); return; }
     if (st.tab !== "admin" && (st.contractors === null || st.works === null)) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     if ((st.tab === "report" || st.tab === "data") && !st.facets) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; loadFacets().then(() => !dead && paint()); return; }
-    ({ input: paintInput, contractors: paintContractors, report: paintReport, data: paintData, admin: paintAdmin })[st.tab]();
+    ({ input: paintInput, contractors: paintContractors, report: paintReport, data: paintData, codifier: paintCodifier, admin: paintAdmin })[st.tab]();
   }
 
   // =====================================================================  ВВОД
@@ -527,6 +527,45 @@ export function mountHeadcount(el, ctx) {
     box.querySelector("#hc-d-next").addEventListener("click", () => { d.offset += d.limit; loadData(); });
   }
 
+  // =====================================================================  ВИДЫ РАБОТ (справочник-кодификатор целиком)
+  async function loadCodifier() {
+    st.codErr = "";
+    try { st.cod = (await api.get(`/objects/${ctx.objectId}/headcount/codifier?full=true`)).works || []; }
+    catch (e) { st.cod = []; st.codErr = errText(e); }
+    if (!dead && st.tab === "codifier") paintCodifier();
+  }
+
+  function paintCodifier() {
+    if (st.cod === null) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; loadCodifier(); return; }
+    const all = st.cod, sections = [...new Set(all.map((w) => w.section_name || "Без раздела"))];
+    const q = st.codQ.trim().toLowerCase();
+    const list = all.filter((w) => (!st.codSec || (w.section_name || "Без раздела") === st.codSec) && (!q || `${w.code} ${w.name}`.toLowerCase().includes(q)));
+    const retired = all.filter((w) => w.retired_at).length, used = all.filter((w) => w.records).length;
+    let lastSec = null;
+    const rows = list.map((w) => {
+      const sec = w.section_name || "Без раздела";
+      const head = sec !== lastSec ? `<tr class="hc-sec-row"><td colspan="5">${esc(sec)}</td></tr>` : "";
+      lastSec = sec;
+      return `${head}<tr class="${w.retired_at ? "retired" : ""}"><td class="nw hc-code">${esc(w.code)}</td><td>${esc(w.name)}</td><td class="nw">${esc(w.unit || "")}</td><td class="num">${w.records ? w.records.toLocaleString("ru-RU") : ""}</td><td class="nw">${w.retired_at ? `<span class="hc-badge warn">выведен из действия</span>` : ""}</td></tr>`;
+    }).join("");
+    pane.innerHTML = `
+      <div class="hc-filters">
+        <label class="hc-f-ctr">Поиск (код или название)<input type="text" id="hc-c-q" value="${esc(st.codQ)}" placeholder="например: бетон или 130"></label>
+        <label class="hc-f-obj">Раздел<select id="hc-c-sec"><option value="">Все разделы (${sections.length})</option>${sections.map((x) => `<option value="${esc(x)}" ${x === st.codSec ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+        <span class="hc-spacer"></span>
+        ${ctx.canAdmin ? `<button type="button" class="hc-btn" id="hc-c-load">Загрузить / обновить из Excel…</button>` : ""}
+      </div>
+      <p class="hc-muted hc-small">Общий справочник видов работ (кодификатор): один на все объекты, ${all.length.toLocaleString("ru-RU")} позиций в ${sections.length} разделах${used ? `, использовано в численности: ${used}` : ""}${retired ? `, выведено из действия: ${retired}` : ""}.
+        ${ctx.canAdmin ? "Обновляется загрузкой файла «Справочник по видам работ» (вкладка «Загрузка данных»)." : "Загружает и обновляет справочник администратор сервиса."}</p>
+      ${st.codErr ? `<div class="hc-callout bad" role="alert">${esc(st.codErr)}</div>` : ""}
+      ${all.length ? `<p class="hc-muted hc-small">Показано: ${list.length.toLocaleString("ru-RU")}</p><div class="hc-scroll"><table class="hc-tbl hc-cod"><thead><tr><th>Код</th><th>Вид работ</th><th>Ед.</th><th class="num">Записей численности</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="5" class="hc-muted">Ничего не найдено.</td></tr>`}</tbody></table></div>`
+        : `<div class="hc-callout warn">Справочник пуст. ${ctx.canAdmin ? "Загрузите файл «Справочник по видам работ» на вкладке «Загрузка данных»." : "Попросите администратора сервиса загрузить его."}</div>`}`;
+    const input = pane.querySelector("#hc-c-q");
+    input.addEventListener("input", () => { st.codQ = input.value; const pos = input.selectionStart; paintCodifier(); const n = pane.querySelector("#hc-c-q"); n.focus(); n.setSelectionRange(pos, pos); });
+    pane.querySelector("#hc-c-sec").addEventListener("change", (e) => { st.codSec = e.target.value; paintCodifier(); });
+    pane.querySelector("#hc-c-load")?.addEventListener("click", () => { st.tab = "admin"; paint(); });
+  }
+
   // =====================================================================  ЗАГРУЗКА ДАННЫХ (администратор сервиса)
   function paintAdmin() {
     const a = st.adm;
@@ -551,6 +590,7 @@ export function mountHeadcount(el, ctx) {
       a.busy = true; a.error = ""; paintAdmin();
       try { const r = await upload("/headcount/codifier/import", f, { dry_run: dry ? "true" : "false" });
         a.codResult = `${dry ? "Проверка (ничего не записано): " : "Загружено: "}в файле ${r.rows}, новых ${r.created}, изменено ${r.updated}, без изменений ${r.unchanged}${r.absent_in_file ? `, в справочнике есть, в файле нет: ${r.absent_in_file}` : ""}.`;
+        if (!dry) { st.cod = null; st.works = null; loadRefs(); }   // справочник изменился: форма ввода и вкладка «Виды работ» перечитают его
       } catch (e) { a.error = errText(e); a.codResult = ""; }
       a.busy = false; paintAdmin();
     };
@@ -629,27 +669,45 @@ export function mountHeadcount(el, ctx) {
 // Выбор вида работ из кодификатора: поле поиска по коду и названию + список совпадений (593 строки — обычный select неудобен).
 function workPicker(box, works) {
   let chosen = null;
-  box.innerHTML = `<input type="text" class="hc-pick-in" placeholder="Код или название вида работ" autocomplete="off" role="combobox" aria-expanded="false"><ul class="hc-pick-list" role="listbox" hidden></ul>`;
-  const input = box.querySelector("input"), list = box.querySelector("ul");
-  const render = () => {
-    const q = input.value.trim().toLowerCase();
-    const hit = (q ? works.filter((w) => `${w.code} ${w.name}`.toLowerCase().includes(q)) : works).slice(0, 60);
-    list.innerHTML = hit.length ? hit.map((w) => `<li role="option" data-id="${w.id}"><span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}</li>`).join("") : `<li class="hc-muted">Ничего не найдено</li>`;
+  box.innerHTML = `<div class="hc-pickbox"><input type="text" class="hc-pick-in" placeholder="Выберите вид работ из справочника…" autocomplete="off" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+    <button type="button" class="hc-pick-x" title="Сбросить выбор" aria-label="Сбросить выбор" hidden>✕</button>
+    <button type="button" class="hc-pick-btn" title="Открыть справочник видов работ" aria-label="Открыть справочник видов работ" tabindex="-1">▾</button></div><ul class="hc-pick-list" role="listbox" hidden></ul>`;
+  const input = box.querySelector("input"), list = box.querySelector("ul"), xBtn = box.querySelector(".hc-pick-x"), arrow = box.querySelector(".hc-pick-btn"), field = box.querySelector(".hc-pickbox");
+  const label = (w) => `${w.code} ${w.name}`;
+  const render = (filter) => {
+    const q = (filter || "").trim().toLowerCase();
+    const hit = q ? works.filter((w) => label(w).toLowerCase().includes(q)) : works;   // без ограничения числа: виден весь справочник
+    let sec = null;
+    list.innerHTML = hit.length ? hit.map((w) => {
+      const s2 = w.section_name || "Без раздела", head = s2 !== sec ? `<li class="hc-pick-sec" role="presentation">${esc(s2)}</li>` : "";
+      sec = s2;
+      return `${head}<li role="option" data-id="${w.id}" ${w.id === chosen ? 'aria-selected="true" class="sel"' : ""}><span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}</li>`;
+    }).join("") : `<li class="hc-muted">Ничего не найдено</li>`;
     list.hidden = false; input.setAttribute("aria-expanded", "true");
     // список поверх всех прокруток (окно V1 и страница V2 обрезают абсолютно позиционированное): позиция по полю, вниз или вверх
-    const r = input.getBoundingClientRect(), below = window.innerHeight - r.bottom - 8, above = r.top - 8;
-    const up = below < 180 && above > below, room = Math.max(120, Math.min(300, up ? above : below));
-    Object.assign(list.style, { position: "fixed", left: `${r.left}px`, width: `${r.width}px`, maxHeight: `${room}px`,
+    const r = field.getBoundingClientRect(), below = window.innerHeight - r.bottom - 8, above = r.top - 8;
+    const up = below < 220 && above > below, room = Math.max(140, Math.min(420, up ? above : below));
+    Object.assign(list.style, { position: "fixed", left: `${r.left}px`, width: `${Math.max(r.width, 360)}px`, maxHeight: `${room}px`,
       top: up ? "auto" : `${r.bottom + 2}px`, bottom: up ? `${window.innerHeight - r.top + 2}px` : "auto" });
+    list.querySelector(".sel")?.scrollIntoView({ block: "nearest" });
   };
   const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); };
-  input.addEventListener("input", () => { chosen = null; render(); });
-  input.addEventListener("focus", render);
-  input.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); if (e.key === "Enter" && !list.hidden) { const f = list.querySelector("[data-id]"); if (f && !chosen) { e.preventDefault(); pick(f); } } });
+  const show = () => { xBtn.hidden = !chosen; };
+  const pick = (li) => { chosen = Number(li.dataset.id); input.value = label(works.find((x) => x.id === chosen)); show(); close(); };
+  const open = () => { if (chosen) input.select(); render(chosen ? "" : input.value); };   // выбранное значение не фильтрует список: виден весь справочник
+  input.addEventListener("input", () => { chosen = null; show(); render(input.value); });
+  input.addEventListener("focus", open);
+  input.addEventListener("click", () => { if (list.hidden) open(); });
+  arrow.addEventListener("mousedown", (e) => { e.preventDefault(); if (list.hidden) { input.focus(); open(); } else close(); });
+  xBtn.addEventListener("click", () => { chosen = null; input.value = ""; show(); input.focus(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close();
+    if (e.key === "ArrowDown" && list.hidden) { e.preventDefault(); open(); }
+    if (e.key === "Enter" && !list.hidden) { const f = list.querySelector("[data-id]"); if (f && !chosen) { e.preventDefault(); pick(f); } }
+  });
   list.addEventListener("mousedown", (e) => { const li = e.target.closest("[data-id]"); if (li) { e.preventDefault(); pick(li); } });
-  const pick = (li) => { chosen = Number(li.dataset.id); const w = works.find((x) => x.id === chosen); input.value = `${w.code} ${w.name}`; close(); };
   document.addEventListener("click", (e) => { if (!box.contains(e.target)) close(); });
   window.addEventListener("scroll", (e) => { if (!list.hidden && !list.contains(e.target)) close(); }, true);
-  return { value: () => chosen, clear: () => { chosen = null; input.value = ""; close(); },
-    set: (id) => { const w = works.find((x) => x.id === id); if (w) { chosen = id; input.value = `${w.code} ${w.name}`; } } };
+  return { value: () => chosen, clear: () => { chosen = null; input.value = ""; show(); close(); },
+    set: (id) => { const w = works.find((x) => x.id === id); if (w) { chosen = id; input.value = label(w); show(); } } };
 }

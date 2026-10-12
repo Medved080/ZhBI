@@ -33305,7 +33305,7 @@ function closeHeadcount() {
   document.getElementById("headcount-backdrop").classList.remove("open");
 }
 document.getElementById("hc-close").addEventListener("click", closeHeadcount);
-document.getElementById("menu-headcount").addEventListener("click", async () => {
+async function openHeadcount(startTab) {
   if (!state.objectId) { showToast("Сначала выберите объект", "warning"); return; }
   const объект = currentObject();
   document.getElementById("hc-object-name").textContent = объект ? объект.object.name : "";
@@ -33321,11 +33321,14 @@ document.getElementById("menu-headcount").addEventListener("click", async () => 
     upload: (path, form) => api(path, { method: "POST", body: form }),
     download: (url) => downloadFromServer(url),
     objectId: state.objectId,
+    startTab,
     canWrite: can("headcount", "write"),
     canAdmin: systemAdmin(),
     confirm: async (text) => confirm(text),
   });
-});
+}
+document.getElementById("menu-headcount").addEventListener("click", () => openHeadcount());
+document.getElementById("menu-work-codifier").addEventListener("click", () => openHeadcount("codifier"));
 
 // «Новый отчёт» из журнала (живой запрос пользователя, 2026-09-10:
 // «сначала явно выбрать блок и дату, затем заполнить существующую форму

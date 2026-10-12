@@ -17,6 +17,7 @@
 заказчиком.)
 """
 
+import re
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
@@ -269,16 +270,30 @@ def delete_contractor(object_id: int, contractor_id: int, user: sqlite3.Row = De
 
 # ------------------------------------------------------------------ кодификатор (чтение)
 
+_LEAD_NUM = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s")
+
+
+def codifier_sort_key(row) -> tuple:
+    """Порядок кодификатора для показа: по номеру раздела и пункта из названия («1.», «16.1.1.»), а не по порядку строк файла и не по
+    коду (код «320» — это раздел 23, номера и коды не совпадают). Без номера в названии — в конец, по коду."""
+    m = _LEAD_NUM.match(row["name"] or "")
+    return (0, tuple(int(x) for x in m.group(1).split(".")), row["code"]) if m else (1, (), row["code"])
+
+
 @router.get("/codifier")
-def list_codifier(object_id: int, user: sqlite3.Row = Depends(get_current_user)):
-    """Действующие виды работ для выбора в форме: дерево собирает клиент по section_name → parent_name → name."""
+def list_codifier(object_id: int, full: bool = False, user: sqlite3.Row = Depends(get_current_user)):
+    """Виды работ кодификатора, по порядку номеров. Для выбора в форме (`full` не задан) — только действующие. `full=true` — справочник
+    целиком для просмотра: добавляются выведенные из действия, дата вывода и число записей численности по каждому виду работ."""
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "read")
-        rows = conn.execute(
-            "SELECT id, code, name, parent_name, section_name, unit FROM work_codifier WHERE retired_at IS NULL "
-            "ORDER BY sort_order, code").fetchall()
-        return {"works": [dict(r) for r in rows]}
+        if full:
+            rows = conn.execute(
+                "SELECT w.id, w.code, w.name, w.parent_name, w.section_name, w.unit, w.retired_at, "
+                "(SELECT COUNT(*) FROM headcount_records r WHERE r.codifier_id = w.id) AS records FROM work_codifier w").fetchall()
+        else:
+            rows = conn.execute("SELECT id, code, name, parent_name, section_name, unit FROM work_codifier WHERE retired_at IS NULL").fetchall()
+        return {"works": [dict(r) for r in sorted(rows, key=codifier_sort_key)]}
     finally:
         conn.close()
 
