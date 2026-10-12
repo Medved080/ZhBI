@@ -221,13 +221,13 @@ export function mountHeadcount(el, ctx) {
       <label class="hc-grow">Вид работ<div class="hc-picker" id="hc-a-work"></div></label>
       <label>Рабочие<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-w" class="hc-num"></label>
       <label>ИТР<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-i" class="hc-num"></label>
-      <label>Итого<output id="hc-a-sum" class="hc-num hc-sum" aria-live="polite">0</output></label>
+      <label>Итого<input type="text" id="hc-a-sum" class="hc-num hc-total-in" value="0" readonly tabindex="-1" aria-label="Итого: рабочие плюс ИТР"></label>
       <button type="button" class="hc-btn" id="hc-a-go">Добавить в карточку</button></div><p class="hc-msg bad" id="hc-a-err" role="alert"></p>`;
     const picker = workPicker(box.querySelector("#hc-a-work"), st.works);
     const err = box.querySelector("#hc-a-err");
     const wIn = box.querySelector("#hc-a-w"), iIn = box.querySelector("#hc-a-i"), sum = box.querySelector("#hc-a-sum");
     const val = (el) => (el.value.trim() === "" ? "0" : el.value);   // пустое поле — 0: вносят чаще что-то одно
-    const upd = () => { sum.textContent = numOf(val(wIn)) + numOf(val(iIn)); };
+    const upd = () => { sum.value = numOf(val(wIn)) + numOf(val(iIn)); };
     wIn.addEventListener("input", upd); iIn.addEventListener("input", upd);
     const add = () => {
       const contractor_id = Number(box.querySelector("#hc-a-ctr").value), codifier_id = picker.value();
