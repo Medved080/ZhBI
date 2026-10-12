@@ -53,6 +53,8 @@ def quality_issues(product):
     sources = [{'sourceId':source_id,'pdfPage':source['productPage'],'label':'Лист изделия' if source.get('pageVerified',True) else 'Ведомость',
                 'url':f"/calc/api/document-source/{source_id}#page={source['productPage']}"}]
     checks = []
+    if product.get('concreteClass') in (None, '', 'Не указан'):
+        checks.append(('class','Класс бетона не подтверждён','Цена бетона по умолчанию является предварительной; установить класс по документации.'))
     if doc.get('projectVolume') is None: checks.append(('volume','Проектный объём бетона не подтверждён','Сверить объём по спецификации; нулевое значение не означает отсутствие бетона.'))
     if doc.get('projectSteel') is None: checks.append(('steel','Общий расход стали не распознан','Проверить ведомость расхода стали; масса не должна определяться по объёму модели.'))
     if source.get('pageVerified') is False: checks.append(('sheet','Актуальный лист изделия не установлен','Уточнить действующий лист и изменение документации.'))
@@ -61,9 +63,16 @@ def quality_issues(product):
         elif any(float(r['rate']) == 0 for r in doc['resources']): checks.append(('rates','Цена части ресурсов не задана','Заполнить производственные цены; 0 в расчёте не является подтверждённой ценой.'))
         if product['hours'] == 0: checks.append(('labour','Трудоёмкость не задана','Назначить подтверждённую норму производства.'))
         checks.append(('norms','Применимость норм этой группе не подтверждена','Нормы выведены из двух исходных колонн; проверить их применимость к этой марке.'))
-    return [{'id':product['id']+':'+key,'issueKey':'quality-'+key,'kind':'data_quality','kindLabel':KIND_NAMES['data_quality'],
+    result = [{'id':product['id']+':'+key,'issueKey':'quality-'+key,'kind':'data_quality','kindLabel':KIND_NAMES['data_quality'],
              'severity':'warning','title':title,'description':description,'recommendation':description,'sources':sources,
              'status':'open','recordedAt':None,'origin':'current-data-check'} for key,title,description in checks]
+    for pending in doc.get('calculationPending') or []:
+        result.append({'id':product['id']+':'+pending['key'],'issueKey':'quality-'+pending['key'],
+                       'kind':'data_quality','kindLabel':KIND_NAMES['data_quality'],'severity':'warning',
+                       'title':pending['title'],'description':pending['description'],
+                       'recommendation':pending['description'],'sources':pending.get('sources') or sources,
+                       'status':'open','recordedAt':None,'origin':'current-data-check'})
+    return result
 
 
 def project_report(conn):

@@ -155,8 +155,21 @@ def main(out, families, before_path=None):
     from app.calc import document_models as dm
     catalog = dm.catalog()
     models = {k: v for k, v in catalog.items() if v.get("family") in families and (v.get("source") or {}).get("id") and v["source"].get("productPage")}
+    # Несколько марок могут иметь общую таблицу. Индивидуально сверенные
+    # строки хранятся отдельно, чтобы повторная OCR-сборка не взяла чужую строку.
+    reviewed_path = dm.ASSETS / "promka-reviewed-readings.json"
+    reviewed = json.loads(reviewed_path.read_text()) if reviewed_path.exists() else {}
+    required = {k for k, v in models.items() if v.get("readingMode") == "reviewed"}
+    if required - reviewed.keys():
+        raise ValueError("Нет индивидуальных чтений: %s" % sorted(required - reviewed.keys()))
+    reviewed = {k: reviewed[k] for k in required}
+    for key, reading in reviewed.items():
+        source = models[key]["source"]; sheet = reading.get("sheet") or {}
+        if sheet.get("doc") != int(source["id"][3:]) or (sheet.get("drawingPage") or sheet.get("page")) != source["productPage"]:
+            raise ValueError("Чтение относится к другому листу: " + key)
+    models = {k: v for k, v in models.items() if k not in required}
     offset = steel.sheet_offsets(catalog.values())
-    print("моделей:", len(models), "смещения листов:", offset)
+    print("моделей OCR:", len(models), "индивидуальных чтений:", len(reviewed), "смещения листов:", offset)
     cache = load_cache()
     refresh = [k for k, v in cache.items() if needs_numeric_refresh(v)]
     if refresh:
@@ -267,6 +280,7 @@ def main(out, families, before_path=None):
         if (entry.get("steel") or {}).get("embedded_total") is not None: item["embedded"]["sheetTotalKg"] = entry["steel"]["embedded_total"]
         if entry.get("steel"): item["rebar"]["fromSteelSheet"] = entry["steel"]["rods"]; item["rebar"]["steelSheetChecks"] = entry["steel"]["checks"]
         result[key] = item
+    result.update(reviewed)
     if before_path:
         before = json.loads(Path(before_path).read_text())
         retained = preserve_accepted(result, before, assembly_loops)

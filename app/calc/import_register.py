@@ -1,17 +1,18 @@
 from decimal import Decimal
 from uuid import uuid4,uuid5,NAMESPACE_URL
+from contextlib import nullcontext
 from .database import audit,transaction
 from .document_models import catalog,resource_cost
 from .repository import save_product
 from .schemas import ProductSave
 
 
-def import_register(settings):
+def import_register(settings, connection=None):
     """Insert source-linked KZhI assemblies once; existing calculations stay untouched."""
     from .norms import get_norms,parameters_for
     from .prices import get_prices
     imported=[]
-    with transaction(settings.database_path) as conn:
+    with (transaction(settings.database_path) if connection is None else nullcontext(connection)) as conn:
         norms=get_norms(conn);prices=get_prices(conn)['parameters']
         for doc in catalog().values():
             if doc.get('kind')!='registry':continue
