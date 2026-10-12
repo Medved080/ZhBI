@@ -24,7 +24,7 @@ RUN_DIR = Path(tempfile.mkdtemp(prefix="calc-readings-run-"))
 os.environ["ZHBI_DB_PATH"] = str(RUN_DIR / "zhbi.db"); os.environ["ZHBI_CALC_DIR"] = str(RUN_DIR / "calc")
 
 from app.calc import document_models as dm
-from app.calc.readings import SOURCE_FILE, apply_readings, rebar_of, resource_id
+from app.calc.readings import SOURCE_FILE, apply_readings, rebar_of, resource_id, reviewed_page_matches
 
 FAILS = []
 
@@ -33,6 +33,18 @@ def check(cond, label):
     print(("ok   " if cond else "FAIL ") + label)
     if not cond:
         FAILS.append(label)
+
+
+missing = {"sheet": {"doc": 15, "page": 16, "drawingMissing": True, "registerPage": 5}}
+register = {"id": "doc15", "productPage": 5, "registerPage": 5, "pageVerified": False}
+check(reviewed_page_matches(missing, register), "арматурный лист при отсутствующем чертеже связан с реестром")
+check(not reviewed_page_matches(missing, {**register, "pageVerified": True})
+      and not reviewed_page_matches(missing, {**register, "productPage": 6})
+      and not reviewed_page_matches(missing, {**register, "id": "doc14"}),
+      "отсутствующий чертёж не допускает чужой альбом/строку или подмену проверенного листа")
+check(reviewed_page_matches({"sheet": {"doc": 20, "page": 227}}, {"id": "doc20", "productPage": 227})
+      and not reviewed_page_matches({"sheet": {"doc": 20, "page": 228}}, {"id": "doc20", "productPage": 227}),
+      "у обычного индивидуального чтения требуется собственная страница")
 
 
 # каталог без чтений: временный каталог с ссылками на файлы каталога, кроме файла чтений (в настоящем каталоге данных он может лежать)

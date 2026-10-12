@@ -10,6 +10,20 @@ from pathlib import Path
 SOURCE_FILE = "promka-readings.json"
 
 
+def reviewed_page_matches(reading, source):
+    """A reviewed assembly may survive a missing drawing, linked by its register page."""
+    sheet = reading.get("sheet") or {}
+    if source.get("id") != "doc%02d" % sheet.get("doc", 0):
+        return False
+    if sheet.get("drawingMissing"):
+        return (source.get("pageVerified") is False
+                and bool(sheet.get("page"))
+                and bool(source.get("registerPage"))
+                and sheet.get("registerPage") == source["registerPage"] == source.get("productPage"))
+    page = sheet.get("drawingPage") or sheet.get("page")
+    return bool(page) and page == source.get("productPage")
+
+
 def resource_id(cls, diameter):
     """Код ресурса каталога: steel16A500C, steel3Vr1, steel12K7 (латиница, как в каталоге моделей)."""
     if cls.upper().startswith("ВР"):
@@ -129,6 +143,8 @@ def apply_readings(models, directory):
             sheet = reading.get("sheet") or {}
             model["readings"] = {"applied": applied, "sheet": sheet, "confirmed": False, "method": reading.get("method"), "addedResources": added, "embeddedChecked": checked, "embeddedVerified": verified,
                                  "embedded": (reading.get("embedded") or {}).get("items") or []}
+            if reading.get("concreteClassSource") and "класс бетона" in applied:
+                model["readings"]["concreteClassSource"] = reading["concreteClassSource"]
         issues = model.get("issues") or []
         if checked: issues = [i for i in issues if i != "Не заданы закладные, трубы и прочие материалы"]      # состав прочитан с листа
         if any(x.startswith("арматура") for x in applied): issues = [i for i in issues if i != "Не разобраны ресурсные позиции стали"]
@@ -136,5 +152,9 @@ def apply_readings(models, directory):
         if applied:
             model.setdefault("notes", []).append("Прочитано с листа PDF автоматически и не подтверждено человеком (%s; альбом doc%02d, стр. %s). Сверить с чертежом." % (
                 ", ".join(applied), sheet.get("doc", 0), sheet.get("page", "?")))
+            if reading.get("concreteClassSource") and "класс бетона" in applied:
+                evidence = reading["concreteClassSource"]
+                model["notes"].append("Класс бетона %s: %s (%s, PDF-стр. %s)." % (
+                    reading["concreteClass"], evidence["label"], evidence["sourceId"], evidence["pdfPage"]))
             changed += 1
     return changed

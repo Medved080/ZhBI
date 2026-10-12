@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from app.calc import document_models as dm
 from app.calc.config import Settings
 from app.calc.import_register import import_register
+from app.calc.readings import reviewed_page_matches
 
 FILES = {'registry': 'promka-register.json', 'readings': 'promka-readings.json',
          'reviewedReadings': 'promka-reviewed-readings.json', 'sources': 'promka-sources.json'}
@@ -57,8 +58,7 @@ def merge(assets, package):
             reading = result['promka-reviewed-readings.json'].get(key)
             if not reading or reading != result['promka-readings.json'].get(key):
                 raise ValueError('Reviewed reading is missing or differs: ' + key)
-            sheet = reading.get('sheet') or {}
-            if sheet.get('doc') != int(source['id'][3:]) or (sheet.get('drawingPage') or sheet.get('page')) != source['productPage']:
+            if not reviewed_page_matches(reading, source):
                 raise ValueError('Reading belongs to another product page: ' + key)
     name = 'promka-discrepancies.json'; path = assets / name
     before = json.loads(path.read_text()) if path.exists() else []

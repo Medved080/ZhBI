@@ -153,6 +153,7 @@ def preserve_accepted(result, before, assembly_loops=None):
 
 def main(out, families, before_path=None):
     from app.calc import document_models as dm
+    from app.calc.readings import reviewed_page_matches
     catalog = dm.catalog()
     models = {k: v for k, v in catalog.items() if v.get("family") in families and (v.get("source") or {}).get("id") and v["source"].get("productPage")}
     # Несколько марок могут иметь общую таблицу. Индивидуально сверенные
@@ -164,9 +165,16 @@ def main(out, families, before_path=None):
         raise ValueError("Нет индивидуальных чтений: %s" % sorted(required - reviewed.keys()))
     reviewed = {k: reviewed[k] for k in required}
     for key, reading in reviewed.items():
-        source = models[key]["source"]; sheet = reading.get("sheet") or {}
-        if sheet.get("doc") != int(source["id"][3:]) or (sheet.get("drawingPage") or sheet.get("page")) != source["productPage"]:
+        source = models[key]["source"]
+        if not reviewed_page_matches(reading, source):
             raise ValueError("Чтение относится к другому листу: " + key)
+        evidence = reading.get("concreteClassSource")
+        if evidence:
+            sources = json.loads((dm.ASSETS / "promka-sources.json").read_text())
+            meta = sources.get(evidence.get("sourceId")) or {}
+            if (evidence.get("sha256") != meta.get("sha256") or not meta
+                    or not 1 <= evidence.get("pdfPage", 0) <= meta["pages"]):
+                raise ValueError("Не установлен источник класса бетона: " + key)
     models = {k: v for k, v in models.items() if k not in required}
     offset = steel.sheet_offsets(catalog.values())
     print("моделей OCR:", len(models), "индивидуальных чтений:", len(reviewed), "смещения листов:", offset)
