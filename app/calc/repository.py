@@ -109,6 +109,8 @@ def get_product(conn, product_id, ctx=None):
         if document.get('preview3d'):
             document['notes']=[note for note in document['notes'] if not note.startswith('3D-геометрия')]+document['preview3d']['notes']
         product['documentModel']=document
+    from . import reinforcement
+    product['reinforcement'] = reinforcement.assess(product['documentModel'])
     from .discrepancies import quality_issues
     product['dataIssues'] = quality_issues(product)
     # Use decimal strings from the DB in authoritative calculation, not the float transport representation.

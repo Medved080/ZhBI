@@ -49,6 +49,13 @@ function matchesProductName(product, query){
  q('#pc-recovery-return').addEventListener('click',()=>{recoveryPreview=null;render();});
  const money=window.CalcZhBIMoney.format;
  const number=(n,digits=3)=>n==null?'Не указан':n.toLocaleString('ru-RU',{maximumFractionDigits:digits});
+ // Коэффициент армирования (кг арматуры на м³ бетона) против типичного значения типа или группы (app/calc/reinforcement.py); вне диапазона — предупреждение
+ const reinforcementRow=r=>{
+  if(!r)return '';
+  const typical=r.reference?` · типично ${number(r.reference,0)} (${escapeHTML(r.scopeName)})`:'';
+  const warn=r.status==='low'?'<span class="pc-rf-warn">ниже нормы: арматура может быть неполной</span>':r.status==='high'?'<span class="pc-rf-warn">выше нормы: проверить арматуру и объём</span>':'';
+  return `<dt>Коэффициент армирования</dt><dd>${number(r.value,1)} кг/м³${typical}${warn?'<br>'+warn:''}</dd>`;
+ };
  const escapeHTML=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const writeable=user.role!=='viewer',jobs=new Map(),acknowledged=new Map(),draftKey='calczhbi-drafts-'+workspace.installationId+'-'+user.id;
  function payload(index){const p=products[index];return {product:{id:p.id,name:p.name,concreteClass:p.concreteClass||'В50',volume:p.volume,weight:p.weight,hours:p.hours,concreteRate:p.concreteRate,otherMaterials:p.otherMaterials??p.material-p.volume*p.concreteRate,geometry:p.geometry||null,volumeFromGeometry:Boolean(p.volumeFromGeometry),source:p.source||'excel',documentModelId:p.documentModelId||null},overrides:state.overrides[index],extra:state.extra[index]};}
@@ -284,7 +291,7 @@ function matchesProductName(product, query){
   const route=q('#pc-tech-panel .pc-route');if(!route.dataset.defaultRoute)route.dataset.defaultRoute=route.innerHTML;
   if(doc){
    const checkedSteel=doc.preview3d?.verifiedSourceSpec?.steelTotalKg,steelDiffers=checkedSteel!=null&&checkedSteel!==doc.projectSteel;
-   q('#pc-project-properties').innerHTML=`<dt>Бетон по проекту</dt><dd>${number(doc.projectVolume)} м³</dd><dt>${steelDiffers?'Сталь в каталоге':'Сталь по проекту'}</dt><dd>${number(doc.projectSteel)} кг</dd>${steelDiffers?`<dt>Сталь · сверка листа</dt><dd>${number(checkedSteel)} кг</dd>`:''}`;
+   q('#pc-project-properties').innerHTML=`<dt>Бетон по проекту</dt><dd>${number(doc.projectVolume)} м³</dd><dt>${steelDiffers?'Сталь в каталоге':'Сталь по проекту'}</dt><dd>${number(doc.projectSteel)} кг</dd>${steelDiffers?`<dt>Сталь · сверка листа</dt><dd>${number(checkedSteel)} кг</dd>`:''}${reinforcementRow(p.reinforcement)}`;
    const reading=doc.readings;
    if(reading){
     // автоматически прочитано с листа PDF: что именно взято, откуда, и перечень закладных, труб и петель (для проверки человеком)

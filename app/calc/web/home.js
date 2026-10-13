@@ -71,6 +71,17 @@
   return `<section class="pc-home-block"><h3>Откуда данные</h3><p class="pc-context">«Чтение листа» — прочитано с PDF автоматически и не подтверждено человеком; значения поставщика чтением не заменяются.</p><dl class="pc-home-origin">${names.map(([k,t])=>`<dt>${t}</dt><dd>${line(d.origin,k)}</dd>`).join('')}</dl></section>`;
  }
 
+ // Контроль армирования (app/calc/reinforcement.py): расход арматуры на 1 м³ бетона против типичного значения типа или группы; в условия готовности не входит
+ function reinforcement(d){
+  const r=d.reinforcement,bad=r.low+r.high;
+  const rows=r.families.map(f=>`<tr data-level="${f.low+f.high?'part':'full'}"><th scope="row">${esc(f.name)}</th><td>${num(f.checked)}</td><td>${num(f.low)}</td><td>${num(f.high)}</td></tr>`).join('');
+  const items=r.items.map(i=>`<li><a href="#product=${encodeURIComponent(i.id)}" class="pc-home-link">${esc(i.name)}</a> — <b>${pct(i.value)}</b> кг/м³ при типичных ${num(i.reference)} <span class="pc-context">(${esc(i.scopeName)}) · ${i.status==='low'?'мало':'много'}</span></li>`).join('');
+  return `<section class="pc-home-block"><h3>Контроль армирования</h3>
+   <p class="pc-context">Коэффициент армирования — расход арматуры на 1 м³ бетона, кг/м³. Он сравнивается с типичным значением типа изделий (или группы): ниже ${pct(100*r.lowRatio)}% от типичного — арматура, скорее всего, прочитана не полностью; выше ${pct(100*r.highRatio)}% от типичного — она относится к другому изделию или объём занижен. Изделие вне диапазона получает замечание в карточке и в отчёте по проекту; отметка «Проверено» его снимает. В условия готовности контроль не входит.</p>
+   <table class="pc-home-table"><thead><tr><th scope="col">Группа</th><th scope="col">Проверено</th><th scope="col">Мало</th><th scope="col">Много</th></tr></thead><tbody>${rows}</tbody></table>
+   ${items?`<h4>Самые сомнительные: ${num(r.items.length)} из ${num(bad)}</h4><ol class="pc-home-gaps pc-home-reinforcement">${items}</ol>`:'<p>Изделий вне диапазона нет.</p>'}</section>`;
+ }
+
  function model3d(d){
   const m=d.model3d,withRebar=(m.complete||0)+(m.partial||0);
   return `<section class="pc-home-block"><h3>3D-модели</h3><p>С арматурой: <b>${num(withRebar)}</b> из ${num(d.total)} (полных ${num(m.complete||0)}, частичных ${num(m.partial||0)}). 3D не входит в условия готовности калькуляции: стоимость от неё не зависит.</p></section>`;
@@ -84,6 +95,7 @@
    ${hero(d)}${model3d(d)}
    ${section('Что мешает завершить расчёты','по исполнителям · самые большие пробелы',owners(d)+gaps(d))}
    ${section('Условия готовности и группы изделий',d.funnel.length+' условий · '+d.families.length+' групп',funnel(d)+families(d))}
+   ${section('Контроль армирования','вне диапазона: '+num(d.reinforcement.low+d.reinforcement.high)+' из '+num(d.reinforcement.checked),reinforcement(d))}
    ${section('Расценки и источники данных','без цены: '+num(d.prices.unpriced)+' из '+num(d.prices.materials)+' материалов',prices(d)+origin(d))}`;
   openState.forEach((value,index)=>{const el=panel.querySelectorAll('details.pc-home-detail')[index];if(el)el.open=value;});      // «Обновить» не схлопывает раскрытое
  }

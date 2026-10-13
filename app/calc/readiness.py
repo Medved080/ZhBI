@@ -11,6 +11,7 @@ product_verifications (кнопка в карточке изделия). Пок�
 import collections
 import json
 
+from . import reinforcement
 from .document_models import model, model_readiness
 from .prices import norm_class
 from .norms import type_key
@@ -33,6 +34,27 @@ EMBEDDED = ("embedded", "loop", "pipe")
 
 def _unset(value):
     return (value or "").strip().lower() in UNSET
+
+
+def _reinforcement_summary(products):
+    """Сводка контроля армирования: по группам и самые сомнительные изделия (дальше всего от типичного значения)."""
+    import math
+    by_family = {}
+    flagged = []
+    for p in products:
+        found = p["reinforcement"]
+        if not found or found["status"] == "unknown":
+            continue
+        row = by_family.setdefault(p["family"], {"name": p["family"], "checked": 0, "low": 0, "high": 0})
+        row["checked"] += 1
+        if found["status"] in ("low", "high"):
+            row[found["status"]] += 1
+            flagged.append({"id": p["id"], "name": p["name"], "family": p["family"], "status": found["status"], "value": found["value"], "reference": found["reference"],
+                            "scopeName": found["scopeName"], "distance": abs(math.log(found["value"] / found["reference"]))})
+    flagged.sort(key=lambda x: -x["distance"])
+    return {"low": sum(r["low"] for r in by_family.values()), "high": sum(r["high"] for r in by_family.values()),
+            "checked": sum(r["checked"] for r in by_family.values()), "lowRatio": reinforcement.LOW, "highRatio": reinforcement.HIGH,
+            "families": sorted(by_family.values(), key=lambda r: -(r["low"] + r["high"])), "items": [{k: v for k, v in x.items() if k != "distance"} for x in flagged[:40]]}
 
 
 def readiness(conn):
@@ -76,7 +98,9 @@ def readiness(conn):
         }
         if doc and doc.get("family") and doc.get("alias") and _unset(doc.get("concreteClass")):      # изделия вне каталога (две колонны из Excel) в таблицу типов не входят
             entry = types_without_class[type_key(doc)]; entry["count"] += 1; entry["family"] = family
-        products.append({"family": family, "checks": checks, "origin": origin})
+        # коэффициент армирования: проверка полноты арматуры (в условия готовности не входит); проверенные человеком изделия не помечаются
+        found = None if not doc or row["id"] in verified_ids else reinforcement.assess({**doc, "resources": resources})
+        products.append({"family": family, "checks": checks, "origin": origin, "reinforcement": found, "id": row["id"], "name": row["name"]})
         classes[(concrete_class or "Не указан") if not _unset(concrete_class) else "Не указан"] += 1
         for r in resources:
             usage[r["id"]]["name"] = r["name"]; usage[r["id"]]["products"] += 1
@@ -109,6 +133,7 @@ def readiness(conn):
     # прогресс целиком: среднее долей по семи условиям (каждое условие равноправно)
     percent = round(100 * sum(f["alone"] for f in funnel) / (total * len(funnel)), 1) if total else 0
     return {
+        "reinforcement": _reinforcement_summary(products),
         "total": total, "ready": funnel[-1]["cumulative"], "percent": percent, "funnel": funnel,
         "families": sorted(families.values(), key=lambda f: -f["total"]), "gaps": gaps, "origin": {k: dict(v) for k, v in origin.items()},
         "prices": {"materials": len(materials), "unpriced": len(unpriced), "unpricedList": unpriced[:15], "usage": {i: u["products"] for i, u in usage.items()}, "classes": class_rows,

@@ -663,3 +663,7 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept summary[data-role=menu]::-webkit-details-marker{display:none}
 #precast-concept summary[data-role=menu]:hover{border-color:var(--accent);color:var(--accent);background:var(--sel)}
 #precast-concept details[open]>summary[data-role=menu]{border-color:var(--accent);color:var(--accent)}
+
+/* Коэффициент армирования вне диапазона (карточка изделия, главная) */
+#precast-concept .pc-rf-warn{color:light-dark(#9a5a12,#e0b050);font-weight:600}
+#precast-concept .pc-home-reinforcement{columns:1}

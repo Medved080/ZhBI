@@ -62,6 +62,10 @@ def quality_issues(product):
         if not doc.get('resources'): checks.append(('resources','Ресурсные позиции стали не разобраны','Расшифровать спецификации каркасов и деталей.'))
         elif any(float(r['rate']) == 0 for r in doc['resources']): checks.append(('rates','Цена части ресурсов не задана','Заполнить производственные цены; 0 в расчёте не является подтверждённой ценой.'))
         if product['hours'] == 0: checks.append(('labour','Трудоёмкость не задана','Назначить подтверждённую норму производства.'))
+        from . import reinforcement
+        found = reinforcement.assess(doc)
+        if found and found['status'] in ('low', 'high') and not product.get('verification'):      # проверенное человеком изделие замечанием не помечается
+            checks.append(('reinforcement', 'Коэффициент армирования вне диапазона', reinforcement.issue_text(found)))
         checks.append(('norms','Применимость норм этой группе не подтверждена','Нормы выведены из двух исходных колонн; проверить их применимость к этой марке.'))
     result = [{'id':product['id']+':'+key,'issueKey':'quality-'+key,'kind':'data_quality','kindLabel':KIND_NAMES['data_quality'],
              'severity':'warning','title':title,'description':description,'recommendation':description,'sources':sources,
