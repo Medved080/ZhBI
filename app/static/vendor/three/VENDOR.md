@@ -12,7 +12,7 @@
 | `examples/jsm/curves/NURBSUtils.js` | https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/jsm/curves/NURBSUtils.js | r160 | MIT (`LICENSE`) | `86bcf4002721854739f6dc7fd185b5eb0540d6b8676feaae6979bb605baac85e` |
 | `examples/jsm/libs/fflate.module.js` | https://raw.githubusercontent.com/mrdoob/three.js/r160/examples/jsm/libs/fflate.module.js | 0.6.9 (бандл three.js r160) | MIT (`examples/jsm/libs/fflate.LICENSE`) | `5686c3d02432a47d8e31f16cabc2d725bbf4531a3abb37cc6fd00142256e3730` |
 
-Файлы не изменялись, кроме относительных путей импорта (уже относительные
+Единственная правка кода — `OrbitControls.js`, `getZoomScale`: делитель `devicePixelRatio | 0` заменён на `Math.max(1, devicePixelRatio | 0)` (2026-10-13: при dpr < 1 деление на 0 давало скачок зума к пределу и «залипание»). Остальные файлы не изменялись, кроме относительных путей импорта (уже относительные
 в оригинале — не тронуты). `three` остаётся bare specifier из общего
 importmap `app/static/index.html`, `FBXLoader.js` и `NURBSCurve.js`
 импортируют его так же, как остальные модули `examples/jsm`.
