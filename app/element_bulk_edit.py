@@ -77,6 +77,9 @@ COLUMNS = [
     (KEY_COLUMN, "UID (не менять)", False),
     ("object_name", "Объект", False),
     ("current_status", "Статус", False),
+    # Дата присвоения текущего статуса (2026-10-13, живой запрос) — «рабочая дата» последней записи истории, по которой и
+    # определён статус (см. recompute_status_and_actual_date). Только для чтения: даты событий меняются диалогом статуса.
+    ("status_date", "Дата присвоения статуса", False),
     ("element_type", FIELD_LABELS["element_type"], True),
     ("subtype", FIELD_LABELS["subtype"], True),
     ("mark", FIELD_LABELS["mark"], True),
@@ -189,12 +192,19 @@ def _element_rows(conn, element_ids: Optional[set] = None) -> list:
     ).fetchall()
     # Прогноз — к каждой строке (словарём: sqlite3.Row не дополнить); см. schedule_versions.forecast_dates.
     прогноз = forecast_dates(conn)
+    # Дата текущего статуса — changed_at той же записи истории, что задала current_status (порядок как в
+    # recompute_status_and_actual_date). Одним запросом на все элементы, не по запросу на строку.
+    даты_статуса = {r["element_id"]: r["changed_at"] for r in conn.execute(
+        "SELECT h.element_id, h.changed_at FROM status_history h WHERE h.id = ("
+        "SELECT h2.id FROM status_history h2 WHERE h2.element_id = h.element_id "
+        "ORDER BY h2.changed_at DESC, h2.id DESC LIMIT 1)")}
     out = []
     for r in rows:
         if element_ids is not None and r["id"] not in element_ids:
             continue
         d = dict(r)
         f = прогноз.get(r["id"])
+        d["status_date"] = даты_статуса.get(r["id"])
         d["forecast_smr_start_date"] = f[0] if f else None
         d["forecast_smr_end_date"] = f[1] if f else None
         d["need_delivery_date"] = f[0] if f and not f[2] else None
@@ -205,7 +215,7 @@ def _element_rows(conn, element_ids: Optional[set] = None) -> list:
 # Колонки, которые в Excel должны быть НАСТОЯЩИМИ датами с русским
 # форматом (живой запрос 2026-08-03): три правимые даты плюс справочная
 # фактическая. `actual_delivery_date` тоже дата, хотя и не правится.
-_DATE_COLUMNS = {"planned_delivery_date", "project_smr_start_date",
+_DATE_COLUMNS = {"status_date", "planned_delivery_date", "project_smr_start_date",
                  "project_delivery_date", "actual_delivery_date",
                  "forecast_smr_start_date", "forecast_smr_end_date", "need_delivery_date"}
 
