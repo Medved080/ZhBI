@@ -130,7 +130,7 @@ function matchesProductName(product, query){
   const registry=p.documentModel?.kind==='registry',normsConfirmed=(workspace.settings?.normGroups||[]).includes(p.documentModel?.family||'Вне каталога');
   const status=missingData?'Нет данных':missingPrice?'Нет цены':registry?(normsConfirmed&&p.verification?'Готово':'Предварительно'):'Расчёт';
   const model=readiness(p),mark=model.status==='complete'?'✓':model.status==='partial'?'◐':'';
-  const badge=mark?`<span class="pc-model-indicator" data-model-status="${model.status}" title="${escapeHTML('3D-модель: '+model.label+'. '+model.description)}">3D ${mark}</span>`:'';
+  const badge=mark?`<span class="pc-model-indicator" data-model-status="${model.status}" title="${escapeHTML('3D-модель: '+model.label+'. '+model.description)}">3D ${mark}</span>`:'<span aria-hidden="true"></span>';
   return `<div class="pc-product-row"><input class="pc-export-check" type="checkbox" data-select-product="${i}" aria-label="Включить ${escapeHTML(p.name)} в выгрузку"><button class="pc-product cursor-interaction" data-product="${i}" aria-label="${escapeHTML(p.name+' · '+status+(mark?' · 3D-модель: '+model.label:''))}" title="${escapeHTML(details)}" aria-pressed="${state.product===i}"><strong>${escapeHTML(label)}</strong><span class="pc-row-badges">${badge}<span class="pc-row-status" data-attention="${missingData||missingPrice}" title="${escapeHTML(STATUS_TIPS[status])}">${status}</span></span></button></div>`;
  }
  function productGroups(visible){
