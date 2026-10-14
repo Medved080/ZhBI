@@ -6,6 +6,7 @@
 // текстом сказано: функция работает только в интерфейсе V1, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
 import { STATUS_LABEL, v1Href, statusChip } from "./registry.js";
+import { GROUPINGS, homeCards, readGrouping, saveGrouping } from "./home-groups.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -130,26 +131,37 @@ function ruPlural(n, one, few, many) {
 
 export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRights = 0, go }) {
   el.className = "v2-page";
-  const groups = registry.groups.filter((g) => g.id !== "home");
-  const cards = groups.map((g) => {
-    const items = registry.screens.filter((s) => s.group === g.id && s.listed !== false && allowed(s));
-    if (!items.length) return "";
-    return `<section class="v2-card">
-      <h3>${esc(g.title)} <span class="v2-muted">· ${items.length}</span></h3>
-      <ul class="v2-card-list">${items.map((s) => `<li><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
+  const allowedItems = registry.screens.filter((s) => s.listed !== false && allowed(s));
+  let grouping = readGrouping();
+  const cardsHtml = () => homeCards(grouping, registry.groups, allowedItems).map((c) => `<section class="v2-card">
+      <h3>${esc(c.title)} <span class="v2-muted">· ${c.items.length}</span></h3>
+      <ul class="v2-card-list">${c.items.map((s, i) => `<li${c.gaps.has(i) ? ` class="v2-card-gap"` : ""}><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
         ${homeChip(s)}</li>`).join("")}</ul>
-    </section>`;
-  }).join("");
+    </section>`).join("");
   const mine = registry.screens.filter((s) => allowed(s) && s.group !== "home" && s.listed !== false);
   const inV2 = mine.filter((s) => !inV1Only(s)).length;
   const full = mine.filter((s) => !inV1Only(s) && s.status === 5).length;
   el.innerHTML = `<div class="v2-container">
-    <h2 class="v2-home-title">Действия</h2>
+    <div class="v2-home-head">
+      <h2 class="v2-home-title">Действия</h2>
+      <div class="v2-home-grouping"><span class="v2-muted">Группировка</span>
+        <div class="v2-seg" role="group" aria-label="Группировка разделов">${GROUPINGS.map((g) => `<button type="button" data-grouping="${g.id}" aria-pressed="${g.id === grouping}">${g.label}</button>`).join("")}</div>
+      </div>
+    </div>
     <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. Доступно вам: ${mine.length} ${ruPlural(mine.length, "раздел", "раздела", "разделов")}.${hiddenByRights ? ` Скрыто по правам: ${hiddenByRights}.` : ""}${hiddenByType ? ` Не относятся к типу текущего объекта: ${hiddenByType}.` : ""}</p>
-    <div class="v2-cards">${cards}</div>
+    <div class="v2-cards"></div>
   </div>`;
-  el.querySelectorAll("[data-screen-link]").forEach((a) => a.addEventListener("click", (e) => {
+  const cardsEl = el.querySelector(".v2-cards");
+  const wireCards = () => cardsEl.querySelectorAll("[data-screen-link]").forEach((a) => a.addEventListener("click", (e) => {
     e.preventDefault(); go(a.dataset.screenLink);
+  }));
+  const drawCards = () => { cardsEl.innerHTML = cardsHtml(); wireCards(); };
+  drawCards();
+  el.querySelectorAll("[data-grouping]").forEach((b) => b.addEventListener("click", () => {
+    grouping = b.dataset.grouping;
+    saveGrouping(grouping);
+    el.querySelectorAll("[data-grouping]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    drawCards();
   }));
   return { hasUnsavedChanges: () => false, guardLeave: async () => true };
 }
