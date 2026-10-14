@@ -13,7 +13,7 @@ from app.access import is_system_admin, require_service_feature, role_keys
 from app.auth import (
     SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, create_session,
     forget_session, format_display_name, get_current_user, hash_password, list_sessions,
-    session_public_id, user_out, user_version, validate_password_strength, UserOut,
+    session_public_id, user_out, user_version, v2_shell_prefs_of, validate_password_strength, UserOut,
 )
 from app.db import begin_write, get_connection
 from app.models import validate_color
@@ -658,7 +658,12 @@ class SetShellPrefsIn(BaseModel):
     item_order: dict[str, list[str]] = {}
     # Плоский список id экранов-избранных (across групп — каждый показывается своей группой отдельным блоком сверху).
     favorites: list[str] = []
+    # Группировка начальной страницы «Действия» V2 (2026-10-14): "kind" — по видам (исходная), "process" — по процессам.
+    # Не прислано (старый клиент) — сохраняется прежнее значение, а не сбрасывается: тело PATCH пишется целиком.
+    home_grouping: Optional[str] = None
 
+
+_HOME_GROUPINGS = ("kind", "process")
 
 # Границы личной ширины навигации: рабочий диапазон клиента — 220..380px (плюс временное сужение под ширину
 # окна, которое НЕ сохраняется); здесь — только защита от заведомого мусора в записи.
@@ -695,6 +700,8 @@ def set_v2_shell_prefs(
         raise HTTPException(status_code=400, detail="Слишком длинный порядок пунктов в группе")
     if len(body.favorites) > _SHELL_PREFS_LIMIT:
         raise HTTPException(status_code=400, detail="Слишком много избранных пунктов")
+    if body.home_grouping is not None and body.home_grouping not in _HOME_GROUPINGS:
+        raise HTTPException(status_code=400, detail="Неизвестная группировка начальной страницы")
     conn = get_connection()
     try:
         if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
@@ -703,6 +710,8 @@ def set_v2_shell_prefs(
         # убираем повторы, оставляя первое вхождение (двойной клик/гонка вкладок не должны плодить дубли).
         закреплённые = list(dict.fromkeys(body.pinned_objects))
         избранные_пункты = list(dict.fromkeys(body.favorites))
+        прежнее = v2_shell_prefs_of(conn.execute("SELECT recent_objects FROM users WHERE id = ?", (user_id,)).fetchone()) or {}
+        группировка = body.home_grouping or прежнее.get("home_grouping")
         payload = {
             "pinned_objects": закреплённые,
             "nav_pinned": body.nav_pinned,
@@ -711,6 +720,8 @@ def set_v2_shell_prefs(
             "item_order": body.item_order,
             "favorites": избранные_пункты,
         }
+        if группировка in _HOME_GROUPINGS:
+            payload["home_grouping"] = группировка
         conn.execute(
             "UPDATE users SET recent_objects = ?, updated_at = datetime('now') WHERE id = ?",
             (json.dumps(payload, ensure_ascii=False), user_id),
@@ -719,7 +730,8 @@ def set_v2_shell_prefs(
         activity.log("user_v2_shell_prefs", user=current, entity_type="user", entity_id=user_id,
                      new_value=f"закреплено объектов: {len(закреплённые)}, "
                                f"навигация: {'закреплена' if body.nav_pinned else 'временная'}, "
-                               f"избранных пунктов: {len(избранные_пункты)}")
+                               f"избранных пунктов: {len(избранные_пункты)}, "
+                               f"группировка «Действий»: {'по процессам' if группировка == 'process' else 'по видам'}")
         return user_out(conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
     finally:
         conn.close()

@@ -3,7 +3,6 @@
 // Данные реестра не трогаются: здесь только перенос разделов между карточками для этого одного экрана. Левая навигация и
 // хлебные крошки по-прежнему берут группы из реестра.
 
-export const GROUPING_KEY = "v2.home.grouping";
 export const GROUPINGS = [
   { id: "kind", label: "По видам" },
   { id: "process", label: "По процессам" },
@@ -58,18 +57,6 @@ const HIDDEN_IN_PROCESS = new Set(["export-xls", "export-pdf"]);
 const KIND_RANK = { reports: 0, exchange: 1, contracting: 2, dicts: 2, documents: 3 };
 const OTHER_RANK = 4;
 const kindRank = (s) => KIND_RANK[s.group] ?? OTHER_RANK;
-
-export function readGrouping() {
-  try {
-    const v = localStorage.getItem(GROUPING_KEY);
-    if (GROUPINGS.some((g) => g.id === v)) return v;
-  } catch { /* хранилище недоступно — берём исходную группировку */ }
-  return "kind";
-}
-
-export function saveGrouping(id) {
-  try { localStorage.setItem(GROUPING_KEY, id); } catch { /* не критично: выбор просто не запомнится */ }
-}
 
 // Карточки для показа: [{ id, title, items: [screen], gaps: Set<индекс, перед которым начинается новый вид> }].
 // `items` — уже отфильтрованные по правам разделы (порядок реестра сохраняется).

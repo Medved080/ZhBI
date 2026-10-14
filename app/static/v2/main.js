@@ -649,7 +649,7 @@ async function renderShell(user, permissions) {
         // «скрыто по правам» не бывает — у него остаётся только первая причина.
         const hiddenAll = registry.screens.filter((s) => !allowedScreen(s));
         const hiddenByType = hiddenAll.filter((s) => !isModule(s) && screenNotApplicable(s, registry.structure[s.id], rights)).length;
-        activeModule = mountHome(content, { registry, allowed: allowedScreen, hiddenByType, hiddenByRights: hiddenAll.length - hiddenByType, go: (k) => openSection(k) });
+        activeModule = mountHome(content, { registry, allowed: allowedScreen, hiddenByType, hiddenByRights: hiddenAll.length - hiddenByType, go: (k) => openSection(k), prefsStore });
       } else if (isModule(target)) {
         document.title = `${target.title} — ЖБИ`;
         activeModule = MODULES[target.id](content, { ...moduleCtx, objectId });

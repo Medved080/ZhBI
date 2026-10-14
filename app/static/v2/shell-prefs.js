@@ -30,6 +30,8 @@ function normalize(raw) {
     : {};
   const favorites = Array.isArray(r.favorites) ? [...new Set(r.favorites.filter((x) => typeof x === "string" && x))] : [];
   return {
+    // Группировка начальной страницы «Действия»: "kind" (по видам, исходная) или "process" (по процессам).
+    homeGrouping: r.home_grouping === "process" ? "process" : "kind",
     pinnedObjects,
     navPinned: r.nav_pinned === true,
     navWidth: r.nav_width != null ? clampNavWidth(r.nav_width) : NAV_WIDTH_DEFAULT,
@@ -55,6 +57,7 @@ export function createShellPrefsStore({ api, user }) {
       nav_group_state: prefs.navGroupState,
       item_order: prefs.itemOrder,
       favorites: prefs.favorites,
+      home_grouping: prefs.homeGrouping,
     };
   }
 
@@ -116,6 +119,11 @@ export function createShellPrefsStore({ api, user }) {
       prefs = { ...prefs, favorites: now ? [...prefs.favorites, id] : prefs.favorites.filter((x) => x !== id) };
       schedule(300);
       return now;
+    },
+    getHomeGrouping: () => prefs.homeGrouping,
+    setHomeGrouping(id) {
+      prefs = { ...prefs, homeGrouping: id === "process" ? "process" : "kind" };
+      schedule(200);
     },
     flush,
   };

@@ -6,7 +6,7 @@
 // текстом сказано: функция работает только в интерфейсе V1, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
 import { STATUS_LABEL, v1Href, statusChip } from "./registry.js";
-import { GROUPINGS, homeCards, readGrouping, saveGrouping } from "./home-groups.js";
+import { GROUPINGS, homeCards } from "./home-groups.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -129,10 +129,10 @@ function ruPlural(n, one, few, many) {
   return n10 === 1 && n100 !== 11 ? one : n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20) ? few : many;
 }
 
-export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRights = 0, go }) {
+export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRights = 0, go, prefsStore }) {
   el.className = "v2-page";
   const allowedItems = registry.screens.filter((s) => s.listed !== false && allowed(s));
-  let grouping = readGrouping();
+  let grouping = prefsStore?.getHomeGrouping() ?? "kind";   // личная настройка, хранится на сервере (shell-prefs.js)
   const cardsHtml = () => homeCards(grouping, registry.groups, allowedItems).map((c) => `<section class="v2-card">
       <h3>${esc(c.title)} <span class="v2-muted">· ${c.items.length}</span></h3>
       <ul class="v2-card-list">${c.items.map((s, i) => `<li${c.gaps.has(i) ? ` class="v2-card-gap"` : ""}><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
@@ -159,7 +159,7 @@ export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRig
   drawCards();
   el.querySelectorAll("[data-grouping]").forEach((b) => b.addEventListener("click", () => {
     grouping = b.dataset.grouping;
-    saveGrouping(grouping);
+    prefsStore?.setHomeGrouping(grouping);
     el.querySelectorAll("[data-grouping]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     drawCards();
   }));

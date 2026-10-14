@@ -209,7 +209,7 @@ function lastObjectBodyProblem(b) {
 // ---- форма тела личных настроек оболочки V2 (закреплённые объекты шапки, состояние левой навигации, порядок и избранное
 // пунктов навигации — СВОИ данные, 2026-09-22, не путать с menu_prefs V1) ----
 function shellPrefsBodyProblem(b) {
-  if (!isObj(b) || Object.keys(b).some((k) => !["pinned_objects", "nav_pinned", "nav_width", "nav_group_state", "item_order", "favorites"].includes(k))) return "лишние поля";
+  if (!isObj(b) || Object.keys(b).some((k) => !["pinned_objects", "nav_pinned", "nav_width", "nav_group_state", "item_order", "favorites", "home_grouping"].includes(k))) return "лишние поля";
   if (!Array.isArray(b.pinned_objects) || b.pinned_objects.length > 200 || !b.pinned_objects.every((x) => Number.isInteger(x) && x > 0)) return "список закреплённых объектов";
   if (typeof b.nav_pinned !== "boolean") return "состояние закрепления панели";
   if (!(b.nav_width === null || b.nav_width === undefined || (typeof b.nav_width === "number" && Number.isFinite(b.nav_width) && b.nav_width >= 160 && b.nav_width <= 600))) return "ширина панели";
@@ -221,6 +221,7 @@ function shellPrefsBodyProblem(b) {
   if (b.favorites !== undefined) {
     if (!Array.isArray(b.favorites) || b.favorites.length > 200 || !b.favorites.every((x) => typeof x === "string" && x.length > 0 && x.length <= 100)) return "список избранных пунктов";
   }
+  if (b.home_grouping !== undefined && !["kind", "process"].includes(b.home_grouping)) return "группировка начальной страницы";
   return null;
 }
 
@@ -269,7 +270,7 @@ export const POLICY = [
 
   // ==== разрешённые операции по областям переноса: каждая область дописывает строки ТОЛЬКО в свой блок (меньше конфликтов слияния) ====
   // ==== область: shell (оболочка — выбор объекта в шапке, левая навигация) ====
-  { id: "shell.prefs.set", screen: "shell", action: "Личные настройки оболочки: закреплённые объекты выбора объекта в шапке, состояние левой навигации (закреплена/нет, ширина, раскрытые группы, порядок пунктов внутри группы, избранные пункты)", method: "PATCH", path: re(`/users/\\d+/v2-shell-prefs`), check: shellPrefsBodyProblem, risk: "личная (только V2 — у V1 своего представления этих настроек нет)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат после перезагрузки, отказ формы (лишние поля/диапазон), 403 на чужого пользователя (scripts/v2_tests/shell, scripts/verify_gaps2_shell_nav.mjs)" },
+  { id: "shell.prefs.set", screen: "shell", action: "Личные настройки оболочки: закреплённые объекты выбора объекта в шапке, состояние левой навигации (закреплена/нет, ширина, раскрытые группы, порядок пунктов внутри группы, избранные пункты, группировка начальной страницы «Действия»)", method: "PATCH", path: re(`/users/\\d+/v2-shell-prefs`), check: shellPrefsBodyProblem, risk: "личная (только V2 — у V1 своего представления этих настроек нет)", allowed: true, proof: "HTTP+браузер: запись → SQL → возврат после перезагрузки, отказ формы (лишние поля/диапазон), 403 на чужого пользователя (scripts/v2_tests/shell, scripts/verify_gaps2_shell_nav.mjs)" },
   { id: "shell.last-object.set", screen: "shell", action: "Запомнить последний выбранный объект за пользователем — ТОТ ЖЕ эндпоинт, что у V1 (своего в V2 не заводили)", method: "PUT", path: re("/me/last-object"), check: lastObjectBodyProblem, risk: "личная, общий эндпоинт с V1", allowed: true, proof: "живая проверка: смена объекта → SQL users.last_object_id → тот же объект после перезагрузки (scripts/shell_verify)" },
 
   // ==== область: model (прораб, модель ЖБИ, операции над элементами) ====
