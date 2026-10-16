@@ -135,7 +135,7 @@ export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRig
   let grouping = prefsStore?.getHomeGrouping() ?? "kind";   // личная настройка, хранится на сервере (shell-prefs.js)
   const cardsHtml = () => homeCards(grouping, registry.groups, allowedItems).map((c) => `<section class="v2-card">
       <h3>${esc(c.title)} <span class="v2-muted">· ${c.items.length}</span></h3>
-      <ul class="v2-card-list">${c.items.map((s, i) => `<li${c.gaps.has(i) ? ` class="v2-card-gap"` : ""}><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
+      <ul class="v2-card-list">${c.items.map((s, i) => `${c.labels.has(i) ? `<li class="v2-card-kind">${esc(c.labels.get(i))}</li>` : ""}<li><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
         ${homeChip(s)}</li>`).join("")}</ul>
     </section>`).join("");
   const mine = registry.screens.filter((s) => allowed(s) && s.group !== "home" && s.listed !== false);

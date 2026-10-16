@@ -56,14 +56,15 @@ const HIDDEN_IN_PROCESS = new Set(["export-xls", "export-pdf"]);
 // «Контрактация и график» в реестре — это контрагенты и контракты, то есть справочники.
 const KIND_RANK = { reports: 0, exchange: 1, contracting: 2, dicts: 2, documents: 3 };
 const OTHER_RANK = 4;
+const KIND_LABEL = ["Отчёты", "Обмен данными", "Справочники", "Документы", "Прочее"];
 const kindRank = (s) => KIND_RANK[s.group] ?? OTHER_RANK;
 
-// Карточки для показа: [{ id, title, items: [screen], gaps: Set<индекс, перед которым начинается новый вид> }].
+// Карточки для показа: [{ id, title, items: [screen], labels: Map<индекс, подпись вида, с которого он начинается> }].
 // `items` — уже отфильтрованные по правам разделы (порядок реестра сохраняется).
 export function homeCards(mode, registryGroups, items) {
   const groups = registryGroups.filter((g) => g.id !== "home");
   if (mode !== "process") {
-    return groups.map((g) => ({ id: g.id, title: g.title, items: items.filter((s) => s.group === g.id), gaps: new Set() }))
+    return groups.map((g) => ({ id: g.id, title: g.title, items: items.filter((s) => s.group === g.id), labels: new Map() }))
       .filter((c) => c.items.length);
   }
   const title = new Map(groups.map((g) => [g.id, g.title]));
@@ -75,9 +76,12 @@ export function homeCards(mode, registryGroups, items) {
   const cards = order.map((id) => {
     const list = items.filter((s) => !HIDDEN_IN_PROCESS.has(s.id) && cardOf(s) === id)
       .sort((a, b) => kindRank(a) - kindRank(b));   // сортировка устойчивая: внутри вида — порядок реестра
-    const gaps = new Set();
-    list.forEach((s, i) => { if (i && kindRank(s) !== kindRank(list[i - 1])) gaps.add(i); });
-    return { id, title: titleOf(id), items: list, gaps };
+    // Подписи видов — только если в карточке их несколько: у карточки из одного вида подпись повторяла бы её название.
+    const labels = new Map();
+    if (new Set(list.map(kindRank)).size > 1) {
+      list.forEach((s, i) => { if (!i || kindRank(s) !== kindRank(list[i - 1])) labels.set(i, KIND_LABEL[kindRank(s)]); });
+    }
+    return { id, title: titleOf(id), items: list, labels };
   });
   return cards.filter((c) => c.items.length);
 }

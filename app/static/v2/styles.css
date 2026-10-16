@@ -792,7 +792,8 @@ body.v2-noselect { user-select: none; }
 .v2-home-title { font-size: 1.375rem; font-weight: 600; margin-bottom: 6px; }
 .v2-home-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
 .v2-home-grouping { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
-.v2-card-gap { margin-top: 6px; }
+.v2-card-list .v2-card-kind { display: block; margin-top: 8px; padding-bottom: 2px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.v2-card-list .v2-card-kind:first-child { margin-top: 0; }
 .v2-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 20px; }
 .v2-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--bg); }
 .v2-card h3 { font-size: 0.9375rem; margin-bottom: 8px; }
