@@ -89,12 +89,27 @@ export function mountResetHistory(el, { screen, groupTitle, api, rights }) {
 
 // ================================================================== Резервные копии
 const KEY_TABLES = [["elements", "Изделия"], ["status_history", "История статусов"], ["users", "Пользователи"], ["objects", "Объекты"], ["projects", "Проекты"], ["contracts", "Контракты"], ["activity_log", "Журнал действий"]];
+// Групповая очистка копий (2026-10-20): панель над таблицей. Отмечаются только показанные строки (фильтр поиска учитывается).
+function bulkBar(prefix, picks, rows, withAuto) {
+  const chosen = rows.filter((b) => picks.has(b.name));
+  const size = chosen.reduce((s, b) => s + (b.size_bytes || 0), 0);
+  return `<div class="v2-bar" id="${prefix}-bulk" role="group" aria-label="Групповая очистка копий">
+    ${withAuto ? `<button type="button" class="v2-btn" data-bulk="auto" title="Копии, которые система сняла сама; созданные вручную не отмечаются">Выбрать служебные</button>` : ""}
+    <button type="button" class="v2-btn" data-bulk="keep" title="Отметить все показанные, кроме самой свежей">Все, кроме самой свежей</button>
+    <button type="button" class="v2-btn" data-bulk="none">Снять выбор</button>
+    <span class="v2-muted" data-bulk-count role="status" aria-live="polite">${chosen.length ? `Выбрано: ${chosen.length} · ${esc(fmtSize(size))}` : "Ничего не выбрано"}</span>
+    <button type="button" class="v2-btn v2-danger" data-bulk="delete"${chosen.length ? "" : " disabled"}>Удалить выбранные…</button></div>`;
+}
+const kopii = (n) => { const m = n % 100, d = n % 10; return m > 10 && m < 15 ? "копий" : d === 1 ? "копию" : d > 1 && d < 5 ? "копии" : "копий"; };
+
 export function mountBackups(el, { screen, groupTitle, api, rights }) {
   const body = frame(el, screen, groupTitle);
   const canWrite = can(rights, "backups", "write") && checkWrite("POST", "/admin/backups", { comment: "x" }).allowed;
   const canFull = can(rights, "backups", "write") && checkWrite("POST", "/admin/full-backups", { comment: "x" }).allowed;
+  const canBulk = can(rights, "backups", "write") && checkWrite("POST", "/admin/backups/delete-many", { names: ["x"] }).allowed;
+  const canFullBulk = can(rights, "backups", "write") && checkWrite("POST", "/admin/full-backups/delete-many", { names: ["x"] }).allowed;
   let dead = false, busy = false, seq = 0, fseq = 0;
-  const st = { data: null, error: "", q: "", comment: "", full: null, fullError: "" };
+  const st = { data: null, error: "", q: "", comment: "", full: null, fullError: "", pick: new Set(), fpick: new Set(), rowsBk: [], rowsFb: [] };
   body.innerHTML = `
     <div class="v2-callout" role="note"><strong>Копии базы данных.</strong> Служебные копии система снимает сама перед обновлением и разрушительными операциями. ${canWrite ? "Здесь можно снять копию вручную, восстановить базу из копии (перед этим снимается служебная копия текущего состояния) или удалить копию." : "У вас есть только просмотр."}</div>
     <div id="bk-disk" class="v2-muted"></div>
@@ -111,7 +126,8 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
     </section>`;
   const $ = (s) => body.querySelector(s);
   const setStatus = (t) => { const n = $("#bk-status"); if (n) n.textContent = t; };
-  const lock = () => body.querySelectorAll("#bk-body button, #bk-create, #bk-refresh, #bk-comment, #fb-body button, #fb-create, #fb-comment, #fb-word").forEach((c) => { c.disabled = busy || (c.id === "bk-create" && !st.data) || (c.id === "fb-create" && !st.full); });   // до загрузки списка «Создать» выключена
+  const lock = () => { body.querySelectorAll("#bk-body button, #bk-body input, #bk-create, #bk-refresh, #bk-comment, #fb-body button, #fb-body input, #fb-create, #fb-comment, #fb-word").forEach((c) => { c.disabled = busy || (c.id === "bk-create" && !st.data) || (c.id === "fb-create" && !st.full); }); /* до загрузки списка «Создать» выключена */
+    ["bk", "fb"].forEach((p) => syncBulk(p)); };      // кнопка «Удалить выбранные» включается только при непустом выборе
   function paint() {
     if (dead) return;
     const box = $("#bk-body");
@@ -120,15 +136,16 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
     $("#bk-disk").textContent = d.known ? `Свободно на диске сервера: ${fmtSize(d.free_bytes)}${d.database_bytes ? ` · размер базы: ${fmtSize(d.database_bytes)}` : ""}.` : "";
     const q = st.q.trim().toLowerCase();
     const rows = st.data.backups.filter((b) => !q || `${b.name} ${b.user_name || ""} ${b.comment || ""} ${b.kind_label || ""}`.toLowerCase().includes(q));
+    st.rowsBk = rows;
     $("#bk-count").textContent = `Копий: ${rows.length} из ${st.data.backups.length}`;
-    box.innerHTML = rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Создана (UTC)</th><th>Вид</th><th>Кто</th><th>Комментарий</th><th class="num">Размер</th><th>Имя</th>${canWrite ? "<th></th>" : ""}</tr></thead><tbody>
-      ${rows.map((b) => `<tr><td>${esc(b.created_at)}</td><td>${esc(b.kind_label)}</td><td>${esc(b.user_name || "")}</td><td>${esc(b.comment || "")}</td><td class="num">${esc(fmtSize(b.size_bytes))}</td><td>${esc(b.name)}</td>
+    box.innerHTML = rows.length ? `${canBulk ? bulkBar("bk", st.pick, rows, true) : ""}<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${canBulk ? `<th><input type="checkbox" id="bk-pick-all" aria-label="Выбрать все показанные копии"></th>` : ""}<th>Создана (UTC)</th><th>Вид</th><th>Кто</th><th>Комментарий</th><th class="num">Размер</th><th>Имя</th>${canWrite ? "<th></th>" : ""}</tr></thead><tbody>
+      ${rows.map((b) => `<tr>${canBulk ? `<td><input type="checkbox" data-pick="${esc(b.name)}"${st.pick.has(b.name) ? " checked" : ""} aria-label="Выбрать копию ${esc(b.name)}"></td>` : ""}<td>${esc(b.created_at)}</td><td>${esc(b.kind_label)}</td><td>${esc(b.user_name || "")}</td><td>${esc(b.comment || "")}</td><td class="num">${esc(fmtSize(b.size_bytes))}</td><td>${esc(b.name)}</td>
         ${canWrite ? `<td><button type="button" class="v2-btn" data-restore="${esc(b.name)}" aria-label="Восстановить из ${esc(b.name)}">Восстановить…</button> <button type="button" class="v2-btn v2-danger" data-del="${esc(b.name)}" aria-label="Удалить ${esc(b.name)}">Удалить…</button></td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="v2-muted">${q ? "Ничего не найдено." : "Копий нет."}</p>`;
     lock();
   }
   async function load() {
     const my = ++seq;
-    try { const d = await api.get("/admin/backups"); if (dead || my !== seq) return false; st.data = d; st.error = ""; paint(); return true; }
+    try { const d = await api.get("/admin/backups"); if (dead || my !== seq) return false; st.data = d; st.error = ""; st.pick = new Set([...st.pick].filter((n) => d.backups.some((b) => b.name === n))); paint(); return true; }
     catch (e) { if (dead || my !== seq) return false; if (!st.data) { st.error = errText(e); paint(); } else setStatus(`Список не обновился: ${errText(e)}`); return false; }
   }
   async function write(fn) { if (busy) return; busy = true; lock(); try { await fn(); } finally { busy = false; lock(); } }
@@ -196,14 +213,15 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
     const e = st.full.estimate || {};
     $("#fb-estimate").textContent = `Сейчас в полную копию войдёт около ${fmtSize(e.total_bytes)} до сжатия: база ${fmtSize(e.db_bytes)}, вложений ${fmtNum((e.uploads || {}).files)} (${fmtSize((e.uploads || {}).bytes)})${e.calc_present ? `, калькулятор ${fmtSize((e.calc_db_bytes || 0) + ((e.calc_uploads || {}).bytes || 0))}` : ", калькулятора нет"}.`;
     const rows = st.full.backups;
-    box.innerHTML = rows.length ? `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Создана (UTC)</th><th>Кто</th><th>Комментарий</th><th>Содержимое</th><th class="num">Размер</th><th>Имя</th>${canFull ? "<th></th>" : ""}</tr></thead><tbody>
-      ${rows.map((b) => `<tr><td>${esc(b.created_at)}</td><td>${esc(b.user_name || "")}</td><td>${esc(b.comment || "")}</td><td>${b.tables ? esc(`изделий ${fmtNum(b.tables.elements)}, пользователей ${fmtNum(b.tables.users)}; вложений ${fmtNum((b.uploads || {}).files)}; калькулятор ${(b.calc || {}).present ? "есть" : "нет"}`) : "—"}</td><td class="num">${esc(fmtSize(b.size_bytes))}</td><td>${esc(b.name)}</td>
+    st.rowsFb = rows;
+    box.innerHTML = rows.length ? `${canFullBulk ? bulkBar("fb", st.fpick, rows, false) : ""}<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr>${canFullBulk ? `<th><input type="checkbox" id="fb-pick-all" aria-label="Выбрать все полные копии"></th>` : ""}<th>Создана (UTC)</th><th>Кто</th><th>Комментарий</th><th>Содержимое</th><th class="num">Размер</th><th>Имя</th>${canFull ? "<th></th>" : ""}</tr></thead><tbody>
+      ${rows.map((b) => `<tr>${canFullBulk ? `<td><input type="checkbox" data-pick="${esc(b.name)}"${st.fpick.has(b.name) ? " checked" : ""} aria-label="Выбрать полную копию ${esc(b.name)}"></td>` : ""}<td>${esc(b.created_at)}</td><td>${esc(b.user_name || "")}</td><td>${esc(b.comment || "")}</td><td>${b.tables ? esc(`изделий ${fmtNum(b.tables.elements)}, пользователей ${fmtNum(b.tables.users)}; вложений ${fmtNum((b.uploads || {}).files)}; калькулятор ${(b.calc || {}).present ? "есть" : "нет"}`) : "—"}</td><td class="num">${esc(fmtSize(b.size_bytes))}</td><td>${esc(b.name)}</td>
         ${canFull ? `<td><a class="v2-btn" href="/admin/full-backups/${encodeURIComponent(b.name)}/download" download aria-label="Скачать ${esc(b.name)}">Скачать</a> <button type="button" class="v2-btn" data-frestore="${esc(b.name)}" aria-label="Восстановить из ${esc(b.name)}">Восстановить…</button> <button type="button" class="v2-btn v2-danger" data-fdel="${esc(b.name)}" aria-label="Удалить ${esc(b.name)}">Удалить…</button></td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="v2-muted">Полных копий нет.</p>`;
     lock();
   }
   async function loadFull() {
     const my = ++fseq;
-    try { const d = await api.get("/admin/full-backups"); if (dead || my !== fseq) return false; st.full = d; st.fullError = ""; paintFull(); return true; }
+    try { const d = await api.get("/admin/full-backups"); if (dead || my !== fseq) return false; st.full = d; st.fullError = ""; st.fpick = new Set([...st.fpick].filter((n) => d.backups.some((b) => b.name === n))); paintFull(); return true; }
     catch (e) { if (dead || my !== fseq) return false; if (!st.full) { st.fullError = errText(e); paintFull(); } else setFStatus(`Список не обновился: ${errText(e)}`); return false; }
   }
   async function createFull() {
@@ -264,7 +282,7 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
   $("#fb-body").addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || busy) return;
-    if (b.dataset.frestore) restoreFull(b.dataset.frestore); else if (b.dataset.fdel) delFull(b.dataset.fdel);
+    if (b.dataset.frestore) restoreFull(b.dataset.frestore); else if (b.dataset.fdel) delFull(b.dataset.fdel); else if (b.dataset.bulk) bulkAction("fb", b.dataset.bulk);
   });
   $("#bk-form")?.addEventListener("submit", (e) => { e.preventDefault(); if (!busy && st.data) create(); });
   $("#bk-search").addEventListener("input", (e) => { st.q = e.target.value; paint(); });
@@ -272,7 +290,54 @@ export function mountBackups(el, { screen, groupTitle, api, rights }) {
   body.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || busy) return;
-    if (b.dataset.restore) restore(b.dataset.restore); else if (b.dataset.del) del(b.dataset.del);
+    if (b.dataset.restore) restore(b.dataset.restore); else if (b.dataset.del) del(b.dataset.del); else if (b.dataset.bulk && b.closest("#bk-body")) bulkAction("bk", b.dataset.bulk);
+  });
+  // ---- Групповая очистка (2026-10-20): сервер — POST …/delete-many (app/backups.delete_backups): каждая копия независимо, хотя бы одна остаётся ----
+  const bulk = (p) => p === "bk"
+    ? { set: st.pick, rows: st.rowsBk, box: "#bk-body", url: "/admin/backups/delete-many", reload: () => load(), say: setStatus, what: "копий" }
+    : { set: st.fpick, rows: st.rowsFb, box: "#fb-body", url: "/admin/full-backups/delete-many", reload: () => loadFull(), say: setFStatus, what: "полных копий" };
+  function syncBulk(p) {
+    const c = bulk(p), root = $(c.box);
+    if (!root || !$(`#${p}-bulk`)) return;
+    const chosen = c.rows.filter((b) => c.set.has(b.name)), size = chosen.reduce((s, b) => s + (b.size_bytes || 0), 0);
+    root.querySelectorAll("input[data-pick]").forEach((i) => { i.checked = c.set.has(i.dataset.pick); });
+    const all = root.querySelector(`#${p}-pick-all`);
+    if (all) { all.checked = c.rows.length > 0 && chosen.length === c.rows.length; all.indeterminate = chosen.length > 0 && chosen.length < c.rows.length; }
+    root.querySelector("[data-bulk-count]").textContent = chosen.length ? `Выбрано: ${chosen.length} · ${fmtSize(size)}` : "Ничего не выбрано";
+    root.querySelector('[data-bulk="delete"]').disabled = busy || !chosen.length;
+  }
+  function bulkAction(p, what) {
+    const c = bulk(p);
+    if (what === "none") c.set.clear();
+    else if (what === "keep") { c.set.clear(); c.rows.slice(1).forEach((b) => c.set.add(b.name)); }      // список «новые сверху»: первая — самая свежая
+    else if (what === "auto") { c.set.clear(); c.rows.filter((b) => b.kind !== "manual").forEach((b) => c.set.add(b.name)); }
+    else if (what === "delete") return bulkDelete(p);
+    syncBulk(p);
+  }
+  async function bulkDelete(p) {
+    const c = bulk(p), chosen = c.rows.filter((b) => c.set.has(b.name));
+    if (!chosen.length) return;
+    const size = chosen.reduce((s, b) => s + (b.size_bytes || 0), 0), manual = p === "bk" ? chosen.filter((b) => b.kind === "manual").length : 0;
+    if (!(await showConfirmDialog(`Удалить ${chosen.length} ${p === "bk" ? kopii(chosen.length) : "полн. " + kopii(chosen.length)} (${fmtSize(size)})? Восстановить их будет нечем.${manual ? ` Среди них созданных вручную: ${manual}.` : ""}`, { confirmLabel: "Удалить выбранные", danger: true }))) return;
+    if (manual && !(await showConfirmDialog(`Созданные вручную копии система сама не удаляет. Удалить и ${manual === 1 ? "её" : "их"} (${manual})?`, { confirmLabel: "Да, удалить", danger: true }))) return;
+    await write(async () => {
+      c.say("Удаляем выбранные…");
+      try {
+        const r = await api.post(c.url, { names: chosen.map((b) => b.name) });
+        const ok = await c.reload();
+        c.say(`Удалено: ${r.deleted.length}, освобождено ${fmtSize(r.freed_bytes)}.${r.failed.length ? ` Не удалось: ${r.failed.map((f) => `${f.name} (${f.error})`).join("; ")}.` : ""}${ok ? "" : " Список обновить не удалось — нажмите «Обновить»."}`);
+      } catch (e) {
+        if (unknownOutcome(e)) { await c.reload(); c.say(`Неизвестно, выполнено ли удаление (${errText(e)}). Список обновлён — проверьте, какие копии остались.`); }
+        else c.say(errText(e));
+      }
+    });
+  }
+  body.addEventListener("change", (e) => {
+    const t = e.target, p = t.closest("#bk-body") ? "bk" : t.closest("#fb-body") ? "fb" : null;
+    if (!p || busy) return;
+    const c = bulk(p);
+    if (t.dataset.pick !== undefined) { if (t.checked) c.set.add(t.dataset.pick); else c.set.delete(t.dataset.pick); syncBulk(p); }
+    else if (t.id === `${p}-pick-all`) { c.set.clear(); if (t.checked) c.rows.forEach((b) => c.set.add(b.name)); syncBulk(p); }
   });
   lock();
   load();

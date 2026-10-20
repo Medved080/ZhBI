@@ -8548,9 +8548,17 @@
       <div class="hint-text" id="backups-status"></div>
     </div>
     <div class="modal-sticky-scroll">
+      <!-- Групповая очистка (2026-10-20): отметить копии галочками и удалить одним действием. Хотя бы одна копия остаётся — проверяет сервер. -->
+      <div class="row bulk-bar" id="backups-bulk" style="align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 6px">
+        <button type="button" class="btn btn-sm btn-secondary" id="backups-pick-auto" title="Отметить копии, которые система сняла сама (перед стартом, загрузкой, восстановлением); созданные вручную не отмечаются">Выбрать служебные</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="backups-pick-keep" title="Отметить все копии, кроме самой свежей">Все, кроме самой свежей</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="backups-pick-none">Снять выбор</button>
+        <span class="hint-text" id="backups-picked"></span>
+        <button type="button" class="btn btn-sm btn-secondary menu-item-danger" id="backups-delete-picked" disabled style="margin-left:auto">Удалить выбранные</button>
+      </div>
       <table id="backups-table">
         <thead><tr>
-          <th>Создана</th><th>Происхождение</th><th>Кем</th><th>Комментарий</th>
+          <th style="width:28px"><input type="checkbox" id="backups-pick-all" aria-label="Выбрать все копии"></th><th>Создана</th><th>Происхождение</th><th>Кем</th><th>Комментарий</th>
           <th>Содержимое</th><th>Размер</th><th></th>
         </tr></thead>
         <tbody id="backups-tbody"></tbody>
@@ -8576,9 +8584,16 @@
         <button class="btn btn-primary" id="fullbk-create">Создать полную копию</button>
       </div>
       <div class="hint-text" id="fullbk-status"></div>
+      <!-- Групповая очистка (2026-10-20): отметить копии галочками и удалить одним действием. Хотя бы одна копия остаётся — проверяет сервер. -->
+      <div class="row bulk-bar" id="fullbk-bulk" style="align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 6px">
+        <button type="button" class="btn btn-sm btn-secondary" id="fullbk-pick-keep" title="Отметить все копии, кроме самой свежей">Все, кроме самой свежей</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="fullbk-pick-none">Снять выбор</button>
+        <span class="hint-text" id="fullbk-picked"></span>
+        <button type="button" class="btn btn-sm btn-secondary menu-item-danger" id="fullbk-delete-picked" disabled style="margin-left:auto">Удалить выбранные</button>
+      </div>
       <table id="fullbk-table">
         <thead><tr>
-          <th>Создана</th><th>Кем</th><th>Комментарий</th><th>Содержимое</th><th>Размер</th><th></th>
+          <th style="width:28px"><input type="checkbox" id="fullbk-pick-all" aria-label="Выбрать все полные копии"></th><th>Создана</th><th>Кем</th><th>Комментарий</th><th>Содержимое</th><th>Размер</th><th></th>
         </tr></thead>
         <tbody id="fullbk-tbody"></tbody>
       </table>

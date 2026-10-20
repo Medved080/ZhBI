@@ -62,7 +62,7 @@ from app.project_map import router as project_map_router
 from app.contracting_import import ContractingImportError, import_contracting, parse_contracting_xlsx
 from urllib.parse import quote
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import activity
 from app import object_team, team_access
@@ -74,7 +74,7 @@ from app.activity_actions import (
 from app.backups import (
     KIND_BEFORE_REBUILD, KIND_MANUAL, BackupError,
     adopt_legacy_backup, backup_before_import, create_backup, database_bytes,
-    delete_backup, disk_state, list_backups, restore_backup,
+    delete_backup, delete_backups, disk_state, list_backups, restore_backup,
 )
 from app.contracts import (
     apply_status_change,
@@ -2445,6 +2445,10 @@ class BackupCreateIn(BaseModel):
     comment: Optional[str] = None
 
 
+class BackupDeleteManyIn(BaseModel):
+    names: List[str] = Field(..., min_length=1, max_length=500)
+
+
 @app.get("/admin/backups")
 def admin_list_backups(admin: sqlite3.Row = Depends(require_service_feature("backups", "read"))):
     """Все резервные копии на диске, новые сверху — из этого списка
@@ -2501,6 +2505,19 @@ def admin_restore_backup(name: str, admin: sqlite3.Row = Depends(require_service
         "backup_restore", user=admin, old_value=result["safety_backup"]["name"], new_value=name,
         details={"комментарий": "перед восстановлением снята служебная копия"},
     )
+    return result
+
+
+@app.post("/admin/backups/delete-many")
+def admin_delete_backups(body: BackupDeleteManyIn, admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
+    """Групповая очистка копий (2026-10-20): список имён из экрана «Резервные копии». Ответ — что удалено, что не удалось (с причиной) и сколько места освобождено.
+    В журнал — по записи на каждую удалённую копию, как при одиночном удалении."""
+    try:
+        result = delete_backups(body.names)
+    except BackupError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    for name in result["deleted"]:
+        activity.log("backup_delete", user=admin, old_value=name, details={"группой": len(body.names)})
     return result
 
 
@@ -2584,6 +2601,18 @@ def admin_restore_full_backup(name: str, body: FullBackupRestoreIn,
                  "прежние вложения": result["uploads_moved_to"],
                  "миграций схемы": len(result["schema_changes"]),
                  "обработок релиза": len(result["release_tasks"])})
+    return result
+
+
+@app.post("/admin/full-backups/delete-many")
+def admin_delete_full_backups(body: BackupDeleteManyIn, admin: sqlite3.Row = Depends(require_service_feature("backups", "write"))):
+    """Групповая очистка полных копий — то же, что /admin/backups/delete-many, для архивов в data/backups/full."""
+    try:
+        result = full_backup.delete_full_backups(body.names)
+    except BackupError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    for name in result["deleted"]:
+        activity.log("full_backup_delete", user=admin, old_value=name, details={"группой": len(body.names)})
     return result
 
 

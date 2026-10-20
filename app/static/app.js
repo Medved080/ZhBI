@@ -24108,8 +24108,9 @@ async function loadBackups() {
     const data = await api("/admin/backups");
     renderDiskPlate(data.disk);
     if (!data.backups.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="hint-text">Копий пока нет</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="hint-text">Копий пока нет</td></tr>`;
       status.textContent = "";
+      backupBulk.backups?.refresh();
       return;
     }
     tbody.innerHTML = data.backups.map(b => {
@@ -24125,6 +24126,7 @@ async function loadBackups() {
       // должен цепляться за созданные человеком.
       const cls = b.kind === "manual" ? "" : ' class="backup-auto"';
       return `<tr${cls}>
+        <td><input type="checkbox" data-pick="${escapeHtml(b.name)}" data-size="${b.size_bytes || 0}" data-manual="${b.kind === "manual" ? 1 : 0}" aria-label="Выбрать копию ${escapeHtml(b.name)}"></td>
         <td>${escapeHtml(activityTimeLocal(b.created_at))}</td>
         <td>${escapeHtml(b.kind_label || b.kind)}</td>
         <td>${escapeHtml(b.user_name || "—")}</td>
@@ -24137,10 +24139,59 @@ async function loadBackups() {
         </td></tr>`;
     }).join("");
     status.textContent = `Всего копий: ${data.backups.length}`;
+    backupBulk.backups?.refresh();
   } catch (e) {
     status.textContent = "Ошибка: " + e.message;
   }
 }
+
+// ---------- Групповая очистка копий (2026-10-20) ----------
+// Один контроллер на оба списка (обычные и полные копии): галочки в первом столбце, быстрые отметки, кнопка «Удалить выбранные». Сервер (POST …/delete-many)
+// удаляет каждую копию независимо и не даёт стереть все до одной (app/backups.delete_backups).
+const backupBulk = {};
+function копий(n) { const m = n % 100, d = n % 10; return m > 10 && m < 15 ? "копий" : d === 1 ? "копию" : d > 1 && d < 5 ? "копии" : "копий"; }
+function setupBackupBulk(cfg) {
+  const $ = (suffix) => document.getElementById(`${cfg.prefix}-${suffix}`);
+  const tbody = document.getElementById(cfg.tbody);
+  const boxes = () => [...tbody.querySelectorAll("input[data-pick]")];
+  const refresh = () => {
+    const all = boxes(), chosen = all.filter(b => b.checked);
+    const bytes = chosen.reduce((sum, b) => sum + Number(b.dataset.size || 0), 0);
+    $("picked").textContent = chosen.length ? `Выбрано: ${chosen.length} · ${formatBytes(bytes)}` : "";
+    $("delete-picked").disabled = !chosen.length;
+    $("pick-all").checked = all.length > 0 && chosen.length === all.length;
+    $("pick-all").indeterminate = chosen.length > 0 && chosen.length < all.length;
+  };
+  backupBulk[cfg.prefix] = { refresh };
+  tbody.addEventListener("change", (e) => { if (e.target.matches("input[data-pick]")) refresh(); });
+  $("pick-all").addEventListener("change", () => { boxes().forEach(b => { b.checked = $("pick-all").checked; }); refresh(); });
+  $("pick-none").addEventListener("click", () => { boxes().forEach(b => { b.checked = false; }); refresh(); });
+  // список приходит «новые сверху»: самая свежая — первая; её оставляем
+  $("pick-keep").addEventListener("click", () => { boxes().forEach((b, i) => { b.checked = i > 0; }); refresh(); });
+  $("pick-auto")?.addEventListener("click", () => { boxes().forEach(b => { b.checked = b.dataset.manual === "0"; }); refresh(); });
+  $("delete-picked").addEventListener("click", async () => {
+    const chosen = boxes().filter(b => b.checked);
+    if (!chosen.length) return;
+    const manual = chosen.filter(b => b.dataset.manual === "1").length;
+    const bytes = chosen.reduce((sum, b) => sum + Number(b.dataset.size || 0), 0);
+    if (!confirm(`Удалить ${chosen.length} ${копий(chosen.length)} (${formatBytes(bytes)})?`
+      + (cfg.manualNote && manual ? `\n\nСреди них созданных вручную: ${manual}.` : "") + "\n\nДействие необратимо.")) return;
+    if (cfg.manualNote && manual && !confirm(`Созданные вручную копии система сама не удаляет. Удалить и ${manual === 1 ? "её" : "их"} (${manual})?`)) return;
+    const status = document.getElementById(cfg.status), button = $("delete-picked");
+    button.disabled = true; status.textContent = "Удаление…";
+    try {
+      const res = await api(cfg.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names: chosen.map(b => b.dataset.pick) }) });
+      showToast(`Удалено: ${res.deleted.length}, освобождено ${formatBytes(res.freed_bytes)}` + (res.failed.length ? `; не удалось: ${res.failed.length}` : ""), res.failed.length ? "warning" : "info");
+      await cfg.reload();
+      if (res.failed.length) status.textContent = "Не удалось удалить: " + res.failed.map(f => `${f.name} (${f.error})`).join("; ");
+    } catch (err) {
+      status.textContent = "Не удалось удалить: " + err.message;
+      refresh();
+    }
+  });
+  refresh();
+}
+setupBackupBulk({ prefix: "backups", tbody: "backups-tbody", status: "backups-status", endpoint: "/admin/backups/delete-many", reload: () => loadBackups(), manualNote: true });
 
 document.getElementById("menu-backups").addEventListener("click", () => {
   backupsBackdrop.classList.add("open");
@@ -24213,7 +24264,8 @@ async function loadFullBackups() {
       + `база ${formatBytes(e.db_bytes || 0)}, вложения ${(e.uploads || {}).files || 0} файл. / ${formatBytes((e.uploads || {}).bytes || 0)}`
       + (e.calc_present ? `, калькулятор ${formatBytes((e.calc_db_bytes || 0) + ((e.calc_uploads || {}).bytes || 0))}` : ", калькулятора нет");
     if (!data.backups.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="hint-text">Полных копий пока нет</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="hint-text">Полных копий пока нет</td></tr>`;
+      backupBulk.fullbk?.refresh();
       return;
     }
     tbody.innerHTML = data.backups.map(b => {
@@ -24223,6 +24275,7 @@ async function loadFullBackups() {
           + `; калькулятор ${(b.calc || {}).present ? "есть" : "нет"}`
         : "—";
       return `<tr>
+        <td><input type="checkbox" data-pick="${escapeHtml(b.name)}" data-size="${b.size_bytes || 0}" data-manual="1" aria-label="Выбрать полную копию ${escapeHtml(b.name)}"></td>
         <td>${escapeHtml(activityTimeLocal(b.created_at))}</td>
         <td>${escapeHtml(b.user_name || "—")}</td>
         <td>${escapeHtml(b.comment || "")}</td>
@@ -24235,11 +24288,13 @@ async function loadFullBackups() {
         </td></tr>`;
     }).join("");
     status.textContent = `Полных копий: ${data.backups.length}`;
+    backupBulk.fullbk?.refresh();
   } catch (err) {
     status.textContent = "Ошибка: " + err.message;
   }
 }
 
+setupBackupBulk({ prefix: "fullbk", tbody: "fullbk-tbody", status: "fullbk-status", endpoint: "/admin/full-backups/delete-many", reload: () => loadFullBackups(), manualNote: false });
 document.getElementById("menu-backups").addEventListener("click", loadFullBackups);
 
 document.getElementById("fullbk-create").addEventListener("click", async () => {

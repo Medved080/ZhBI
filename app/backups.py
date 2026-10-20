@@ -604,6 +604,27 @@ def delete_backup(name: str) -> None:
         meta_path.unlink()
 
 
+def delete_backups(names: list) -> dict:
+    """Групповая очистка (2026-10-20): удалить выбранные копии одним действием. Каждая удаляется независимо: недопустимое или уже исчезнувшее имя попадает в `failed`
+    и не мешает остальным. Целиком всё стереть нельзя: хотя бы одна копия должна остаться — иначе одна неверная галочка «выбрать все» лишила бы базу всех точек возврата."""
+    names = list(dict.fromkeys(names))
+    total = sum(1 for _ in BACKUP_DIR.glob("*.db")) if BACKUP_DIR.is_dir() else 0
+    if total - len(names) < 1:
+        raise BackupError(409, "Нельзя удалить все копии: хотя бы одна должна остаться (оставьте самую свежую).")
+    deleted, failed, freed = [], [], 0
+    for name in names:
+        try:
+            size = _safe_name(name).stat().st_size
+            delete_backup(name)
+            deleted.append(name)
+            freed += size
+        except BackupError as e:
+            failed.append({"name": name, "error": e.message})
+        except OSError as e:
+            failed.append({"name": name, "error": str(e)})
+    return {"deleted": deleted, "failed": failed, "freed_bytes": freed}
+
+
 def adopt_legacy_backup(path: Path, kind: str, comment: str) -> Optional[dict]:
     """Перенести в папку копий файл, оставшийся от прежнего механизма
     (`data/zhbi.db.bak-*` от аварийной пересборки). Такие файлы — полноценные

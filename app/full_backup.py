@@ -320,6 +320,26 @@ def delete_full_backup(name: str) -> None:
     _meta_path(path).unlink(missing_ok=True)
 
 
+def delete_full_backups(names: list) -> dict:
+    """Групповая очистка полных копий (2026-10-20); правила как у backups.delete_backups: каждая независимо, хотя бы одна копия остаётся."""
+    names = list(dict.fromkeys(names))
+    total = sum(1 for _ in FULL_DIR.glob("*.zip")) if FULL_DIR.is_dir() else 0
+    if total - len(names) < 1:
+        raise BackupError(409, "Нельзя удалить все полные копии: хотя бы одна должна остаться (оставьте самую свежую).")
+    deleted, failed, freed = [], [], 0
+    for name in names:
+        try:
+            size = _safe_path(name).stat().st_size
+            delete_full_backup(name)
+            deleted.append(name)
+            freed += size
+        except BackupError as e:
+            failed.append({"name": name, "error": e.message})
+        except OSError as e:
+            failed.append({"name": name, "error": str(e)})
+    return {"deleted": deleted, "failed": failed, "freed_bytes": freed}
+
+
 # ==================== ПРОВЕРКА И ВОССТАНОВЛЕНИЕ ====================
 
 
