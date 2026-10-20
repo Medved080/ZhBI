@@ -18140,6 +18140,108 @@ document.getElementById("db-table-limit").addEventListener("change", (e) => {
   loadDbTable();
 });
 
+// ---------- Состояние сервера (2026-10-20, см. app/server_status.py) ----------
+// Три показателя виртуального сервера: процессор, ДОСТУПНАЯ память, свободное
+// место на дисках. Пока окно открыто, опрашиваем сервер каждые 5 секунд; цикл
+// сам останавливается, когда окно закрыто (любым способом: кнопка, Esc, фон).
+const serverStatusBackdrop = document.getElementById("server-status-backdrop");
+const SERVER_POLL_MS = 5000;
+const SERVER_HISTORY = 60;   // 5 минут при шаге 5 секунд
+const serverState = { timer: null, busy: false, cpu: [], first: true };
+
+// Своя функция, а не formatBytes из «Резервных копий» (та объявлена ниже по
+// файлу и с другой семантикой нуля) — тот же довод, что у formatDbSize.
+function formatServerSize(n) {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1099511627776) return `${(n / 1099511627776).toFixed(2)} ТБ`;
+  if (n >= 1073741824) return `${(n / 1073741824).toFixed(1)} ГБ`;
+  if (n >= 1048576) return `${(n / 1048576).toFixed(0)} МБ`;
+  return `${Math.round(n / 1024)} КБ`;
+}
+function formatServerUptime(sec) {
+  if (sec === null || sec === undefined) return "—";
+  const д = Math.floor(sec / 86400), ч = Math.floor(sec % 86400 / 3600), м = Math.floor(sec % 3600 / 60);
+  return д ? `${д} д ${ч} ч` : ч ? `${ч} ч ${м} мин` : `${м} мин`;
+}
+
+function serverMeter(percent) {
+  return `<div class="srv-meter"><span style="width:${Math.max(0, Math.min(100, percent || 0))}%"></span></div>`;
+}
+
+function renderServerStatus(d) {
+  serverState.cpu.push(d.cpu.percent);
+  if (serverState.cpu.length > SERVER_HISTORY) serverState.cpu.shift();
+  const pts = serverState.cpu.map((v, i, a) =>
+    `${a.length > 1 ? (100 * i / (a.length - 1)).toFixed(1) : 100},${(100 - (v || 0)).toFixed(1)}`).join(" ");
+  const c = d.cpu, m = d.memory;
+  const процессор = `<div class="srv-card srv-${c.level}" id="srv-cpu">
+    <h3>Процессор</h3>
+    <div class="srv-big">${c.percent === null ? "—" : c.percent.toFixed(1).replace(".", ",") + " %"}</div>
+    ${serverMeter(c.percent)}
+    <div class="srv-sub">ядер: ${c.cores ?? "—"}${c.load_average
+      ? `; нагрузка за 1 / 5 / 15 мин: ${c.load_average.join(" / ")}` : ""}</div>
+    <svg class="srv-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Загрузка процессора за последние минуты">
+      <polyline points="${pts}"/></svg>
+  </div>`;
+  const память = m ? `<div class="srv-card srv-${m.level}" id="srv-mem">
+    <h3>Оперативная память</h3>
+    <div class="srv-big">${formatServerSize(m.available_bytes)}</div>
+    <div class="srv-sub">доступно из ${formatServerSize(m.total_bytes)}</div>
+    ${serverMeter(m.used_percent)}
+    <div class="srv-sub">занято ${m.used_percent.toFixed(1).replace(".", ",")} % (${formatServerSize(m.used_bytes)})</div>
+    ${m.container ? `<div class="srv-sub">Предел контейнера: ${formatServerSize(m.container.limit_bytes)}, занято ${
+      m.container.used_percent.toFixed(1).replace(".", ",")} %</div>` : ""}
+    ${m.swap_total_bytes ? `<div class="srv-sub">Подкачка: ${formatServerSize(m.swap_used_bytes)} из ${formatServerSize(m.swap_total_bytes)}</div>` : ""}
+  </div>` : `<div class="srv-card srv-unknown" id="srv-mem"><h3>Оперативная память</h3><div class="srv-big">—</div>
+    <div class="srv-sub">не удалось прочитать данные о памяти</div></div>`;
+  const диски = `<div class="srv-card" id="srv-disk"><h3>Дисковое пространство</h3>${
+    d.disks.length ? d.disks.map(k => `<div class="srv-disk srv-${k.level}">
+      <div class="srv-disk-name">${escapeHtml(k.label)}</div>
+      <div class="srv-big">${formatServerSize(k.free)}</div>
+      <div class="srv-sub">свободно из ${formatServerSize(k.total)} (${k.free_percent === null ? "—" : k.free_percent.toFixed(1).replace(".", ",")} %)</div>
+      ${serverMeter(100 - (k.free_percent ?? 100))}
+      <div class="srv-sub">${escapeHtml(k.path)}</div></div>`).join("")
+    : '<div class="srv-sub">не удалось узнать свободное место</div>'}</div>`;
+  const х = d.host;
+  document.getElementById("server-status-body").innerHTML = `
+    <dl class="dbs-facts">
+      <dt>Сервер</dt><dd>${escapeHtml(х.name || "—")}</dd>
+      <dt>Система</dt><dd>${escapeHtml(х.os || "—")}</dd>
+      <dt>Работает</dt><dd>${formatServerUptime(х.uptime_seconds)}</dd>
+    </dl>
+    <div class="srv-grid">${процессор}${память}${диски}</div>
+    ${d.source === "fallback" ? '<p class="hint-text">Данные получены запасным способом (сервер не на Linux): значения приблизительные.</p>' : ""}`;
+  document.getElementById("server-status-time").textContent =
+    `Обновлено: ${new Date(d.time * 1000).toLocaleTimeString("ru-RU")}`;
+}
+
+async function serverStatusTick() {
+  clearTimeout(serverState.timer);
+  if (!serverStatusBackdrop.classList.contains("open")) return;   // окно закрыли — цикл кончается
+  if (!serverState.busy && !document.hidden) {
+    serverState.busy = true;
+    try {
+      renderServerStatus(await api("/admin/server-status" + (serverState.first ? "?open=1" : "")));
+      serverState.first = false;
+    } catch (e) {
+      document.getElementById("server-status-body").textContent = e.message;
+    } finally {
+      serverState.busy = false;
+    }
+  }
+  serverState.timer = setTimeout(serverStatusTick, SERVER_POLL_MS);
+}
+
+document.getElementById("menu-server-status").addEventListener("click", () => {
+  Object.assign(serverState, { cpu: [], first: true });
+  document.getElementById("server-status-body").textContent = "Загрузка…";
+  document.getElementById("server-status-time").textContent = "";
+  serverStatusBackdrop.classList.add("open");
+  serverStatusTick();
+});
+document.getElementById("server-status-close").addEventListener("click", () =>
+  serverStatusBackdrop.classList.remove("open"));
+
 // ---------- Доменная (корпоративная) авторизация — 2026-08-03, см.
 // app/ldap_auth.py. Настройка СИСТЕМНАЯ: контроллер домена один на сервис,
 // а не свой на каждую стройку, поэтому и форма под системной ролью. ----------

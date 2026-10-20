@@ -1,0 +1,21 @@
+/* Экран «Состояние сервера» (V2): карточки процессора, памяти и дисков. Отдельный файл — styles.css общий.
+   Цвет числа и полосы задаёт уровень (ok / warning / critical), присланный сервером. */
+.v2-srv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
+.v2-srv-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--bg); }
+.v2-srv-card h3 { margin: 0 0 6px; font-size: 0.8125rem; font-weight: 600; color: var(--muted); }
+.v2-srv-big { font-size: 1.75rem; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--good, #1e7e34); }
+.v2-srv-sub { font-size: 0.75rem; color: var(--muted); margin-top: 3px; }
+.v2-srv-meter { height: 8px; border-radius: 4px; background: var(--surface); overflow: hidden; margin: 8px 0 4px; }
+.v2-srv-meter > span { display: block; height: 100%; background: var(--good, #1e7e34); transition: width .3s; }
+.v2-srv-warning .v2-srv-big { color: #b26a00; }
+.v2-srv-warning .v2-srv-meter > span { background: #e0a100; }
+.v2-srv-critical .v2-srv-big { color: var(--bad); }
+.v2-srv-critical .v2-srv-meter > span { background: var(--bad); }
+.v2-srv-unknown .v2-srv-big { color: var(--muted); }
+.v2-srv-spark { display: block; width: 100%; height: 40px; margin-top: 6px; }
+.v2-srv-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.v2-srv-disk { padding: 8px 0; border-top: 1px dashed var(--line); }
+.v2-srv-disk:first-of-type { border-top: 0; padding-top: 0; }
+.v2-srv-disk-name { font-size: 0.75rem; font-weight: 600; }
+.v2-srv-facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 8px 0; font-size: 0.8125rem; }
+.v2-srv-facts dd { margin: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }

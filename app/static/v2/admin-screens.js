@@ -1,6 +1,7 @@
 // Экраны области «администрирование» (impl: "admin:<имя>"): смена своего пароля, сводка «Мой доступ» и др. Один вход для оболочки (main.js),
 // внутри — диспетчер по имени. Каждый экран возвращает {hasUnsavedChanges, guardLeave, destroy}.
 import { mountAiSettings } from "./ai-settings.js";
+import { mountServerStatusView } from "./server-status-view.js";
 import { esc } from "./screen-view.js";
 import { mountPasswordForm } from "./password-form.js";
 import { frame, errText } from "./admin-common.js";
@@ -78,6 +79,7 @@ function mountStatusLog(el, { screen, groupTitle }) {
 
 const SCREENS = {
   "admin:ai": mountAiSettings,
+  "admin:server-status": mountServerStatusView,
   "admin:password": mountPassword,
   "admin:my-access": mountMyAccess,
   "admin:reset-history": mountResetHistory,

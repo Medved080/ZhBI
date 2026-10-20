@@ -1921,6 +1921,27 @@
   .dbs-type { color: var(--color-text-muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
   .dbs-undoc { color: var(--color-danger); }
   .dbs-rel { font-size: 12px; color: var(--color-text-muted); margin-top: 6px; }
+  /* Состояние сервера (2026-10-20): три карточки — процессор, память, диски.
+     Цвет полосы и числа задаёт уровень (ok / warning / critical) с сервера. */
+  .srv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 10px 0; }
+  .srv-card { border: 1px solid var(--color-border); border-radius: var(--radius); padding: 10px 12px;
+    background: var(--color-surface); }
+  .srv-card h3 { margin: 0 0 6px; font-size: 13px; color: var(--color-text-muted); font-weight: 600; }
+  .srv-big { font-size: 28px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .srv-sub { font-size: 12px; color: var(--color-text-muted); margin-top: 3px; }
+  .srv-meter { height: 8px; border-radius: 4px; background: var(--color-surface-2); overflow: hidden; margin: 8px 0 4px; }
+  .srv-meter > span { display: block; height: 100%; background: var(--color-success); transition: width .3s; }
+  .srv-ok .srv-big { color: var(--color-success); }
+  .srv-warning .srv-big { color: #b26a00; }
+  .srv-warning .srv-meter > span { background: #e0a100; }
+  .srv-critical .srv-big { color: var(--color-danger); }
+  .srv-critical .srv-meter > span { background: var(--color-danger); }
+  .srv-unknown .srv-big { color: var(--color-text-muted); }
+  .srv-spark { display: block; width: 100%; height: 36px; margin-top: 6px; }
+  .srv-spark polyline { fill: none; stroke: var(--color-primary); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .srv-disk { padding: 6px 0; border-top: 1px dashed var(--color-border); }
+  .srv-disk:first-of-type { border-top: 0; padding-top: 0; }
+  .srv-disk-name { font-size: 12px; font-weight: 600; }
   /* Содержимое таблицы: горизонтальный скролл внутри своего блока, иначе
      elements на 41 колонку растягивает всю модалку. */
   .dbt-wrap { overflow-x: auto; }
@@ -5536,6 +5557,9 @@
                  Рядом с «Резервными копиями»: туда идут с тем же вопросом
                  «сколько всего накопилось и что именно копируем». -->
             <button id="menu-db-status" data-feature="backups" data-feature-kind="read">Состояние БД</button>
+            <!-- 2026-10-20: показатели виртуального сервера — процессор, доступная память,
+                 свободное место на дисках. Права отдельные (server_status, только админ сервиса). -->
+            <button id="menu-server-status" data-feature="server_status" data-feature-kind="read">Состояние сервера</button>
             <!-- Последним и красным: необратимо и затрагивает ВСЕ чертежи разом. -->
             <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов</button>
           </div>
@@ -7668,6 +7692,27 @@
     <div class="modal-sticky-foot">
       <div class="actions">
         <button class="btn btn-secondary" id="db-status-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Состояние сервера — 2026-10-20, см. app/server_status.py. Только чтение; пока окно открыто,
+     показания обновляются сами (app.js: serverStatusTick). -->
+<div class="modal-backdrop" id="server-status-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Состояние сервера</h2>
+      <p class="hint-text">Показатели виртуального сервера, на котором работает сервис: загрузка
+        процессора, доступная оперативная память и свободное место на дисках. Обновляются каждые 5 секунд.</p>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="server-status-body">Загрузка…</div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <span class="hint-text" id="server-status-time" style="margin-right:auto;"></span>
+        <button class="btn btn-secondary" id="server-status-close">Закрыть</button>
       </div>
     </div>
   </div>
