@@ -175,11 +175,11 @@
   const groups=new Map();
   for(const entry of entries){const key=groupOf(entry.snapshot.product);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(entry);}
   const ordered=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0],'ru',{numeric:true}));
-  [6,52,24,24].forEach((width,i)=>{sheet.getColumn(i+1).width=width;});
+  [6,36,22,22].forEach((width,i)=>{sheet.getColumn(i+1).width=width;});
   sheet.mergeCells('A1:D1');sheet.getCell('A1').value='Калькуляции ЖБИ';sheet.getCell('A1').font={bold:true,size:16};
   sheet.mergeCells('A2:D2');sheet.getCell('A2').value='Изделий: '+entries.length+' · групп: '+ordered.length+' · выгружено '+new Date().toLocaleString('ru-RU')+' · НДС '+vat+'%';
   sheet.mergeCells('A3:D3');sheet.getCell('A3').value='Название — ссылка на лист изделия. Стоимость берётся с листа: «Итого без НДС» и «Итого с НДС» (меняется вместе с листом). Группы свёрнуты: «+» слева от названия группы раскрывает её, кнопки «1» и «2» над номерами строк сворачивают и раскрывают все группы.';
-  sheet.getCell('A3').font={italic:true,color:{argb:'FF5B6675'}};sheet.getCell('A3').alignment={wrapText:true,vertical:'top'};sheet.getRow(3).height=45;
+  sheet.getCell('A3').font={italic:true,color:{argb:'FF5B6675'}};sheet.getCell('A3').alignment={wrapText:true,vertical:'top'};sheet.getRow(3).height=62;
   const head=sheet.getRow(TOC_HEADER);head.values=['№','Наименование','Стоимость без НДС, ₽','Стоимость с НДС, ₽'];
   head.font={bold:true};head.alignment={vertical:'middle',wrapText:true};head.height=30;
   head.eachCell(cell=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFD9E2EF'}};cell.border={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};});
@@ -206,7 +206,8 @@
     const detail=sheet.getRow(r);detail.outlineLevel=1;detail.hidden=true;setCollapsed(detail,false);
    });
   }
-  sheet.pageSetup={paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:TOC_HEADER+':'+TOC_HEADER};
+  // fitToPage здесь нельзя: ExcelJS пишет <pageSetUpPr> раньше <outlinePr>, а по схеме порядок tabColor → outlinePr → pageSetUpPr; Excel заменяет такой лист пустым (ширина столбцов подобрана под A4)
+  sheet.pageSetup={paperSize:9,orientation:'portrait',printTitlesRow:TOC_HEADER+':'+TOC_HEADER};
  }
  function buildWorkbook(snapshots,template){
   if(!globalThis.ExcelJS||!template?.layouts||!template?.styles)throw new Error('Не удалось загрузить шаблон XLSX. Обновите страницу.');
