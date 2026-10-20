@@ -7646,18 +7646,11 @@ function closeObjectHome() {
   if (box) { box.hidden = true; box.innerHTML = ""; }
 }
 
-async function openObjectHome(objectId) {
-  const box = document.getElementById("object-home");
-  if (!box || !objectId) return;
-  closeObjectHome();
-  objectHomeFor = objectId;
-  let o;
-  try {
-    o = (await api("/objects")).find((x) => x.id === objectId);
-  } catch (e) {
-    return;   // без заглавной страницы работа продолжается как раньше
-  }
-  if (!o || objectHomeFor !== objectId || state.objectId !== objectId) return;   // за время запроса объект сменили
+// Единая карточка объекта (2026-10-20, запрос пользователя: «из шапки, из справочника и с карты открываются разные формы — объединить»):
+// одна отрисовка для заглавной страницы (оверлей) и для правой области справочника «Проекты и объекты». Кнопки задаёт вызывающий:
+// onOpen — «открыть» (подпись openLabel), onHeadcount — «Ввод численности», onEdit — «Изменить реквизиты» / «Указать адрес».
+// setMap(pin) получает мини-карту, чтобы вызывающий мог её remove() (контекст WebGL); isStale() — за время запроса карточку сменили.
+async function fillObjectCard(box, o, { openLabel, onOpen, onHeadcount, onEdit, isStale, setMap }) {
   const строка = (подпись, значение) => значение === null || значение === undefined || значение === ""
     ? "" : `<dt>${escapeHtml(подпись)}</dt><dd>${значение}</dd>`;
   const e = (v) => escapeHtml(String(v ?? ""));
@@ -7669,7 +7662,6 @@ async function openObjectHome(objectId) {
   const команда = строка("Отв. подразделение", e(o.smu_name)) + строка("Директор СМУ", e(o.smu_director_name))
     + OBJECT_TEAM_ROLES.map(([ключ, подпись]) => строка(подпись, o.team && o.team[ключ] ? e(o.team[ключ].name) : "")).join("");
   const медиа = safeHttpUrl(o.media_url);
-  const закрыть = o.kind === "mfr" ? "Открыть модель МФР" : "Открыть схему";
   box.innerHTML = `
     <div class="ohv-head">
       <div class="ohv-titles">
@@ -7679,9 +7671,9 @@ async function openObjectHome(objectId) {
           ${типУчёта ? `<span>${e(типУчёта)}</span>` : ""}${o.address ? `<span>${e(o.address)}</span>` : ""}</div>
       </div>
       <div class="ohv-actions">
-        <button type="button" class="btn btn-primary" id="ohv-open">${закрыть}</button>
-        ${can("headcount", "read") ? '<button type="button" class="btn btn-primary" id="ohv-headcount">Ввод численности</button>' : ""}
-        <button type="button" class="btn btn-secondary" id="ohv-edit">Изменить реквизиты</button>
+        ${onOpen ? `<button type="button" class="btn btn-primary" data-act="open">${e(openLabel)}</button>` : ""}
+        ${onHeadcount ? '<button type="button" class="btn btn-primary" data-act="headcount">Ввод численности</button>' : ""}
+        ${onEdit ? '<button type="button" class="btn btn-secondary" data-act="edit">Изменить реквизиты</button>' : ""}
       </div>
     </div>
     <div class="ohv-grid">
@@ -7698,39 +7690,60 @@ async function openObjectHome(objectId) {
       </div>
       <div class="ohv-col">
         <section class="ohv-card"><h4>Проектная команда</h4>${команда
-          ? `<dl class="ohv-dl">${команда}</dl>` : '<div class="hint-text">Команда не заполнена — укажите её в «Проекты и объекты».</div>'}</section>
+          ? `<dl class="ohv-dl">${команда}</dl>` : `<div class="hint-text">Команда не заполнена${onEdit ? " — заполните её кнопкой «Изменить реквизиты»" : ""}.</div>`}</section>
         ${o.kind === "mfr" ? "" : `<section class="ohv-card"><h4>Учёт</h4><dl class="ohv-dl">
           ${строка("Элементов на схеме", e(o.elements_current ?? 0))}${строка("Чертёж", e(o.current_source_file))}</dl>
           ${o.current_source_file ? "" : '<div class="hint-text">Чертёж ещё не загружен — схемы пока нет.</div>'}</section>`}
       </div>
       <section class="ohv-mapbox" aria-label="Расположение объекта на карте">
-        ${есть ? `<div class="ohv-map" id="ohv-map"></div><div class="ohv-mapcap">${e(o.address || o.name)} · ${e(o.lat)}, ${e(o.lon)}</div>`
-          : `<div class="ohv-nomap"><strong>Расположение не задано</strong><p class="hint-text">У объекта нет координат: укажите адрес в «Проекты и объекты» — точка определится по нему и появится на карте.</p>
-              <button type="button" class="btn btn-primary" id="ohv-edit2">Указать адрес</button></div>`}
+        ${есть ? `<div class="ohv-map" data-role="map"></div><div class="ohv-mapcap">${e(o.address || o.name)} · ${e(o.lat)}, ${e(o.lon)}</div>`
+          : `<div class="ohv-nomap"><strong>Расположение не задано</strong><p class="hint-text">У объекта нет координат: укажите адрес — точка определится по нему и появится на карте.</p>
+              ${onEdit ? '<button type="button" class="btn btn-primary" data-act="edit">Указать адрес</button>' : ""}</div>`}
       </section>
     </div>`;
-  box.hidden = false;
-  box.scrollTop = 0;
-  const править = () => { closeObjectHome(); openCatalog(); };
-  document.getElementById("ohv-open").addEventListener("click", closeObjectHome);
+  box.querySelector('[data-act="open"]')?.addEventListener("click", onOpen);
   // «Ввод численности» — окно учёта численности поверх схемы объекта (то же, что «Действия → Численность»)
-  document.getElementById("ohv-headcount")?.addEventListener("click", () => { closeObjectHome(); openHeadcount(); });
+  box.querySelector('[data-act="headcount"]')?.addEventListener("click", onHeadcount);
+  box.querySelectorAll('[data-act="edit"]').forEach((b) => b.addEventListener("click", onEdit));
   // Фото не загрузилось — вместо пустой рамки та же заглушка.
   const фото = box.querySelector(".ohv-photo img");
   фото?.addEventListener("error", () => { if (фото.getAttribute("src") !== фото.dataset.fallback) { фото.src = фото.dataset.fallback; фото.closest(".ohv-photo")?.classList.add("ohv-photo-empty"); } });
-  document.getElementById("ohv-edit").addEventListener("click", править);
-  document.getElementById("ohv-edit2")?.addEventListener("click", править);
   if (есть) {
-    const контейнер = document.getElementById("ohv-map");
+    const контейнер = box.querySelector('[data-role="map"]');
     try {
       const m = await ensureMapModule();
       const pin = await m.createPinMap(контейнер, { lat: o.lat, lon: o.lon, canEdit: false, onMove: () => {} });
-      if (objectHomeFor !== objectId || !контейнер.isConnected) { try { pin.карта.remove(); } catch (err) { /* уже закрыто */ } return; }
-      objectHomeMap = pin;
+      if (isStale() || !контейнер.isConnected) { try { pin.карта.remove(); } catch (err) { /* уже закрыто */ } return; }
+      setMap(pin);
     } catch (err) {
       контейнер.innerHTML = `<div class="hint-text" style="padding:16px">Карта недоступна: ${e(err.message || "")}</div>`;
     }
   }
+}
+
+async function openObjectHome(objectId) {
+  const box = document.getElementById("object-home");
+  if (!box || !objectId) return;
+  closeObjectHome();
+  objectHomeFor = objectId;
+  let o;
+  try {
+    o = (await api("/objects")).find((x) => x.id === objectId);
+  } catch (e) {
+    return;   // без заглавной страницы работа продолжается как раньше
+  }
+  if (!o || objectHomeFor !== objectId || state.objectId !== objectId) return;   // за время запроса объект сменили
+  box.hidden = false;   // до отрисовки: у мини-карты в скрытом блоке нулевой размер
+  box.scrollTop = 0;
+  await fillObjectCard(box, o, {
+    openLabel: o.kind === "mfr" ? "Открыть модель МФР" : "Открыть схему",
+    onOpen: closeObjectHome,
+    onHeadcount: can("headcount", "read") ? () => { closeObjectHome(); openHeadcount(); } : null,
+    // Правка — внутри той же карточки справочника: он открывается сразу на форме-редакторе этого объекта.
+    onEdit: catalogCanEdit() ? () => { closeObjectHome(); openCatalog({ type: "object", id: o.id, edit: true }); } : null,
+    isStale: () => objectHomeFor !== objectId,
+    setMap: (pin) => { objectHomeMap = pin; },
+  });
 }
 
 async function loadPlan(preserveView = true) {
@@ -12387,6 +12400,9 @@ const catalog = {
   // намеренно уточнённую точку из-за правки опечатки в адресе — плохая
   // неожиданность. Сбрасывается в renderCatalogForm на каждую запись.
   coordsLocked: false,
+  // Существующий объект открыт в форме-редакторе (иначе в правой области — единая карточка объекта, fillObjectCard).
+  // Проект и новый объект всегда в редакторе.
+  editing: false,
 };
 
 // Виджет адреса живёт отдельным файлом и подгружается по первому открытию
@@ -12396,6 +12412,10 @@ let addressModule = null;
 // Живая мини-карта формы: держим ссылку, чтобы уничтожить её перед
 // следующей отрисовкой (см. renderCatalogForm).
 let catalogPinMap = null;
+let catalogCardMap = null;   // мини-карта единой карточки в правой области справочника (тоже обязательно remove())
+function closeCatalogCard() {
+  if (catalogCardMap) { try { catalogCardMap.карта.remove(); } catch (e) { /* контекст мог быть потерян */ } catalogCardMap = null; }
+}
 async function ensureAddressWidget() {
   if (!addressModule) {
     addressModule = await import("/static/address.js");
@@ -12819,6 +12839,29 @@ function catalogSummaryHtml(запись, тип) {
 const OBJECT_TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
   ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 
+function renderCatalogCard(место, запись) {
+  const id = запись.id;
+  // «Перейти к объекту» — только когда доступ на объект у человека есть: раздел «Проекты и объекты» может быть открыт и без доступа на
+  // конкретный объект, а переключиться туда, куда доступа нет, всё равно не получится (сервер откажет).
+  const доступен = state.projects.flatMap((p) => p.objects).some((o) => o.id === id);
+  место.innerHTML = `<div class="ohv-pane"></div>`;
+  const box = место.firstElementChild;
+  return fillObjectCard(box, запись, {
+    openLabel: "Перейти к объекту",
+    onOpen: доступен ? async () => {
+      catalogBackdrop.classList.remove("open");
+      clearCatalogDirty();
+      closeCatalogCard();
+      await switchObject(id);
+      openObjectHome(id);
+    } : null,
+    onHeadcount: null,
+    onEdit: catalogCanEdit() ? () => { catalog.editing = true; renderCatalogForm(); } : null,
+    isStale: () => !box.isConnected || !catalog.selected || catalog.selected.id !== id || catalog.editing,
+    setMap: (pin) => { catalogCardMap = pin; },
+  });
+}
+
 function renderCatalogForm() {
   const место = document.getElementById("catalog-form");
   const кнопкаСохранить = document.getElementById("catalog-save");
@@ -12834,6 +12877,16 @@ function renderCatalogForm() {
   const { type } = catalog.selected;
   const запись = catalogSelectedRecord();
   const новая = catalog.selected.id === null;
+  // Форма перерисовывается целиком — обе мини-карты (редактора и карточки) уничтожаются ДО этого (контекст WebGL).
+  if (catalogPinMap) { try { catalogPinMap.карта.remove(); } catch (e) { /* контекст мог быть потерян */ } catalogPinMap = null; }
+  closeCatalogCard();
+  // Существующий объект вне правки — единая карточка (та же, что открывается из шапки и с карты); правка — кнопкой внутри неё.
+  if (type === "object" && !новая && запись && !catalog.editing) {
+    renderCatalogCard(место, запись);
+    кнопкаСохранить.hidden = true;
+    кнопкаОтмена.hidden = true;
+    return;
+  }
   // У уже сохранённой записи с координатами автопозиционирование по адресу
   // не трогает точку — вдруг она уточнена руками именно там, где нужно.
   // Пустая запись (новая или ещё без координат) остаётся разблокированной:
@@ -12877,6 +12930,9 @@ function renderCatalogForm() {
       ` : ""}
       <span class="catalog-form-kind">${type === "project" ? "Проект" : "Объект"}</span>
       <h3>${escapeHtml(заголовок)}</h3>
+      ${type === "object" && !новая
+        ? `<button type="button" class="btn btn-sm btn-secondary" id="catalog-to-card"
+                   title="Вернуться к карточке объекта (фото, карта, реквизиты)">← К карточке</button>` : ""}
       ${доступенДляПерехода
         ? `<button type="button" class="btn btn-sm btn-secondary" id="catalog-open-object"
                    title="Сделать этот объект текущим и закрыть справочник">Перейти к объекту</button>` : ""}
@@ -13124,6 +13180,14 @@ function renderCatalogForm() {
     });
   }
 
+  document.getElementById("catalog-to-card")?.addEventListener("click", async () => {
+    if (catalog.dirty && !confirm("В форме есть несохранённые изменения. Вернуться к карточке без сохранения?")) return;
+    clearCatalogDirty();
+    catalog.editing = false;
+    setCatalogStatus("", false);
+    await refreshCatalog();   // фото и вложения в редакторе могли поменяться — карточка читает свежую запись
+  });
+
   const кнопкаПерейти = document.getElementById("catalog-open-object");
   if (кнопкаПерейти) {
     кнопкаПерейти.addEventListener("click", async () => {
@@ -13227,6 +13291,7 @@ function selectCatalogNode(тип, id, extra) {
   // справа не видны в дереве слева, и потерять их щелчком мимо — легко.
   if (catalog.dirty && !confirm("В форме есть несохранённые изменения. Перейти к другой записи?")) return;
   clearCatalogDirty();
+  catalog.editing = false;
   catalog.selected = Object.assign({ type: тип, id }, extra || {});
   setCatalogStatus("", false);
   renderCatalogTree();
@@ -13274,6 +13339,7 @@ async function saveCatalog() {
     }
     clearCatalogDirty();
     catalog.selected = { type, id: ответ.id };
+    catalog.editing = false;   // сохранено — снова карточка
     await refreshCatalog();
     setCatalogStatus(id === null ? "Добавлено." : "Сохранено.", false);
   } catch (e) {
@@ -13302,8 +13368,11 @@ async function openCatalog(предвыбор) {
   document.getElementById("catalog-search").value = "";
   await loadCatalogData();
   populateCatalogFilterOptions();
-  if (предвыбор) {
-    catalog.selected = предвыбор;
+  // Обработчик меню передаёт сюда событие щелчка — предвыбором считается только явное {type, id}.
+  const задан = предвыбор && (предвыбор.type === "object" || предвыбор.type === "project") && "id" in предвыбор;
+  catalog.editing = !!(задан && предвыбор.edit);
+  if (задан) {
+    catalog.selected = { type: предвыбор.type, id: предвыбор.id };
     if (предвыбор.type === "object") {
       const объект = catalog.objects.find((o) => o.id === предвыбор.id);
       if (объект && объект.project_id) catalog.expanded.add(объект.project_id);
@@ -13328,6 +13397,7 @@ document.getElementById("menu-catalog").addEventListener("click", openCatalog);
 document.getElementById("catalog-close").addEventListener("click", () => {
   if (!можноЗакрытьФорму(catalogBackdrop)) return;
   clearCatalogDirty();
+  closeCatalogCard();
   if (catalogPinMap) {
     try { catalogPinMap.карта.remove(); } catch (e) {}
     catalogPinMap = null;
@@ -13579,12 +13649,16 @@ async function openProjectMap() {
     const m = await ensureMapModule();
     projectMap = await m.renderProjectMap(холст, {
       onOpenObject: async (id) => {
-        // Клик по точке ведёт на СВОЙСТВА объекта, а не сразу переключает
-        // текущий: с карты обычно смотрят «что там вообще за площадка», а
-        // не обязательно намерены сейчас на ней работать. Перейти к работе
-        // на объекте — отдельная кнопка внутри самой карточки.
+        // Клик по точке открывает ту же карточку объекта, что и выбор в шапке (фото, карта, реквизиты; правка — внутри неё, с 2026-10-20;
+        // раньше открывалась отдельная форма «Свойства объекта» справочника). Текущий объект при этом переключается — карточка принадлежит
+        // выбранному в шапке объекту, как и везде. Объект вне доступного дерева (переключиться на него нельзя) — по-прежнему в справочнике.
         mapBackdrop.classList.remove("open");
-        await openCatalog({ type: "object", id });
+        if (state.projects.flatMap((p) => p.objects).some((o) => o.id === id)) {
+          await switchObject(id);
+          openObjectHome(id);
+        } else {
+          await openCatalog({ type: "object", id });
+        }
       },
       onEmptyCoords: (без, всего, естьПодложка, бедаСПодложкой) => {
         const части = [`Объектов на карте: ${всего}.`];

@@ -1468,6 +1468,14 @@ input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default
 }
 
 
+/* Единая карточка объекта внутри «Проектов и объектов» (2026-10-20): в правой области справочника у неё задана высота (страница
+   карточки по высоте равна области и не прокручивается), на заглавной странице (режим одного объекта, .po-only) — занимает всю область */
+.v2-cols .po-card { flex: none; height: clamp(520px, calc(100vh - 250px), 780px); border: 1px solid var(--line); border-radius: 10px; }
+#po-body.po-card-mode { overflow: hidden; display: flex; flex-direction: column; }
+#po-body.po-card-mode > #po-inner { flex: 1; min-height: 0; width: 100%; padding: 0; display: flex; flex-direction: column; }
+#po-body.po-card-mode #po-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.po-only .v2-foot:has(#po-status:empty):has(.v2-foot-actions:empty) { display: none; }
+
 /* Переключатель интерфейсов «V1 | V2» в верхней панели (2026-10-06); кнопка с id v2-back-btn — «Текущий» (main.js: onBackClick) */
 .v2-ui-switch { display: inline-flex; border: 1px solid var(--btn-line); border-radius: 8px; overflow: hidden; flex: none; }
 .v2-ui-switch button { border: 0; background: var(--bg); color: var(--muted); font: inherit; font-size: 0.8125rem; font-weight: 500; padding: 5px 12px; cursor: pointer; }

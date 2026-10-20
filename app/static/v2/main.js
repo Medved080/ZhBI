@@ -562,6 +562,11 @@ async function renderShell(user, permissions) {
     }
   }
 
+  // Для карточки объекта в справочнике «Проекты и объекты» (projects-objects.js): объект, не являющийся текущим, делается текущим
+  // и открывается его заглавная страница — тем же путём, что и выбор в шапке.
+  moduleCtx.canOpenObject = (id) => activeObjects.some((o) => o.id === id);
+  moduleCtx.openObject = (id) => changeObject(id, { card: true });
+
   // ---- левая навигация: три состояния (свёрнута/временно открыта/закреплена), поиск, группы — shell-nav.js.
   // onOpen зовёт openSection ниже (объявлена как function-декларация — доступна и до текстового объявления).
   const shellNav = mountShellNav(side, {

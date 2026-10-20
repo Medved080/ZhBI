@@ -754,6 +754,10 @@
   #object-home { position: absolute; inset: 0; z-index: 30; overflow: hidden; background: var(--color-bg, #fff); padding: 10px 16px 14px;
     box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; container-type: size; }
   #object-home[hidden] { display: none; }
+  /* Та же карточка внутри правой области справочника «Проекты и объекты»: высота задана (страница не прокручивается), размер-контейнер
+     даёт тот же адаптивный вид, что у заглавной страницы */
+  .ohv-pane { position: relative; height: clamp(480px, 64vh, 720px); overflow: hidden; display: flex; flex-direction: column; gap: 10px;
+    box-sizing: border-box; container-type: size; }
   /* Страница равна рабочей области и не прокручивается: три колонки (реквизиты, команда и учёт, карта) делят её по высоте;
      узкая область (рядом правая панель) — две колонки, карта справа. */
   .ohv-head { flex: none; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }

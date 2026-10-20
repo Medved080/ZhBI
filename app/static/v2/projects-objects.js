@@ -1,4 +1,9 @@
 // V2: «Проекты и объекты» — дерево проект→объект слева, карточка справа.
+//
+// С 2026-10-20 у объекта ОДНА форма на весь интерфейс (object-card.js): щелчок по объекту в дереве показывает ту же карточку (фото, карта,
+// реквизиты, команда), что открывается из шапки и с карты; форма-редактор ниже — режим правки ЭТОЙ карточки («Изменить реквизиты»),
+// после сохранения возврат к карточке. Проект и новый объект сразу открываются в редакторе. Режим «одного объекта» (ctx.only = id) — то же
+// без дерева: именно так работает заглавная страница объекта (object-home.js) для тех, кто вправе править.
 // Те же эндпоинты, что у V1 (app/main.py: /projects, /objects, /smu,
 // /individuals, /dictionaries/*), тот же уровень доступа: раздел целиком,
 // включая чтение, открыт только при "projects":"write" — как в V1
@@ -23,6 +28,7 @@
 // "Открыть в V1".
 import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 import { trashIconHtml } from "./icons.js";
+import { renderObjectCard } from "./object-card.js";
 
 // Кэш загруженных модулей — на уровне файла, а не mountProjectsObjects(): при
 // повторном монтировании раздела (уход на другую вкладку V2 и возврат) не
@@ -96,6 +102,8 @@ function escapeHtml(s) {
 
 export function mountProjectsObjects(container, ctx) {
   const { api } = ctx;
+  // Режим одного объекта (заглавная страница): без дерева, без шапки раздела, без удаления; объект задан id.
+  const only = ctx.only ?? null;
 
   const state = {
     projects: [], objects: [], smuList: [], individualsList: [],
@@ -104,6 +112,8 @@ export function mountProjectsObjects(container, ctx) {
     expanded: new Set(),
     query: "", status: "active", smu: "",
     draft: null, dirty: false, isNew: false,
+    // Объект в режиме правки (форма-редактор) — иначе показана карточка. Проект и новый объект всегда в редакторе.
+    editing: false,
     status_msg: "", busy: false,
     // Координаты уже стоят (сохранены) или тронуты руками/пином — тогда
     // автоопределение по адресу их больше не перезаписывает (initDraft).
@@ -160,13 +170,15 @@ export function mountProjectsObjects(container, ctx) {
   let pinMap = null;
   function destroyPinMap() {
     if (pinMap) { try { pinMap.карта.remove(); } catch (e) { /* контекст уже мог быть потерян */ } pinMap = null; }
+    if (cardHandle) { cardHandle.destroy(); cardHandle = null; }   // карта карточки — тот же graphics-контекст
   }
+  let cardHandle = null;
 
   container.innerHTML = `
-    <div class="v2-page-head"><div class="v2-container">
+    ${only ? "" : `<div class="v2-page-head"><div class="v2-container">
       <h2>Проекты и объекты</h2>
       <p class="v2-muted">Проект — группа объектов одной площадки. Все свойства, справочники и контракты живут внутри объекта; сроки СМР сводятся из объектов.</p>
-    </div></div>
+    </div></div>`}
     <div id="po-body" class="v2-scroll"><div id="po-inner" class="v2-container"></div></div>
     <footer class="v2-foot"><div class="v2-container">
       <span id="po-status" class="v2-muted" role="status" aria-live="polite"></span><div class="v2-foot-actions" id="po-foot-actions"></div>
@@ -177,6 +189,7 @@ export function mountProjectsObjects(container, ctx) {
   // как «утечка» после захода в «Пользователи и доступ», и вид зависел от
   // порядка посещения разделов. main.js сбрасывает класс при каждой смене.
   container.classList.add("v2-app");
+  if (only) container.classList.add("po-only");
   const body = container.querySelector("#po-inner");
   const status = container.querySelector("#po-status");
   const footActions = container.querySelector("#po-foot-actions");
@@ -249,6 +262,7 @@ export function mountProjectsObjects(container, ctx) {
       if (!(await requestLeave())) return;
       state.selected = { type, id };
       state.isNew = id == null;
+      state.editing = false;
       if (extra?.projectId) state.newObjectProjectId = extra.projectId;
       initDraft();
       state.status_msg = "";
@@ -450,6 +464,7 @@ export function mountProjectsObjects(container, ctx) {
     // Новый/сохранённый объект должен быть виден в дереве: родительский проект раскрывается, иначе выбранная строка скрыта.
     if (type === "object" && saved.project_id != null) state.expanded.add(saved.project_id);
     state.isNew = false;
+    state.editing = false;   // сохранено — снова карточка (кроме случая правки «на лету», ниже)
     state.dirty = false;
     clearDirtyState();
     const ok = await refreshListsBestEffort();
@@ -464,6 +479,7 @@ export function mountProjectsObjects(container, ctx) {
         if (JSON.stringify(draftNow[key]) !== JSON.stringify(snapshot[key])) state.draft[key] = draftNow[key];
       }
       state.dirty = true;
+      state.editing = true;
       setDirty({ message: "В карточке есть несохранённые изменения.", save: saveOrThrow, discard: () => { initDraft(); } });
       state.status_msg = "";
     }
@@ -547,11 +563,16 @@ export function mountProjectsObjects(container, ctx) {
     }
     const type = state.selected.type;
     const d = state.draft;
-    const canDelete = !state.isNew && (ctx.perms.isSystemAdmin || ctx.perms.dictDelete === "write");
+    // Существующий объект вне правки — единая карточка (фото, карта, реквизиты, команда, кнопки переходов).
+    const cardView = type === "object" && !state.isNew && !state.editing;
+    container.querySelector("#po-body").classList.toggle("po-card-mode", !!only && cardView);
+    if (cardView) { renderCardView(el); return; }
+    const canDelete = !only && !state.isNew && (ctx.perms.isSystemAdmin || ctx.perms.dictDelete === "write");
     const title = state.isNew ? (type === "project" ? "Новый проект" : "Новый объект") : d.name;
     el.innerHTML = `
       <div class="v2-bar"><h3>${escapeHtml(title || (type === "project" ? "Проект" : "Объект"))}</h3>
         <div class="v2-inline">
+          ${!state.isNew && type === "object" ? btn("← К карточке", 'id="po-to-card"') : ""}
           ${!state.isNew && type === "object" ? btn("Открыть в V1", 'id="po-open-v1"') : ""}
           ${canDelete ? btn("Удалить", 'id="po-delete"') : ""}
         </div></div>
@@ -598,6 +619,14 @@ export function mountProjectsObjects(container, ctx) {
     const syncDraftField = (elm) => { const key = FIELD_KEYS[elm.id]; if (key) state.draft[key] = elm.value; };
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", () => { syncDraftField(elm); markDirty(); }));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => syncDraftField(elm)));
+    el.querySelector("#po-to-card")?.addEventListener("click", () => withNavGuard(async () => {
+      if (!(await requestLeave())) return;
+      initDraft();
+      await refreshListsBestEffort();   // фото и вложения в редакторе могли поменяться — карточка читает свежую запись
+      state.editing = false;
+      await renderForm();
+      renderFooter();
+    }));
     if (el.querySelector("#po-open-v1")) {
       el.querySelector("#po-open-v1").addEventListener("click", async () => {
         if (!(await requestLeave())) return;
@@ -609,6 +638,22 @@ export function mountProjectsObjects(container, ctx) {
     }
     mountAddressAndMap(el, d);
     if (!state.isNew) mountAttachments(el, type, state.selected.id);
+  }
+
+  // Карточка объекта (object-card.js). Кнопки переходов к моделям и отчётам работают для ТЕКУЩЕГО объекта шапки (права считаются по нему),
+  // поэтому у чужого объекта вместо них одна — «Перейти к объекту» (делает его текущим и открывает заглавную страницу).
+  function renderCardView(el) {
+    const rec = selectedRecord();
+    if (!rec) { el.innerHTML = `<p class="v2-note">Объект недоступен или не найден.</p>`; return; }
+    const isCurrent = rec.id === ctx.objectId;
+    el.innerHTML = `<div class="oh-page po-card"></div>`;
+    cardHandle = renderObjectCard(el.firstElementChild, rec, {
+      api,
+      go: ctx.go,
+      isAllowed: isCurrent ? ctx.isAllowed : null,
+      openObject: !isCurrent && ctx.canOpenObject?.(rec.id) ? () => ctx.openObject?.(rec.id) : null,
+      onEdit: () => withNavGuard(async () => { state.editing = true; await renderForm(); renderFooter(); }),
+    });
   }
 
   // Классификатор адресов + мини-карта (раздел 6). Тот же приём, что и в
@@ -989,6 +1034,17 @@ export function mountProjectsObjects(container, ctx) {
         body.querySelector("#po-retry")?.addEventListener("click", render);
         return;
       }
+    }
+    if (only) {
+      // Без дерева и фильтров: сразу карточка (или редактор) единственного объекта.
+      state.selected = { type: "object", id: only };
+      if (!state.draft) initDraft();
+      body.innerHTML = `<section id="po-form"></section>`;
+      await renderForm();
+      renderFooter();
+      if (state.status_msg) { status.textContent = state.status_msg; state.status_msg = ""; }
+      renderListRefreshRetry();
+      return;
     }
     body.innerHTML = `
       <div class="v2-cols">
