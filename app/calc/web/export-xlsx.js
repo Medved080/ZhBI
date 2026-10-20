@@ -5,6 +5,17 @@
  const formula=(expression,result)=>({formula:expression,result});
  const clone=value=>JSON.parse(JSON.stringify(value));
  const money=value=>new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2}).format(value);
+ // Excel не открывает книгу без «восстановления», если примечание длиннее 32 767 знаков; по расхождениям реестра у отдельных изделий набиралось до 70 тысяч
+ const NOTE_LIMIT=30000,NOTICE_LIMIT=2000;
+ function fitNote(notices,tail){
+  const kept=[];let size=tail.length;
+  for(let i=0;i<notices.length;i++){
+   const text=notices[i].length>NOTICE_LIMIT?notices[i].slice(0,NOTICE_LIMIT-1)+'…':notices[i];
+   if(size+text.length+2>NOTE_LIMIT-300){kept.push('Ещё замечаний, не поместившихся в примечание: '+(notices.length-i)+'. Полный список — в карточке изделия и в отчёте «Расхождения и готовность» (вкладка «Отчёты»).');break;}
+   kept.push(text);size+=text.length+2;
+  }
+  return kept.join('\n\n')+tail;
+ }
  function sheetName(name,used){
   const base=String(name).replace(/[\\/*?:\[\]\x00-\x1f]/g,' ').replace(/^'+|'+$/g,'').trim()||'Изделие';
   let candidate=base.slice(0,31),suffix=1;
@@ -142,11 +153,12 @@
   if(original)layout.quotes.forEach((value,i)=>{sheet.getCell('G'+n(47+i)).value=value;sheet.getCell('G'+n(47+i)).numFmt='#,##0';sheet.getCell('G'+n(47+i)).note='Справочная цена исходного примера МСУ-1; не итог текущей калькуляции сервиса.';});
   const notices=[];
   if(product.documentModel?.kind==='registry')notices.push('Предварительные нормы от двух колонн, версия '+product.normsVersion+'. Цены и производственный расход требуют подтверждения.');
-  for(const issue of product.discrepancies||[])notices.push('Расхождение: '+issue.title+'. '+issue.description+' Уточнить: '+issue.recommendation+' Источники: '+(issue.sources||[]).map(s=>(s.label||s.sourceId)+' / PDF стр. '+s.pdfPage).join('; '));
   for(const issue of product.dataIssues||[])notices.push('Неполные данные: '+issue.title+'. '+issue.recommendation);
   for(const pending of product.documentModel?.solidModel?.pending||product.documentModel?.preview3d?.pendingReinforcement||[])notices.push('Не завершено в модели: '+pending);
   for(const issue of product.documentModel?.issues||[])notices.push('Требует уточнения: '+issue);
-  sheet.getCell('C2').note=notices.join('\n\n')+'\nИсточник формы: '+template.source+'. Источник изделия: '+(product.documentModel?.source?.title||product.name)+'.';
+  // расхождения из реестра — последними: у изделия их бывает несколько десятков, и при нехватке места отсекаются они, а не вопросы по самому изделию
+  for(const issue of product.discrepancies||[])notices.push('Расхождение: '+issue.title+'. '+issue.description+' Уточнить: '+issue.recommendation+' Источники: '+(issue.sources||[]).map(s=>(s.label||s.sourceId)+' / PDF стр. '+s.pdfPage).join('; '));
+  sheet.getCell('C2').note=fitNote(notices,'\nИсточник формы: '+template.source+'. Источник изделия: '+(product.documentModel?.source?.title||product.name)+'.');
   for(let r=n(38);r<=gross;r++)if(!extra.some(row=>numberById[row.id]===r))sheet.getCell('B'+r).value=formula('B'+(r-1)+'+1',11+r-n(38)-extra.filter(row=>numberById[row.id]<r).length);
   if(extra.length)sheet.getCell('B'+cost).value=formula('B'+n(39)+'+1',13);
   sheet.pageSetup.printArea='B1:G'+n(49);
