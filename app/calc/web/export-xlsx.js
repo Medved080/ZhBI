@@ -178,17 +178,21 @@
   [6,52,24,24].forEach((width,i)=>{sheet.getColumn(i+1).width=width;});
   sheet.mergeCells('A1:D1');sheet.getCell('A1').value='Калькуляции ЖБИ';sheet.getCell('A1').font={bold:true,size:16};
   sheet.mergeCells('A2:D2');sheet.getCell('A2').value='Изделий: '+entries.length+' · групп: '+ordered.length+' · выгружено '+new Date().toLocaleString('ru-RU')+' · НДС '+vat+'%';
-  sheet.mergeCells('A3:D3');sheet.getCell('A3').value='Название — ссылка на лист изделия. Стоимость берётся с листа: «Итого без НДС» и «Итого с НДС» (меняется вместе с листом).';
-  sheet.getCell('A3').font={italic:true,color:{argb:'FF5B6675'}};sheet.getCell('A3').alignment={wrapText:true,vertical:'top'};sheet.getRow(3).height=30;
+  sheet.mergeCells('A3:D3');sheet.getCell('A3').value='Название — ссылка на лист изделия. Стоимость берётся с листа: «Итого без НДС» и «Итого с НДС» (меняется вместе с листом). Группы свёрнуты: «+» слева от названия группы раскрывает её, кнопки «1» и «2» над номерами строк сворачивают и раскрывают все группы.';
+  sheet.getCell('A3').font={italic:true,color:{argb:'FF5B6675'}};sheet.getCell('A3').alignment={wrapText:true,vertical:'top'};sheet.getRow(3).height=45;
   const head=sheet.getRow(TOC_HEADER);head.values=['№','Наименование','Стоимость без НДС, ₽','Стоимость с НДС, ₽'];
   head.font={bold:true};head.alignment={vertical:'middle',wrapText:true};head.height=30;
   head.eachCell(cell=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFD9E2EF'}};cell.border={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};});
   sheet.views=[{state:'frozen',ySplit:TOC_HEADER,showGridLines:false}];
+  sheet.properties.outlineLevelRow=1;sheet.properties.outlineProperties={summaryBelow:false};      // группы сворачиваются: кнопка «+/−» на строке группы (над строками изделий), по умолчанию свёрнуты
+  // ExcelJS сам выводит collapsed=1 у всех строк нижнего уровня; Excel ждёт его только у строки группы, поэтому значение задаётся явно
+  const setCollapsed=(row,value)=>Object.defineProperty(row,'collapsed',{value,configurable:true});
   let r=TOC_HEADER;
   for(const [group,items] of ordered){
    r++;sheet.mergeCells('A'+r+':D'+r);
    const title=sheet.getCell('A'+r);title.value=group+' · '+items.length;title.font={bold:true,size:11};
    for(let col=1;col<=4;col++)sheet.getCell(r,col).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEEF2F7'}};
+   setCollapsed(sheet.getRow(r),true);
    items.forEach(({snapshot,name,sheet:target},i)=>{
     r++;
     const total=Number(snapshot.precise?.total??snapshot.total),gross=Number(snapshot.precise?.grossTotal??snapshot.total*(1+(snapshot.vatPercent??vat)/100));
@@ -199,6 +203,7 @@
     sheet.getCell('C'+r).value=formula(quoteSheet(name)+'!'+target.totalCells.net,total);
     sheet.getCell('D'+r).value=formula(quoteSheet(name)+'!'+target.totalCells.gross,gross);
     for(const col of ['C','D'])sheet.getCell(col+r).numFmt='#,##0.00';
+    const detail=sheet.getRow(r);detail.outlineLevel=1;detail.hidden=true;setCollapsed(detail,false);
    });
   }
   sheet.pageSetup={paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:TOC_HEADER+':'+TOC_HEADER};
