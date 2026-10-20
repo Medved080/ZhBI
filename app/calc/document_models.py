@@ -27,7 +27,9 @@ def refresh():
         try: return os.stat(ASSETS / name).st_mtime_ns
         except OSError: return 0
     signature = tuple(mtime(name) for name in SOURCE_FILES)
-    if _seen is not None and signature != _seen:
+    # Первый вызов в процессе тоже сбрасывает кеш: каталог мог быть прочитан раньше, чем файлы заменили (перезапуск сервера
+    # по --reload и запись каталога шли почти одновременно, и до первой сверки подписи в памяти оставалась старая версия).
+    if _seen is None or signature != _seen:
         catalog.cache_clear()
     _seen = signature
 
