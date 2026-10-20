@@ -163,16 +163,59 @@
   if(extra.length)sheet.getCell('B'+cost).value=formula('B'+n(39)+'+1',13);
   sheet.pageSetup.printArea='B1:G'+n(49);
   if(shift>0||extra.length){sheet.pageSetup.fitToHeight=0;sheet.pageSetup.printTitlesRow=header+':'+header;}
+  sheet.totalCells={net:'G'+net,gross:'G'+gross};      // оглавление ссылается на итоги листа формулами
   return sheet;
+ }
+ // Оглавление — первая страница книги из нескольких изделий: калькуляции по группам (как в списке изделий), название — ссылка на лист, стоимость — формула на итоги самого листа
+ const TOC_NAME='Оглавление',TOC_HEADER=5;
+ const groupOf=product=>product.documentModel?.family||(product.documentModel?'Колонны':'Прочие изделия');
+ const quoteSheet=name=>"'"+name.replace(/'/g,"''")+"'";
+ function addContents(sheet,entries){
+  const vat=entries[0].snapshot.vatPercent??22;
+  const groups=new Map();
+  for(const entry of entries){const key=groupOf(entry.snapshot.product);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(entry);}
+  const ordered=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0],'ru',{numeric:true}));
+  [6,52,24,24].forEach((width,i)=>{sheet.getColumn(i+1).width=width;});
+  sheet.mergeCells('A1:D1');sheet.getCell('A1').value='Калькуляции ЖБИ';sheet.getCell('A1').font={bold:true,size:16};
+  sheet.mergeCells('A2:D2');sheet.getCell('A2').value='Изделий: '+entries.length+' · групп: '+ordered.length+' · выгружено '+new Date().toLocaleString('ru-RU')+' · НДС '+vat+'%';
+  sheet.mergeCells('A3:D3');sheet.getCell('A3').value='Название — ссылка на лист изделия. Стоимость берётся с листа: «Итого без НДС» и «Итого с НДС» (меняется вместе с листом).';
+  sheet.getCell('A3').font={italic:true,color:{argb:'FF5B6675'}};sheet.getCell('A3').alignment={wrapText:true,vertical:'top'};sheet.getRow(3).height=30;
+  const head=sheet.getRow(TOC_HEADER);head.values=['№','Наименование','Стоимость без НДС, ₽','Стоимость с НДС, ₽'];
+  head.font={bold:true};head.alignment={vertical:'middle',wrapText:true};head.height=30;
+  head.eachCell(cell=>{cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFD9E2EF'}};cell.border={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};});
+  sheet.views=[{state:'frozen',ySplit:TOC_HEADER,showGridLines:false}];
+  let r=TOC_HEADER;
+  for(const [group,items] of ordered){
+   r++;sheet.mergeCells('A'+r+':D'+r);
+   const title=sheet.getCell('A'+r);title.value=group+' · '+items.length;title.font={bold:true,size:11};
+   for(let col=1;col<=4;col++)sheet.getCell(r,col).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEEF2F7'}};
+   items.forEach(({snapshot,name,sheet:target},i)=>{
+    r++;
+    const total=Number(snapshot.precise?.total??snapshot.total),gross=Number(snapshot.precise?.grossTotal??snapshot.total*(1+(snapshot.vatPercent??vat)/100));
+    const label=String(snapshot.product.name).slice(0,200);
+    sheet.getCell('A'+r).value=i+1;sheet.getCell('A'+r).alignment={horizontal:'center'};
+    sheet.getCell('B'+r).value=formula('HYPERLINK("#'+quoteSheet(name)+'!A1","'+label.replace(/"/g,'""')+'")',label);
+    sheet.getCell('B'+r).font={color:{argb:'FF0563C1'},underline:true};
+    sheet.getCell('C'+r).value=formula(quoteSheet(name)+'!'+target.totalCells.net,total);
+    sheet.getCell('D'+r).value=formula(quoteSheet(name)+'!'+target.totalCells.gross,gross);
+    for(const col of ['C','D'])sheet.getCell(col+r).numFmt='#,##0.00';
+   });
+  }
+  sheet.pageSetup={paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:TOC_HEADER+':'+TOC_HEADER};
  }
  function buildWorkbook(snapshots,template){
   if(!globalThis.ExcelJS||!template?.layouts||!template?.styles)throw new Error('Не удалось загрузить шаблон XLSX. Обновите страницу.');
   if(!Array.isArray(snapshots)||!snapshots.length)throw new Error('Выберите хотя бы одно изделие.');
   const workbook=new ExcelJS.Workbook();workbook.creator='CalcZhBI';workbook.calcProperties.fullCalcOnLoad=true;const used=new Set();
+  const contents=snapshots.length>1?workbook.addWorksheet(TOC_NAME,{properties:{tabColor:{argb:'FF12304F'}}}):null;      // одно изделие — оглавление не нужно
+  if(contents)used.add(TOC_NAME.toLowerCase());
+  const entries=[];
   for(const snapshot of snapshots){
    if(![snapshot.baseTotal,snapshot.total].every(Number.isFinite))throw new Error('Не удалось рассчитать '+snapshot.product.name+'.');
-   addProductSheet(workbook,snapshot,sheetName(snapshot.product.name+' (кальк)',used),template);
+   const name=sheetName(snapshot.product.name+' (кальк)',used);
+   entries.push({snapshot,name,sheet:addProductSheet(workbook,snapshot,name,template)});
   }
+  if(contents)addContents(contents,entries);
   return workbook;
  }
  async function download(snapshots){
