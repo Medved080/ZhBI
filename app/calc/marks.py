@@ -48,9 +48,24 @@ def build_index(conn, strict=False):
     return index
 
 
+def excluded_index():
+    """Модели, исключённые из расчёта (поле excluded в каталоге): ключ марки → {alias, reason}; марка на схеме у них есть, изделия в калькуляторе нет и не будет."""
+    index = {}
+    for model in catalog().values():
+        info = model.get("excluded")
+        if not info:
+            continue
+        entry = {"alias": model.get("alias"), "reason": info.get("reason", ""), "label": info.get("label", "исключено из расчёта")}
+        for key in {normalize(model.get("alias"), True), normalize(_strip_type(model.get("mark") or "")[0], True)}:
+            if key:
+                index[key] = entry
+    return index
+
+
 def resolve(conn, items):
-    """items: [{mark, type?}] → {mark: {status: found|ambiguous|none, productId?, productName?, candidates?}}."""
+    """items: [{mark, type?}] → {mark: {status: found|ambiguous|excluded|none, productId?, productName?, candidates?, reason?}}."""
     index, loose = build_index(conn, True), build_index(conn)
+    skipped = excluded_index()
     result = {}
     for item in items:
         mark = (item.get("mark") or "").strip()
@@ -68,6 +83,8 @@ def resolve(conn, items):
             result[mark] = {"status": "found", "productId": candidates[0]["id"], "productName": candidates[0]["name"]}
         elif candidates:
             result[mark] = {"status": "ambiguous", "candidates": [{"productId": c["id"], "productName": c["name"]} for c in candidates[:5]]}
+        elif normalize(mark, True) in skipped:
+            result[mark] = {"status": "excluded", **skipped[normalize(mark, True)]}
         else:
             result[mark] = {"status": "none"}
     return result

@@ -18,6 +18,7 @@ def import_register(settings, connection=None):
             if doc.get('kind')!='registry':continue
             if doc['source']['id']=='doc02' and doc['alias'] in {'1КС1','2КС3'}:
                 continue
+            if doc.get('excluded'):continue      # изделие исключено из расчёта (монолитное или отсутствует в проекте): продукт не создаётся, причина — в самой модели
             identifier=str(uuid5(NAMESPACE_URL,'calczhbi:promka:'+doc['source']['id']+':'+doc['alias']))
             if conn.execute('SELECT 1 FROM products WHERE id=? OR document_model_id=?',(identifier,doc['id'])).fetchone():continue
             name=('Колонна ' if doc['family']=='Колонны' else 'Ригель ' if doc['family']=='Ригели' else 'Плита ' if doc['family']=='Плиты' else 'Балка ' if doc['family']=='Лестничные балки' else 'Панель ' if not doc['alias'].startswith(('ПГП','ПШЛ')) else 'Плита ')+doc['alias']

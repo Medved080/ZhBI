@@ -29,6 +29,7 @@
     if (!res) return "";
     if (res.status === "found") return `<button type="button" class="btn btn-sm btn-secondary" data-calc-open="${esc(res.productId)}" title="Страница изделия в калькуляторе">Открыть в калькуляторе · ${esc(res.productName)}</button>`;
     if (res.status === "ambiguous") return `<div class="hint-text">В калькуляторе несколько похожих изделий:</div>` + res.candidates.map((c) => `<button type="button" class="btn btn-sm btn-secondary" data-calc-open="${esc(c.productId)}">${esc(c.productName)}</button>`).join(" ");
+    if (res.status === "excluded") return `<span class="hint-text" title="${esc(res.reason || "")}">Не входит в калькуляцию: ${esc(res.label || "исключено из расчёта")}</span>`;
     return `<span class="hint-text">Изделия нет в калькуляторе</span>`;
   }
   function bind(root) { root.querySelectorAll("[data-calc-open]").forEach((b) => b.addEventListener("click", () => open(b.dataset.calcOpen))); }

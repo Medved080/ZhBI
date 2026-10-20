@@ -60,6 +60,7 @@ def embedded_verified(reading):
     """Сверка закладных и труб с итогом «закладные изделия» ведомости расхода стали листа (у ведомости он равен закладным деталям плюс трубам, петли в нём
     не считаются): True — сошлось в пределах 2%, False — нет, None — итога на листе нет (проверить нечем)."""
     embedded = reading.get("embedded") or {}
+    if embedded.get("confirmedBy"): return True      # состав закладных подтверждён проектировщиками (в ведомости листа ошибка): сверка с итогом ведомости не нужна
     total = embedded.get("sheetTotalKg")
     if not total: return None
     mass = sum(item[2] * item[3] for item in embedded.get("items") or [] if item[0] in ("embedded", "pipe"))
@@ -96,7 +97,8 @@ def without_readings(model):
     if "объём" in applied: copy["projectVolume"] = None
     if "класс" in applied: copy["concreteClass"] = "Не указан"
     added = set(info.get("addedResources") or [])
-    if added: copy["resources"] = [r for r in model.get("resources") or [] if r["id"] not in added]
+    replaced = info.get("replacedResources") or []
+    if added or replaced: copy["resources"] = [r for r in model.get("resources") or [] if r["id"] not in added] + [dict(r) for r in replaced]
     return copy
 
 
@@ -107,6 +109,10 @@ def apply_readings(models, directory):
         return 0
     data = json.loads(path.read_text())
     changed = 0
+    from . import reinforcement
+    # типичный расход арматуры по самим чтениям листов (они проходят самопроверки по суммам), по группе изделий: данные поставщика для эталона не годятся — у большинства
+    # изделий типа они неполные (1КС: 36 кг/м³ при настоящих ~480), и медиана, посчитанная по ним, сама занижена и ошибку не видит
+    references = (reinforcement.build_reading_references(models, data, rebar_of), {})
     for key, reading in data.items():
         model = models.get(key)
         if not model or "readings" in model:      # нет такой модели или чтение уже наложено
@@ -119,13 +125,27 @@ def apply_readings(models, directory):
         if model.get("concreteClass") in (None, "", "Не указан") and reading.get("concreteClass"):
             model["concreteClass"] = reading["concreteClass"]; applied.append("класс бетона")
         rods, source = rebar_of(reading)
-        added = []
+        added, replaced = [], []
         steel_counts_loops = bool(model.get("resources"))      # арматура поставщика (ведомость) уже включает петли
-        if not model.get("resources") and rods:
-            model["resources"] = [{"id": resource_id(c, d), "name": resource_name(c, d), "unit": "т", "projectQty": round(kg / 1000, 5), "qty": round(kg / 1000, 5), "rate": "0"}
-                                  for c, d, kg in sorted(rods)]
-            added += [r["id"] for r in model["resources"]]
-            applied.append("арматура (" + source + ")")
+        new_steel = [{"id": resource_id(c, d), "name": resource_name(c, d), "unit": "т", "projectQty": round(kg / 1000, 5), "qty": round(kg / 1000, 5), "rate": "0"}
+                     for c, d, kg in sorted(rods or [])]
+        is_steel = lambda r: r["id"].startswith(reinforcement.STEEL) and r["id"] != reinforcement.ESTIMATE_ID
+        supplier_steel = [r for r in model.get("resources") or [] if is_steel(r)]
+        # арматура поставщика вне допустимого расхода (кг/м³), а чтение листа — в допустимом: берём чтение (1Р9: у поставщика Ø12 990 кг вместо 9,9; проектировщики 2026-10-19: 286 кг/м³)
+        replace = False
+        if supplier_steel and new_steel:
+            before = reinforcement.assess(model, references)
+            after = reinforcement.assess({**model, "resources": new_steel}, references)
+            replace = bool(before and before["status"] in ("low", "high") and after and after["status"] == "ok")
+        if (not model.get("resources") or not supplier_steel or replace) and new_steel:
+            if replace:
+                replaced = [dict(r) for r in supplier_steel]
+                model["resources"] = new_steel + [r for r in model["resources"] if not is_steel(r)]
+                applied.append("арматура (%s; данные поставщика %s кг/м³ вне допустимого диапазона заменены чтением листа %s кг/м³)" % (source, before["value"], after["value"]))
+            else:
+                model["resources"] = new_steel + list(model.get("resources") or [])
+                applied.append("арматура (" + source + ")")
+            added += [r["id"] for r in new_steel]
             steel_counts_loops = source == "ведомость расхода стали" or bool((reading.get("rebar") or {}).get("assemblyIncludesLoops"))
         # закладные, трубы, петли: каждый вид добавляется, только если у модели нет ресурсов этого вида (у двух исходных колонн Excel трубы уже есть)
         present = {r["id"] for r in model.get("resources") or []}
@@ -143,6 +163,7 @@ def apply_readings(models, directory):
             sheet = reading.get("sheet") or {}
             model["readings"] = {"applied": applied, "sheet": sheet, "confirmed": False, "method": reading.get("method"), "addedResources": added, "embeddedChecked": checked, "embeddedVerified": verified,
                                  "embedded": (reading.get("embedded") or {}).get("items") or []}
+            if replaced: model["readings"]["replacedResources"] = replaced
             if reading.get("concreteClassSource") and "класс бетона" in applied:
                 model["readings"]["concreteClassSource"] = reading["concreteClassSource"]
         issues = model.get("issues") or []

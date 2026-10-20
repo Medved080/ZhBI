@@ -246,6 +246,11 @@ neutral — закрыть, отмена, навигация; menu — выпа�
 ZHBI_CALC_ASSETS_DIR=$PWD/data/calc/assets .venv312/bin/python scripts/audit_calc_vs_price_list.py "…/Промкорпус с названиями.xlsx" --out data/calc/list1-audit.xlsx
 ```
 
+## Ответы проектировщиков 2026-10-19 (2026-10-20)
+
+Исключённые изделия (монолитные колонны Км, плита 4П-15), замена неполной арматуры поставщика чтением листа, подтверждение закладных проектировщиками, классы бетона плит по марке, новые редакции томов (doc21–doc25) — `Docs/calc-designer-answers-20261019.md`.
+Новое в модели каталога: поле `excluded` {reason, label} (изделие не создаётся при импорте реестра, `marks.resolve` отдаёт статус `excluded`), в чтении — `embedded.confirmedBy` и `readings.replacedResources`.
+
 ## Проверки
 
 ```bash

@@ -25,26 +25,43 @@ def coefficient(volume, resources):
     return kg / volume if volume > 0 and kg > 0 else None
 
 
-def _references():
-    """Типичные значения: ({группа: (медиана, число изделий)}, {тип: (медиана, число изделий)}); пересчитываются при смене каталога."""
-    models = catalog()
-    if _cache["catalog"] is models:
-        return _cache["refs"]
+def build_references(models):
+    """Типичные значения по словарю моделей: ({группа: (медиана, число изделий)}, {тип: (медиана, число изделий)})."""
     by_family, by_type = collections.defaultdict(list), collections.defaultdict(list)
     for model in models.values():
-        if model.get("kind") != "registry" or not model.get("family"):
+        if model.get("kind") != "registry" or not model.get("family") or model.get("excluded"):
             continue
         value = coefficient(model.get("projectVolume"), model.get("resources"))
         if value:
             by_family[model["family"]].append(value)
             by_type[type_key(model)].append(value)
-    refs = ({k: (statistics.median(v), len(v)) for k, v in by_family.items() if len(v) >= MIN_FAMILY},
+    return ({k: (statistics.median(v), len(v)) for k, v in by_family.items() if len(v) >= MIN_FAMILY},
             {k: (statistics.median(v), len(v)) for k, v in by_type.items() if len(v) >= MIN_TYPE})
-    _cache["catalog"], _cache["refs"] = models, refs
-    return refs
 
 
-def assess(doc):
+def build_reading_references(models, readings, rebar_of):
+    """Типичный расход арматуры по группам, посчитанный по чтениям листов: ({группа: (медиана, число изделий)}, {}). rebar_of — правило приёмки арматуры из чтения (readings.rebar_of)."""
+    by_family = collections.defaultdict(list)
+    for key, reading in readings.items():
+        model = models.get(key)
+        if not model or model.get("kind") != "registry" or not model.get("family") or model.get("excluded"):
+            continue
+        rods, _ = rebar_of(reading)
+        volume = float(model.get("projectVolume") or reading.get("volume") or 0)
+        if rods and volume > 0:
+            by_family[model["family"]].append(sum(r[2] for r in rods) / volume)
+    return {k: (statistics.median(v), len(v)) for k, v in by_family.items() if len(v) >= MIN_FAMILY}
+
+
+def _references():
+    """Типичные значения по текущему каталогу; пересчитываются при смене каталога."""
+    models = catalog()
+    if _cache["catalog"] is not models:
+        _cache["catalog"], _cache["refs"] = models, build_references(models)
+    return _cache["refs"]
+
+
+def assess(doc, references=None):
     """Оценка модели изделия: {value, reference, scopeName, count, min, max, status} или None, если показателя нет.
     status: 'ok' — в диапазоне, 'low' — ниже, 'high' — выше, 'unknown' — типичного значения нет (мало изделий в группе)."""
     if not doc or doc.get("kind") != "registry":
@@ -52,7 +69,7 @@ def assess(doc):
     value = coefficient(doc.get("projectVolume"), doc.get("resources"))
     if value is None:
         return None
-    families, types = _references()
+    families, types = references or _references()
     key = type_key(doc)
     if key in types:
         reference, count = types[key]; scope = key
