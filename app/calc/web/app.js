@@ -264,6 +264,7 @@ function matchesProductName(product, query){
    if(!(row.effective.qty>0)){need.add('qty');items.push(row.id==='concrete'?'объём бетона':row.id==='labour'?'трудоёмкость':'количество «'+row.name+'»');}
    fields[row.id]=need;
   }
+  if(p.documentModel?.kind==='registry'&&!rows.some(r=>/^(steel|mainsteel|wire)/.test(r.id)&&r.effective.qty>0))items.unshift('расход арматуры (в чертеже не раскрыт)');     // плиты: строки арматуры нет вовсе, и итог молча занижен
   if(noClass(p))items.push('класс бетона (цена бетона взята по умолчанию)');
   return {fields,items,text:items.length?'Итог неполный. Не задано: '+items.slice(0,8).join('; ')+(items.length>8?'; и ещё '+(items.length-8):'')+'.':''};
  }
