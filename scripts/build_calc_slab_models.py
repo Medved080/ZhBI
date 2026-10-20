@@ -677,6 +677,184 @@ def read_plan_holes(doc_id, page, region, outline_box, scale, size_range=(50.0, 
     return sorted(holes)
 
 
+# ───────────────────────── плиты Пл (ПБ серии 192/16, doc11) ─────────────────────────
+#
+# Высота 220, пустоты 81 × 162 с шагом 120. Профиль зависит от ширины: 997, 1197, 1497 мм (свой набор пустот у каждой), 1080 — пропил профиля 1197 по оси
+# девятой пустоты. План торцов (вырезы) — с вектора листа: каждая плита собирается из частей по интервалам длины, в каждом — профиль, обрезанный по ширине плана.
+
+PL_SECTIONS = {  # профиль на всю ширину: (лист, область сечения, подписанная ширина сплошной части, полная ширина)
+    997: ("doc11", 6, (140, 640, 350, 715), 697),
+    1197: ("doc11", 6, (615, 438, 975, 515), 697),
+    1497: ("doc11", 7, (130, 675, 570, 765), 1197),
+}
+
+
+def pl_profiles():
+    profiles = {}
+    for full, (doc, page, region, solid_w) in PL_SECTIONS.items():
+        outline, voids, _, _ = read_section(doc, page, region, solid_w, min_width=1.0, height_mm=220)
+        profiles[full] = mirrored_full_profile(outline, voids, float(full))
+    profiles[1080] = profiles[1197].intersection(box(-1, -1, 1080, 400))
+    return profiles
+
+
+def page_plans(doc_id, page, expected):
+    """Контуры планов на листе по порядку сверху вниз: толстые замкнутые контуры (до 8 штрихов), ширина по горизонтали не менее 200 pt."""
+    groups = connected_groups(sheet_chains(doc_id, page, (30, 30, 700, 800), min_width=1.0))
+    rings = []
+    for g in groups:
+        pts = [p for c in g for p in c]
+        w = max(p.x for p in pts) - min(p.x for p in pts)
+        h = max(p.y for p in pts) - min(p.y for p in pts)
+        if w > 200 and h > 50 and len(g) <= 8:
+            rings.append((min(p.y for p in pts), g))
+    rings.sort(key=lambda r: r[0])
+    if len(rings) < expected:
+        raise SystemExit(f"лист {page}: найдено планов {len(rings)}, ожидалось {expected}")
+    return [r[1] for r in rings[:expected]]
+
+
+def plan_from_group(group, length_mm, snap=5.0):
+    ring = group_ring(group)
+    xs, ys = [p.x for p in ring], [p.y for p in ring]
+    scale = length_mm / (max(xs) - min(xs))
+    pts = [(_snap((p.x - min(xs)) * scale, snap), _snap((max(ys) - p.y) * scale, snap)) for p in ring]
+    out = [pts[0]]
+    for q in pts[1:]:
+        if q != out[-1]:
+            out.append(q)
+    if out[0] == out[-1]:
+        out.pop()
+    return [q for i, q in enumerate(out) if not ((out[i - 1][0] == q[0] == out[(i + 1) % len(out)][0]) or (out[i - 1][1] == q[1] == out[(i + 1) % len(out)][1]))]
+
+
+def plan_span_extrusions(name, plan, profile, pages):
+    """Плита по плану (x длина, y ширина = z сечения) и профилю: части по интервалам длины между вершинами плана."""
+    poly = Polygon(plan)
+    xs = sorted({p[0] for p in plan})
+    pieces = []
+    for x0, x1 in zip(xs, xs[1:]):
+        mid = (x0 + x1) / 2
+        cut = poly.intersection(box(mid - 0.01, -1, mid + 0.01, 1e5))
+        if cut.is_empty:
+            continue
+        ymin, ymax = cut.bounds[1], cut.bounds[3]
+        if pieces and abs(pieces[-1][2] - ymin) < 1e-6 and abs(pieces[-1][3] - ymax) < 1e-6 and abs(pieces[-1][1] - x0) < 1e-6:
+            pieces[-1][1] = x1
+        else:
+            pieces.append([x0, x1, ymin, ymax])
+    parts = []
+    for x0, x1, ymin, ymax in pieces:
+        section = profile.intersection(box(ymin, -1, ymax, 400))
+        parts += section_extrusions(f"{name}: x {x0:g}…{x1:g}, ширина {ymax - ymin:g}", section, x0, x1, pages)
+    return parts
+
+
+def build_pl_family(skip):
+    catalog = json.loads((CATALOG_DIR / "promka-models.json").read_text())
+    catalog.update(json.loads((CATALOG_DIR / "promka-register.json").read_text()))
+    sketches = json.loads((CATALOG_DIR / "promka-sketches.json").read_text())
+    readings = json.loads((CATALOG_DIR / "promka-readings.json").read_text())
+    profiles = pl_profiles()
+    by_page = {}
+    for key, entry in catalog.items():
+        if entry.get("family") == "Плиты" and entry["source"]["id"] == "doc11" and key in sketches:
+            by_page.setdefault(entry["source"]["productPage"], []).append((key, entry))
+    out = []
+    for page, rows in sorted(by_page.items()):
+        plans = page_plans("doc11", page, len(rows))
+        for (key, entry), group in zip(rows, plans):
+            if key in skip:
+                continue
+            alias = entry["alias"]
+            length = sketches[key]["dimensions"][0]
+            plan = plan_from_group(group, length)
+            width = max(y for _, y in plan)
+            full = min(profiles, key=lambda w: abs(w - width))
+            length_note = ""
+            if abs(full - width) > 15:
+                # масштаб плана по длине из каталога не сходится с шириной профиля: длина на листе другая (марка округляет длину)
+                k = full / width
+                if abs(k - 1) > 0.04:
+                    raise SystemExit(f"{alias}: ширина плана {width:g} не соответствует профилям {sorted(profiles)}")
+                plan = plan_from_group(group, length * k)
+                length_note = f"Длина по масштабу плана и ширине профиля {full} мм — {max(x for x, _ in plan):g} мм вместо {length:g} в эскизе каталога (по размерной цепочке листа ≈5600 мм)."
+                width = max(y for _, y in plan)
+            parts = plan_span_extrusions(f"Бетон {alias}", plan, profiles[full], [page])
+            reading = readings.get(key, {})
+            mass = reading.get("massKg")
+            notches = len(plate_pockets(plan))
+            out.append({
+                "key": key, "alias": alias, "sourceId": "doc11", "type": f"многопустотная плита 220 мм, ширина {full}" + (", вырезы на торцах" if notches else ""),
+                "hollow": "192-16", "parts": parts,
+                "volumeSpec": (mass / MASS_DENSITY, f"масса {mass:g} кг из таблицы листа ÷ 2500 кг/м³ (объёма в таблице нет)", True, 0.04) if mass else None,
+                "evidence": [{"pdfPage": page, "sheet": str(page - 5), "subject": f"{alias}: план {length:g} × {width:g}, вырезы торцов, сечение",
+                              "checks": ["длина и контур плана с вектора листа (округление до 5 мм)", f"профиль ширины {full} мм из сечений листа", "масса из таблицы"]}],
+                "assumptions": [
+                    {"id": "profile", "text": f"Профиль на всю ширину {full} мм собран зеркальным отражением левой половины сечения листа (сплошная часть вычерчена целиком, остаток — тонкой линией); пустоты симметричны." if full != 1080 else "Ширина 1080 мм — пропил профиля 1197 мм по оси девятой пустоты (так показано сечением 8-8).", "affects": ["concrete"]},
+                    {"id": "notch-side", "text": "Вырезы торцов — по контуру плана листа; сторона относительно шпоночных пазов сечения на листе не определена (принято: ось плана «вверх» = +z).", "affects": ["concrete"]},
+                    {"id": "mass-volume", "text": "Объёма бетона в таблице нет: проверка по массе ÷ 2500 кг/м³ (приблизительно, масса включает арматуру).", "affects": ["qa"]},
+                ] + ([{"id": "length-scale", "text": length_note, "affects": ["concrete"]}] if length_note else [])})
+    return out
+
+
+# ───────────────────────── заводские плиты 1П–4П (КЖ2-1, КЖ2-2: спецификация перекрытий) ─────────────────────────
+#
+# На листах спецификации — только марка, фактическая длина, количество и масса: плиты без вырезов, прямоугольные. 1П/2П/3П — ПБ серии 192/16 шириной 1,0 / 1,2 / 1,5 м
+# (профиль Пл 997 / 1197 / 1497, высота 220), 4П — УДС-1ПБ шириной 1197 (профиль 1ПБ, высота 300). Длина — «L=» из той же строки спецификации.
+
+FACTORY_SHEETS = {"1П": ("doc19", 87, 997, "192-16"), "2П": ("doc19", 87, 1197, "192-16"), "3П": ("doc19", 87, 1497, "192-16"), "4П": ("doc20", 227, 1197, "udc-1pb")}
+
+
+def factory_lengths(doc_id, page):
+    """Марка → фактическая длина по строкам спецификации листа («1 П -2 … L=5560»)."""
+    import re
+    lines = [l.strip() for l in fitz.open(SOURCES / f"{doc_id}.pdf")[page - 1].get_text().split("\n")]
+    out, current = {}, None
+    for line in lines:
+        m = re.fullmatch(r"(\d)\s?П\s?-\s?(\d+)", line)
+        if m:
+            current = f"{m.group(1)}П-{m.group(2)}"
+            continue
+        m = re.fullmatch(r"L=(\d+)", line)
+        if m and current:
+            out.setdefault(current, int(m.group(1)))
+    return out
+
+
+def build_factory_family(full_1pb, profiles, skip):
+    catalog = json.loads((CATALOG_DIR / "promka-models.json").read_text())
+    catalog.update(json.loads((CATALOG_DIR / "promka-register.json").read_text()))
+    readings = json.loads((CATALOG_DIR / "promka-readings.json").read_text())
+    lengths = {}
+    for doc_id, page in (("doc19", 87), ("doc20", 227)):
+        lengths.update(factory_lengths(doc_id, page))
+    out = []
+    for key, entry in catalog.items():
+        alias = entry.get("alias", "")
+        series = alias[:2]
+        if series not in FACTORY_SHEETS or entry["source"]["id"] not in ("doc19", "doc20") or key in skip or entry.get("excluded"):
+            continue
+        doc_id, page, width, hollow = FACTORY_SHEETS[series]
+        if entry["source"]["id"] != doc_id or alias not in lengths:
+            continue
+        length = lengths[alias]
+        profile = full_1pb if series == "4П" else profiles[width]
+        height = 300 if series == "4П" else 220
+        parts = section_extrusions(f"Бетон {alias}: плита {length} × {width} × {height}", profile, 0, length, [page])
+        mass = readings.get(key, {}).get("massKg")
+        out.append({
+            "key": key, "alias": alias, "sourceId": doc_id, "type": f"заводская многопустотная плита {height} мм, прямоугольная", "hollow": hollow, "parts": parts,
+            "volumeSpec": (mass / MASS_DENSITY, f"масса {mass:g} кг из спецификации перекрытий ÷ 2500 кг/м³ (объёма в спецификации нет)", True, 0.05) if mass else None,
+            "evidence": [{"pdfPage": page, "sheet": str(entry["source"].get("sheet") or ""), "subject": f"{alias}: марка, фактическая длина L={length}, масса — спецификация перекрытий",
+                          "checks": ["длина из строки спецификации", "масса из строки спецификации"]}],
+            "assumptions": [
+                {"id": "geometry-from-series", "text": (f"Плиты серии {series} на листах спецификации только перечислены (марка, длина, масса); геометрия взята по серии: ширина {width} мм, высота {height} мм, профиль с пустотами " + ("81 × 242 мм (УДС-1ПБ, лист 1 КЖ.И3-1)" if series == "4П" else "81 × 162 мм (ПБ серии 192/16, листы КЖ.И3)") + "; вырезов и закладных нет."), "affects": ["concrete"]},
+                {"id": "mass-volume", "text": "Объёма бетона в спецификации нет: проверка по массе ÷ 2500 кг/м³ (приблизительно, масса включает проволоку).", "affects": ["qa"]},
+            ]})
+    return out
+
+
 # ───────────────────────── арматура ПГП1 (листы 85, 86, 88) ─────────────────────────
 
 STEEL_KG_PER_M3 = 7850.0
@@ -1198,7 +1376,7 @@ def build_all():
     pshl1 = next((k, e) for k, e in catalog.items() if e.get("alias") == "ПШЛ1")
     five = [build_4pd1(full_1pb), build_4pi18(full_1pb), build_pl41((pl_outline, pl_voids)), build_pgp(pgp1), build_pshl(pshl1[1], sketches[pshl1[0]])]
     skip = {m["key"] for m in five}
-    return five + build_family(full_1pb, skip) + build_pgp_family(skip) + build_pshl_family(skip)
+    return five + build_family(full_1pb, skip) + build_pgp_family(skip) + build_pshl_family(skip) + build_pl_family(skip) + build_factory_family(full_1pb, pl_profiles(), skip)
 
 
 def report_text(models, qas):
