@@ -693,15 +693,20 @@ def _polyline_length(points):
 
 
 class SheetMap:
-    """Перевод координат листа (xs вправо, ys вверх, вид сверху) в координаты модели (x вдоль длины плиты, z поперёк, y вверх).
-    Вид сверху в правой системе: «вверх по листу» — это −z (flip_z) либо лист повёрнут на 90° по часовой (rotate)."""
-    def __init__(self, width_sheet, height_sheet, rotate):
-        self.w, self.h, self.rotate = width_sheet, height_sheet, rotate
+    """Перевод координат листа (xs вправо, ys вверх) в координаты модели (x вдоль длины плиты, z поперёк, y вверх).
+    Вид сверху в правой системе: «вверх по листу» — это −z (по умолчанию) либо лист повёрнут на 90° по часовой (rotate). Для вида снизу
+    (ПШЛ, план «из шахты лифта») «вверх по листу» совпадает с +z (identity)."""
+    def __init__(self, width_sheet, height_sheet, rotate=False, identity=False):
+        self.w, self.h, self.rotate, self.identity = width_sheet, height_sheet, rotate, identity
 
     def xz(self, xs, ys):
+        if self.identity:
+            return (xs, ys)
         return (ys, xs) if self.rotate else (xs, self.h - ys)
 
     def vec(self, dxs, dys):
+        if self.identity:
+            return (dxs, dys)
         return (dys, dxs) if self.rotate else (dxs, -dys)
 
 
@@ -709,12 +714,13 @@ def _block_xz(sm, u, v):
     return sm.xz(BLOCK_OFFSET + u, BLOCK_OFFSET + v)
 
 
-def abp_nets(sm, U, V, d, bars_u_v, bars_v_u, ident_prefix, sheet_page, spec_name):
+def abp_nets(sm, U, V, d, bars_u_v, bars_v_u, ident_prefix, sheet_page, spec_name, top_y=None):
     """Две сетки блока U × V: стержни вдоль u (длина U) на позициях v из bars_u_v, вдоль v (длина V) на позициях u из bars_v_u.
     Нижняя и верхняя: по два слоя Ø d, наружные слои — стержни вдоль большей стороны блока."""
     outer_u = U >= V
+    top_y = NET_TOP_Y if top_y is None else top_y
     groups = []
-    for name, ident, ys in (("нижняя", "net-bottom", (NET_BOTTOM_Y + d / 2, NET_BOTTOM_Y + d * 1.5)), ("верхняя", "net-top", (NET_TOP_Y - d * 1.5, NET_TOP_Y - d / 2))):
+    for name, ident, ys in (("нижняя", "net-bottom", (NET_BOTTOM_Y + d / 2, NET_BOTTOM_Y + d * 1.5)), ("верхняя", "net-top", (top_y - d * 1.5, top_y - d / 2))):
         outer, inner = (ys[0], ys[1]) if ident == "net-bottom" else (ys[1], ys[0])      # наружный слой — ближе к грани блока
         y_u, y_v = (outer, inner) if outer_u else (inner, outer)
         paths = []
@@ -729,29 +735,33 @@ def abp_nets(sm, U, V, d, bars_u_v, bars_v_u, ident_prefix, sheet_page, spec_nam
     return groups
 
 
-def abp_loops(sm, d, R, centers, net_d, ident="loops", name="", designation="", sheet="85", pages=()):
+def abp_loops(sm, d, R, centers, net_d, ident="loops", name="", designation="", sheet="85", pages=(), eye_height=None, target_len=None, tail=50.0):
     """Петли Ø d (Пп3 R80, Пп4 R50): два плоских полукольца R с хвостами 50 и ступенька 2R, по центру ступеньки подъёмная петля ∩ (лист 85).
     Ось петли — вдоль u блока; центры подъёмных дуг centers = [(u, v)]. Верх петли — 135 мм над верхней гранью блока."""
-    top_outer = NET_TOP_Y + 135.0
     base_y = NET_BOTTOM_Y + 2 * net_d + d / 2
+    top_outer = NET_TOP_Y + 135.0 if eye_height is None else base_y - d / 2 + eye_height
     arc_cy = top_outer - d / 2 - R
     half = 350.0
+    if target_len:                         # длина стержня по спецификации определяет вылет ветвей (форма в плане условна)
+        riser = arc_cy - base_y
+        run = (target_len - 2 * tail - 3 * math.pi * R - 2 * riser) / 2
+        half = R + max(run, R)
     paths = []
     for ci, (uc, vc) in enumerate(centers, 1):
         def P(a, w, y):                      # a — по оси петли (0…700), w — вниз по листу; центр подъёмной дуги (350, 3R)
             x, z = _block_xz(sm, uc + (a - half), vc - (w - 3 * R))
             return [x, y, z]
-        pts = [P(R + 50, 0, base_y), P(R, 0, base_y)]
+        pts = [P(R + tail, 0, base_y), P(R, 0, base_y)]
         for ang in range(-90, -271, -15):
             pts.append(P(R + R * math.cos(math.radians(ang)), R + R * math.sin(math.radians(ang)), base_y))
         pts += [P(half, 2 * R, base_y), P(half, 2 * R, arc_cy)]
         for i in range(1, 13):
             t = math.radians(180 - 180 * i / 12)
             pts.append(P(half, 3 * R + R * math.cos(t), arc_cy + R * math.sin(t)))
-        pts += [P(half, 4 * R, base_y), P(700 - R, 4 * R, base_y)]
+        pts += [P(half, 4 * R, base_y), P(2 * half - R, 4 * R, base_y)]
         for ang in range(-90, 91, 15):
-            pts.append(P(700 - R + R * math.cos(math.radians(ang)), 5 * R + R * math.sin(math.radians(ang)), base_y))
-        pts.append(P(700 - R - 50, 6 * R, base_y))
+            pts.append(P(2 * half - R + R * math.cos(math.radians(ang)), 5 * R + R * math.sin(math.radians(ang)), base_y))
+        pts.append(P(2 * half - R - tail, 6 * R, base_y))
         paths.append({"id": f"{ident}:{ci}", "diameter": d, "points": pts, "position": "2", "instance": str(ci),
                       "note": "форма условная: радиусы гибов по листу 85, подъёмная часть по разрезам"})
     return [{"id": ident, "name": name, "shortLabel": f"Петли {designation}", "designation": designation, "sheet": sheet, "quantity": len(centers), "unit": "шт",
@@ -852,6 +862,72 @@ def abp_embedded(sm, polygon_sheet):
     group = {"id": "zd12", "name": f"Закладная деталь ЗД12: пластина −10×300 L=200 и 4 анкера Ø12 А500С L=365 (×{len(plates)})", "shortLabel": "Закладные ЗД12",
              "designation": "ЗД12", "sheet": "86", "quantity": len(plates), "unit": "шт", "kind": "embedded", "material": "С245 / А500С",
              "sourcePages": [94, 92], "paths": anchors}
+    return group, plates
+
+
+def pk1_frames(sm, U, V, positions, top_y, net_d, ident="frames", name="", pages=()):
+    """Поддерживающие каркасы ПК1 (лист 106): ∧ высотой 180 мм и основанием 200 мм, 4 продольных Ø8 L=2020 (по два на ветвь) и 11 поперечных
+    Ø8 L=425 (по краям 55 и через 200 мм). Линии идут вдоль u на позициях v; длина — не больше 2020 и не больше ширины блока, по центру."""
+    L = min(2020.0, U - 70.0)
+    u0 = (U - L) / 2
+    apex_y = top_y - net_d / 2
+    h, half_base = 180.0, 100.0
+    paths, cross = [], []
+    cross_pos = [55.0] + [165.0 + 200 * k for k in range(9)] + [2020.0 - 55.0]
+    for fi, v in enumerate(positions, 1):
+        for side in (-1, 1):
+            for drop in (40.0, 140.0):                    # вертикальные размеры 40 | 100 | 40 вида после сгиба
+                x0, z0 = _block_xz(sm, u0, v + side * half_base * drop / h)
+                x1, z1 = _block_xz(sm, u0 + L, v + side * half_base * drop / h)
+                paths.append({"id": f"{ident}:{fi}:{side}:{int(drop)}", "diameter": 8, "points": [[x0, apex_y - drop, z0], [x1, apex_y - drop, z1]], "position": "4"})
+        for k, a in enumerate(cross_pos, 1):
+            if a > L:
+                continue
+            pts = []
+            for side in (-1, 0, 1):
+                x, z = _block_xz(sm, u0 + a, v + side * half_base)
+                pts.append([x, apex_y - (0 if side == 0 else h), z])
+            cross.append({"id": f"{ident}:{fi}:cross:{k}", "diameter": 8, "points": pts, "position": "3"})
+    return [{"id": ident, "name": name, "shortLabel": "Каркасы ПК1", "designation": "ПК1", "sheet": "106", "quantity": len(positions), "unit": "шт",
+             "kind": "frame", "material": "А500С", "sourcePages": list(pages), "paths": paths + cross}]
+
+
+def mn5_embedded(sm, polygon_sheet):
+    """Закладные МН5 (лист 109, узел Е листа 110) в выемках контура: пластина −10×100, L=200 за дном выемки по центру толщины плиты и два анкера
+    Ø12 L=340 (200 в бетон + отгиб 140 вдоль пластины)."""
+    plates, anchors = [], []
+    for ni, (side, a0, a1, depth) in enumerate(plate_pockets(polygon_sheet), 1):
+        acenter = (a0 + a1) / 2
+        xs, ys = [p[0] for p in polygon_sheet], [p[1] for p in polygon_sheet]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        if side == "left":
+            rect, back, inward, along = (depth, a0, depth + 10, a1), (depth + 10, acenter), (1, 0), (0, 1)
+        elif side == "right":
+            rect, back, inward, along = (x1 - depth - 10, a0, x1 - depth, a1), (x1 - depth - 10, acenter), (-1, 0), (0, 1)
+        elif side == "bottom":
+            rect, back, inward, along = (a0, depth, a1, depth + 10), (acenter, depth + 10), (0, 1), (1, 0)
+        else:
+            rect, back, inward, along = (a0, y1 - depth - 10, a1, y1 - depth), (acenter, y1 - depth - 10), (0, -1), (1, 0)
+        ca, cb = sm.xz(rect[0], rect[1]), sm.xz(rect[2], rect[3])
+        bx0, bx1, bz0, bz1 = min(ca[0], cb[0]), max(ca[0], cb[0]), min(ca[1], cb[1]), max(ca[1], cb[1])
+        y_lo, y_hi = 50.0, 150.0
+        if bx1 - bx0 <= bz1 - bz0:
+            part = extrusion_part(f"Пластина МН5 −10×100, L=200 (выемка {ni})", box(bz0, y_lo, bz1, y_hi), [bx0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0], bx1 - bx0, [120, 121])
+        else:
+            part = extrusion_part(f"Пластина МН5 −10×100, L=200 (выемка {ni})", box(bx0, y_lo, bx1, y_hi), [0, 0, bz0], [1, 0, 0], [0, 1, 0], [0, 0, 1], bz1 - bz0, [120, 121])
+        part["group"] = "mn5"
+        plates.append(part)
+        bx, bz = sm.xz(*back)
+        inx, inz = sm.vec(*inward)
+        alx, alz = sm.vec(*along)
+        for ai, off in enumerate((-70.0, 70.0), 1):         # анкеры в 30 мм от краёв пластины L=200
+            start = [bx + alx * off, 100.0, bz + alz * off]
+            mid = [start[0] + inx * 200, 100.0, start[2] + inz * 200]
+            end = [mid[0] + alx * math.copysign(140, off), 100.0, mid[2] + alz * math.copysign(140, off)]
+            anchors.append({"id": f"mn5:{ni}:{ai}", "diameter": 12, "points": [start, mid, end], "position": "МН5 поз. 2"})
+    group = {"id": "mn5", "name": f"Закладная деталь МН5: пластина −10×100 L=200 и 2 анкера Ø12 А500С L=340 (×{len(plates)})", "shortLabel": "Закладные МН5",
+             "designation": "МН5", "sheet": "109", "quantity": len(plates), "unit": "шт", "kind": "embedded", "material": "С245 / А500С",
+             "sourcePages": [120, 121], "paths": anchors}
     return group, plates
 
 
@@ -964,6 +1040,26 @@ def build_pgp_family(skip):
 PSHL_PAGES = {"ПШЛ1": 102, "ПШЛ2": 104, "ПШЛ3": 106, "ПШЛ4": 108, "ПШЛ5": 110, "ПШЛ6": 112, "ПШЛ7": 114}
 
 
+PSHL_LOOPS = {"ПГ3": dict(d=14, R=40.0, L=1630, kg=1.97), "ПГ4": dict(d=16, R=40.0, L=1630, kg=2.57), "ПГ5": dict(d=18, R=50.0, L=1965, kg=3.93)}
+
+
+def _loop_corners(U, V, du, dv):
+    return [(du, dv), (U - du, dv), (du, V - dv), (U - du, V - dv)]
+
+
+# арматурные блоки АБ ПШЛ1…7 (листы 92, 94, 96, 98, 100, 102, 104 проекта = PDF 103, 105, 107, 109, 111, 113, 115):
+# размеры блока U × V (по горизонтали и вертикали листа), масса сетки 2С (одной) и всего блока, тип петель и привязка, линии каркасов ПК1
+PSHL_BLOCKS = {
+    "ПШЛ1": dict(sheet_pdf=103, U=2870, V=3070, net_kg=81.65, block_kg=209.44, loop="ПГ5", loops=_loop_corners(2870, 3070, 710, 760), frames=[285 + 500 * k for k in range(6)]),
+    "ПШЛ2": dict(sheet_pdf=105, U=3020, V=2070, net_kg=58.90, block_kg=145.96, loop="ПГ3", loops=_loop_corners(3020, 2070, 745, 510), frames=[285 + 500 * k for k in range(4)]),
+    "ПШЛ3": dict(sheet_pdf=107, U=3070, V=1870, net_kg=53.82, block_kg=130.73, loop="ПГ3", loops=_loop_corners(3070, 1870, 745, 510), frames=[435 + 500 * k for k in range(3)]),
+    "ПШЛ4": dict(sheet_pdf=109, U=3070, V=1850, net_kg=53.54, block_kg=130.17, loop="ПГ3", loops=_loop_corners(3070, 1850, 745, 510), frames=[425 + 500 * k for k in range(3)]),
+    "ПШЛ5": dict(sheet_pdf=111, U=3070, V=2050, net_kg=59.10, block_kg=146.36, loop="ПГ3", loops=_loop_corners(3070, 2050, 745, 510), frames=[275 + 500 * k for k in range(4)]),
+    "ПШЛ6": dict(sheet_pdf=113, U=2850, V=3070, net_kg=81.37, block_kg=203.44, loop="ПГ4", loops=_loop_corners(2850, 3070, 710, 760), frames=[285 + 500 * k for k in range(6)]),
+    "ПШЛ7": dict(sheet_pdf=115, U=1870, V=3070, net_kg=53.82, block_kg=145.94, loop="ПГ3", loops=[(510, 760), (1360, 760), (510, 2310), (1360, 2310)], frames=[285 + 500 * k for k in range(6)]),
+}
+
+
 def build_pshl(entry, sketch):
     """Плита перекрытия шахты лифта (ПШЛ1…7): толщина 200, контур с восемью выемками и сквозные прямоугольные отверстия — с вектора листа
     (план дан видом из шахты лифта, то есть снизу). Армирование и закладные МН5 не включены."""
@@ -993,8 +1089,30 @@ def build_pshl(entry, sketch):
     sizes = sorted({f"{int(w)}×{int(h)}" for _, _, w, h in holes})
     part = plan_extrusion(f"Бетон {alias}: плита {length:g} × {width:g} × 200, {len(plate_pockets(plan))} выемок, {len(holes)} сквозных отверстий", plan_poly, 200, [page, 121])
     spec = entry.get("projectVolume")
+    blk = PSHL_BLOCKS[alias]
+    sm = SheetMap(length, width, identity=True)
+    U, V = blk["U"], blk["V"]
+    top_y = 200 - 35.0                                # блок 130 мм между защитными слоями 35 мм при толщине плиты 200
+    pos = lambda start: [start + 200.0 * k for k in range(int((V - 70.0) // 200) + 1)]
+    nets = abp_nets(sm, U, V, 12, [35 + 200 * k for k in range(int((V - 70.0) // 200) + 1)], [35 + 200 * k for k in range(int((U - 70.0) // 200) + 1)], "net",
+                    blk["sheet_pdf"], f"Сетка 2С 12А500С-200 {V / 10:g}×{U / 10:g}", top_y=top_y)
+    loop = PSHL_LOOPS[blk["loop"]]
+    loops = abp_loops(sm, loop["d"], loop["R"], blk["loops"], 12, ident="loops", name=f"Петля {blk['loop']} Ø{loop['d']} А240 L={loop['L']} (поз. 2, ×{len(blk['loops'])})",
+                      designation=blk["loop"], sheet="108", pages=[119, blk["sheet_pdf"]], eye_height=240.0, target_len=loop["L"], tail=60.0)
+    frames = pk1_frames(sm, U, V, blk["frames"], top_y, 12, name=f"Поддерживающий каркас ПК1 Ø8 А500С (поз. 3, ×{len(blk['frames'])})", pages=[117, blk["sheet_pdf"]])
+    mn5, plates = mn5_embedded(sm, plan)
+    block_kg = _group_mass(nets) + _group_mass(loops) + _group_mass(frames)
+    checks = [
+        _mass_check(f"Арматурный блок АБ {alias} (сетки + петли + каркасы)", block_kg, blk["block_kg"], f"лист {blk['sheet_pdf'] - 11}, спецификация блока", 0.08),
+        _mass_check("Сетки 2С ×2", _group_mass(nets), 2 * blk["net_kg"], f"лист {blk['sheet_pdf'] - 11}, поз. 1", 0.08),
+        _mass_check(f"Петли {blk['loop']} ×{len(blk['loops'])}", _group_mass(loops), len(blk["loops"]) * loop["kg"], f"лист {blk['sheet_pdf'] - 11}, поз. 2 (лист 108)", 0.06),
+        _mass_check(f"Каркасы ПК1 ×{len(blk['frames'])}", _group_mass(frames), len(blk["frames"]) * 5.07, f"лист {blk['sheet_pdf'] - 11}, поз. 3 (лист 106: 5,07 кг)", 0.12),
+        _mass_check(f"Закладные МН5 ×{len(plates)} (пластины + анкеры)", _group_mass([mn5]) + 1.57 * len(plates), 2.17 * len(plates), "лист 109: 2,17 кг на деталь", 0.05),
+    ]
     return {
         "key": entry["id"], "alias": alias, "sourceId": "doc13", "type": "сплошная плита шахты лифта с отверстиями",
+        "groups": nets + loops + frames + [mn5], "metalParts": plates, "massChecks": checks,
+        "readinessDescription": f"Бетонное тело по чертежам; арматурный блок АБ {alias} (сетки 2С Ø12, петли {blk['loop']}, каркасы ПК1) и закладные МН5 восстановлены по листам 92–110 с допущениями (форма петель, каркасов и анкеров условна, масса видов сверена со спецификацией). Не допуск в производство.",
         "parts": [part], "volumeSpec": (spec, f"лист {page - 11}, спецификация: бетон В25, {spec:.2f} м³", False, 0.02) if spec else None,
         "evidence": [
             {"pdfPage": page, "sheet": str(page - 11), "subject": f"{alias}: план {length:g} × {width:g}, выемки, отверстия, спецификация",
@@ -1005,12 +1123,14 @@ def build_pshl(entry, sketch):
             {"id": "hole-positions", "text": "Положение и размеры сквозных отверстий сняты с вектора листа (±1 мм, размеры округлены до 5 мм); размерные цепочки листа с положением отверстий построчно не сверялись.", "affects": ["concrete"]},
             {"id": "notch-depth", "text": "Выемки по контуру — 120 мм (контур листа, округление до 5 мм); в узле Е это 110 мм + закладная МН5 10 мм.", "affects": ["concrete"]},
             {"id": "plan-view", "text": "План дан видом из шахты лифта, то есть снизу (примечание листа). Модель построена так, что при взгляде на низ плиты (y = 0) «вверх по плану» совпадает с +z — вид повторяет чертёж, а не зеркалит его.", "affects": ["concrete"]},
+            {"id": "nets-layout", "text": "Сетки 2С 12А500С-200: стержни Ø12 в обоих направлениях с шагом 200 мм от кромки 35 мм (число стержней по размеру сетки листа блока); нижняя и верхняя сетки — по два слоя, наружными приняты стержни вдоль большей стороны.", "affects": ["nets"]},
+            {"id": "loops-shape", "text": "Петли ПГ3/ПГ4/ПГ5 (лист 108): в плане два полукольца с хвостами 60 мм и подъёмная петля ∩ высотой 240 мм; вылет ветвей подобран так, чтобы длина стержня равнялась спецификации (радиусы гибов и ступеньки плановой развёртки условны). Привязка 710/745/510/760 мм листа блока отнесена к оси подъёмной петли.", "affects": ["loops"]},
+            {"id": "frames-shape", "text": "Каркас ПК1 (лист 106): ∧ высотой 180 мм и основанием 200 мм, по два продольных Ø8 на ветвь и 11 поперечных; линии — через 500 мм по размерам листа блока; длина 2020 мм, но не больше ширины блока (по центру).", "affects": ["frames"]},
+            {"id": "anchors-shape", "text": "Анкеры МН5 Ø12 L=340 упрощены: 200 мм в глубь плиты и отгиб 140 мм вдоль пластины без радиуса; пластина −10×100 по центру толщины плиты.", "affects": ["mn5"]},
         ],
         "pending": [
-            {"id": "embedded-mn5", "kind": "missing_geometry", "sourcePages": [page, 120, 121],
-             "description": "Закладные МН5 (полоса −10×100, L=200 и два анкера Ø12 А500С L=340) в выемках: положение по толщине плиты на листе не размерено, в модель не включены."},
-            {"id": "reinforcement-block", "kind": "missing_geometry", "sourcePages": [page + 1],
-             "description": f"Арматурный блок АБ {alias} (сетки 2С, петли ПГ5, каркасы ПК1 по спецификации листа {page - 10}; высота блока 130 мм, защитный слой 35 мм): не восстановлен."},
+            {"id": "reinforcement-conventions", "kind": "placement_question", "sourcePages": [page + 1, 117, 119, 120],
+             "description": "Форма петель (плановая развёртка, вылет ветвей подобран по длине стержня), каркасов ПК1 и анкеров МН5 условна; положение пластин МН5 по толщине плиты на листе не размерено (принято по центру); пересечения арматуры не проверялись."},
         ],
     }
 
@@ -1085,7 +1205,7 @@ def report_text(models, qas):
     lines = ["# Плиты перекрытия — 3D-модели бетонного тела (%s)" % SNAPSHOT, "",
              "Пять разных исполнений разобраны отдельно (4Пд-1, 4ПИ-18, Пл4.1, ПГП1 с арматурой, ПШЛ1); остальные плиты семейства УДС-1ПБ — "
              "4Пд-2…41 и 4ПИ-1…22 — собраны тем же кодом из общего профиля 1ПБ (длина, ширина и форма торца по эскизам каталога); плиты подъёмников "
-             "ПГП1н, ПГП2, ПГП2н, ПГПЗ — с арматурным блоком и закладными ЗД12, плиты шахт лифтов ПШЛ2…7 — бетон с выемками и отверстиями (контуры и отверстия сняты с векторных листов).", "",
+             "ПГП1н, ПГП2, ПГП2н, ПГПЗ — с арматурным блоком и закладными ЗД12, плиты шахт лифтов ПШЛ1…7 — бетон с выемками и отверстиями, арматурный блок и закладные МН5 (контуры и отверстия сняты с векторных листов).", "",
              "Контуры сняты с векторных листов КЖИ (`scripts/build_calc_slab_models.py`); объём каждой модели сверен с объёмом таблицы листа.", ""]
     checked = [(m, next(c for c in qa["checks"] if c["check"] == "volume-vs-spec")) for m, qa in zip(models, qas)]
     for m, vol in checked:
@@ -1095,8 +1215,7 @@ def report_text(models, qas):
     deviations = [abs(v["deviationPercent"]) for _, v in family if "deviationPercent" in v]
     lines += ["", "Семейство 1ПБ: %d моделей, объём сошёлся с таблицей листа у %d из них (допуск 3%%), наибольшее расхождение %.1f%%; "
               "у %s в таблице листа нет объёма." % (len(family), len(deviations), max(deviations), ", ".join(m["alias"] for m, v in family if "deviationPercent" not in v)),
-              "", "Не включено: напрягаемая проволока 4Пд/4ПИ/Пл (для 4Пд/4ПИ нагрузка 24 кПа вне таблиц альбома УДС-1ПБ, для Пл альбомов нет), "
-              "арматурные блоки и закладные МН5 плит ПШЛ1…7.",
+              "", "Не включено: напрягаемая проволока 4Пд/4ПИ/Пл (для 4Пд/4ПИ нагрузка 24 кПа вне таблиц альбома УДС-1ПБ, для Пл альбомов нет).",
               "Замечания: на листе сечений 1ПБ высота подписана «3000» — принято 300 мм; у 4Пд-34 в эскизе каталога ширина 8500 мм — принято 850 мм; "
               "по ПГП1 объём контура (4,14 м³) на 5% меньше спецификации (4,37 м³)."]
     return "\n".join(lines)
