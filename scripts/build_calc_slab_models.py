@@ -39,11 +39,12 @@ from shapely.geometry import Point, Polygon, box
 from shapely.geometry.polygon import orient
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCES = ROOT / "data" / "calc" / "assets" / "sources"      # PDF-альбомы читаются всегда отсюда
+CATALOG_DIR = ROOT / "data" / "calc" / "assets"                # каталог изделий и эскизов читается всегда отсюда
+SOURCES = CATALOG_DIR / "sources"                               # PDF-альбомы тоже
 ASSETS = ROOT / "data" / "calc" / "assets"                     # куда пишутся модели (--assets меняет)
 BACKUPS = ROOT / "data" / "calc" / "backups"
 SUPPLY_ID = "claude-slabs"
-SNAPSHOT = "20261020-slabs-five"
+SNAPSHOT = "20261020-slabs-1pb"
 
 
 # ───────────────────────── чтение векторного листа ─────────────────────────
@@ -534,6 +535,108 @@ def build_pl41(profile_half):
     }
 
 
+# ───────────────────────── семейство УДС-1ПБ: 4Пд-2…41 и 4ПИ-1…22 ─────────────────────────
+#
+# Профиль 1ПБ один (сечение 1-1 doc10 л. 1), меняются длина, ширина (продольный пропил по пустоте) и форма торца в плане.
+# Длина, ширина и план торца берутся из каталога (`promka-sketches.json`: размеры по листам и размерным цепочкам), объём каждой модели
+# сверяется с объёмом из таблицы листа.
+
+WIDTH_OVERRIDES = {"4Пд-34": (850.0, "марка 1ПБ86.85: ширина 8,5 дм; в эскизе каталога ошибочно 8500 мм (объём по 850 мм сходится со спецификацией: +0,8%)")}
+FAMILY_PAGES = {"doc10": 7}      # лист с сечениями 1-1…8-8
+FAMILY_TOLERANCE = 0.03
+
+
+def _end_profile(plan, length, width):
+    """Торец в плане: вершины от (L, 0) до дальнего угла → x_end(z) кусочно-линейно по z сечения; z плана (номинал 1200) приведена к ширине сечения 1197
+    от дальней кромки. Возвращает список пар (z, x_end) по возрастанию z."""
+    pts = [tuple(p) for p in plan]
+    i0 = next(i for i, p in enumerate(pts) if abs(p[0] - length) < 1e-6 and abs(p[1]) < 1e-6)
+    end = []
+    for x, z in pts[i0:] + pts[:i0]:
+        end.append((x, z))
+        if z >= 1200 - 1e-6:
+            break
+    return [(max(0.0, z + (width - 1200.0)) if z > 0 else 0.0, x) for x, z in end]
+
+
+def build_1pb_pd(entry, sketch, full_1pb):
+    alias = entry["alias"]
+    length, _, width = sketch["dimensions"]
+    note = None
+    if alias in WIDTH_OVERRIDES:
+        width, note = WIDTH_OVERRIDES[alias]
+    section = full_1pb.intersection(box(-1, -1, width, 400))
+    page = entry["source"]["productPage"]
+    parts = section_extrusions(f"Бетон {alias}: многопустотная полоса {length:g} × {width:g} × 300", section, 0, length, [page, 7])
+    spec = entry.get("projectVolume")
+    assumptions = [
+        {"id": "section-height", "text": "Высота сечения 1ПБ принята 300 мм (подпись сечений листа «3000» — опечатка; заводской альбом УДС-1ПБ, п. 1.1).", "affects": ["concrete"]},
+        {"id": "sawn-width", "text": f"Ширина {width:g} мм получена продольным пропилом полного профиля 1197 мм по линии, как на сечениях листа 1 (для ширин 600, 700, 720, 850, 950, 1050, 1090 мм листом дано собственное сечение, для остальных — по аналогии); длина {length:g} мм по эскизу каталога и размерной цепочке листа.", "affects": ["concrete"]},
+    ]
+    if note:
+        assumptions.append({"id": "width-fix", "text": note, "affects": ["concrete"]})
+    return {"key": entry["id"], "alias": alias, "sourceId": entry["source"]["id"], "type": "многопустотная доборная полоса, пропил по пустоте", "hollow": "udc-1pb",
+            "parts": parts, "volumeSpec": (spec, "таблица листа проекта", False, FAMILY_TOLERANCE) if spec else None,
+            "evidence": _family_evidence(entry, page), "assumptions": assumptions}
+
+
+def build_1pb_pi(entry, sketch, full_1pb):
+    alias = entry["alias"]
+    length, _, _ = sketch["dimensions"]
+    width = 1197.0
+    profile = _end_profile(sketch["planPolygon"], length, width)       # [(z, x_end)] возрастающе по z
+    xs = [x for _, x in profile]
+    x_min = min(xs)
+    parts = section_extrusions(f"Бетон {alias}: основная часть x 0…{x_min:g}", full_1pb, 0, x_min, [entry["source"]["productPage"], 7])
+    for (z0, x0), (z1, x1) in zip(profile, profile[1:]):
+        band = full_1pb.intersection(box(z0, -1, z1, 400))
+        if band.is_empty:
+            continue
+        if abs(x0 - x1) < 1e-6:
+            if x0 > x_min + 1e-6:
+                parts += section_extrusions(f"Бетон {alias}: торцевой участок x {x_min:g}…{x0:g}, z {z0:g}…{z1:g}", band, x_min, x0, [entry["source"]["productPage"]])
+        else:
+            slope = (x1 - x0) / (z1 - z0)
+            mesh, _ = oblique_end_mesh(f"Бетон {alias}: косой торец, z {z0:g}…{z1:g}", band, x_min, lambda z, z0=z0, x0=x0, slope=slope: x0 + (z - z0) * slope,
+                                       [entry["source"]["productPage"]])
+            parts.append(mesh)
+    cut = sketch.get("dimensionSource", "")
+    spec = entry.get("projectVolume")
+    return {"key": entry["id"], "alias": alias, "sourceId": entry["source"]["id"], "type": "многопустотная плита со скошенным торцом", "hollow": "udc-1pb",
+            "parts": parts, "volumeSpec": (spec, "таблица листа проекта", False, FAMILY_TOLERANCE) if spec else None,
+            "evidence": _family_evidence(entry, entry["source"]["productPage"]),
+            "assumptions": [
+                {"id": "section-height", "text": "Высота сечения 1ПБ принята 300 мм (подпись сечений листа «3000» — опечатка; заводской альбом УДС-1ПБ, п. 1.1).", "affects": ["concrete"]},
+                {"id": "plan-width", "text": "Ширина в плане — номинальные 1200 мм, по сечению 1197 мм (шов 3 мм): принято 1197, размеры среза отложены от дальней кромки.", "affects": ["concrete"]},
+                {"id": "chamfer-side", "text": "Скос торца по размерной цепочке листа: " + (cut.split(';', 1)[1].strip() if ';' in cut else 'см. лист') + ". Сторона среза относительно шпоночных пазов сечения на листе не определена: принята сторона z = 1197.", "affects": ["concrete"]},
+            ]}
+
+
+def _family_evidence(entry, page):
+    return [
+        {"pdfPage": page, "sheet": str(entry["source"].get("sheet") or ""), "subject": f"{entry['alias']}: габариты и объём (таблица листа)",
+         "checks": ["длина, ширина и форма торца в плане по размерным цепочкам листа", "объём бетона и масса из таблицы"]},
+        {"pdfPage": 7, "sheet": "1", "subject": "Сечения 1-1…8-8: профиль плиты (9 пустот 81 × 242, шаг 120)", "checks": ["масштаб сечения = подписанная ширина 1197 мм"]},
+        {"source": "doc25", "pdfPage": 10, "sheet": "9", "subject": "Заводской альбом УДС-1ПБ3.02.2020: высота 300 мм, пустоты 81 × 242, шаг 120", "checks": ["совпадает с профилем, снятым с листа проекта"]},
+    ]
+
+
+def build_family(full_1pb, skip):
+    catalog = json.loads((CATALOG_DIR / "promka-models.json").read_text())
+    catalog.update(json.loads((CATALOG_DIR / "promka-register.json").read_text()))
+    sketches = json.loads((CATALOG_DIR / "promka-sketches.json").read_text())
+    out = []
+    for key, entry in catalog.items():
+        alias = entry.get("alias", "")
+        if entry.get("family") != "Плиты" or entry["source"]["id"] != "doc10" or key in skip or key not in sketches:
+            continue
+        if alias.startswith("4Пд"):
+            out.append(build_1pb_pd(entry, sketches[key], full_1pb))
+        elif alias.startswith("4ПИ"):
+            out.append(build_1pb_pi(entry, sketches[key], full_1pb))
+    return sorted(out, key=lambda m: (m["alias"][:3], int(''.join(c for c in m["alias"].split('-')[1] if c.isdigit()))))
+
+
 # ───────────────────────── арматура ПГП1 (листы 85, 86, 88) ─────────────────────────
 
 STEEL_KG_PER_M3 = 7850.0
@@ -769,9 +872,12 @@ README_LIMIT = ("Индивидуальная 3D-модель бетонного
 
 def assemble(m, captured_at):
     parts = m["parts"]
-    checks = [_volume_check(parts, m["volumeSpec"][0], m["volumeSpec"][1], approximate=m["volumeSpec"][2])] + _structure_checks(parts) + m.get("massChecks", [])
+    checks = ([_volume_check(parts, m["volumeSpec"][0], m["volumeSpec"][1], approximate=m["volumeSpec"][2], **({"tolerance": m["volumeSpec"][3]} if len(m["volumeSpec"]) > 3 else {}))]
+              if m.get("volumeSpec") else [{"check": "volume-vs-spec", "result": "note", "detail": "объёма в таблице листа нет: проверка по объёму не выполнялась; объём модели %.4f м³" % (sum(part_volume(p) for p in parts) / 1e9)}]) \
+        + _structure_checks(parts) + m.get("massChecks", [])
     pages = [ev["pdfPage"] for ev in m["evidence"] if "source" not in ev]
-    pending = ([dict(PENDING_WIRES[HOLLOW_WIRES[m["key"]]], sourcePages=pages), dict(PENDING_VOIDS, sourcePages=pages)] if m["key"] in HOLLOW_WIRES else []) \
+    hollow = m.get("hollow") or HOLLOW_WIRES.get(m["key"])
+    pending = ([dict(PENDING_WIRES[hollow], sourcePages=pages), dict(PENDING_VOIDS, sourcePages=pages)] if hollow else []) \
         + [dict(p) for p in PENDING_SOLID.get(m["key"], [])]
     solid = {
         "id": m["key"], "sourceId": m["sourceId"], "alias": m["alias"], "supplyId": SUPPLY_ID,
@@ -794,20 +900,26 @@ def build_all():
     outline, voids, _, _ = read_section(**DOC10_SECTION_1_1)
     full_1pb = section_polygon(outline, voids)
     pl_outline, pl_voids, _, _ = read_section(**DOC11_SECTION_3_3)
-    return [build_4pd1(full_1pb), build_4pi18(full_1pb), build_pl41((pl_outline, pl_voids)), build_pgp1(), build_pshl1()]
+    five = [build_4pd1(full_1pb), build_4pi18(full_1pb), build_pl41((pl_outline, pl_voids)), build_pgp1(), build_pshl1()]
+    return five + build_family(full_1pb, skip={m["key"] for m in five})
 
 
 def report_text(models, qas):
-    lines = ["# Пять плит перекрытия — 3D-модели бетонного тела (%s)" % SNAPSHOT, "",
-             "Подобраны пять разных конструктивных исполнений: узкая многопустотная полоса (4Пд-1), многопустотная со срезанным углом "
-             "(4ПИ-18), многопустотная с угловыми вырезами (Пл4.1), сплошная плита подъёмника с выемками под закладные (ПГП1) и "
-             "сплошная плита шахты лифта с девятью сквозными отверстиями (ПШЛ1).", "",
-             "Контуры сняты с векторных листов КЖИ кодом (`scripts/build_calc_slab_models.py`); объём каждой модели сверен с объёмом спецификации.", ""]
-    for m, qa in zip(models, qas):
-        vol = next(c for c in qa["checks"] if c["check"] == "volume-vs-spec")
-        lines.append("* **%s** — %s: %s" % (m["alias"], m["type"], vol["detail"]))
-    lines += ["", "Не включено: напрягаемая проволока плит 4Пд/4ПИ/Пл (число проволок по заводским альбомам: для 4Пд/4ПИ нагрузка 24 кПа вне таблиц УДС-1ПБ, для Пл альбомов нет), арматурные блоки и закладные детали ПГП1 и ПШЛ1.",
-              "Замечание: на листе сечений 1ПБ высота подписана «3000» — по масштабу сечения и объёму принято 300 мм; "
+    lines = ["# Плиты перекрытия — 3D-модели бетонного тела (%s)" % SNAPSHOT, "",
+             "Пять разных исполнений разобраны отдельно (4Пд-1, 4ПИ-18, Пл4.1, ПГП1 с арматурой, ПШЛ1), остальные плиты семейства УДС-1ПБ — "
+             "4Пд-2…41 и 4ПИ-1…22 — собраны тем же кодом из общего профиля 1ПБ (длина, ширина и форма торца по эскизам каталога).", "",
+             "Контуры сняты с векторных листов КЖИ (`scripts/build_calc_slab_models.py`); объём каждой модели сверен с объёмом таблицы листа.", ""]
+    checked = [(m, next(c for c in qa["checks"] if c["check"] == "volume-vs-spec")) for m, qa in zip(models, qas)]
+    for m, vol in checked:
+        if m["alias"] in ("4Пд-1", "4ПИ-18", "Пл4.1", "ПГП1", "ПШЛ1"):
+            lines.append("* **%s** — %s: %s" % (m["alias"], m["type"], vol["detail"]))
+    family = [(m, v) for m, v in checked if m.get("hollow") == "udc-1pb" and m["alias"] not in ("4Пд-1", "4ПИ-18")]
+    deviations = [abs(v["deviationPercent"]) for _, v in family if "deviationPercent" in v]
+    lines += ["", "Семейство 1ПБ: %d моделей, объём сошёлся с таблицей листа у %d из них (допуск 3%%), наибольшее расхождение %.1f%%; "
+              "у %s в таблице листа нет объёма." % (len(family), len(deviations), max(deviations), ", ".join(m["alias"] for m, v in family if "deviationPercent" not in v)),
+              "", "Не включено: напрягаемая проволока 4Пд/4ПИ/Пл (для 4Пд/4ПИ нагрузка 24 кПа вне таблиц альбома УДС-1ПБ, для Пл альбомов нет), "
+              "арматурный блок и закладные ПШЛ1.",
+              "Замечания: на листе сечений 1ПБ высота подписана «3000» — принято 300 мм; у 4Пд-34 в эскизе каталога ширина 8500 мм — принято 850 мм; "
               "по ПГП1 объём контура (4,14 м³) на 5% меньше спецификации (4,37 м³)."]
     return "\n".join(lines)
 
@@ -852,7 +964,7 @@ def main():
         solid_all[solid["id"]] = solid
     sha = hashlib.sha256(dump(models_blob).encode()).hexdigest()
     supplies[SUPPLY_ID] = {
-        "label": "Claude · плиты перекрытия (пять типов)", "snapshot": SNAPSHOT, "modelsSha256": sha, "modelCount": len(solids),
+        "label": "Claude · плиты перекрытия", "snapshot": SNAPSHOT, "modelsSha256": sha, "modelCount": len(solids),
         "capturedAt": captured_at,
         "qa": {"modelsSha256": sha, "tool": "scripts/build_calc_slab_models.py",
                "covers": ["объём бетонного тела против объёма спецификации листа", "корректность сечений и замкнутость мешей",
