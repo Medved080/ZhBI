@@ -68,6 +68,13 @@
    sheet.getCell('K'+r).value=Number(row.precise?.amount??row.qty*row.rate);
    for(const col of ['J','K'])sheet.getCell(col+r).numFmt='#,##0.00';
   }
+  // поля без цены или количества, из-за которых сумма статьи нулевая, — красным, как в таблице калькулятора
+  const MISSING_FILL={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFC7CE'}};
+  function flagMissing(row,r){
+   const priced=row.id==='concrete'||row.id==='labour'||(product.documentModel?.resources||[]).some(x=>x.id===row.id);
+   if(!priced||row.effective.amount>0)return;
+   for(const [present,col] of [[row.effective.qty>0,'E'],[row.effective.rate>0,'F']])if(!present){const cell=sheet.getCell(col+r);cell.fill=MISSING_FILL;cell.font={...(cell.font||{}),bold:true,color:{argb:'FF9C0006'}};}
+  }
   function annotate(row,r){
    for(const [field,col] of [['qty','E'],['rate','F'],['amount','G']])if(has(row,field))sheet.getCell(col+r).note='Задано пользователем: '+row.manual[field]+'. Расчёт сервиса: '+(field==='amount'?(row.precise?.amount??row.qty*row.rate):(row.precise?.[field]??row[field]))+'.';
    if(product.documentModel?.kind==='registry'&&row.rate===0)sheet.getCell('F'+r).note='Цена не задана. Ноль — предварительное значение сервиса, а не подтверждённая бесплатная стоимость.';
@@ -80,7 +87,7 @@
    sheet.getCell('G'+r).value=has(row,'amount')?Number(row.manual.amount):formula('E'+r+'*F'+r,row.effective.amount);
    sheet.getCell('F'+r).numFmt=sheet.getCell('G'+r).numFmt='#,##0.00';
    if(!original||has(row,'qty'))sheet.getCell('E'+r).numFmt='#,##0.###';
-   annotate(row,r);
+   annotate(row,r);flagMissing(row,r);
   }
   materials.forEach((row,i)=>{
    const r=numberById[row.id],label=original&&row.id!=='concrete'?layout.rows[header+2+i].labels[1]:row.name;

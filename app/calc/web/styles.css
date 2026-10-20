@@ -407,6 +407,11 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-calculation td:nth-child(6){border-left:1px solid var(--pc-line)}
 #precast-concept .pc-calculation td input{width:100%;min-width:0;max-width:132px;padding:4px 8px}
 #precast-concept .pc-calculation td input[data-field="qty"]{max-width:96px}
+/* поля, без которых итог не посчитать (нет цены или количества): красным */
+#precast-concept .pc-calculation td input.pc-missing{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--bg))}
+#precast-concept .pc-calculation td.pc-missing{color:var(--bad);font-weight:600;background:color-mix(in srgb,var(--bad) 12%,var(--bg))}
+#precast-concept .pc-missing-text{color:var(--bad)}
+#precast-concept .pc-incomplete{margin:8px 0 0;padding:8px 10px;border:1px solid var(--bad);border-radius:6px;color:var(--bad);background:color-mix(in srgb,var(--bad) 8%,var(--bg));font-size:13px}
 #precast-concept .pc-calculation .pc-article{font-size:inherit;line-height:1.4}
 #precast-concept .pc-calculation .pc-detail td{white-space:normal}
 #precast-concept .pc-calculation-footer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 24px;padding-top:12px;border-top:1px solid var(--pc-line)}

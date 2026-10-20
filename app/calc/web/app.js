@@ -252,9 +252,27 @@ function matchesProductName(product, query){
   }
   return {product:{...products[productIndex]},rows:results,bases,amounts,total,baseTotal};
  }
+ const noClass=p=>!p.concreteClass||/^\s*не указан\s*$/i.test(p.concreteClass);
+ // Что не даёт посчитать итог: у платной статьи (бетон, труд, ресурсы изделия) нулевая сумма из-за нулевой цены или количества. Такие поля красятся в таблице и перечисляются под итогом
+ function incompleteness(rows){
+  const p=products[state.product],priced=new Set(['concrete','labour',...(p.documentModel?.resources||[]).map(r=>r.id)]);
+  const fields={},items=[];
+  for(const row of rows){
+   if(!priced.has(row.id)||row.effective.amount>0)continue;
+   const need=new Set();
+   if(!(row.effective.rate>0)){need.add('rate');items.push('цена «'+row.name+'»');}
+   if(!(row.effective.qty>0)){need.add('qty');items.push(row.id==='concrete'?'объём бетона':row.id==='labour'?'трудоёмкость':'количество «'+row.name+'»');}
+   fields[row.id]=need;
+  }
+  if(noClass(p))items.push('класс бетона (цена бетона взята по умолчанию)');
+  return {fields,items,text:items.length?'Итог неполный. Не задано: '+items.slice(0,8).join('; ')+(items.length>8?'; и ещё '+(items.length-8):'')+'.':''};
+ }
  function totals(){
   const {rows,bases,amounts,total}=calculate(state.product);
   for(const row of rows){const output=q(`[data-output="${row.id}"]`);if(output)output.textContent=money(amounts[row.id]);for(const field of ['qty','rate','amount']){const input=q(`input[data-id="${row.id}"][data-field="${field}"]`);if(input){input.placeholder=field==='qty'?number(row.qty):money(field==='rate'?bases[row.id]:amounts[row.id]);input.classList.toggle('pc-manual',state.overrides[state.product][row.id]?.[field]!==undefined&&state.overrides[state.product][row.id]?.[field]!=='');}}}
+  const gaps=incompleteness(rows);
+  for(const row of rows)for(const field of ['qty','rate','amount']){const miss=field!=='amount'&&Boolean(gaps.fields[row.id]?.has(field));q(`input[data-id="${row.id}"][data-field="${field}"]`)?.classList.toggle('pc-missing',miss);q(`[data-base="${row.id}:${field}"]`)?.classList.toggle('pc-missing',miss);}
+  const incomplete=q('#pc-incomplete');if(incomplete){incomplete.hidden=!gaps.text;incomplete.textContent=gaps.text;}
   q('#pc-baseline').textContent=money(products[state.product].price)+' ₽';q('#pc-effective').textContent=money(total)+' ₽';
   const rawDiff=total-products[state.product].price;const diff=Math.abs(rawDiff)<.005?0:rawDiff;q('#pc-delta').textContent=(diff>0?'+':'')+money(diff)+' ₽';q('#pc-vat').textContent='Моя цена с НДС '+profile.vatPercent+'%: '+money(total*(1+profile.vatPercent/100))+' ₽';
  }
@@ -273,7 +291,7 @@ function matchesProductName(product, query){
   finally{state.exporting=false;q('#pc-export').textContent='Выгрузить XLSX';updateSelection();}
  }
  function render(){
-  const p=products[state.product];q('#pc-title').textContent=p.documentModel?.alias||p.name;q('#pc-card-context').textContent=p.documentModel?.alias?p.name:'Калькуляция изделия';q('#pc-calculation-summary').innerHTML='<span>Бетон: '+(p.volume?number(p.volume)+' м³':'объём не задан')+' · '+escapeHTML(p.concreteClass||'класс не указан')+' · Труд: '+(p.hours?number(p.hours)+' чел·ч':'не задан')+'</span>'+(writeable?'<button id="pc-edit-calculation" type="button">Изменить параметры</button>':'');q('#pc-volume').textContent=number(p.volume)+' м³';q('#pc-weight').textContent=number(p.weight)+' т';q('#pc-hours').textContent=number(p.hours)+' чел·ч';
+  const p=products[state.product];q('#pc-title').textContent=p.documentModel?.alias||p.name;q('#pc-card-context').textContent=p.documentModel?.alias?p.name:'Калькуляция изделия';q('#pc-calculation-summary').innerHTML='<span>Бетон: '+(p.volume?number(p.volume)+' м³':'<b class="pc-missing-text">объём не задан</b>')+' · '+(noClass(p)?'<b class="pc-missing-text">класс не указан</b>':escapeHTML(p.concreteClass))+' · Труд: '+(p.hours?number(p.hours)+' чел·ч':'<b class="pc-missing-text">не задан</b>')+'</span>'+(writeable?'<button id="pc-edit-calculation" type="button">Изменить параметры</button>':'');q('#pc-volume').textContent=number(p.volume)+' м³';q('#pc-weight').textContent=number(p.weight)+' т';q('#pc-hours').textContent=number(p.hours)+' чел·ч';
   const ready=readiness(p);q('#pc-model-readiness').textContent=ready.label;q('#pc-model-readiness').dataset.modelStatus=ready.status;q('#pc-model-readiness').title=ready.description;q('#pc-calculation-product').textContent=p.name;
   window.CalcZhBIProjectKey=p.id;window.dispatchEvent(new CustomEvent('calczhbi:product',{detail:window.CalcZhBIProjectKey}));
   renderProducts();
@@ -314,7 +332,7 @@ function matchesProductName(product, query){
    route.innerHTML=doc.stages.map(s=>`<li>${escapeHTML(s)}</li>`).join('');
   }else route.innerHTML=route.dataset.defaultRoute;
   root.querySelectorAll('[data-product]').forEach(b=>b.setAttribute('aria-pressed',Number(b.dataset.product)===state.product));
-  q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td class="pc-baseline-cell">${number(r.qty)}</td><td class="pc-baseline-cell">${money(r.rate)}</td><td class="pc-baseline-cell">${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
+  q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td class="pc-baseline-cell" data-base="${r.id}:qty">${number(r.qty)}</td><td class="pc-baseline-cell" data-base="${r.id}:rate">${money(r.rate)}</td><td class="pc-baseline-cell" data-base="${r.id}:amount">${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
   q('#pc-calculation-heading').textContent=doc?.kind==='registry'?'Предварительная калькуляция на 1 изделие':'Калькуляция на 1 изделие';
   q('#pc-volume').textContent=p.volume?number(p.volume)+' м³':'Не задан';q('#pc-hours').textContent=doc?.kind==='registry'&&!p.hours?'Не задана':number(p.hours)+' чел·ч';
   // Первая загрузка отдаёт каталог без реестра расхождений (десятки МБ): он догружается для открытого изделия.
