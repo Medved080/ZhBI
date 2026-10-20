@@ -257,6 +257,11 @@ ZHBI_CALC_ASSETS_DIR=$PWD/data/calc/assets .venv312/bin/python scripts/audit_cal
 Исключённые изделия (монолитные колонны Км, плита 4П-15), замена неполной арматуры поставщика чтением листа, подтверждение закладных проектировщиками, классы бетона плит по марке, новые редакции томов (doc21–doc25) — `Docs/calc-designer-answers-20261019.md`.
 Новое в модели каталога: поле `excluded` {reason, label} (изделие не создаётся при импорте реестра, `marks.resolve` отдаёт статус `excluded`), в чтении — `embedded.confirmedBy` и `readings.replacedResources`.
 
+## 3D-модели плит перекрытия (2026-10-20)
+
+Пять плит (4Пд-1, 4ПИ-18, Пл4.1, ПГП1, ПШЛ1) получили индивидуальные модели бетонного тела (поставка `claude-slabs`): `scripts/build_calc_slab_models.py`,
+подробности, проверка объёмов и ограничения — `Docs/calc-slab-models.md`. Каталог `data/calc/assets` вне git: на тест/бой модели уходят пакетом отправки.
+
 ## Проверки
 
 ```bash

@@ -65,14 +65,16 @@ def catalog():
             solid['delivery'] = {'snapshot':delivery['snapshot'], 'modelsSha256':delivery['modelsSha256'],
                                  'worker':worker}
             result[key]['solidModel'] = solid
-            if solid.get('supplyId') == 'codex-abk-rigels':
+            if solid.get('supplyId') == 'codex-abk-rigels' or solid.get('supersedesSketch'):
                 # The drawing-based assembly replaces this mark's old envelope.
                 result[key].pop('preview3d', None)
             limitations = qa.get('limitations') or qa.get('limits') or qa.get('doesNotCover') or []
             if isinstance(limitations, str): limitations = [limitations]
+            # Модель без арматуры (бетонное тело по чертежам) не выдаётся за модель «с арматурой».
+            kind = 'Индивидуальная 3D-модель с арматурой' if solid.get('groups') else 'Индивидуальная 3D-модель бетонного тела (армирование не восстановлено)'
             result[key]['notes'] = [note for note in result[key].get('notes', [])
                                     if not note.startswith('3D-геометрия и пространственное расположение арматуры для этой марки ещё не восстановлены.')] + [
-                'Индивидуальная 3D-модель с арматурой из поставки '+delivery['snapshot']+'. Статус: частичная. Геометрия не пересчитывает калькуляцию.',
+                kind+' из поставки '+delivery['snapshot']+'. Статус: частичная. Геометрия не пересчитывает калькуляцию.',
                 *solid.get('notes', []),
                 *[p.get('description', str(p)) if isinstance(p, dict) else p
                   for p in solid.get('pending', [])], *limitations]
@@ -105,7 +107,8 @@ def model_readiness(entry):
                 'description': 'Контур и состав армирования восстановлены. Упрощения и вопросы проверки указаны в исходных данных; это не допуск в производство.'}
     if entry.get('solidModel') or entry.get('groups') or preview.get('reinforcementGroups'):
         return {'status': 'partial', 'label': 'Частичная модель',
-                'description': 'Армирование восстановлено частично. До завершения всех деталей модель не отмечается как полная.'}
+                'description': (entry.get('solidModel') or {}).get('readinessDescription') or
+                'Армирование восстановлено частично. До завершения всех деталей модель не отмечается как полная.'}
     if preview:
         return {'status': 'envelope', 'label': 'Габаритная схема',
                 'description': 'Есть внешний эскиз; полный конструктив и армирование ещё не восстановлены.'}

@@ -14,6 +14,12 @@
 - Код: `app/headcount.py` (ввод, подрядчики, история, отчёт), `app/headcount_import.py` (загрузка), общий экран V1/V2 `app/static/headcount-ui.js` + `headcount.css`, V2-оболочка `app/static/v2/headcount-screen.js`. Права — разделы `headcount` и `headcount_admin`.
 - Проверки: `scripts/verify_headcount.py`, `verify_headcount_import.py`, `dry_run_headcount_import.py` (все на КОПИИ базы).
 
+## Калькулятор: 3D-модели плит перекрытия (20.10.2026)
+
+- Пять плит (4Пд-1, 4ПИ-18, Пл4.1, ПГП1, ПШЛ1) имеют индивидуальную 3D-модель бетонного тела по векторным листам КЖИ вместо габаритного
+  эскиза: `scripts/build_calc_slab_models.py` (читает PDF, сверяет объём со спецификацией, пишет в `promka-solid-models/-supplies.json`),
+  детали, находки и ограничения — `Docs/calc-slab-models.md`. Остальные 73 плиты пока на эскизах.
+
 ## ИИ-помощник (05.10.2026)
 
 - Общая настройка локального ИИ в Администрировании: `app/ai_integration.py`, `app/static/v2/ai-settings.js`; отдельные модели диалога/чертежей, сохранение старого подключения Калькулятора, проверки.
