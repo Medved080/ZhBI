@@ -35,7 +35,7 @@ export function mountDictEdit(el, { screen, structure, objectId, api, groupTitle
       <div class="v2-screen-head"><h2>${esc(screen.title)}</h2>
         ${statusChip(screen)}</div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
-      <div class="v2-callout" role="note"><strong>${canWrite ? "Правка справочника в интерфейсе V2." : "Просмотр справочника."}</strong>
+      <div class="v2-callout" role="note">${canWrite ? "" : "<strong>Просмотр справочника.</strong>"}
         ${canWrite ? esc(`Можно добавить, переименовать и удалить запись. Если на запись ссылаются объекты, при удалении нужно выбрать другую запись — ссылки будут переведены на неё.`) : (gateOpen ? "У вас нет права изменять этот справочник." : "Изменение этого справочника в экспериментальном интерфейсе отключено — выполняйте его в интерфейсе V1.")}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div></div>
       ${canWrite ? `<form id="de-add" class="v2-bar" autocomplete="off">

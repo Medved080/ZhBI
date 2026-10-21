@@ -220,6 +220,9 @@ input:not([type="checkbox"]), select {
   border: 1px solid var(--line);
   border-radius: 6px;
 }
+/* Выбор цвета: общий отступ полей (9px 10px) схлопывал образец до чёрточки — цвет не был виден. */
+input[type="color"] { width: 52px; height: 32px; padding: 3px; cursor: pointer; }
+input[type="color"]:disabled { cursor: default; }
 .v2-search { width: 300px; max-width: 100%; }
 
 /* border-collapse:separate (не collapse) + border-spacing:0 — визуально

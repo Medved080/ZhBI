@@ -223,7 +223,7 @@ export function mountReadScreen(el, { screen, structure, objectId, api, groupTit
       </div>
       <p class="v2-muted">${esc(screen.summary || "")}</p>
       <div class="v2-callout" role="note">
-        <strong>Просмотр в интерфейсе V2.</strong> ${esc(screen.read.note || "Изменение данных этого экрана пока выполняется в интерфейсе V1.")}
+        ${esc(screen.read.note || "Изменение данных этого экрана пока выполняется в интерфейсе V1.")}
         <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div>
       </div>
       ${sections.length > 1 ? `<div class="v2-wire-tabs v2-read-tabs" role="tablist">${sections.map((s, i) =>

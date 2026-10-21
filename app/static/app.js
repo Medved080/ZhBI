@@ -31174,7 +31174,7 @@ const REVIT_GROUPS = ["levels", "sections", "parts", "categories"];
 // По номеру было так: отфильтровал двери — индексы съехали, и стены
 // поменяли цвет. Схема приезжает с сервера (app/revit_colors.py) и
 // хранится у объекта.
-let revitColors = { preset: "grey", colors: {}, presets: [], fallback: "#c8c8c8" };
+let revitColors = { preset: "pastel", colors: {}, presets: [], fallback: "#c8c8c8" };
 
 function revitFill(имя) {
   return revitColors.colors[имя] || revitColors.fallback;

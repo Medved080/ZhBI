@@ -69,7 +69,7 @@ PRESETS = {
             "Стены": "#a9c6dd",
             "Стены монолит": "#8fb0cc",
             "Стены блоки": "#c3d8e8",
-            "Стены кирпич": "#e0b9a8",
+            "Стены кирпич": "#d0765a",
             "Перегородки": "#cadeed",
             "Перекрытия": "#e0cfa8",
             "Двери": "#c9b6dd",
@@ -110,7 +110,7 @@ PRESETS = {
     },
 }
 
-DEFAULT_PRESET = "grey"
+DEFAULT_PRESET = "pastel"
 
 
 def scheme(conn, object_id: int) -> dict:
@@ -131,7 +131,17 @@ def scheme(conn, object_id: int) -> dict:
                 # «Стены кладка» — промежуточная категория первой версии
                 # разделения (2026-10-21): её цвет блоки и кирпич наследуют
                 # раньше общей «Стены».
+                # Схема, сохранённая НЕИЗМЕНЁННЫМ шаблоном (preset не «custom»),
+                # недостающие категории берёт из самого шаблона: так «Пастельная»
+                # даёт кирпичу терракотовый, а не цвет блоков.
+                шаблон = PRESETS.get(data.get("preset") or "")
                 for part in SPLIT_FROM_WALLS:
+                    if шаблон and part in шаблон["colors"] and part not in colors:
+                        colors[part] = шаблон["colors"][part]
+                        for таблица, из_шаблона in ((opacity, шаблон["opacity"]), (glow, шаблон["glow"])):
+                            if part in из_шаблона:
+                                таблица[part] = из_шаблона[part]
+                        continue
                     for table in (colors, opacity, glow):
                         источник = "Стены кладка" if "Стены кладка" in table and part != "Стены монолит" else "Стены"
                         if источник in table and part not in table:
