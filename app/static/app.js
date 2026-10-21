@@ -34589,6 +34589,14 @@ async function buildMfr3D() {
   const сохранённыйРакурс = сохранитьРакурс
     ? { position: mfr3d.camera.position.clone(), target: mfr3d.controls.target.clone() }
     : null;
+  // Камера хранится в ЛОКАЛЬНЫХ координатах сцены, а их начало — угол и нижняя
+  // отметка ОТФИЛЬТРОВАННЫХ элементов (`data.origin`, `низ`): убрали стены —
+  // начало уехало, и здание «смещалось» под неподвижной камерой (живой
+  // запрос пользователя 2026-10-21; в 2D та же беда лечится в drawRevitPlan
+  // переводом вида между системами координат). Модельные координаты не
+  // меняются, поэтому камеру и цель сдвигаем на разницу начал — прежнего и
+  // нового. Начало прежней сцены запоминаем ниже, в `mfr3d.frame`.
+  const прежняяСцена = сохранитьРакурс ? mfr3d.frame : null;
 
   revitPlanStatus(data.elements.length
     ? `Сборка 3D: ${data.elements.length} элементов…`
@@ -35052,7 +35060,14 @@ async function buildMfr3D() {
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.maxDistance = mfr3d.homeDistance * ZOOM_OUT_LIMIT_3D;
+  const [началоX, началоY] = data.origin || [0, 0];
   if (сохранённыйРакурс) {
+    if (прежняяСцена && прежняяСцена.objectId === revitPlanState.objectId) {
+      const сдвиг = new THREE.Vector3(прежняяСцена.ox - началоX, прежняяСцена.oy - началоY,
+                                       прежняяСцена.низ - низ);
+      сохранённыйРакурс.position.add(сдвиг);
+      сохранённыйРакурс.target.add(сдвиг);
+    }
     camera.position.copy(сохранённыйРакурс.position);
     controls.target.copy(сохранённыйРакурс.target);
     controls.update();
@@ -35081,6 +35096,7 @@ async function buildMfr3D() {
 
   mfr3d.scene = scene; mfr3d.camera = camera;
   mfr3d.renderer = renderer; mfr3d.controls = controls; mfr3d.key = ключ; mfr3d.objectId = revitPlanState.objectId;
+  mfr3d.frame = { objectId: revitPlanState.objectId, ox: началоX, oy: началоY, низ };
   bindMfr3DPick(renderer.domElement, camera, scene);
 
   // Внешние 3D-модели (благоустройство) — асинхронно, ПОСЛЕ того, как сцена
