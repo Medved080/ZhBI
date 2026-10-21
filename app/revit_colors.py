@@ -36,7 +36,7 @@ DEFAULT_GLOW = {"Окна": 35}
 # Категории, на которые с 2026-10-21 разделена «Стены» у объектов из PDF.
 # Сохранённая раньше схема их не знает — без наследования они вдруг стали бы
 # серыми по умолчанию, хотя человек красил «Стены» сам.
-SPLIT_FROM_WALLS = ("Стены монолит", "Стены кладка")
+SPLIT_FROM_WALLS = ("Стены монолит", "Стены блоки", "Стены кирпич")
 
 PRESETS = {
     "grey": {
@@ -45,7 +45,8 @@ PRESETS = {
         "colors": {
             "Стены": "#d4d4d4",
             "Стены монолит": "#b8b8b8",
-            "Стены кладка": "#d4d4d4",
+            "Стены блоки": "#d4d4d4",
+            "Стены кирпич": "#c2bab2",
             "Перегородки": "#e8e8e8",
             "Перекрытия": "#8a8a8a",
             "Двери": "#f7f7f7",
@@ -67,7 +68,8 @@ PRESETS = {
         "colors": {
             "Стены": "#a9c6dd",
             "Стены монолит": "#8fb0cc",
-            "Стены кладка": "#c3d8e8",
+            "Стены блоки": "#c3d8e8",
+            "Стены кирпич": "#e0b9a8",
             "Перегородки": "#cadeed",
             "Перекрытия": "#e0cfa8",
             "Двери": "#c9b6dd",
@@ -89,7 +91,8 @@ PRESETS = {
         "colors": {
             "Стены": "#4a7fb5",
             "Стены монолит": "#2f5f94",
-            "Стены кладка": "#6fa1d1",
+            "Стены блоки": "#6fa1d1",
+            "Стены кирпич": "#b5794a",
             "Перегородки": "#8ab0d6",
             "Перекрытия": "#b58b4a",
             "Двери": "#7a4ab5",
@@ -125,10 +128,14 @@ def scheme(conn, object_id: int) -> dict:
                 colors = dict(data["colors"])
                 opacity = dict(data.get("opacity") or {})
                 glow = dict(data.get("glow") or {})
+                # «Стены кладка» — промежуточная категория первой версии
+                # разделения (2026-10-21): её цвет блоки и кирпич наследуют
+                # раньше общей «Стены».
                 for part in SPLIT_FROM_WALLS:
                     for table in (colors, opacity, glow):
-                        if "Стены" in table and part not in table:
-                            table[part] = table["Стены"]
+                        источник = "Стены кладка" if "Стены кладка" in table and part != "Стены монолит" else "Стены"
+                        if источник in table and part not in table:
+                            table[part] = table[источник]
                 return {"preset": data.get("preset") or "custom",
                         "colors": colors, "opacity": opacity, "glow": glow}
         except (TypeError, ValueError):

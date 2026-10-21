@@ -444,7 +444,8 @@ def _grant_feature_to_all_roles(conn: sqlite3.Connection, feature_key: str) -> s
 
 
 def _split_pdf_walls(conn: sqlite3.Connection) -> str:
-    """Разделить «Стены» объектов из PDF на «Стены монолит» и «Стены кладка».
+    """Разделить «Стены» объектов из PDF на «Стены монолит», «Стены блоки» и
+    «Стены кирпич».
 
     Материал у строки уже есть (`type_name`, из слоя штриховки чертежа,
     `pdf_rooms._WALL_LAYERS`), поэтому перезагружать PDF не нужно: монолит
@@ -454,10 +455,26 @@ def _split_pdf_walls(conn: sqlite3.Connection) -> str:
     категория «Стены», после прогона таких строк в PDF-разделе нет."""
     from app import pdf_rooms
     n = conn.execute(
-        "UPDATE revit_elements SET category = CASE WHEN type_name = ? THEN ? ELSE ? END "
+        "UPDATE revit_elements SET category = CASE WHEN type_name = ? THEN ? "
+        "WHEN type_name = ? THEN ? ELSE ? END "
         "WHERE section_code = 'PDF' AND category = 'Стены'",
-        (pdf_rooms.MONOLITH_MATERIAL, pdf_rooms.CAT_WALL_MONOLITH, pdf_rooms.CAT_WALL_MASONRY)).rowcount
+        (pdf_rooms.MONOLITH_MATERIAL, pdf_rooms.CAT_WALL_MONOLITH,
+         pdf_rooms.BRICK_MATERIAL, pdf_rooms.CAT_WALL_BRICK, pdf_rooms.CAT_WALL_BLOCKS)).rowcount
     return f"стен разделено по материалу: {n}"
+
+
+def _split_pdf_masonry(conn: sqlite3.Connection) -> str:
+    """Разделить промежуточную категорию «Стены кладка» (2026-10-21, первая
+    версия разделения стен из PDF) на «Стены блоки» и «Стены кирпич» по
+    материалу. Нужна базам, где `_split_pdf_walls` уже отработала в прежней
+    редакции и оставила единую «кладку»; на остальных строк «Стены кладка» нет.
+    Идемпотентна."""
+    from app import pdf_rooms
+    n = conn.execute(
+        "UPDATE revit_elements SET category = CASE WHEN type_name = ? THEN ? ELSE ? END "
+        "WHERE section_code = 'PDF' AND category = 'Стены кладка'",
+        (pdf_rooms.BRICK_MATERIAL, pdf_rooms.CAT_WALL_BRICK, pdf_rooms.CAT_WALL_BLOCKS)).rowcount
+    return f"кладки разделено на блоки и кирпич: {n}"
 
 
 def _grant_feature_baseline(conn: sqlite3.Connection, feature_key: str) -> str:
@@ -1203,10 +1220,20 @@ RELEASE_TASKS = [
         "version": "0.109",
         "date": "2026-10-21",
         "title": "Разделить стены из PDF на монолит и кладку",
-        "why": "в модели МФР из PDF «Стены» делятся по штриховке чертежа на «Стены монолит» и «Стены кладка»; "
+        "why": "в модели МФР из PDF «Стены» делятся по штриховке чертежа на «Стены монолит», «Стены блоки» и «Стены кирпич»; "
                "уже загруженные стены раскладываются по материалу без повторной загрузки PDF",
         "kind": KIND_DATA,
         "run": _split_pdf_walls,
+    },
+    {
+        "name": "2026-10-21-split-pdf-masonry",
+        "version": "0.109",
+        "date": "2026-10-21",
+        "title": "Разделить кладку из PDF на блоки и кирпич",
+        "why": "блоки и кирпичная кладка получили отдельные категории и свой узор на схеме; "
+               "ранее разделённая единая «кладка» раскладывается по материалу без повторной загрузки PDF",
+        "kind": KIND_DATA,
+        "run": _split_pdf_masonry,
     },
 ]
 

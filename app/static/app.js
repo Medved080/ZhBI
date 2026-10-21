@@ -31180,6 +31180,109 @@ function revitFill(имя) {
   return revitColors.colors[имя] || revitColors.fallback;
 }
 
+// Узор кладки на стенах «Модели МФР» (запрос пользователя 2026-10-21):
+// блоки — крупная перевязка, кирпич — мелкая. Тот же узор в 2D (SVG-pattern)
+// и в 3D (текстура на стенах). Категории — из разбора PDF
+// (`app/pdf_rooms.py`, `CAT_WALL_BLOCKS`/`CAT_WALL_BRICK`).
+//   w, h  — ячейка узора в условных единицах рисунка (viewBox pattern'а и
+//           canvas-текстуры): два ряда, во втором швы сдвинуты на полблока;
+//   px    — размер ячейки на ЭКРАНЕ в 2D: узор держится постоянным при любом
+//           масштабе (настоящий кирпич 65мм на плане меньше пикселя);
+//   mm    — размер ячейки в 3D, в мм модели. Схематично: чуть крупнее
+//           настоящих блока 625×250 и кирпича 250×65, иначе на обычном
+//           удалении камеры узор неразличим.
+const MFR_WALL_PATTERNS = {
+  "Стены блоки": { key: "blocks", w: 72, h: 24, px: [72, 24], mm: [2000, 600], line: 1.3 },
+  "Стены кирпич": { key: "brick", w: 40, h: 10, px: [40, 10], mm: [800, 240], line: 0.9 },
+};
+
+// Швы одной ячейки: горизонтали по краям рядов, вертикали первого ряда — на
+// краях и середине, второго — на четвертях (перевязка).
+function mfrPatternSegments(p) {
+  const { w, h } = p, h2 = h / 2;
+  const seg = [[0, 0, w, 0], [0, h2, w, h2]];
+  for (const x of [0, w / 2]) seg.push([x, 0, x, h2]);
+  for (const x of [w / 4, w * 3 / 4]) seg.push([x, h2, x, h]);
+  return seg;
+}
+
+// <defs> с узорами для 2D-схемы. Цвет швов — тёмный оттенок цвета категории.
+function mfrPatternDefs2D() {
+  return Object.entries(MFR_WALL_PATTERNS).map(([имя, p]) => {
+    const штрих = darken(revitFill(имя));
+    const линии = mfrPatternSegments(p).map(([x1, y1, x2, y2]) =>
+      `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`).join("");
+    return `<pattern id="mfr-pat-${p.key}" data-mfr-pat="${p.key}" patternUnits="userSpaceOnUse"
+      width="${p.w}" height="${p.h}" viewBox="0 0 ${p.w} ${p.h}">
+      <g stroke="${штрих}" stroke-width="${p.line}" stroke-opacity="0.85" stroke-linecap="square">${линии}</g></pattern>`;
+  }).join("");
+}
+
+// Размер ячеек узоров в единицах вида: пикселей на экране — постоянно.
+function updateMfrPatterns2D(svg, v) {
+  const r = svg.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const k = 1 / Math.min(r.width / v.w, r.height / v.h);   // единиц вида на пиксель
+  for (const p of Object.values(MFR_WALL_PATTERNS)) {
+    const el = svg.querySelector(`pattern[data-mfr-pat="${p.key}"]`);
+    if (!el) continue;
+    el.setAttribute("width", (p.px[0] * k).toFixed(3));
+    el.setAttribute("height", (p.px[1] * k).toFixed(3));
+  }
+}
+
+// Образец узора для легенды: цвет категории плюс швы.
+function mfrPatternSwatchStyle(имя) {
+  const p = MFR_WALL_PATTERNS[имя];
+  if (!p) return "";
+  const линии = mfrPatternSegments(p).map(([x1, y1, x2, y2]) =>
+    `<line x1='${x1}' y1='${y1}' x2='${x2}' y2='${y2}'/>`).join("");
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${p.w / 3}' height='${p.h / 3}' viewBox='0 0 ${p.w} ${p.h}'>`
+    + `<g stroke='${darken(revitFill(имя))}' stroke-width='${p.line * 3}' stroke-linecap='square'>${линии}</g></svg>`;
+  return `background-image:url("data:image/svg+xml,${encodeURIComponent(svg)}");`;
+}
+
+// Текстура узора для 3D: белое поле и тёмные швы — материал умножает её на
+// цвет категории, поэтому цвет и узор настраиваются независимо.
+function mfrPatternTexture3D(p) {
+  const W = 640, H = Math.round(640 * p.h / p.w);
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const g = c.getContext("2d");
+  g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
+  g.strokeStyle = "#5c5c5c"; g.lineWidth = Math.max(3, Math.round(p.line * W / p.w * 1.6));
+  g.lineCap = "square";
+  const kx = W / p.w, ky = H / p.h;
+  g.beginPath();
+  for (const [x1, y1, x2, y2] of mfrPatternSegments(p)) { g.moveTo(x1 * kx, y1 * ky); g.lineTo(x2 * kx, y2 * ky); }
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;   // three сам ограничит возможностями видеокарты
+  return t;
+}
+
+// UV для узора по МОДЕЛЬНЫМ координатам: начало сцены (`data.origin`, нижняя
+// отметка) зависит от отбора, и привязка к локальным координатам сдвигала бы
+// швы при каждой смене фильтра. Грань выбирается по нормали: верх — по плану,
+// боковые — по длине стены и высоте.
+function mfrAssignPatternUV(geometry, p, ox, oy, низ) {
+  const pos = geometry.attributes.position, nor = geometry.attributes.normal;
+  const [tw, th] = p.mm;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + ox, y = pos.getY(i) + oy, z = pos.getZ(i) + низ;
+    const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
+    let u, v;
+    if (nz > 0.7) { u = x / tw; v = y / th; }
+    else if (nx >= ny) { u = y / tw; v = z / th; }
+    else { u = x / tw; v = z / th; }
+    uv[i * 2] = u; uv[i * 2 + 1] = v;
+  }
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+}
+
 // Свечение категории в долях: самосвечение материала в 3D. В 2D не
 // действует — там нечему светиться.
 function revitGlow(имя) {
@@ -32017,6 +32120,15 @@ function drawRevitPlan(data) {
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
   }) : [];
 
+  // Узор кладки поверх заливки стен «блоки»/«кирпич»: отдельный путь без
+  // перехвата мыши — клик и выделение по-прежнему идут по основному пути.
+  const узоры = mfrShowElements() ? data.elements.flatMap((el) => {
+    const p = MFR_WALL_PATTERNS[(data.categories || [])[el["кат"]]];
+    if (!p) return [];
+    const d = "M" + el["контур"].map((q) => `${q[0] - minX} ${h - (q[1] - minY)}`).join("L") + "Z";
+    return [`<path class="mfr-pat" d="${d}" fill="url(#mfr-pat-${p.key})" stroke="none" pointer-events="none"/>`];
+  }) : [];
+
   // Прямоугольник ГАБАРИТА блока в плане. Блоков без геометрии (`ok:
   // false` — нет привязки к осям или ненадёжная отметка этажа) на плане
   // не показываем — молчаливо приблизительный контур хуже честного
@@ -32104,12 +32216,12 @@ function drawRevitPlan(data) {
   revitPlanState.fit = fit;
   revitPlanState.frame = { originX, originY, h, objectId: revitPlanState.objectId };
   box.innerHTML = `<svg id="revit-plan-svg" viewBox="0 0 ${w} ${h}"
-    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet">${planUnderlay}${paths.join("")}${blockRects.join("")}${axisLines.join("")}</svg>`;
+    style="width:100%;height:100%;cursor:grab" preserveAspectRatio="xMidYMid meet"><defs>${mfrPatternDefs2D()}</defs>${planUnderlay}${paths.join("")}${узоры.join("")}${blockRects.join("")}${axisLines.join("")}</svg>`;
 
   document.getElementById("revit-plan-legend").innerHTML =
     (data.categories || []).map((name, i) =>
-      `<span style="margin-right:12px"><span style="display:inline-block;width:10px;height:10px;
-        background:${revitFill(name)};
+      `<span style="margin-right:12px"><span style="display:inline-block;width:${MFR_WALL_PATTERNS[name] ? 18 : 10}px;height:10px;
+        background-color:${revitFill(name)};${mfrPatternSwatchStyle(name)}
         border:1px solid ${darken(revitFill(name))};margin-right:4px"></span>${escapeHtml(name)}</span>`
     ).join("") + '<span style="margin-left:8px">пунктиром — габаритный контур</span>';
 
@@ -32159,6 +32271,7 @@ function bindRevitPlanZoom(svg) {
       }
     }
     svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+    updateMfrPatterns2D(svg, v);
     updateMfrAxisLabelSizing(svg, v);
     updateMfrPlanZoomIndicator();
   };
@@ -34700,6 +34813,11 @@ async function buildMfr3D() {
       depthWrite: непрозрачность >= 1,
       side: непрозрачность < 1 ? THREE.DoubleSide : THREE.FrontSide,
     });
+    const узор = MFR_WALL_PATTERNS[имяКат];
+    if (узор && data.origin) {
+      mfrAssignPatternUV(geometry, узор, data.origin[0], data.origin[1], низ);
+      material.map = mfrPatternTexture3D(узор);
+    }
     const mesh = new THREE.Mesh(geometry, material);
     mesh.userData.диапазоны = диапазоны;
     mesh.renderOrder = непрозрачность < 1 ? 1 : 0;   // прозрачное рисуется последним

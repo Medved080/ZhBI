@@ -61,7 +61,7 @@ def get_wall_segments(conn: sqlite3.Connection, object_id: int) -> dict:
     проверку в этой же сессии, Docs/DECISIONS.md)."""
     rows = conn.execute(
         "SELECT outline_json, elevation_mm, height_mm, updated_at FROM revit_elements "
-        "WHERE object_id = ? AND is_current = 1 AND category IN ('Стены', 'Стены монолит', 'Стены кладка') "
+        "WHERE object_id = ? AND is_current = 1 AND category IN ('Стены', 'Стены монолит', 'Стены кладка', 'Стены блоки', 'Стены кирпич') "
         "AND elevation_mm IS NOT NULL AND height_mm IS NOT NULL AND height_mm > 0",
         (object_id,),
     ).fetchall()
