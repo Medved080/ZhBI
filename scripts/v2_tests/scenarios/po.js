@@ -71,7 +71,7 @@ export const tests = [
       t.ok(a.$('[data-object="1"]'), "проект раскрыт — видны его объекты");
       await selectObject(a, 3);
       t.eq(a.$("#pf-name").value, a.ctl.data.objects.find((o) => o.id === 3).name, "карточка объекта 3");
-      t.ok(a.$("#po-open-v1"), "у объекта есть «Открыть в V1»");
+      t.ok(!a.$("#po-open-v1"), "у объекта нет «Открыть в V1»: карточка перенесена в V2");
       await selectProject(a, 1);
       t.notHas(a.$("#po-form").innerText, "Открыть в V1", "у проекта «Открыть в V1» нет");
     },

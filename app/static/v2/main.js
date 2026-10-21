@@ -844,7 +844,7 @@ async function renderShell(user, permissions) {
   function updateGateNote(target, hit) {
     const off = target ? disabledForScreen(target.id) : [];
     if (!off.length && !hit) { gateNote.hidden = true; gateNote.innerHTML = ""; return; }
-    const link = target ? linkList(target, registry.structure[target.id], objectId) : "";
+    const link = target ? linkList(target, registry.structure[target.id], objectId, { force: true }) : "";
     gateNote.innerHTML = (hit ? `<strong>Не выполнено:</strong> ${escapeHtml(hit)} ` : "")
       + (off.length ? `<strong>В этом разделе отключено в интерфейсе V2:</strong> ${off.map((r) => escapeHtml(r.action)).join("; ")}. Просмотр доступен. ` : "")
       + link;

@@ -573,7 +573,6 @@ export function mountProjectsObjects(container, ctx) {
       <div class="v2-bar"><h3>${escapeHtml(title || (type === "project" ? "Проект" : "Объект"))}</h3>
         <div class="v2-inline">
           ${!state.isNew && type === "object" ? btn("← К карточке", 'id="po-to-card"') : ""}
-          ${!state.isNew && type === "object" ? btn("Открыть в V1", 'id="po-open-v1"') : ""}
           ${canDelete ? btn("Удалить", 'id="po-delete"') : ""}
         </div></div>
       <div class="v2-group">Реквизиты</div>
@@ -627,12 +626,6 @@ export function mountProjectsObjects(container, ctx) {
       await renderForm();
       renderFooter();
     }));
-    if (el.querySelector("#po-open-v1")) {
-      el.querySelector("#po-open-v1").addEventListener("click", async () => {
-        if (!(await requestLeave())) return;
-        location.href = `/?ui=v1&object_id=${state.selected.id}`;
-      });
-    }
     if (el.querySelector("#po-delete")) {
       el.querySelector("#po-delete").addEventListener("click", () => withNavGuard(() => requestDelete(type, state.selected.id)));
     }

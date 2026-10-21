@@ -58,7 +58,11 @@ function wireBlocks(blocks) {
   return out || `<p class="v2-wire-hint">Состав формы строится в V1 динамически — в статической разметке его нет.</p>`;
 }
 
-export function linkList(screen, structure, objectId) {
+// Ссылка «Открыть в интерфейсе V1» нужна, только когда функции в V2 нет или она отключена: у перенесённых разделов
+// (статус реестра 4+, реализация не «v1») её нет (2026-10-21, запрос пользователя). `force` — места, где V1 остаётся
+// единственным путём: каркас неперенесённого раздела и пояснение об отключённых в V2 операциях.
+export function linkList(screen, structure, objectId, { force = false } = {}) {
+  if (!force && !inV1Only(screen)) return "";
   const items = [];
   const menus = (structure?.menu || []).filter((m) => !m.danger);
   if (menus.length) {
@@ -92,7 +96,7 @@ export function mountScreenView(el, { screen, structure, objectId, rights, group
       <div class="v2-callout" role="note">
         <strong>Эта функция пока работает только в интерфейсе V1.</strong>
         Здесь показан состав экрана по его форме в V1 — данные не загружаются, кнопки неактивны, ничего не сохраняется.
-        <div class="v2-callout-actions">${linkList(screen, structure, objectId)}</div>
+        <div class="v2-callout-actions">${linkList(screen, structure, objectId, { force: true })}</div>
       </div>
       <dl class="v2-facts">
         <dt>Где в интерфейсе V1</dt><dd>${[...menuPath.map(esc), ...toolbar.map((t) => `Панель: ${t}`)].join("<br>") || "—"}</dd>
