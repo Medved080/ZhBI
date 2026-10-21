@@ -443,6 +443,23 @@ def _grant_feature_to_all_roles(conn: sqlite3.Connection, feature_key: str) -> s
     return f"раздел «{feature_key}» открыт ролям: {len(новые)}"
 
 
+def _split_pdf_walls(conn: sqlite3.Connection) -> str:
+    """Разделить «Стены» объектов из PDF на «Стены монолит» и «Стены кладка».
+
+    Материал у строки уже есть (`type_name`, из слоя штриховки чертежа,
+    `pdf_rooms._WALL_LAYERS`), поэтому перезагружать PDF не нужно: монолит
+    остаётся монолитом, всё остальное (газобетон, газосиликат, кирпич,
+    наружная кладка) — кладка. Выгрузки Revit (раздел не «PDF») не трогаем —
+    у них «Стены» остаются как есть. Идемпотентна: условие — прежняя
+    категория «Стены», после прогона таких строк в PDF-разделе нет."""
+    from app import pdf_rooms
+    n = conn.execute(
+        "UPDATE revit_elements SET category = CASE WHEN type_name = ? THEN ? ELSE ? END "
+        "WHERE section_code = 'PDF' AND category = 'Стены'",
+        (pdf_rooms.MONOLITH_MATERIAL, pdf_rooms.CAT_WALL_MONOLITH, pdf_rooms.CAT_WALL_MASONRY)).rowcount
+    return f"стен разделено по материалу: {n}"
+
+
 def _grant_feature_baseline(conn: sqlite3.Connection, feature_key: str) -> str:
     """Донакатить ЗАВОДСКУЮ раскладку ОДНОГО раздела ролям, у которых по
     нему нет вообще ни строки — тем же способом, каким `_seed_object_roles`
@@ -1180,6 +1197,16 @@ RELEASE_TASKS = [
                "без этого у ролей на объектах не появилось бы ни ввода, ни отчётов численности",
         "kind": KIND_DATA,
         "run": lambda conn: _grant_feature_baseline(conn, "headcount"),
+    },
+    {
+        "name": "2026-10-21-split-pdf-walls",
+        "version": "0.109",
+        "date": "2026-10-21",
+        "title": "Разделить стены из PDF на монолит и кладку",
+        "why": "в модели МФР из PDF «Стены» делятся по штриховке чертежа на «Стены монолит» и «Стены кладка»; "
+               "уже загруженные стены раскладываются по материалу без повторной загрузки PDF",
+        "kind": KIND_DATA,
+        "run": _split_pdf_walls,
     },
 ]
 

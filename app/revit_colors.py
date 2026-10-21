@@ -33,12 +33,19 @@ DEFAULT_OPACITY = {"Окна": 90}
 # стоит ничего. В 2D не действует: там нечему светиться.
 DEFAULT_GLOW = {"Окна": 35}
 
+# Категории, на которые с 2026-10-21 разделена «Стены» у объектов из PDF.
+# Сохранённая раньше схема их не знает — без наследования они вдруг стали бы
+# серыми по умолчанию, хотя человек красил «Стены» сам.
+SPLIT_FROM_WALLS = ("Стены монолит", "Стены кладка")
+
 PRESETS = {
     "grey": {
         "title": "Оттенки серого",
         "hint": "Конструкции читаются по светлоте: чем несущее, тем темнее",
         "colors": {
             "Стены": "#d4d4d4",
+            "Стены монолит": "#b8b8b8",
+            "Стены кладка": "#d4d4d4",
             "Перегородки": "#e8e8e8",
             "Перекрытия": "#8a8a8a",
             "Двери": "#f7f7f7",
@@ -59,6 +66,8 @@ PRESETS = {
         "hint": "Категории различаются цветом, а не светлотой",
         "colors": {
             "Стены": "#a9c6dd",
+            "Стены монолит": "#8fb0cc",
+            "Стены кладка": "#c3d8e8",
             "Перегородки": "#cadeed",
             "Перекрытия": "#e0cfa8",
             "Двери": "#c9b6dd",
@@ -79,6 +88,8 @@ PRESETS = {
         "hint": "Для разбора состава модели: категории видно издалека",
         "colors": {
             "Стены": "#4a7fb5",
+            "Стены монолит": "#2f5f94",
+            "Стены кладка": "#6fa1d1",
             "Перегородки": "#8ab0d6",
             "Перекрытия": "#b58b4a",
             "Двери": "#7a4ab5",
@@ -111,10 +122,15 @@ def scheme(conn, object_id: int) -> dict:
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and isinstance(data.get("colors"), dict):
+                colors = dict(data["colors"])
+                opacity = dict(data.get("opacity") or {})
+                glow = dict(data.get("glow") or {})
+                for part in SPLIT_FROM_WALLS:
+                    for table in (colors, opacity, glow):
+                        if "Стены" in table and part not in table:
+                            table[part] = table["Стены"]
                 return {"preset": data.get("preset") or "custom",
-                        "colors": data["colors"],
-                        "opacity": data.get("opacity") or {},
-                        "glow": data.get("glow") or {}}
+                        "colors": colors, "opacity": opacity, "glow": glow}
         except (TypeError, ValueError):
             pass
     return {"preset": DEFAULT_PRESET,
