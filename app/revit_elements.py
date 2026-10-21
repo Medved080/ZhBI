@@ -20,6 +20,7 @@
 import json
 
 from app import revit_sections
+from app.wall_classes import classify_revit_wall
 from app.revit_package import normalize_section, resolve_section
 
 # Поля, расхождение которых показывается в сводке. Марка — отдельно и
@@ -47,7 +48,9 @@ def build_row(element: dict, package, level, level_id, section_id) -> dict:
         "section_code": package.section_code,
         "uid": element.get("uid"),
         "revit_id": element.get("id"),
-        "category": element.get("категория"),
+        # «Стены» Revit делятся по имени типа на монолит/блоки/кирпич и
+        # перегородки — как у PDF (`app/wall_classes.py`).
+        "category": classify_revit_wall(element.get("категория"), element.get("типоразмер")),
         "family": element.get("семейство"),
         "type_name": element.get("типоразмер"),
         "mark": element.get("марка"),

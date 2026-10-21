@@ -135,9 +135,8 @@ _AXIS_AUX_RE = re.compile(r'^([A-ZА-Я]{1,2})а$')
 # разные категории, чтобы включать их в фильтре, красить по отдельности и
 # рисовать каждой свой узор (`app/static/app.js`, `MFR_WALL_PATTERNS`).
 # Общей «Стены» у PDF-объектов больше нет; она остаётся у выгрузок Revit.
-CAT_WALL_MONOLITH = "Стены монолит"
-CAT_WALL_BLOCKS = "Стены блоки"
-CAT_WALL_BRICK = "Стены кирпич"
+# Названия категорий — общие с Revit (`app/wall_classes.py`).
+from app.wall_classes import CAT_WALL_MONOLITH, CAT_WALL_BLOCKS, CAT_WALL_BRICK
 # Материал (`type_name`) монолитной стены — по нему же делится прежняя
 # категория «Стены» у уже загруженных данных (`app/release_tasks.py`).
 MONOLITH_MATERIAL = "Монолитный железобетон"

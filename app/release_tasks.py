@@ -477,6 +477,30 @@ def _split_pdf_masonry(conn: sqlite3.Connection) -> str:
     return f"кладки разделено на блоки и кирпич: {n}"
 
 
+def _split_revit_walls(conn: sqlite3.Connection) -> str:
+    """Разделить «Стены» моделей из Revit на монолит/блоки/кирпич и «Перегородки»
+    по имени типа стены (`app/wall_classes.py`). У PDF-моделей категории уже
+    стоят (раздел «PDF» не трогаем). Идемпотентна: берутся только строки с
+    прежней категорией «Стены», а тип, не попавший ни в одно правило, ею и
+    остаётся. Повторная загрузка выгрузки даёт тот же результат (то же правило
+    стоит в `app/revit_elements.build_row`)."""
+    from app.wall_classes import CAT_WALL, classify_revit_wall
+    types = conn.execute(
+        "SELECT DISTINCT type_name FROM revit_elements "
+        "WHERE category = ? AND section_code != 'PDF' AND type_name IS NOT NULL", (CAT_WALL,)).fetchall()
+    moved = {}
+    for (type_name,) in [(r[0],) for r in types]:
+        target = classify_revit_wall(CAT_WALL, type_name)
+        if target == CAT_WALL:
+            continue
+        n = conn.execute(
+            "UPDATE revit_elements SET category = ? "
+            "WHERE category = ? AND section_code != 'PDF' AND type_name = ?",
+            (target, CAT_WALL, type_name)).rowcount
+        moved[target] = moved.get(target, 0) + n
+    return "стен разложено: " + (", ".join(f"{k} — {v}" for k, v in sorted(moved.items())) or "ничего")
+
+
 def _grant_feature_baseline(conn: sqlite3.Connection, feature_key: str) -> str:
     """Донакатить ЗАВОДСКУЮ раскладку ОДНОГО раздела ролям, у которых по
     нему нет вообще ни строки — тем же способом, каким `_seed_object_roles`
@@ -1234,6 +1258,16 @@ RELEASE_TASKS = [
                "ранее разделённая единая «кладка» раскладывается по материалу без повторной загрузки PDF",
         "kind": KIND_DATA,
         "run": _split_pdf_masonry,
+    },
+    {
+        "name": "2026-10-21-split-revit-walls",
+        "version": "0.109",
+        "date": "2026-10-21",
+        "title": "Разделить стены Revit на монолит, блоки, кирпич и перегородки",
+        "why": "у моделей из Revit «Стены» были одной категорией; материал известен только по имени типа стены, "
+               "по нему стены раскладываются на те же категории, что у PDF-моделей",
+        "kind": KIND_DATA,
+        "run": _split_revit_walls,
     },
 ]
 
