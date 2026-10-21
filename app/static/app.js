@@ -32109,7 +32109,12 @@ function drawRevitPlan(data) {
     : "";
 
   // Y переворачивается: в модели он растёт вверх, в SVG — вниз.
-  const paths = mfrShowElements() ? data.elements.map((el) => {
+  // Окна рисуются ПОСЛЕ остальных: на их месте теперь есть кладка под
+  // подоконником и над перемычкой (тот же контур), и окно под ней пропало бы.
+  const окнаКат = (data.categories || []).indexOf("Окна");
+  const порядок = окнаКат < 0 ? data.elements
+    : [...data.elements].sort((a, b) => (a["кат"] === окнаКат) - (b["кат"] === окнаКат));
+  const paths = mfrShowElements() ? порядок.map((el) => {
     const d = "M" + el["контур"].map((p) => `${p[0] - minX} ${h - (p[1] - minY)}`).join("L") + "Z";
     const color = revitFill((data.categories || [])[el["кат"]]);
     const обводка = darken(color);

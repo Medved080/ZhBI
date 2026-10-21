@@ -407,6 +407,15 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
         on_progress("Снимаю картинки планов", None, 0, len(pdf_rooms.FLOOR_PLANS))
     plan_images = pdf_plan_images.render_floor_images(doc, rooms, walls, axis_grid)
 
+    # Кладка под подоконником и над перемычкой каждого окна. После картинок
+    # планов: те рисуются по настоящим сегментам листа.
+    infill = []
+    for w in walls:
+        if w.category == "Окна":
+            z0, z1 = _floor_elevation(w.floor)
+            infill += pdf_rooms.window_infill(w, z1 - z0)
+    walls = walls + infill
+
     row = conn.execute("SELECT name FROM objects WHERE id = ?", (object_id,)).fetchone()
     object_name = row["name"] if row else ""
 
@@ -430,11 +439,13 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
             s["с площадью"] += 1
 
     _windows_count = sum(1 for w in walls if w.category == "Окна")
+    # Кладка над/под окнами в сводке «стен» не считается: это не стены листа.
     return {
         "object_id": object_id,
         "object_name": object_name,
         "total_rooms": len(rooms),
-        "total_walls": len(walls) - _windows_count,
+        "total_walls": len(walls) - _windows_count - len(infill),
+        "total_infill": len(infill),
         "total_windows": _windows_count,
         "total_slabs": len(slabs),
         "new": new_count,
@@ -655,7 +666,8 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     windows_count = sum(1 for w in walls if w.category == "Окна")
     return {
         "rooms_written": len(rooms),
-        "walls_written": len(walls) - windows_count,
+        "walls_written": len(walls) - windows_count
+                         - sum(1 for w in walls if w.index >= pdf_rooms.INFILL_INDEX_BASE),
         "windows_written": windows_count,
         "slabs_written": len(slabs),
         "retired": len(retired),

@@ -314,6 +314,44 @@ class WallSegment:
     z_height_mm: Optional[float] = None   # окно: своя высота вместо всей высоты этажа
 
 
+# Порядковые номера кладки над/под окном начинаются с этого числа (чтобы не
+# пересекаться с номерами настоящих сегментов листа) и привязаны к номеру
+# окна: `INFILL_INDEX_BASE + 2*номер_окна + {0: под, 1: над}`. Повторная
+# загрузка даёт те же uid, поэтому кладка обновляется, а не задваивается
+# (`app/pdf_import.py`, `_WALL_UID_PREFIX` — общий префикс «стена»).
+INFILL_INDEX_BASE = 1_000_000
+# Ниже/выше этого запаса (мм) кладку не строим — щель меньше толщины шва.
+_INFILL_MIN_MM = 50
+
+
+def window_infill(win: "WallSegment", floor_height_mm: float) -> list:
+    """Кладка ПОД подоконником и НАД перемычкой одного окна (2026-10-21,
+    запрос пользователя: стена вокруг окна должна быть, а не сквозной проём
+    на всю высоту этажа). Контур — как у окна, материал — наружная кладка
+    простенков (`_EXTERIOR_INFILL_MATERIAL`), на этой же отметке она стоит
+    рядом. Подоконник и высота окна — те, что записаны у самого окна
+    (`z_offset_mm`/`z_height_mm`; сейчас типовые, не измеренные), поэтому
+    когда они уточнятся по листу фасада — кладка пересчитается сама."""
+    if win.z_offset_mm is None or win.z_height_mm is None:
+        return []
+    category, material = _EXTERIOR_INFILL_MATERIAL
+    sill = float(win.z_offset_mm)
+    top = sill + float(win.z_height_mm)
+    base = INFILL_INDEX_BASE + 2 * win.index
+    out = []
+    if sill > _INFILL_MIN_MM:
+        out.append(WallSegment(
+            floor=win.floor, index=base, page=win.page, category=category, material=material,
+            polygon_mm=win.polygon_mm, thickness_mm=win.thickness_mm, section=win.section,
+            z_offset_mm=0.0, z_height_mm=sill))
+    if floor_height_mm - top > _INFILL_MIN_MM:
+        out.append(WallSegment(
+            floor=win.floor, index=base + 1, page=win.page, category=category, material=material,
+            polygon_mm=win.polygon_mm, thickness_mm=win.thickness_mm, section=win.section,
+            z_offset_mm=top, z_height_mm=floor_height_mm - top))
+    return out
+
+
 @dataclass
 class Slab:
     """Плита перекрытия этажа — приближение контуром здания (объединение

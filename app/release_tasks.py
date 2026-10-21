@@ -501,6 +501,64 @@ def _split_revit_walls(conn: sqlite3.Connection) -> str:
     return "стен разложено: " + (", ".join(f"{k} — {v}" for k, v in sorted(moved.items())) or "ничего")
 
 
+def _add_window_infill(conn: sqlite3.Connection) -> str:
+    """Добавить кладку под подоконником и над перемычкой окон PDF-моделей.
+
+    Окно в модели — тонкий параллелепипед на высоте подоконника, а стена на
+    его месте была вырезана на ВСЮ высоту этажа: в 3D вместо окна — сквозная
+    щель. Здесь по каждому текущему окну раздела «PDF» заводятся две строки
+    «Стены блоки» (материал наружной кладки): от пола до подоконника и от
+    перемычки до верха этажа, с теми же uid, что даёт новая загрузка PDF
+    (`pdf_rooms.window_infill`), — повторная загрузка их обновит, а не
+    задвоит. Идемпотентна: строка с уже существующим uid пропускается."""
+    import json
+    import re
+    from app import pdf_rooms
+    colnames = [r[1] for r in conn.execute("PRAGMA table_info(revit_elements)")]
+    copy_cols = [c for c in colnames if c not in ("id", "created_at", "updated_at")]
+    wins = conn.execute(
+        "SELECT * FROM revit_elements WHERE section_code = 'PDF' AND category = 'Окна' "
+        "AND is_current = 1").fetchall()
+    plans = {p.floor: p for p in pdf_rooms.FLOOR_PLANS}
+    added = skipped = 0
+    for w in wins:
+        m = re.match(r"^pdf:окно:(.+):(\d+)$", w["uid"] or "")
+        label = m.group(1) if m else ((w["level_name"] or "").replace("этаж ", "", 1))
+        plan = plans.get(label)
+        if plan is None or w["elevation_mm"] is None or w["height_mm"] is None or not w["outline_json"]:
+            skipped += 1
+            continue
+        try:
+            polygon = [tuple(p) for p in json.loads(w["outline_json"])]
+            params = json.loads(w["params_json"] or "{}")
+        except ValueError:
+            skipped += 1
+            continue
+        index = int(m.group(2)) if m else int(w["id"])
+        win = pdf_rooms.WallSegment(
+            floor=label, index=index, category="Окна", material=w["type_name"] or "",
+            polygon_mm=polygon, thickness_mm=params.get("толщина_мм") or 0,
+            page=params.get("страница") or 0,
+            z_offset_mm=float(w["elevation_mm"]) - plan.z0, z_height_mm=float(w["height_mm"]))
+        for piece in pdf_rooms.window_infill(win, plan.z1 - plan.z0):
+            uid = "pdf:стена:%s:%d" % (label, piece.index) if m else "%s|кладка%d" % (w["uid"], piece.index - pdf_rooms.INFILL_INDEX_BASE - 2 * index)
+            if conn.execute("SELECT 1 FROM revit_elements WHERE object_id = ? AND uid = ?",
+                            (w["object_id"], uid)).fetchone():
+                continue
+            row = {c: w[c] for c in copy_cols}
+            row.update(uid=uid, category=piece.category, type_name=piece.material,
+                       elevation_mm=plan.z0 + piece.z_offset_mm, height_mm=piece.z_height_mm,
+                       params_json=json.dumps(
+                           {**params, "материал": piece.material,
+                            "высота_и_отступ": "по типовым подоконнику и высоте окна, не измерены"},
+                           ensure_ascii=False))
+            conn.execute(
+                "INSERT INTO revit_elements (%s) VALUES (%s)" % (",".join(row), ",".join("?" * len(row))),
+                list(row.values()))
+            added += 1
+    return f"кладки под/над окнами добавлено: {added}" + (f", окон пропущено: {skipped}" if skipped else "")
+
+
 def _grant_feature_baseline(conn: sqlite3.Connection, feature_key: str) -> str:
     """Донакатить ЗАВОДСКУЮ раскладку ОДНОГО раздела ролям, у которых по
     нему нет вообще ни строки — тем же способом, каким `_seed_object_roles`
@@ -1268,6 +1326,16 @@ RELEASE_TASKS = [
                "по нему стены раскладываются на те же категории, что у PDF-моделей",
         "kind": KIND_DATA,
         "run": _split_revit_walls,
+    },
+    {
+        "name": "2026-10-21-pdf-window-infill",
+        "version": "0.109",
+        "date": "2026-10-21",
+        "title": "Добавить кладку под и над окнами у моделей из PDF",
+        "why": "стена на месте окна была вырезана на всю высоту этажа, в 3D вместо окна получалась сквозная щель; "
+               "кладка под подоконником и над перемычкой достраивается по уже загруженным окнам",
+        "kind": KIND_DATA,
+        "run": _add_window_infill,
     },
 ]
 
