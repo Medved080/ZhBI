@@ -248,6 +248,7 @@ from app.rights_matrix import router as rights_matrix_router
 from app.roles import router as roles_router
 from app.settings import router as settings_router
 from app.impersonation import ImpersonationMiddleware
+from app.response_compression import TextGZipMiddleware
 from app.shaft_panels_host import router as shaft_panels_router
 from app import shaft_panels_scope
 from app.upload_limits import (
@@ -437,6 +438,10 @@ async def _log_unhandled_exception(request: Request, exc: Exception):
     error_log.note_exception(request, exc)
     return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
 
+
+# Сжатие текстовых ответов (gzip) — `/plan-data` весит ~18 МБ, в gzip ~0,9 МБ;
+# перед uvicorn на серверах нет nginx. Подробности — app/response_compression.py.
+app.add_middleware(TextGZipMiddleware)
 
 # Лимит тела запроса — САМЫМ ВНЕШНИМ слоем (add_middleware ставит
 # последний добавленный снаружи всех предыдущих), чтобы отсечь приём
