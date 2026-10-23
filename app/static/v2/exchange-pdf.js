@@ -71,7 +71,7 @@ export function mountPdfImport(el, ctx) {
     const floors = Object.keys(data.by_floor || {});
     const rows = floors.map((f) => `<tr><td>${esc(f)}</td><td>${data.by_floor[f]["помещений"]}</td><td>${data.by_floor[f]["с площадью"]}</td></tr>`).join("");
     return `${factsHtml([
-        ["Объект", data.object_name], ["Помещений в файле", data.total_rooms], ["Стен/перегородок", data.total_walls],
+        ["Объект", data.object_name], ["Помещений в файле", data.total_rooms], ["Стен/перегородок", data.total_walls], ["Дверей", data.total_doors ?? 0],
         ["Окон", data.total_windows], ["Плит перекрытия", data.total_slabs],
       ])}
       ${listHtml("Предупреждения", data.warnings)}
@@ -158,7 +158,7 @@ export function mountPdfImport(el, ctx) {
       status.set(text, "ok");
       $("#pf-review").innerHTML = facade
         ? factsHtml([["Блоков", res.blocks_written], ["Этажей", res.floors], ["Секций", res.sections]])
-        : factsHtml([["Помещений", res.rooms_written], ["Стен/перегородок", res.walls_written], ["Окон", res.windows_written], ["Плит", res.slabs_written], ["Списано", res.retired]]);
+        : factsHtml([["Помещений", res.rooms_written], ["Стен/перегородок", res.walls_written], ["Окон", res.windows_written], ["Дверей", res.doors_written ?? 0], ["Плит", res.slabs_written], ["Списано", res.retired]]);
       pending = null; setProgress(null);
     } catch (err) {
       if (dead) return;

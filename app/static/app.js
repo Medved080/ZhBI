@@ -38280,7 +38280,7 @@ function renderPdfFacadeReview(data) {
 function renderPdfReview(data) {
   document.getElementById("pdf-review-head").textContent =
     `Объект «${data.object_name}» · помещений в файле ${data.total_rooms}`
-    + `, стен/перегородок ${data.total_walls}, окон ${data.total_windows}`
+    + `, стен/перегородок ${data.total_walls}, окон ${data.total_windows}, дверей ${data.total_doors ?? 0}`
     + `, плит перекрытия ${data.total_slabs}`;
 
   const floors = Object.keys(data.by_floor || {});
@@ -38337,7 +38337,7 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
         + `этажах, секций ${body.sections}.`;
     } else {
       текст = `Готово: помещений ${body.rooms_written}, стен/перегородок `
-        + `${body.walls_written}, окон ${body.windows_written}, плит `
+        + `${body.walls_written}, окон ${body.windows_written}, дверей ${body.doors_written ?? 0}, плит `
         + `${body.slabs_written}, списано ${body.retired}.`;
       // Секция считается по границе подписей осей «…с1»/«…с2» на листе —
       // не молчим, если на каком-то листе подписей не нашлось и она не

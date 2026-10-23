@@ -230,7 +230,7 @@ def _level_name(floor_label: str) -> str:
 # задвоила бы стены, а не обновила их категорию).
 _WALL_UID_PREFIX = {pdf_rooms.CAT_WALL_MONOLITH: "стена", pdf_rooms.CAT_WALL_BLOCKS: "стена",
                     pdf_rooms.CAT_WALL_BRICK: "стена",
-                    "Перегородки": "перегородка", "Окна": "окно"}
+                    "Перегородки": "перегородка", "Окна": "окно", "Двери": "дверь"}
 
 
 def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str = None) -> list:
@@ -441,12 +441,14 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
             s["с площадью"] += 1
 
     _windows_count = sum(1 for w in walls if w.category == "Окна")
-    # Кладка над/под окнами в сводке «стен» не считается: это не стены листа.
+    _doors_count = sum(1 for w in walls if w.category == "Двери")
+    # Кладка над/под окнами и двери в сводке «стен» не считаются: это не стены листа.
     return {
         "object_id": object_id,
         "object_name": object_name,
         "total_rooms": len(rooms),
-        "total_walls": len(walls) - _windows_count - len(infill),
+        "total_walls": len(walls) - _windows_count - _doors_count - len(infill),
+        "total_doors": _doors_count,
         "total_infill": len(infill),
         "total_windows": _windows_count,
         "total_slabs": len(slabs),
@@ -666,9 +668,11 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     sectioned = [r for r in rows if r["category"] != "Перекрытия"]
     known_section = sum(1 for r in sectioned if r["section_id"] is not None)
     windows_count = sum(1 for w in walls if w.category == "Окна")
+    doors_count = sum(1 for w in walls if w.category == "Двери")
     return {
         "rooms_written": len(rooms),
-        "walls_written": len(walls) - windows_count
+        "doors_written": doors_count,
+        "walls_written": len(walls) - windows_count - doors_count
                          - sum(1 for w in walls if w.index >= pdf_rooms.INFILL_INDEX_BASE),
         "windows_written": windows_count,
         "slabs_written": len(slabs),

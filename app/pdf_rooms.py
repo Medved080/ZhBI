@@ -64,6 +64,7 @@ import.md` §13, где описана и методика: подпись «N �
 новой вместо обновления на месте.
 """
 
+import math
 import re
 from dataclasses import dataclass
 from statistics import median
@@ -1129,15 +1130,10 @@ _WINDOW_MAX_SPAN_MM = 6000
 # справляется. (x0, y0, x1, y1) — в тех же выровненных мм-координатах, что
 # и остальная геометрия листа (после `_page_shift_correction`).
 _FLOOR1_MANUAL_WINDOWS_MM = [
-    (-22560, 220, -21875, 370),
-    # (-38850, -180, -37730, -30) — убрано 2026-10-23 (отмечено пользователем как ложное: фланг ниши входа)
-    (-57710, -180, -57350, -30),
-    (-46440, -180, -45430, -30),
-    (-63830, -14180, -63680, -13200),
-    (-38870, -16530, -38280, -16380),
-    # (-26980, -16380, -26830, -14880) — боковая стена ниши входа, не окно
-    # (убрано 2026-10-23: ниша разбирается `_niche_window`, стекло на её задней стене).
-    (-19030, -16530, -17780, -16380),
+    # Список обнулён 2026-10-23: каждая запись лежала ровно на куске кладки (IoU 1,00)
+    # и в модели давала «окно на стене»; пользователь отметил их как ложные, а сверка
+    # с листом фасада показала, что стекла на этих местах нет (простенки, жалюзи).
+    # Остекление первого этажа находится разрывами цепочки (`_gap_windows`).
 ]
 _WINDOW_CATEGORY = ("Окна", "Окно (типовое, по узору переплёта)")
 # Высота и отступ окна от отметки этажа — ПРИБЛИЖЕНИЕ, не измерение: в
@@ -1326,6 +1322,85 @@ _GAP_WINDOW_MM = (500, 4500)
 _LINE_TOL_MM = 450
 
 
+def _door_segments(page, scale: int, shift_x: float, shift_y: float, wall_polys: list,
+                   bounds: tuple) -> list:
+    """Двери из дуг поворота створок слоя проёмов (`_DOOR_LAYER`). Дуга — четверть
+    окружности радиуса в ширину створки с центром в петле: центр — тот из углов
+    её габарита, до которого от обоих концов дуги ровно радиус. Закрытая створка
+    лежит на одном из двух рёбер от петли; это то, которое упирается в стену с
+    обоих концов (точка за петлёй и точка за концом створки — внутри стены), а
+    открытое ребро уходит в помещение. Дверь — прямоугольник вдоль закрытого
+    ребра толщиной `_DOOR_THICK_MM`."""
+    H = page.rect.height
+    k = PT_TO_MM * scale
+    walls = None
+    if wall_polys:
+        try:
+            walls = unary_union([Polygon(p).buffer(0) for p in wall_polys if len(p) >= 3]).buffer(40)
+        except Exception:
+            walls = None
+    x0, x1, y0, y1 = bounds
+    out = []
+    for d in page.get_cdrawings():
+        # Дверь — штрих из ОДНОЙ дуги (на первом этаже — в слое проёмов, на типовых этажах
+        # — в слое той стены, в которой стоит дверь; круги осей — по четыре дуги, их
+        # это правило не берёт).
+        if len(d["items"]) != 1 or d["items"][0][0] != "c" or d.get("layer") in _AXIS_LAYERS:
+            continue
+        curves = d["items"]
+
+        def to_mm(pt):
+            return (pt[0] * k - shift_x, (H - pt[1]) * k - shift_y)
+
+        a = to_mm(curves[0][1])
+        b = to_mm(curves[-1][-1])
+        r = d["rect"]
+        bx0, by0 = r[0] * k - shift_x, (H - r[3]) * k - shift_y
+        bx1, by1 = r[2] * k - shift_x, (H - r[1]) * k - shift_y
+        radius = max(bx1 - bx0, by1 - by0)
+        if not (350 <= radius <= 1400) or abs((bx1 - bx0) - (by1 - by0)) > 0.15 * radius:
+            continue   # не четверть окружности створки
+        corners = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)]
+        # Середина дуги (кривая Безье, t = 0,5): от ПЕТЛИ до неё ровно радиус, а у
+        # противоположного угла габарита (до обоих концов дуги тоже радиус) — всего
+        # 0,41 радиуса; без этой проверки петля выбиралась по любому из двух углов.
+        c1, c2 = to_mm(curves[0][2]), to_mm(curves[0][3])
+        p0m = to_mm(curves[0][1])
+        p3m = to_mm(curves[0][4])
+        mid = ((p0m[0] + 3 * c1[0] + 3 * c2[0] + p3m[0]) / 8, (p0m[1] + 3 * c1[1] + 3 * c2[1] + p3m[1]) / 8)
+        hinge = min(corners, key=lambda c: abs(math.hypot(c[0] - a[0], c[1] - a[1]) - radius)
+                    + abs(math.hypot(c[0] - b[0], c[1] - b[1]) - radius)
+                    + abs(math.hypot(c[0] - mid[0], c[1] - mid[1]) - radius))
+        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+        if not (x0 <= cx <= x1 and y0 <= cy <= y1):
+            continue
+
+        def closed_score(tip):
+            vx, vy = tip[0] - hinge[0], tip[1] - hinge[1]
+            n = math.hypot(vx, vy) or 1.0
+            ux, uy = vx / n, vy / n
+            if walls is None:
+                return 0
+            # 300 мм: меньше толщины стены (150–250) точка за петлёй по ПЕРЕКЛАДИНЕ
+            # (открытое ребро) тоже попадала бы в стену, и ребро выбиралось наугад
+            beyond_tip = Point(tip[0] + ux * 300, tip[1] + uy * 300)
+            beyond_hinge = Point(hinge[0] - ux * 300, hinge[1] - uy * 300)
+            return int(walls.contains(beyond_tip)) + int(walls.contains(beyond_hinge))
+
+        tip = a if closed_score(a) >= closed_score(b) else b
+        vx, vy = tip[0] - hinge[0], tip[1] - hinge[1]
+        n = math.hypot(vx, vy) or 1.0
+        nx, ny = -vy / n * _DOOR_THICK_MM / 2, vx / n * _DOOR_THICK_MM / 2
+        poly = [(hinge[0] + nx, hinge[1] + ny), (tip[0] + nx, tip[1] + ny),
+                (tip[0] - nx, tip[1] - ny), (hinge[0] - nx, hinge[1] - ny)]
+        out.append({
+            "category": CAT_DOOR, "material": _DOOR_MATERIAL,
+            "polygon_mm": poly, "thickness_mm": float(_DOOR_THICK_MM),
+            "z_offset_mm": 0.0, "z_height_mm": float(_DOOR_HEIGHT_MM),
+        })
+    return out
+
+
 def _outline_boundary(room_polys: list, side_polys: list, candidates: list):
     """Граница наружного контура здания на листе: объединение помещений,
     стен и фасадных фигур, затянутое острым буфером (как `pdf_plan_images.
@@ -1351,6 +1426,11 @@ _NICHE_DEPTH_MIN_MM = 800     # меньшая глубина — не ниша,
 _NICHE_SIDE_TOL_MM = 450      # боковая стена ниши стоит у края разрыва не дальше этого
 _NICHE_BACK_TOL_MM = 250
 _DOOR_LAYER = "Б_блок ПРОЕМ.Б"   # слой проёмов: дверь — дуга поворота створки
+_AXIS_LAYERS = ("$$_ОСИ.$", "$$_МАРКИ ОСЕЙ.$")
+CAT_DOOR = "Двери"
+_DOOR_MATERIAL = "Дверь (по дуге поворота створки)"
+_DOOR_THICK_MM = 150     # толщина прямоугольника двери в плане (створка/коробка)
+_DOOR_HEIGHT_MM = 2100   # типовая высота двери — на листах фасада не подписана
 _DOOR_NEAR_MM = 150
 _NICHE_DUP_MM = 400           # «задняя» панель ближе этого к обычному окну — дубль
 
@@ -1475,15 +1555,10 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
                 if near is not None:
                     is_niche, back_poly = _niche_window(g0, g1, mid, horiz, piece_boxes + list(extra_boxes or []))
                     if is_niche:
-                        # Ниша входа: остекление на задней стене, на линии фасада окна нет;
-                        # а если на задней стене дверь — окна нет вовсе.
-                        if back_poly is not None and not near_door(_bbox_of(back_poly)):
-                            out.append({
-                                "category": _WINDOW_CATEGORY[0], "material": _WINDOW_CATEGORY[1],
-                                "polygon_mm": back_poly, "thickness_mm": 150.0,
-                                "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
-                                "storefront": storefront, "niche": True,
-                            })
+                        # Ниша входа (с 2026-10-23): на линии фасада окна нет, и проём на
+                        # задней стене — дверной блок (дверь строится из дуги створки,
+                        # `_door_segments`), а не остекление: на листе фасада такие проёмы
+                        # шириной 1,5–2,4 м — двери, а не окна.
                         continue
                 bb = _bbox_of(poly)
                 if any(not (bb[2] < w[0] or bb[0] > w[2] or bb[3] < w[1] or bb[1] > w[3]) for w in win_boxes):
@@ -1779,6 +1854,12 @@ def parse_walls_page(page, rooms: list = None, correction: tuple = (0.0, 0.0)) -
     segments += infill_walls
     segments += infill_windows
     segments += manual
+    # Двери — по дугам створок; стеной для определения закрытого ребра служат стены
+    # листа и фасадные фигуры (окна как стена не считаются).
+    segments += _door_segments(
+        page, scale, shift_x, shift_y,
+        [sg["polygon_mm"] for sg in segments if sg["category"] not in ("Окна", CAT_DOOR)],
+        (x0, x1, y0, y1))
 
     words = page.get_text("words")
     boundary_pt = _axis_boundary_x(words)
