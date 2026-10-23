@@ -1591,3 +1591,7 @@ input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default
 
 /* GUID изделия в панели свойств (2026-10-08): моноширинно, переносится по знакам, выделяется целиком одним щелчком */
 .ws-guid dd { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.75rem; overflow-wrap: anywhere; user-select: all; }
+
+/* Спрятанное рабочее место со схемой (main.js держит его в памяти, пока человек в меню или отчёте): иначе display: flex рабочего места
+   перебил бы атрибут hidden и две области встали бы рядом. */
+.v2-body > .v2-page[hidden] { display: none; }

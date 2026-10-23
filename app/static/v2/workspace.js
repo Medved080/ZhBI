@@ -1081,6 +1081,26 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       paintAll(); send("setObject", { objectId: id });
       return true;
     },
+    // Рабочее место, которое main.js держит в памяти, пока человек в меню или отчёте: кадр со схемой не трогаем (его выбор, фильтры, масштаб и
+    // загруженные данные остаются), возвращаем оболочке то, что рабочее место у неё забирало, — общую навигацию. destroy() при этом не вызывается.
+    suspend() {
+      if (dead) return;
+      if (found) found.hidden = true;
+      const side = shellSide(); if (side) side.hidden = navWasHidden;
+    },
+    resume() {
+      if (dead) return;
+      setNav((readSess("v2.ws.navHidden") ?? (window.innerWidth < 1500 ? "1" : "0")) === "1");   // и сообщение кадру об изменившемся размере
+      send("poll");                                                                              // чужие правки подтянуть сразу, не ждать тика опроса
+      // переходы «Показать на схеме» и «Загрузить из FBX» ждали именно этого рабочего места (схема уже загружена — onScene их больше не увидит)
+      if (sc?.loaded && !sc.error) {
+        if (takeOpenFbx(curObject)) extm.open();
+        if (!mfr) { const want = takeLocate(curObject); if (want) { send("select", { id: want }); send("locate", { id: want }); } }
+      }
+      paintAll();
+    },
+    // Годится ли спрятанное рабочее место для возврата: после ошибки или обрыва загрузки схемы показывать нечего — строим заново
+    isReusable: () => !dead && !!frame && !sc?.error,
     destroy() {
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
       clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();

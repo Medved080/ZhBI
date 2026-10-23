@@ -11,7 +11,7 @@
 //                     { proto, evt: "cmd-error", cmd, message }     — команда отклонена (неверные параметры/состояние).
 //   родитель → кадр:  { proto, cmd, args } — команды из БЕЛОГО СПИСКА ниже; параметры проверяются по типам, HTML и код не принимаются.
 //   setObject{objectId} · setView{mode:"2d"|"3d"|"3d-light"} · fit · zoom{factor} · select{id|null} · locate{id} · clearSelection ·
-//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setGuidFilter{text} · setHatch{kind:"mont"|"deliv",value:"off"|"plan"|"forecast"} · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
+//   setFilter{changes:[{key,values,on}]} · setDateFilter{key,from,to,empty} · setLagFilter{key,on} · resetDateFilters{group} · setChangeFilter{on,from,to,scope,userIds} · resetChanges · resetFilters · setGuidFilter{text} · setHatch{kind:"mont"|"deliv",value:"off"|"plan"|"forecast"} · setZoneVisible{category,on} · setExternalVisible{kind:"models"|"facades",on} · setLabelVisible{type,part:"label"|"dates",on} · search{text} · getFilters · getFilteredIds · refreshElement{id} · reload · poll; МФР (ws=mfr): mfrPick{kind,id} · mfrCategory{category,on} · mfrLayer{layer,on} · mfrReset · mfrSelect{kind,id,additive}; комплектовщик (ws=picker): pickerToggle{key,value} · pickerSet{key,values,on} · pickerClear{key|null} · pickerMetric{key,on} · pickerHighlight{on} · pickerCandidates{elementType,mark} · pickerSelectIds{ids} · applyElements{items}; события picker{model}, candidates{items}
 //   внешние 3D-модели (FBX; ЖБИ и МФР): extPlacementStart{model} · extCalibrationStart{model} · extStop · extPreview{model,override} · extGizmo{on,model} · extRefresh{objectId}; события ext-op{op,phase,…}, ext-refreshed{objectId}
 //   операции над изделиями (все рабочие места ЖБИ): getContracts (ответ — событие contracts{objectId,items}) · applyElements{items} (ЖБИ, кроме комплектовщика: у него свой) · patchComment{id,comment};
 //   в 2D (не МФР, не комплектовщик) Ctrl/⌘ + щелчок по изделию добавляет его к выбору или убирает из выбора.
@@ -774,6 +774,9 @@
       post({ evt: "refreshed", id: a.id, changed });
     },
     async reload() { await loadPlan(true); },
+    // Спрятанная схема (оболочка держит её в памяти, пока человек в меню или отчёте) возвращается на экран: чужие правки подтягиваются сразу,
+    // не дожидаясь очередного тика опроса. Тот же точечный путь, что кнопка «⟳» V1 — перестроения схемы нет.
+    async poll() { await pollChanges(); },
   };
 
   // Команды операций над изделиями (модель ЖБИ, АРМ прораба; те же безопасны и для комплектовщика): кадр по-прежнему только читает,
