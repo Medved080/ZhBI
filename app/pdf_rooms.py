@@ -1150,6 +1150,7 @@ _WINDOW_HEIGHT_MM = 1500
 # конца окна и лоджии (2026-10-23, найдено разбором выгрузки листа 10).
 _MARKER_SIZE_MM = 80
 _MARKER_TOL_MM = 12
+_SASH_MAX_THICK_MM = 145     # толщина фигуры створки; кладка — 150 и 200
 _MARKER_REACH_MM = 220      # насколько далеко от конца проёма ищется маркер вдоль оси
 _MARKER_ACROSS_MM = 300     # и поперёк оси
 # Маркеры есть не на всех листах: первый этаж (лист 5, закруглённый угол,
@@ -1174,6 +1175,35 @@ def _marker_at(markers: list, axis_pos: float, across_lo: float, across_hi: floa
     return False
 
 
+def _bbox_size(poly: list) -> tuple:
+    bb = _bbox_of(poly)
+    return (bb[2] - bb[0], bb[3] - bb[1])
+
+
+def _extend_to_markers(bb: tuple, markers: list) -> list:
+    """Габарит окна по внешним граням концевых маркеров (сверено с листом
+    фасада 2026-10-23: ширина окна на фасаде 2424 мм, а по створкам плана —
+    2240: не хватало по стойке с каждой стороны, ~92 мм)."""
+    x0, y0, x1, y1 = bb
+    half = _MARKER_SIZE_MM / 2
+    horiz = (x1 - x0) >= (y1 - y0)
+    for mx, my in markers:
+        a, c = (mx, my) if horiz else (my, mx)
+        lo, hi = (x0, x1) if horiz else (y0, y1)
+        c0, c1 = (y0, y1) if horiz else (x0, x1)
+        if not (c0 - _MARKER_ACROSS_MM <= c <= c1 + _MARKER_ACROSS_MM):
+            continue
+        if abs(a - lo) <= _MARKER_REACH_MM:
+            lo = min(lo, a - half)
+        if abs(a - hi) <= _MARKER_REACH_MM:
+            hi = max(hi, a + half)
+        if horiz:
+            x0, x1 = lo, hi
+        else:
+            y0, y1 = lo, hi
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
 def _has_end_markers(bb: tuple, markers: list) -> bool:
     """Маркеры у ОБОИХ концов проёма (вдоль его длинной стороны)."""
     x0, y0, x1, y1 = bb
@@ -1192,7 +1222,8 @@ _LOGGIA_THIN_MM = 260                # толщина боковой стены 
 _LOGGIA_ALIGN_MM = 150               # допуск совпадения наружных торцов боковых стен
 
 
-def _loggia_windows(rest: list, side_polys: list, claimed: set, center: tuple) -> list:
+def _loggia_windows(rest: list, side_polys: list, claimed: set, center: tuple,
+                    existing: Optional[list] = None) -> list:
     """Лоджии: полосы кладки (`rest`), которые с обоих концов упираются в
     боковые стены, уходящие внутрь здания. Боковые стены — фигуры слоёв
     материала (`side_polys`) и вертикальные/горизонтальные куски самого
@@ -1207,6 +1238,7 @@ def _loggia_windows(rest: list, side_polys: list, claimed: set, center: tuple) -
         pieces.append((_bbox_of(c["poly"]), c))
     sides = [(_bbox_of(p), None) for p in side_polys]
     out = []
+    taken = [_bbox_of(w["polygon_mm"]) for w in (existing or [])]
     for horiz in (True, False):
         def along(bb):   # (начало, конец) вдоль оси полосы
             return (bb[0], bb[2]) if horiz else (bb[1], bb[3])
@@ -1248,6 +1280,7 @@ def _loggia_windows(rest: list, side_polys: list, claimed: set, center: tuple) -
                         continue   # внутренний торец (стена к квартире), не остекление
                     glaze = [(bb, c) for bb, c in strips
                              if id(c) not in claimed
+                             and along(a)[1] - 100 <= (along(bb)[0] + along(bb)[1]) / 2 <= along(b)[0] + 100
                              and along(bb)[0] >= along(a)[1] - 250 and along(bb)[1] <= along(b)[0] + 250
                              and abs((across(bb)[0] + across(bb)[1]) / 2 - e) <= 350]
                     if not glaze:
@@ -1257,7 +1290,15 @@ def _loggia_windows(rest: list, side_polys: list, claimed: set, center: tuple) -
                         continue
                     lo = min(across(bb)[0] for bb, _c in glaze)
                     hi = max(across(bb)[1] for bb, _c in glaze)
-                    ax0, ax1 = along(a)[1], along(b)[0]
+                    # Остекление, а не весь зазор между боковыми стенами: на фасаде
+                    # лоджия уже зазора на толщину рамы (2740 против 2900 мм).
+                    ax0 = max(along(a)[1], min(along(bb)[0] for bb, _c in glaze))
+                    ax1 = min(along(b)[0], max(along(bb)[1] for bb, _c in glaze))
+                    # В зазоре уже есть окно — это простенки по его краям, а не остекление.
+                    # С запасом 150 мм с торцов: соседнее окно может заходить на край зазора
+                    cand = ((ax0 + 150, lo, ax1 - 150, hi) if horiz else (lo, ax0 + 150, hi, ax1 - 150))
+                    if any(not (cand[2] < t[0] or cand[0] > t[2] or cand[3] < t[1] or cand[1] > t[3]) for t in taken):
+                        continue
                     poly = ([(ax0, lo), (ax1, lo), (ax1, hi), (ax0, hi)] if horiz
                             else [(lo, ax0), (hi, ax0), (hi, ax1), (lo, ax1)])
                     out.append({
@@ -1299,7 +1340,8 @@ def _outline_boundary(room_polys: list, side_polys: list, candidates: list):
 _NEAR_OUTLINE_MM = 350   # насколько близко к наружному контуру лежит окно (толщина стены)
 
 
-def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None) -> list:
+def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
+                 storefront: bool = False) -> list:
     """Разрывы цепочки кладки вдоль линии фасада, в которых ещё нет найденного
     окна. Подтверждение: концевые маркеры у обоих краёв (`markers`), а на
     листах без маркеров — близость к наружному контуру здания (`near`)."""
@@ -1346,6 +1388,8 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None) 
                     continue
                 poly = ([(g0, lo), (g1, lo), (g1, hi), (g0, hi)] if horiz
                         else [(lo, g0), (hi, g0), (hi, g1), (lo, g1)])
+                if markers is not None:
+                    poly = _extend_to_markers(_bbox_of(poly), markers)
                 if near is not None and Polygon(poly).distance(near) > _NEAR_OUTLINE_MM:
                     continue
                 bb = _bbox_of(poly)
@@ -1355,6 +1399,7 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None) 
                     "category": _WINDOW_CATEGORY[0], "material": _WINDOW_CATEGORY[1],
                     "polygon_mm": poly, "thickness_mm": 150.0,
                     "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+                    "storefront": storefront,
                 })
     return out
 
@@ -1471,6 +1516,9 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
                 "thickness_mm": round(min(max(xs) - min(xs), max(ys) - min(ys)), 1),
                 "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
                 "_ids": [id(c) for c in group],
+                # толщина самой толстой фигуры состава: створка окна — 80–135 мм,
+                # слой кладки — 150/200 (повтор таких «окон» — совпадение кусков простенка)
+                "_member_thick": max(min(c["w"], c["h"]) for c in group),
             })
 
     # Окно по повтору размера без концевых маркеров — случайное совпадение
@@ -1479,14 +1527,18 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
     if len(markers) >= _MARKERS_MIN_PER_PAGE:
         kept = []
         for win in windows_out:
-            if _has_end_markers(_bbox_of(win["polygon_mm"]), markers):
+            bb = _bbox_of(win["polygon_mm"])
+            if win["_member_thick"] < _SASH_MAX_THICK_MM and _has_end_markers(bb, markers):
+                win["polygon_mm"] = _extend_to_markers(bb, markers)
+                win["thickness_mm"] = round(min(_bbox_size(win["polygon_mm"])), 1)
                 kept.append(win)
                 claimed.update(win["_ids"])
         windows_out = kept
 
         rest = [c for c in candidates if id(c) not in claimed]
         # Лоджии и боковые окна, которые повтором размера не находятся.
-        for win in _loggia_windows(rest, side_polys or [], claimed, ((x0 + x1) / 2, (y0 + y1) / 2)) + _gap_windows(
+        for win in _loggia_windows(rest, side_polys or [], claimed, ((x0 + x1) / 2, (y0 + y1) / 2),
+                                   existing=windows_out) + _gap_windows(
                 [c for c in rest if id(c) not in claimed], markers, windows_out):
             windows_out.append(win)
     else:
@@ -1499,7 +1551,7 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
         boundary = _outline_boundary(room_polys or [], side_polys or [], candidates)
         if boundary is not None:
             rest = [c for c in candidates if id(c) not in claimed]
-            for win in _gap_windows(rest, None, windows_out, near=boundary):
+            for win in _gap_windows(rest, None, windows_out, near=boundary, storefront=True):
                 windows_out.append(win)
     for win in windows_out:
         win.pop("_ids", None)
@@ -1537,6 +1589,7 @@ def _merge_overlapping_windows(windows: list) -> list:
             "polygon_mm": [(min(xs), min(ys)), (max(xs), min(ys)),
                           (max(xs), max(ys)), (min(xs), max(ys))],
             "thickness_mm": round(min(max(xs) - min(xs), max(ys) - min(ys)), 1),
+            "storefront": any(w.get("storefront") for w in group),
         })
     return out
 
@@ -1603,6 +1656,7 @@ def parse_walls_page(page, rooms: list = None, correction: tuple = (0.0, 0.0)) -
                 "polygon_mm": [(x0m, y0m), (x1m, y0m), (x1m, y1m), (x0m, y1m)],
                 "thickness_mm": round(min(x1m - x0m, y1m - y0m), 1),
                 "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+                "storefront": True,
             })
 
     words = page.get_text("words")
@@ -1697,7 +1751,14 @@ def _floor_slab_polygon(room_polys: list, wall_polys: list) -> Optional[list]:
 # неверны. Читаем смещения прямо из подписей листа, а не зашиваем числа.
 _FACADE_MARK_RE = re.compile(r'^\+(\d{1,2}),(\d{3})$')
 _FACADE_MARK_MIN_COUNT = 10        # столько раз пара смещений должна повториться
-_FACADE_WINDOW_FIRST_FLOOR = 2     # первый этаж (витражи, без своих отметок) не трогаем
+_FACADE_WINDOW_FIRST_FLOOR = 2     # жилые этажи; у первого этажа (витражи) свои отметки, см. ниже
+# Первый этаж — витражи на всю высоту: на листе фасада остекление идёт от
+# земли (измерено по растру: низ −0,10…+0,24 м, повторяет уклон земли, берём
+# +150 мм) до отметки +3,600 (подписана у каждого пояса витражей), а не 900…2400,
+# как у жилых окон (2026-10-23, сравнение с FBX-фасадом по скриншоту).
+_GROUND_FLOOR_SILL_MM = 150
+_GROUND_HEAD_MARK_MM = 3600
+_GROUND_HEAD_MIN_MARKS = 3
 
 
 def facade_window_levels(doc) -> Optional[dict]:
@@ -1711,12 +1772,15 @@ def facade_window_levels(doc) -> Optional[dict]:
         return None
     from collections import Counter
     offsets = Counter()
+    ground_marks = 0
     for page in doc:
         for w in page.get_text("words"):
             m = _FACADE_MARK_RE.match(w[4])
             if not m:
                 continue
             z = int(m.group(1)) * 1000 + int(m.group(2))
+            if z == _GROUND_HEAD_MARK_MM:
+                ground_marks += 1
             below = [lv for lv in levels if lv <= z]
             if not below:
                 continue
@@ -1731,7 +1795,8 @@ def facade_window_levels(doc) -> Optional[dict]:
     (sill, n1), (head, n2) = sorted(top)
     if not (1000 <= head - sill <= 2600) or abs(n1 - n2) > 0.2 * max(n1, n2):
         return None
-    return {"sill_mm": float(sill), "height_mm": float(head - sill), "marks": n1 + n2}
+    return {"sill_mm": float(sill), "height_mm": float(head - sill), "marks": n1 + n2,
+            "ground_head_mm": float(_GROUND_HEAD_MARK_MM) if ground_marks >= _GROUND_HEAD_MIN_MARKS else None}
 
 
 def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
@@ -1883,6 +1948,11 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
             z_off, z_hgt, z_src = s.get("z_offset_mm"), s.get("z_height_mm"), "типовые"
             if s["category"] == "Окна" and facade_levels:
                 z_off, z_hgt, z_src = facade_levels["sill_mm"], facade_levels["height_mm"], "лист фасада"
+            elif (s["category"] == "Окна" and s.get("storefront") and plan.floor == "1"
+                  and window_levels and window_levels.get("ground_head_mm")):
+                z_off = float(_GROUND_FLOOR_SILL_MM)
+                z_hgt = window_levels["ground_head_mm"] - _GROUND_FLOOR_SILL_MM
+                z_src = "лист фасада"
             all_walls.append(WallSegment(
                 floor=plan.floor, index=i, page=plan.page,
                 category=s["category"], material=s["material"],
