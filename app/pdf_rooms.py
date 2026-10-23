@@ -1135,7 +1135,8 @@ _FLOOR1_MANUAL_WINDOWS_MM = [
     (-46440, -180, -45430, -30),
     (-63830, -14180, -63680, -13200),
     (-38870, -16530, -38280, -16380),
-    (-26980, -16380, -26830, -14880),
+    # (-26980, -16380, -26830, -14880) — боковая стена ниши входа, не окно
+    # (убрано 2026-10-23: ниша разбирается `_niche_window`, стекло на её задней стене).
     (-19030, -16530, -17780, -16380),
 ]
 _WINDOW_CATEGORY = ("Окна", "Окно (типовое, по узору переплёта)")
@@ -1173,6 +1174,14 @@ def _marker_at(markers: list, axis_pos: float, across_lo: float, across_hi: floa
         if abs(a - axis_pos) <= _MARKER_REACH_MM and across_lo - _MARKER_ACROSS_MM <= c <= across_hi + _MARKER_ACROSS_MM:
             return True
     return False
+
+
+def _iou(a: tuple, b: tuple) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
 
 
 def _bbox_size(poly: list) -> tuple:
@@ -1338,6 +1347,64 @@ def _outline_boundary(room_polys: list, side_polys: list, candidates: list):
 
 
 _NEAR_OUTLINE_MM = 350   # насколько близко к наружному контуру лежит окно (толщина стены)
+_NICHE_DEPTH_MIN_MM = 800     # меньшая глубина — не ниша, а простенок
+_NICHE_SIDE_TOL_MM = 450      # боковая стена ниши стоит у края разрыва не дальше этого
+_NICHE_BACK_TOL_MM = 250
+
+
+def _niche_window(g0: float, g1: float, mid: float, horiz: bool, boxes: list):
+    """Входная группа утоплена в здание (2026-10-23, замечание пользователя по
+    скриншоту первого этажа): по бокам разрыва фасада две боковые стены уходят
+    внутрь на 1,0–3,0 м, а остекление и двери стоят на ЗАДНЕЙ стене ниши, а не
+    на линии фасада. Возвращает (это ниша?, полигон окна на задней стене или
+    None). Окно — разрыв между кусками задней стены (дверной проём); если задняя
+    стена не нарисована — вся ширина между боковыми стенами."""
+    def along(bb):
+        return (bb[0], bb[2]) if horiz else (bb[1], bb[3])
+
+    def across(bb):
+        return (bb[1], bb[3]) if horiz else (bb[0], bb[2])
+
+    sides = [bb for bb in boxes
+             if along(bb)[1] - along(bb)[0] <= 400 and across(bb)[1] - across(bb)[0] >= _NICHE_DEPTH_MIN_MM
+             and across(bb)[0] - 250 <= mid <= across(bb)[1] + 250]
+    centre = lambda bb: (along(bb)[0] + along(bb)[1]) / 2
+    left = [b for b in sides if abs(centre(b) - g0) <= _NICHE_SIDE_TOL_MM]
+    right = [b for b in sides if abs(centre(b) - g1) <= _NICHE_SIDE_TOL_MM]
+    for lb in left:
+        for rb in right:
+            if lb is rb or centre(rb) - centre(lb) < 500:
+                continue
+            for sign in (1, -1):
+                lf = across(lb)[1] if sign > 0 else across(lb)[0]
+                rf = across(rb)[1] if sign > 0 else across(rb)[0]
+                if abs(lf - rf) > 200 or abs(lf - mid) < _NICHE_DEPTH_MIN_MM:
+                    continue
+                inner0, inner1 = along(lb)[1], along(rb)[0]
+                if inner1 - inner0 < 500:
+                    continue
+                c_back = (lf + rf) / 2 - sign * 75
+                back = sorted(
+                    (max(along(bb)[0], inner0), min(along(bb)[1], inner1)) for bb in boxes
+                    if along(bb)[1] - along(bb)[0] > across(bb)[1] - across(bb)[0]
+                    and across(bb)[1] - across(bb)[0] <= 400
+                    and abs((across(bb)[0] + across(bb)[1]) / 2 - c_back) <= _NICHE_BACK_TOL_MM
+                    and along(bb)[1] > inner0 and along(bb)[0] < inner1)
+                gaps, cur = [], inner0
+                for a0, a1 in back:
+                    if a0 - cur >= 500:
+                        gaps.append((cur, a0))
+                    cur = max(cur, a1)
+                if inner1 - cur >= 500:
+                    gaps.append((cur, inner1))
+                if not gaps:
+                    return True, None
+                a0, a1 = max(gaps, key=lambda t: t[1] - t[0])
+                lo, hi = c_back - 75, c_back + 75
+                poly = ([(a0, lo), (a1, lo), (a1, hi), (a0, hi)] if horiz
+                        else [(lo, a0), (hi, a0), (hi, a1), (lo, a1)])
+                return True, poly
+    return False, None
 
 
 def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
@@ -1347,6 +1414,7 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
     листах без маркеров — близость к наружному контуру здания (`near`)."""
     out = []
     win_boxes = [_bbox_of(w["polygon_mm"]) for w in windows]
+    piece_boxes = [_bbox_of(c["poly"]) for c in rest]
     for horiz in (True, False):
         items = []
         for c in rest:
@@ -1392,6 +1460,18 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
                     poly = _extend_to_markers(_bbox_of(poly), markers)
                 if near is not None and Polygon(poly).distance(near) > _NEAR_OUTLINE_MM:
                     continue
+                if near is not None:
+                    is_niche, back_poly = _niche_window(g0, g1, mid, horiz, piece_boxes)
+                    if is_niche:
+                        # Ниша входа: остекление на задней стене, на линии фасада окна нет.
+                        if back_poly is not None:
+                            out.append({
+                                "category": _WINDOW_CATEGORY[0], "material": _WINDOW_CATEGORY[1],
+                                "polygon_mm": back_poly, "thickness_mm": 150.0,
+                                "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+                                "storefront": storefront, "niche": True,
+                            })
+                        continue
                 bb = _bbox_of(poly)
                 if any(not (bb[2] < w[0] or bb[0] > w[2] or bb[3] < w[1] or bb[1] > w[3]) for w in win_boxes):
                     continue
@@ -1643,21 +1723,31 @@ def parse_walls_page(page, rooms: list = None, correction: tuple = (0.0, 0.0)) -
         page, scale, shift_x, shift_y, _axis_envelope(page, correction), infill_margin,
         side_polys=[sg["polygon_mm"] for sg in segments],
         room_polys=room_polys)
-    segments += infill_walls
-    segments += infill_windows
+    manual = []
     if page.number + 1 == _ROUNDED_CORNER_PAGE:
         win_category, win_material = _WINDOW_CATEGORY
         found = [_bbox_of(w["polygon_mm"]) for w in infill_windows]
         for x0m, y0m, x1m, y1m in _FLOOR1_MANUAL_WINDOWS_MM:
             if any(not (x1m < b[0] or x0m > b[2] or y1m < b[1] or y0m > b[3]) for b in found):
                 continue   # уже найдено разбором — второй раз не добавляем
-            segments.append({
+            manual.append({
                 "category": win_category, "material": win_material,
                 "polygon_mm": [(x0m, y0m), (x1m, y0m), (x1m, y1m), (x0m, y1m)],
                 "thickness_mm": round(min(x1m - x0m, y1m - y0m), 1),
                 "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
                 "storefront": True,
             })
+    # Кусок кладки, лежащий ровно на окне, — это то же остекление, нарисованное тем
+    # же слоем (на первом этаже полосы витражей идут заливкой как простенки): в
+    # модели получались стена и окно ПОВЕРХ неё (2026-10-23, замечание
+    # пользователя). Такой кусок снимаем — над и под окном кладка достраивается
+    # отдельно (`window_infill`).
+    win_boxes = [_bbox_of(w["polygon_mm"]) for w in infill_windows + manual]
+    infill_walls = [w for w in infill_walls
+                    if not any(_iou(_bbox_of(w["polygon_mm"]), wb) >= 0.8 for wb in win_boxes)]
+    segments += infill_walls
+    segments += infill_windows
+    segments += manual
 
     words = page.get_text("words")
     boundary_pt = _axis_boundary_x(words)
