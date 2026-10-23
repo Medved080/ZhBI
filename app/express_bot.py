@@ -159,14 +159,32 @@ def save_config(conn, data: dict, user_id: Optional[int]) -> dict:
         raise ValueError("Идентификатор бота: ожидается UUID вида 6a05574d-f544-54ee-a8c8-5c7240f143ae")
     bot_name = " ".join((data.get("bot_name") or "").split())[:80]
     enabled = bool(data.get("enabled"))
-    if enabled and not (cts_url and bot_id and secret_configured()):
-        raise ValueError("Включить бота можно, когда заданы адрес сервера eXpress, идентификатор и ключ бота")
+    if enabled:
+        missing = missing_parts({"cts_url": cts_url, "bot_id": bot_id})
+        if missing:
+            raise ValueError("Включить бота нельзя: не заданы " + ", ".join(missing))
     conn.execute(
         "UPDATE express_config SET enabled = ?, cts_url = ?, bot_id = ?, bot_name = ?, verify_tls = ?, "
         "updated_at = datetime('now'), updated_by = ? WHERE id = 1",
         (1 if enabled else 0, cts_url, bot_id, bot_name, 1 if data.get("verify_tls", True) else 0, user_id))
     _drop_token()
     return get_config(conn)
+
+
+def missing_parts(cfg: dict) -> list:
+    """Чего не хватает для работы подключения: адрес сервера, идентификатор бота, ключ (по именам, как в форме)."""
+    parts = []
+    if not cfg.get("cts_url"):
+        parts.append("адрес сервера eXpress")
+    if not cfg.get("bot_id"):
+        parts.append("идентификатор бота (UUID)")
+    if not secret_configured():
+        parts.append("ключ бота")
+    return parts
+
+
+def not_configured_message(cfg: dict) -> str:
+    return "Подключение к eXpress не настроено: не заданы " + ", ".join(missing_parts(cfg))
 
 
 def config_public(conn=None) -> dict:
@@ -246,7 +264,7 @@ def _api(method: str, path: str, body=None, *, require_enabled: bool = True):
     cfg = get_config()
     key = secret_key()
     if not (cfg["cts_url"] and cfg["bot_id"] and key):
-        raise BotxError("Подключение к eXpress не настроено: нужны адрес сервера, идентификатор и ключ бота", retryable=False)
+        raise BotxError(not_configured_message(cfg), retryable=False)
     if require_enabled and not cfg["enabled"]:
         raise BotxError("Бот eXpress выключен", retryable=False)
     for attempt in (0, 1):
@@ -264,7 +282,7 @@ def ping() -> dict:
     cfg = get_config()
     key = secret_key()
     if not (cfg["cts_url"] and cfg["bot_id"] and key):
-        raise BotxError("Подключение к eXpress не настроено: нужны адрес сервера, идентификатор и ключ бота", retryable=False)
+        raise BotxError(not_configured_message(cfg), retryable=False)
     _token(cfg, key, force=True)
     return {"ok": True, "cts_url": cfg["cts_url"], "bot_id": cfg["bot_id"]}
 

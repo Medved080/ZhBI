@@ -301,7 +301,16 @@ export function mountExpress(el, ctx) {
         st.status = null; paintConnection();
       }, "Подключение сохранено.");
     });
-    pane.querySelector("#ex-k-test").addEventListener("click", () => guard(async () => { const r = await api.post("/express/test", {}); setMsg(`Связь есть: сервер ${r.cts_url} выдал токен боту.`, "ok"); }));
+    // «Проверить связь» берёт сохранённое на сервере, поэтому сначала сохраняем то, что введено в полях (и ключ, если его только что набрали)
+    pane.querySelector("#ex-k-test").addEventListener("click", () => guard(async () => {
+      const keyInput = pane.querySelector("#ex-key-in");
+      if (keyInput.value.trim()) { await api.put("/express/key", { key: keyInput.value }); keyInput.value = ""; st.config.secret_configured = true; }
+      st.config = await api.put("/express/config", { enabled: pane.querySelector("#ex-k-on").checked, cts_url: pane.querySelector("#ex-k-url").value, bot_id: pane.querySelector("#ex-k-id").value,
+        bot_name: pane.querySelector("#ex-k-name").value, verify_tls: pane.querySelector("#ex-k-tls").checked });
+      st.status = null; paintConnection();
+      try { const r = await api.post("/express/test", {}); setMsg(`Подключение сохранено. Связь есть: сервер ${r.cts_url} выдал токен боту.`, "ok"); }
+      catch (e) { setMsg(`Подключение сохранено. ${errText(e)}`, "bad"); }
+    }));
     pane.querySelector("#ex-key").addEventListener("submit", (e) => {
       e.preventDefault();
       const input = pane.querySelector("#ex-key-in");
