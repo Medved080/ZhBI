@@ -190,7 +190,8 @@ export const api = {
       || /^\/objects\/\d+\/blocks\/chess-flat-export\.(xlsx|pdf)$/.test(path)                // бланк обхода плоской шахматки
       || /^\/supplier-changes\/\d+\/changes\.xlsx$/.test(path)                              // протокол проведения документа контрактации
       || /^\/schedule-versions\/gantt\.(xlsx|pdf)(\?|$)/.test(path)                         // диаграмма Ганта графика СМР
-      || /^\/headcount\/(report|records|history-log)\.xlsx(\?|$)/.test(path);                                      // отчёт «Численность персонала»
+      || /^\/headcount\/(report|records|history-log)\.xlsx(\?|$)/.test(path)
+      || path === "/pp/export";                                                         // производственная программа: выгрузка показанного в Excel                                      // отчёт «Численность персонала»
     if (!okPath || (method !== "POST" && method !== "GET")) throw new Error(`download: «${path}» — не выгрузка`);
     let res;
     try {

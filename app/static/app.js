@@ -33682,6 +33682,45 @@ async function openHeadcount(startTab) {
 document.getElementById("menu-headcount").addEventListener("click", () => openHeadcount());
 document.getElementById("menu-work-codifier").addEventListener("click", () => openHeadcount("codifier"));
 
+// ==================== ПРОИЗВОДСТВЕННАЯ ПРОГРАММА (2026-10-23, Docs/pp-money.md) ====================
+// Общий экран V1/V2 — ES-модуль app/static/pp/pp-ui.js с ленивым import(). К выбранному объекту не привязан: показывает все объекты программы.
+let ppView = null;
+function closePp() {
+  if (ppView) { ppView.destroy(); ppView = null; }
+  document.getElementById("pp-backdrop").classList.remove("open");
+}
+document.getElementById("pp-close").addEventListener("click", closePp);
+async function openPp() {
+  document.getElementById("pp-backdrop").classList.add("open");
+  if (ppView) { ppView.destroy(); ppView = null; }
+  const send = (method) => (path, body) => api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const mod = await import("/static/pp/pp-ui.js");
+  ppView = mod.mountPp(document.getElementById("pp-host"), {
+    api: {
+      get: (path) => api(path), put: send("PUT"), post: send("POST"),
+      delete: (path) => api(path, { method: "DELETE" }),
+    },
+    upload: (path, form) => api(path, { method: "POST", body: form }),
+    // Выгрузка в Excel: POST с телом (выборка с пересчитанными сроками считается в браузере) → файл.
+    download: async (path, body, filename) => {
+      const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(describeApiError(err, res));
+      }
+      const objectUrl = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = objectUrl; a.download = filename || "ПП.xlsx";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(objectUrl);
+    },
+    canWrite: systemAdmin() || can("pp", "write"),
+    canAdmin: systemAdmin() || can("pp_admin", "write"),
+    confirm: async (text) => confirm(text),
+  });
+}
+document.getElementById("menu-pp").addEventListener("click", () => openPp());
+
 // «Новый отчёт» из журнала (живой запрос пользователя, 2026-09-10:
 // «сначала явно выбрать блок и дату, затем заполнить существующую форму
 // факта») — журнал, в отличие от панели блока/вкладки «Запланированные

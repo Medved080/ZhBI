@@ -5229,6 +5229,17 @@
             <button id="menu-headcount" data-feature="headcount" data-feature-kind="read">Численность персонала</button>
           </div>
         </div>
+        <!-- ПРОИЗВОДСТВЕННАЯ ПРОГРАММА (2026-10-23, Docs/pp-money.md): сроки работ и
+             остаток денег по объектам, подразделениям и общим группам. Один общий
+             экран на V1 и V2 — app/static/pp/pp-ui.js. «Чтение» — просмотр и выгрузка,
+             «Изменение» — общие правки сроков и группы (раздел `pp`). Не привязан к
+             выбранному объекту: показывает все объекты программы. -->
+        <div class="submenu">
+          <button type="button" class="submenu-trigger">Производственная программа</button>
+          <div class="dropdown-menu submenu-panel">
+            <button id="menu-pp" data-feature="pp" data-feature-kind="read">Сроки и деньги по объектам</button>
+          </div>
+        </div>
         <div class="submenu">
           <button type="button" class="submenu-trigger">Настройки</button>
           <div class="dropdown-menu submenu-panel">
@@ -9406,6 +9417,15 @@
     <div class="modal-sticky-head"><h2>Численность персонала — <span id="hc-object-name"></span></h2></div>
     <div class="modal-sticky-scroll"><div id="hc-host"></div></div>
     <div class="modal-sticky-foot"><div class="actions"><button class="btn btn-secondary" id="hc-close">Закрыть</button></div></div>
+  </div>
+</div>
+
+<!-- «Производственная программа» (2026-10-23): окно с общим экраном app/static/pp/pp-ui.js (диаграмма Ганта, деньги по месяцам, группы, загрузка). -->
+<div class="modal-backdrop" id="pp-backdrop">
+  <div class="modal modal-sticky" style="max-width:min(1500px,96vw);width:96vw">
+    <div class="modal-sticky-head"><h2>Производственная программа</h2></div>
+    <div class="modal-sticky-scroll"><div id="pp-host"></div></div>
+    <div class="modal-sticky-foot"><div class="actions"><button class="btn btn-secondary" id="pp-close">Закрыть</button></div></div>
   </div>
 </div>
 

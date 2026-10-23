@@ -1018,6 +1018,59 @@ TABLES = [
     ("changed_at", "TEXT", "", "когда"),
     ("changed_by", "INTEGER", "FK", "кто → users.id (SET NULL)"),
 ]),
+("pp_dataset", "pp_dataset — Производственная программа: текущая загрузка", C_REF, S_REF, [
+    ("id", "INTEGER", "PK", "всегда 1: текущая загрузка одна"),
+    ("source_file", "TEXT", "", "имя загруженного файла выгрузки"),
+    ("loaded_at", "TEXT", "", "когда загружено"),
+    ("loaded_by", "INTEGER", "FK", "кто загрузил → users.id (SET NULL)"),
+    ("stats", "TEXT", "", "JSON: счётчики загрузки (объектов, работ, строк денег, остаток)"),
+]),
+("pp_objects", "pp_objects — Производственная программа: объекты", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор объекта ПП"),
+    ("code", "TEXT", "U", "код проекта из источника («01-000325», «БП-000221»); ключ при повторной загрузке"),
+    ("name", "TEXT", "", "название объекта в источнике"),
+    ("unit", "TEXT", "", "подразделение — колонка «СМУ» источника (СМУ, дивизион, дирекция — вид подразделения)"),
+    ("division", "TEXT", "", "колонка «Дивизион» источника; в расчёте и показе не участвует"),
+    ("object_id", "INTEGER", "FK", "объект сервиса → objects.id (SET NULL); NULL — «не в сервисе»; находится по совпадению названия"),
+    ("sort_order", "INTEGER", "", "порядок объектов в источнике"),
+]),
+("pp_works", "pp_works — Производственная программа: работы и сроки", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор работы"),
+    ("pp_object_id", "INTEGER", "FK", "объект ПП → pp_objects.id (CASCADE)"),
+    ("work", "TEXT", "U", "наименование работы с номером («3.2.1. …»); уникально в объекте, по нему связываются деньги и правки"),
+    ("start_date", "TEXT", "", "начало по источнику, ГГГГ-ММ-ДД"),
+    ("end_date", "TEXT", "", "окончание по источнику, ГГГГ-ММ-ДД"),
+    ("parent_name", "TEXT", "", "наименование работы-родителя в том же объекте; NULL — работа верхнего уровня"),
+    ("sort_order", "INTEGER", "", "порядок строк в источнике"),
+]),
+("pp_money", "pp_money — Производственная программа: деньги по работам", C_HIER, S_HIER, [
+    ("id", "INTEGER", "PK", "идентификатор строки"),
+    ("pp_object_id", "INTEGER", "FK", "объект ПП → pp_objects.id (CASCADE)"),
+    ("work", "TEXT", "U", "наименование работы по кодификатору; пара с объектом уникальна"),
+    ("price", "REAL", "", "договорная цена, ₽"),
+    ("done", "REAL", "", "выполнено, ₽"),
+    ("rest", "REAL", "", "остаток, ₽; отрицательный (перевыполнение) хранится как есть и в расчёте не участвует"),
+    ("sort_order", "INTEGER", "", "порядок строк"),
+]),
+("pp_edits", "pp_edits — Производственная программа: общие правки сроков", C_ELEM, S_ELEM, [
+    ("pp_object_id", "INTEGER", "PK,FK", "объект ПП → pp_objects.id (CASCADE)"),
+    ("work", "TEXT", "PK", "наименование листовой работы; правка переживает перезагрузку выгрузки, пока работа с таким названием есть"),
+    ("start_date", "TEXT", "", "новое начало, ГГГГ-ММ-ДД"),
+    ("end_date", "TEXT", "", "новое окончание, ГГГГ-ММ-ДД"),
+    ("edited_by", "INTEGER", "FK", "кто правил последним → users.id (SET NULL)"),
+    ("edited_at", "TEXT", "", "когда"),
+]),
+("pp_groups", "pp_groups — Производственная программа: группы объектов", C_REF, S_REF, [
+    ("id", "INTEGER", "PK", "идентификатор группы"),
+    ("name", "TEXT", "U", "название группы; группы общие для всех, у кого есть раздел"),
+    ("created_by", "INTEGER", "FK", "кто создал → users.id (SET NULL)"),
+    ("created_at", "TEXT", "", "создана"),
+    ("updated_at", "TEXT", "", "состав или название менялись"),
+]),
+("pp_group_members", "pp_group_members — Производственная программа: состав групп", C_REF, S_REF, [
+    ("group_id", "INTEGER", "PK,FK", "группа → pp_groups.id (CASCADE)"),
+    ("pp_object_id", "INTEGER", "PK,FK", "объект ПП → pp_objects.id (CASCADE)"),
+]),
 
 ]
 
@@ -1185,6 +1238,15 @@ FKS = [
     ("headcount_history", "contractor_id", "headcount_contractors", "id", "CASCADE"),
     ("headcount_history", "codifier_id", "work_codifier", "id", "RESTRICT"),
     ("headcount_history", "changed_by", "users", "id", "SET NULL"),
+    ("pp_dataset", "loaded_by", "users", "id", "SET NULL"),
+    ("pp_objects", "object_id", "objects", "id", "SET NULL"),
+    ("pp_works", "pp_object_id", "pp_objects", "id", "CASCADE"),
+    ("pp_money", "pp_object_id", "pp_objects", "id", "CASCADE"),
+    ("pp_edits", "pp_object_id", "pp_objects", "id", "CASCADE"),
+    ("pp_edits", "edited_by", "users", "id", "SET NULL"),
+    ("pp_groups", "created_by", "users", "id", "SET NULL"),
+    ("pp_group_members", "group_id", "pp_groups", "id", "CASCADE"),
+    ("pp_group_members", "pp_object_id", "pp_objects", "id", "CASCADE"),
 ]
 
 # логические связи без внешнего ключа (пунктиром)

@@ -1,0 +1,149 @@
+/* Производственная программа (app/static/pp/pp-ui.js) — общий вид для V1 и V2. Перенос оформления прототипа «ПП 2026–2027».
+   У интерфейсов разные имена цветовых токенов (V1: --color-*, V2: --bg/--ink/--line…), поэтому они сводятся к своим --pp-*: берётся
+   токен V1, если он есть, иначе токен V2. Цвета семейств работ фиксированные, средней яркости — читаются и на светлой, и на тёмной
+   теме. Классы только с префиксом pp-; подсказка, окно ввода дат и «тост» живут в <body> (position: fixed), поэтому токены
+   объявлены и на них. */
+.pp-root, .pp-tip, .pp-popup, .pp-toast {
+  --pp-bg: var(--color-surface, var(--bg, #fcfcfb));
+  --pp-soft: var(--color-accent-soft, var(--surface, #f3f3f0));
+  --pp-ink: var(--color-text, var(--ink, #0b0b0b));
+  --pp-ink2: color-mix(in srgb, var(--pp-ink) 70%, var(--pp-bg));
+  --pp-muted: var(--color-text-muted, var(--muted, #898781));
+  --pp-grid: color-mix(in srgb, var(--pp-ink) 9%, var(--pp-bg));
+  --pp-gridm: color-mix(in srgb, var(--pp-ink) 17%, var(--pp-bg));
+  --pp-axis: var(--color-border, var(--line, #c3c2b7));
+  --pp-accent: var(--color-primary, var(--accent, #2a78d6));
+  --pp-on-accent: var(--color-on-primary, var(--accent-ink, #fff));
+  --pp-bad: var(--color-danger, var(--bad, #c0392b));
+  --pp-s0: #8a8a85; --pp-s1: #2f80e0; --pp-s2: #e2622e; --pp-s3: #1aa676; --pp-s4: #d99800;
+  --pp-s5: #de6a96; --pp-s6: #12941a; --pp-s7: #6a5bd0; --pp-s8: #e04f4f;
+  color: var(--pp-ink);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.pp-root *, .pp-root *::before, .pp-root *::after { box-sizing: border-box; }
+.pp-hint { font-size: 11px; color: var(--pp-ink2); margin: 2px 0 0; }
+.pp-muted { color: var(--pp-muted); }
+.pp-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+.pp-controls label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--pp-ink2); }
+.pp-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.pp-lvlbtns { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--pp-ink2); }
+.pp-root select, .pp-root input[type="text"], .pp-root input[type="date"], .pp-popup input[type="date"] {
+  background: var(--pp-bg); color: var(--pp-ink); border: 1px solid var(--pp-axis); border-radius: 6px; padding: 3px 6px;
+  font: inherit; font-size: 12px; width: auto; min-height: 0; max-width: 100%;
+}
+.pp-btn { background: var(--pp-bg); color: var(--pp-ink); border: 1px solid var(--pp-axis); border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.pp-btn:hover:not(:disabled) { border-color: var(--pp-ink2); }
+.pp-btn:disabled { opacity: .5; cursor: default; }
+.pp-btn.pp-lvl.on, .pp-btn.pp-primary { background: var(--pp-accent); border-color: var(--pp-accent); color: var(--pp-on-accent); }
+.pp-btn.pp-danger { color: var(--pp-bad); }
+.pp-btn:focus-visible, .pp-root select:focus-visible, .pp-root input:focus-visible { outline: 2px solid var(--pp-accent); outline-offset: 1px; }
+.pp-srchwrap { position: relative; display: inline-block; }
+.pp-srchwrap input { width: 210px; }
+.pp-srchlist { position: absolute; top: calc(100% + 3px); left: 0; z-index: 40; display: none; min-width: 340px; max-height: 280px; overflow: auto;
+  background: var(--pp-bg); border: 1px solid var(--pp-axis); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.18); padding: 3px 0; }
+.pp-si { display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.pp-si .sc { font-weight: 600; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.pp-si .sn { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.pp-si .sd { color: var(--pp-muted); font-size: 10px; flex: 0 0 auto; }
+.pp-si.on { background: color-mix(in srgb, var(--pp-accent) 16%, var(--pp-bg)); }
+
+.pp-meta { font-size: 11px; color: var(--pp-muted); margin: 0 0 6px; }
+.pp-panel { border: 1px solid var(--pp-axis); border-radius: 10px; background: var(--pp-bg); padding: 10px 12px; margin: 0 0 10px; }
+.pp-panel h4 { margin: 0 0 8px; font-size: 13px; }
+.pp-panel .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+.pp-checklist { max-height: 260px; overflow: auto; border: 1px solid var(--pp-grid); border-radius: 6px; margin: 0 0 8px; }
+.pp-checklist label { display: flex; gap: 8px; align-items: baseline; padding: 3px 8px; font-size: 12px; border-bottom: 1px solid var(--pp-grid); cursor: pointer; }
+.pp-checklist label:hover { background: var(--pp-soft); }
+.pp-checklist .sc { font-variant-numeric: tabular-nums; font-weight: 600; flex: 0 0 auto; }
+.pp-checklist .sd { color: var(--pp-muted); font-size: 10px; margin-left: auto; white-space: nowrap; }
+.pp-report { border-collapse: collapse; font-size: 12px; margin: 0 0 8px; }
+.pp-report td { padding: 2px 14px 2px 0; }
+.pp-report td:last-child { font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+.pp-warn { color: var(--pp-bad); }
+.pp-badge { display: inline-block; margin-left: 6px; padding: 0 5px; border: 1px solid var(--pp-axis); border-radius: 8px; font-size: 9px; font-weight: 400; color: var(--pp-muted); white-space: nowrap; }
+
+.pp-scroll { overflow: auto; border: 1px solid var(--pp-grid); border-radius: 10px; background: var(--pp-bg); max-height: calc(100vh - 300px); min-height: 160px; }
+.pp-inner { position: relative; }
+.pp-body { display: flex; align-items: flex-start; }
+.pp-axis { position: sticky; top: 0; z-index: 4; height: 40px; background: var(--pp-bg); border-bottom: 1px solid var(--pp-grid); }
+.pp-axis .corner { position: absolute; left: 0; top: 0; width: 546px; height: 40px; background: var(--pp-bg); border-right: 1px solid var(--pp-grid); z-index: 2; display: flex; align-items: center; padding: 0 6px; font-size: 10px; color: var(--pp-ink2); }
+.pp-axis .corner .ch { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-axis .corner .ch-name { flex: 1; min-width: 0; font-weight: 600; }
+.pp-axis .corner .ch-date { flex: 0 0 90px; margin-right: 6px; }
+.pp-axis .mlab { position: absolute; top: 20px; font-size: 10px; color: var(--pp-muted); transform: translateX(-50%); white-space: nowrap; }
+.pp-axis .ylab { position: absolute; top: 4px; font-size: 10px; color: var(--pp-ink2); font-weight: 600; transform: translateX(-50%); white-space: nowrap; }
+.pp-axis .corner-r { position: absolute; right: 0; top: 0; width: 150px; height: 40px; background: var(--pp-bg); border-left: 1px solid var(--pp-grid); z-index: 2; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; color: var(--pp-ink2); }
+.pp-left { position: sticky; left: 0; z-index: 3; flex: 0 0 546px; min-width: 0; background: var(--pp-bg); }
+.pp-lrow { display: flex; align-items: center; border-bottom: 1px solid var(--pp-grid); padding: 0 6px; overflow: hidden; }
+.pp-lrow.work { height: 28px; }
+.pp-lrow.grp { height: 30px; }
+.pp-lrow.work input { width: 90px; flex: 0 0 90px; min-width: 0; margin-right: 6px; font-size: 11px; padding: 1px 4px; }
+.pp-lrow.work input:disabled { opacity: .55; cursor: not-allowed; color: var(--pp-ink2); }
+.pp-lrow .tri { flex: 0 0 14px; width: 14px; cursor: pointer; color: var(--pp-ink2); font-size: 9px; text-align: center; user-select: none; }
+.pp-lrow.work .wn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.pp-lrow.work.ch .wn { font-size: 11px; color: var(--pp-ink2); }
+.pp-lrow.grp .gn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 600; padding-left: 2px; }
+.pp-lrow.grp .od { flex: 0 0 90px; width: 90px; min-width: 0; margin-right: 6px; font-size: 11px; color: var(--pp-ink2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-lrow.edited .wn::after { content: " ✎"; color: var(--pp-accent); font-size: 10px; }
+.pp-right { flex: 0 0 150px; min-width: 0; background: var(--pp-bg); border-left: 1px solid var(--pp-grid); }
+.pp-rrow { display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; border-bottom: 1px solid var(--pp-grid); font-size: 11px; color: var(--pp-ink2); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-rrow.rch { color: var(--pp-muted); font-size: 10px; }
+.pp-ltot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; height: 26px; padding: 0 8px; background: var(--pp-bg); border-top: 1px solid var(--pp-axis); font-weight: 700; font-size: 11px; }
+.pp-ltot .lv { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-gsp { height: 26px; }
+.pp-svg { display: block; flex: 0 0 auto; }
+.pp-svg .gmonth { stroke: var(--pp-gridm); stroke-width: 1.2; }
+.pp-svg .gyear { stroke: var(--pp-axis); stroke-width: 1; }
+.pp-svg .grow { stroke: var(--pp-grid); stroke-width: 1; }
+.pp-svg .edge { stroke: var(--pp-axis); stroke-width: 1.5; }
+.pp-svg .bar { cursor: grab; }
+.pp-svg .barrow:hover .bar { filter: brightness(1.07); }
+.pp-svg .barrow:hover .handle { fill: var(--pp-ink); opacity: .3; }
+.pp-svg .handle { fill: transparent; cursor: ew-resize; pointer-events: none; }
+.pp-svg .blab { font-size: 10.5px; fill: var(--pp-ink2); font-variant-numeric: tabular-nums; pointer-events: none; }
+.pp-svg .clipmark { font-size: 10px; fill: var(--pp-ink2); pointer-events: none; font-weight: 700; }
+.pp-svg .f0 .bar { fill: var(--pp-s0); } .pp-svg .f1 .bar { fill: var(--pp-s1); } .pp-svg .f2 .bar { fill: var(--pp-s2); } .pp-svg .f3 .bar { fill: var(--pp-s3); }
+.pp-svg .f4 .bar { fill: var(--pp-s4); } .pp-svg .f5 .bar { fill: var(--pp-s5); } .pp-svg .f6 .bar { fill: var(--pp-s6); } .pp-svg .f7 .bar { fill: var(--pp-s7); } .pp-svg .f8 .bar { fill: var(--pp-s8); }
+.pp-svg .nomoney .bar { stroke: var(--pp-ink2); stroke-dasharray: 4 3; stroke-width: 1; fill-opacity: .35; }
+.pp-svg .childbar .bar { opacity: .5; }
+.pp-svg .childbar .blab { fill: var(--pp-muted); font-size: 10px; }
+.pp-svg .edited .bar { stroke: var(--pp-ink); stroke-width: 1.2; }
+.pp-svg .grpbar rect { fill: var(--pp-axis); opacity: .55; pointer-events: none; }
+.pp-root.dragging { user-select: none; }
+.pp-root.dragging .pp-svg .bar { cursor: grabbing; }
+.pp-root[data-dragmode="rs"] .pp-svg .bar, .pp-root[data-dragmode="re"] .pp-svg .bar { cursor: ew-resize; }
+.pp-root.readonly .pp-svg .bar { cursor: default; }
+.pp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 2px 2px; font-size: 11px; color: var(--pp-ink2); }
+.pp-legend .it { display: flex; align-items: center; gap: 5px; }
+.pp-legend .sw { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
+.pp-legend .f1 { background: var(--pp-s1); } .pp-legend .f2 { background: var(--pp-s2); } .pp-legend .f3 { background: var(--pp-s3); } .pp-legend .f4 { background: var(--pp-s4); }
+.pp-legend .f5 { background: var(--pp-s5); } .pp-legend .f6 { background: var(--pp-s6); } .pp-legend .f7 { background: var(--pp-s7); } .pp-legend .f8 { background: var(--pp-s8); }
+.pp-foot { display: flex; margin: 0; border: 1px solid var(--pp-grid); border-top: none; border-radius: 0 0 10px 10px; background: var(--pp-bg); overflow: hidden; }
+.pp-foot .fleft { flex: 0 0 546px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; color: var(--pp-ink2); }
+.pp-foot .fclip { flex: 1; min-width: 0; overflow: hidden; position: relative; }
+.pp-foot .fcells { position: absolute; left: 38px; top: 0; bottom: 0; display: flex; border-left: 1px solid var(--pp-grid); will-change: transform; }
+.pp-foot .fcell { display: flex; flex-direction: column; align-items: center; justify-content: center; border-left: 1px solid var(--pp-grid); overflow: hidden; white-space: nowrap; padding: 1px 0; }
+.pp-foot .fcell:first-child { border-left: none; }
+.pp-foot .fname { font-size: 9px; color: var(--pp-muted); }
+.pp-foot .fsum { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pp-foot .funit { font-size: 8.5px; color: var(--pp-muted); }
+.pp-foot .fright { flex: 0 0 150px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; font-weight: 700; border-left: 1px solid var(--pp-grid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-nodates { padding: 0 2px 12px; }
+.pp-nodates summary { cursor: pointer; font-size: 12px; color: var(--pp-ink2); margin-top: 6px; }
+.pp-nodates table { border-collapse: collapse; width: 100%; margin-top: 6px; font-size: 12px; background: var(--pp-bg); }
+.pp-nodates th, .pp-nodates td { border: 1px solid var(--pp-grid); padding: 3px 8px; text-align: left; }
+.pp-nodates td.num, .pp-nodates th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pp-empty { padding: 30px; text-align: center; color: var(--pp-ink2); }
+
+.pp-tip { position: fixed; z-index: 3000; display: none; background: var(--pp-bg); color: var(--pp-ink); border: 1px solid var(--pp-axis); border-radius: 8px; padding: 7px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: none; max-width: 360px; }
+.pp-tip .t1 { font-weight: 600; margin-bottom: 2px; }
+.pp-tip .row { display: flex; justify-content: space-between; gap: 14px; }
+.pp-tip .row span:first-child { color: var(--pp-ink2); }
+.pp-tip .hint { font-size: 10px; color: var(--pp-muted); margin-top: 4px; }
+.pp-popup { position: fixed; z-index: 3001; display: none; background: var(--pp-bg); color: var(--pp-ink); border: 1px solid var(--pp-axis); border-radius: 10px; padding: 12px; box-shadow: 0 4px 18px rgba(0,0,0,.25); min-width: 230px; }
+.pp-popup .pp-title { font-weight: 600; margin-bottom: 8px; }
+.pp-popup .pp-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pp-popup .pp-row label { width: 66px; color: var(--pp-ink2); font-size: 12px; }
+.pp-popup .pp-btns { display: flex; gap: 6px; margin-top: 8px; }
+.pp-toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--pp-ink); color: var(--pp-bg); border-radius: 8px; padding: 8px 16px; font-size: 12px; z-index: 3002; opacity: 0; transition: opacity .25s; pointer-events: none; max-width: 80vw; }

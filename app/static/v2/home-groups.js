@@ -19,6 +19,7 @@ const PROCESS_CARDS = [
   { id: "accounting" },
   { id: "reports" },
   { id: "documents" },
+  { id: "pp" },
   { id: "headcount" },
   { id: "dicts" },
   { id: "exchange" },

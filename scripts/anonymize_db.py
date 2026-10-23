@@ -332,6 +332,32 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             conn.execute(f"UPDATE {table} SET name=? WHERE id=?", (alias, row["id"]))
         count(f"{table}.name", len(rows))
 
+    # Производственная программа (2026-10-23, Docs/pp-money.md): в pp_objects лежат реальные коды проектов и названия объектов, в pp_money —
+    # деньги заказчика, в pp_groups — названия групп, набранные людьми. Коды и названия меняются на псевдонимы (код уникален — два прохода),
+    # суммы масштабируются случайным множителем на объект и шумом на строку (структура, сроки и пропорции остаются, цифры — нет).
+    # Названия работ (pp_works.work, pp_money.work) — общий классификатор видов работ, не реквизиты; финальная проверка всё равно ищет в них
+    # прежние названия объектов.
+    if "pp_objects" in existing:
+        import random
+        rnd = random.Random(20261023)
+        rows = conn.execute("SELECT id, code, name FROM pp_objects ORDER BY id").fetchall()
+        for row in rows:
+            conn.execute("UPDATE pp_objects SET code=? WHERE id=?", (f"__anon_{row['id']}__", row["id"]))
+        for n, row in enumerate(rows, start=1):
+            code = mapping.put("pp_objects.code", row["code"], f"ПП-{n:04d}")
+            name = mapping.put("pp_objects.name", row["name"], f"Объект ПП-{n}")
+            conn.execute("UPDATE pp_objects SET code=?, name=? WHERE id=?", (code, name, row["id"]))
+            k = rnd.uniform(0.3, 2.5)
+            for m in conn.execute("SELECT id, price, done, rest FROM pp_money WHERE pp_object_id=?", (row["id"],)).fetchall():
+                conn.execute("UPDATE pp_money SET price=?, done=?, rest=? WHERE id=?",
+                             tuple(round(m[f] * k * rnd.uniform(0.9, 1.1), 2) for f in ("price", "done", "rest")) + (m["id"],))
+        count("pp_objects", len(rows))
+        for n, row in enumerate(conn.execute("SELECT id, name FROM pp_groups ORDER BY id").fetchall(), start=1):
+            alias = mapping.put("pp_groups.name", row["name"], f"Группа ПП-{n}")
+            conn.execute("UPDATE pp_groups SET name=? WHERE id=?", (f"__anon_{row['id']}__", row["id"]))
+            conn.execute("UPDATE pp_groups SET name=? WHERE id=?", (alias, row["id"]))
+        conn.execute("UPDATE pp_dataset SET source_file='ПП-обезличенная.xlsx'")
+
     # Сессии — это живые токены доступа. Обезличивать нечего, копия
     # должна начинаться с пустого списка сессий.
     stats["sessions (удалено)"] = conn.execute("DELETE FROM sessions").rowcount

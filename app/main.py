@@ -52,6 +52,7 @@ from app.attachments import router as attachments_router
 from app.external_models import router as external_models_router
 from app.headcount import global_router as headcount_global_router, router as headcount_router
 from app.headcount_import import router as headcount_import_router
+from app.pp import router as pp_router
 from app.changelog import CHANGELOG
 from app.kladr import router as kladr_router
 from app.project_map import ONLINE_HOSTS as PROJECT_MAP_ONLINE_HOSTS
@@ -508,6 +509,7 @@ app.include_router(external_models_router)
 app.include_router(headcount_router)
 app.include_router(headcount_global_router)
 app.include_router(headcount_import_router)
+app.include_router(pp_router)
 app.include_router(shaft_panels_router)
 
 # Калькулятор: роуты /calc/*, приём и отправка пакетов, статические файлы. Права —

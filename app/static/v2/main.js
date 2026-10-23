@@ -182,6 +182,7 @@ const MFR_SCREENS = {
   "chess-flat-edit": () => import("./chess-flat-screen.js").then((m) => m.mountChessFlatScreen),
   "block-bulk-edit": () => import("./block-bulk-screen.js").then((m) => m.mountBlockBulkScreen),
   "headcount-edit": () => import("./headcount-screen.js").then((m) => m.mountHeadcountScreen),
+  "pp-edit": () => import("./pp-screen.js").then((m) => m.mountPpScreen),
 };
 
 const MODULES = {

@@ -1789,3 +1789,75 @@ CREATE TABLE IF NOT EXISTS headcount_history (
 );
 CREATE INDEX IF NOT EXISTS idx_hc_history_key ON headcount_history (object_id, work_date, contractor_id, codifier_id);
 CREATE INDEX IF NOT EXISTS idx_hc_history_record ON headcount_history (record_id);
+
+
+-- Производственная программа в деньгах (2026-10-23, Docs/pp-money.md): сроки работ объектов и остаток денег, распределяемый по месяцам.
+-- Источник — выгрузка «ДД.ММ.ГГГГ.xlsx» (листы «Ввод» и «Лист6»); загрузка ЗАМЕНЯЕТ работы и деньги целиком, а объекты, общие правки и
+-- группы сохраняются (ключ объекта — код проекта, ключ работы — её название внутри объекта).
+CREATE TABLE IF NOT EXISTS pp_dataset (
+    id INTEGER PRIMARY KEY CHECK (id = 1),    -- одна текущая загрузка
+    source_file TEXT NOT NULL,
+    loaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+    loaded_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    stats TEXT                                -- JSON: счётчики загрузки
+);
+
+CREATE TABLE IF NOT EXISTS pp_objects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,                -- код проекта из источника («01-000325», «БП-000221»)
+    name TEXT NOT NULL,
+    unit TEXT,                                -- подразделение: колонка «СМУ» источника
+    division TEXT,                            -- колонка «Дивизион» источника (в расчёте не участвует)
+    object_id INTEGER REFERENCES objects (id) ON DELETE SET NULL,   -- объект сервиса; NULL — «не в сервисе»
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pp_objects_object ON pp_objects (object_id);
+
+CREATE TABLE IF NOT EXISTS pp_works (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pp_object_id INTEGER NOT NULL REFERENCES pp_objects (id) ON DELETE CASCADE,
+    work TEXT NOT NULL,                       -- «3.2.1. Планировка территории»
+    start_date TEXT NOT NULL,                 -- YYYY-MM-DD
+    end_date TEXT NOT NULL,
+    parent_name TEXT,                         -- название работы-родителя в том же объекте
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (pp_object_id, work)
+);
+
+CREATE TABLE IF NOT EXISTS pp_money (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pp_object_id INTEGER NOT NULL REFERENCES pp_objects (id) ON DELETE CASCADE,
+    work TEXT NOT NULL,
+    price REAL NOT NULL DEFAULT 0,            -- договорная цена
+    done REAL NOT NULL DEFAULT 0,             -- выполнено
+    rest REAL NOT NULL DEFAULT 0,             -- остаток; отрицательный (перевыполнение) хранится как есть, в расчёте не участвует
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (pp_object_id, work)
+);
+
+-- ОБЩИЕ правки сроков листовых работ (решение 2026-10-23): видны всем, у кого есть раздел. Работа с детьми правки не хранит —
+-- её срок считается по нижним. Ключ — название работы, а не id: загрузка новой выгрузки пересоздаёт работы, правки остаются.
+CREATE TABLE IF NOT EXISTS pp_edits (
+    pp_object_id INTEGER NOT NULL REFERENCES pp_objects (id) ON DELETE CASCADE,
+    work TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    edited_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    edited_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (pp_object_id, work)
+);
+
+-- ОБЩИЕ группы объектов ПП для просмотра «по произвольной группе».
+CREATE TABLE IF NOT EXISTS pp_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS pp_group_members (
+    group_id INTEGER NOT NULL REFERENCES pp_groups (id) ON DELETE CASCADE,
+    pp_object_id INTEGER NOT NULL REFERENCES pp_objects (id) ON DELETE CASCADE,
+    PRIMARY KEY (group_id, pp_object_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pp_group_members_obj ON pp_group_members (pp_object_id);
