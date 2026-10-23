@@ -80,14 +80,21 @@ async def bot_command(request: Request):
 
 @webhook_router.post("/notification/callback")
 async def bot_callback(request: Request):
-    denied = _verify(request)
-    if denied is not None:
-        return denied
+    # Результат асинхронного метода BotX. В примере администраторов (pybotx) подпись этих запросов не проверяется: CTS может слать их без токена,
+    # поэтому отказ 401 тут только мешал бы. Подписанный запрос попадает в журнал как есть, неподписанный — коротким предупреждением без содержимого.
+    try:
+        express_bot.verify_incoming(request.headers.get("authorization"))
+        signed = True
+    except BotxError:
+        signed = False
     try:
         payload = await request.json()
     except ValueError:
         payload = {}
-    if isinstance(payload, dict) and payload.get("status") == "error":
+    if not signed:
+        log_event("in", "system", f"POST /notification/callback без верной подписи от {request.client.host if request.client else '?'} (принят, содержимое не разбиралось)", ok=False,
+                  error="подпись не подтверждена")
+    elif isinstance(payload, dict) and payload.get("status") == "error":
         log_event("in", "system", f"callback sync_id={payload.get('sync_id')}", ok=False, error=str(payload.get("reason") or payload.get("errors") or "ошибка доставки")[:300])
     return {"result": "accepted"}
 

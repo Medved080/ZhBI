@@ -76,6 +76,8 @@ ok(eb.verify_incoming("Bearer " + jwt(good)), "верный JWT (iss = бот) �
 ok(eb.verify_incoming("Bearer " + jwt({"iss": "cts.corp", "aud": [BOT_ID], "exp": time.time() + 60})), "верный JWT (aud = [бот]) принят")
 ok(eb.verify_incoming("Bearer " + jwt({"iss": BOT_ID.upper(), "aud": "host", "exp": time.time() + 60})), "UUID бота в токене сравнивается без учёта регистра")
 ok("iss=" in eb.describe_token("Bearer " + jwt(good)) and KEY not in eb.describe_token("Bearer " + jwt(good)), "describe_token показывает iss/aud и не содержит ключа")
+_e = str(eb._fail(401, {"reason": "unauthorized", "errors": ["bad token"]}, "Сообщение не отправлено"))
+ok("unauthorized" in _e and "HTTP 401" in _e and "bad token" in _e, "ошибка отправки называет код ответа CTS и его подробности")
 for label, hdr in [("чужой ключ", "Bearer " + jwt(good, key="other-secret-1")), ("истёк", "Bearer " + jwt({**good, "exp": time.time() - 5})),
                    ("чужой бот", "Bearer " + jwt({"iss": "x", "aud": ["y"]})), ("без токена", None), ("мусор", "Bearer a.b.c"),
                    ("alg none", "Bearer " + jwt(good, alg="none"))]:
@@ -285,7 +287,7 @@ def http(method, path, body=None, auth=True):
     except urllib.error.HTTPError as e: return e.code, json.loads(e.read() or b"null")
 st, body = http("GET", "/status")
 ok(st == 200 and body["result"]["commands"][0]["body"] == "/start", "GET /status отвечает списком команд")
-ok(http("GET", "/status", auth=False)[0] == 401 and http("POST", "/command", {}, auth=False)[0] == 401 and http("POST", "/notification/callback", {}, auth=False)[0] == 401, "без подписи все три маршрута дают 401")
+ok(http("GET", "/status", auth=False)[0] == 401 and http("POST", "/command", {}, auth=False)[0] == 401 and http("POST", "/notification/callback", {}, auth=False)[0] == 200, "без подписи /status и /command дают 401, /notification/callback принимается без разбора (как в примере pybotx)")
 SENT.clear()
 st, body = http("POST", "/command", {"from": sender(), "command": {"body": "/start", "data": {}, "command_type": "user"}, "bot_id": BOT_ID})
 ok(st == 202 and body["result"] == "accepted", "POST /command принят (202)")

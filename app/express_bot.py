@@ -242,7 +242,13 @@ def _fail(status: int, payload, what: str) -> BotxError:
     human = REASONS.get(reason) or (str(reason) if reason else f"код {status}")
     if status >= 500:
         human = f"сервер eXpress недоступен или сломался (код {status})"
-    return BotxError(f"{what}: {redact(human)}", status=status, reason=reason, retryable=status >= 500 or status in (408, 429))
+    # Код ответа и подробности CTS (errors / error_data) — в самом тексте: по одному слову «unauthorized» причину не определить
+    extra = ""
+    if isinstance(payload, dict):
+        details = {k: payload[k] for k in ("errors", "error_data") if payload.get(k)}
+        if details:
+            extra = "; " + json.dumps(details, ensure_ascii=False)[:200]
+    return BotxError(f"{what}: {redact(human)} (HTTP {status}{redact(extra)})", status=status, reason=reason, retryable=status >= 500 or status in (408, 429))
 
 
 def _token(cfg: dict, key: str, force: bool = False) -> str:
