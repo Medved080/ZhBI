@@ -39,6 +39,7 @@ from app.crane_zone_report import historical_zone_overlay
 from app.crane_zone_versions import period_version as crane_zone_period_version
 from app.access import assert_object_feature, is_system_admin
 from app.auth import get_current_user
+from app.status_facts import last_run_day_sql
 from app.db import begin_write, get_connection
 
 router = APIRouter(prefix="/schedule-versions", tags=["schedule"])
@@ -156,9 +157,9 @@ def forecast_dates(conn: sqlite3.Connection, object_id: Optional[int] = None) ->
     """«Прогнозные» даты СМР изделий: element_id -> (начало, окончание, это_факт).
 
     Не смонтированное изделие — даты последней актуализации графика (как есть; None, если изделия в ней нет). Смонтированное
-    (статус «Смонтирован» или «Принят») — ФАКТ: окончание СМР = дата первого перехода в «Смонтирован» (нет такой записи —
-    в «Принят»), начало = фактическая дата поставки, а если её нет — та же дата монтажа. Дата берётся из истории статусов
-    (первый переход, как в «Динамике»). `object_id` — один объект (схема); без него — все актуальные изделия (выгрузка).
+    (статус «Смонтирован» или «Принят») — ФАКТ: окончание СМР = дата последней установки (начало последней серии
+    «Смонтирован»/«Принят»), начало = фактическая дата поставки, а если её нет — та же дата монтажа. Дата берётся из истории
+    статусов (последняя установка, как в «Динамике»). `object_id` — один объект (схема); без него — все актуальные изделия (выгрузка).
     Два запроса на весь набор, а не по запросу на изделие.
     """
     where, params = ("e.object_id = ?", [object_id]) if object_id is not None else ("e.is_current = 1", [])
@@ -169,20 +170,17 @@ def forecast_dates(conn: sqlite3.Connection, object_id: Optional[int] = None) ->
         {FORECAST_JOIN}
         WHERE {where}
         """, params).fetchall()
-    facts = {}
-    for r in conn.execute(
+    # Дата монтажа — последняя установка (решение пользователя 2026-10-23, app/status_facts.py), как в «Динамике».
+    facts = {r["id"]: r["d"] for r in conn.execute(
         f"""
-        SELECT sh.element_id AS id, sh.status AS st, date(MIN(sh.changed_at)) AS d
-        FROM status_history sh JOIN elements e ON e.id = sh.element_id
-        WHERE sh.status IN ('installed', 'accepted') AND {where}
-        GROUP BY sh.element_id, sh.status
-        """, params):
-        facts.setdefault(r["id"], {})[r["st"]] = r["d"]
+        SELECT e.id AS id, {last_run_day_sql(INSTALLED_STATUSES)} AS d
+        FROM elements e
+        WHERE {where} AND e.current_status IN ({",".join("?" * len(INSTALLED_STATUSES))})
+        """, params + list(INSTALLED_STATUSES))}
     out = {}
     for r in rows:
         if r["current_status"] in INSTALLED_STATUSES:
-            ф = facts.get(r["id"], {})
-            end = ф.get("installed") or ф.get("accepted")
+            end = facts.get(r["id"])
             start = (str(r["actual_delivery_date"])[:10] if r["actual_delivery_date"] else None) or end
             out[r["id"]] = (start, end, True)
         else:

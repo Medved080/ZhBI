@@ -19,6 +19,7 @@ from typing import Optional
 
 from app.db import visible_elements_clause
 from app.models import STATUS_LABELS_RU, STATUS_ORDER, Status
+from app.status_facts import last_run_day_sql
 
 TITLE = "Статус монтажа"
 ROOT_LABEL = "ЖБ изделия"
@@ -548,19 +549,20 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     # ФАКТ (2026-10-03, решение пользователя: «корректное значение — как в сводке "Статус монтажа" версия 2»). В факт входят изделия,
     # у которых СЕЙЧАС статус из набора («Доставлен» и выше для поставки, «Смонтирован»/«Принят» для монтажа) — то же определение, что
     # у сводки. Раньше считалась любая запись истории: откатили статус назад — изделие всё равно оставалось в факте, а перескочило
-    # звено (сразу «Смонтирован») — не попадало в поставку. Дата изделия на кривой — первый переход в статус из набора (повторные
-    # записи — откат и возврат — не считаются вторым изделием); нет ни одной записи истории — изделие датируется отчётной датой.
+    # звено (сразу «Смонтирован») — не попадало в поставку. Дата изделия на кривой — ПОСЛЕДНЯЯ установка (решение пользователя
+    # 2026-10-23, app/status_facts.py): начало последней непрерывной серии статусов из набора. Откат и возврат изделие
+    # не дублируют (оно одно), но датируют днём повторной установки — иначе «за сегодня» не видело изделий, смонтированных
+    # сегодня повторно; нет ни одной записи истории — изделие датируется отчётной датой.
     def fact_rows(statuses: tuple):
         marks = ",".join("?" * len(statuses))
         rows = conn.execute(
             f"""
             SELECT d, COUNT(*) AS n FROM (
-                SELECT (SELECT date(MIN(sh.changed_at)) FROM status_history sh
-                        WHERE sh.element_id = e.id AND sh.status IN ({marks})) AS d
+                SELECT {last_run_day_sql(statuses)} AS d
                 FROM elements e
                 {where} {'AND' if where else 'WHERE'} e.current_status IN ({marks})
             ) GROUP BY d
-            """, list(statuses) + params + list(statuses)).fetchall()
+            """, params + list(statuses)).fetchall()
         by_day = {}
         for r in rows:
             day = r["d"] or today[:10]

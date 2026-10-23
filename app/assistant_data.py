@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from app.access import accessible_object_ids, has_feature, is_system_admin
 from app.db import get_connection
+from app.status_facts import last_run_day_sql
 from app.calc import qwen_client, runtime
 from app.assistant_llm import encoded, trim_history
 
@@ -233,8 +234,8 @@ class Snapshot:
         self.db.set_authorizer(self._authorize)
 
     def _facts(self, conn, user, ids):
-        # Единый поэлементный расчёт: текущий состав/статус и первый переход,
-        # как в build_dynamics_report. Недатированные входят в обе границы.
+        # Единый поэлементный расчёт: текущий состав/статус и последняя установка
+        # (начало последней серии статусов), как в build_dynamics_report. Недатированные входят в обе границы.
         fields = "element_id object_id element_type mark floor current_status montage_day delivery_day montage_before montage_after montage_change delivery_before delivery_after delivery_change montage_undated delivery_undated".split()
         self.db.execute("CREATE TABLE element_facts (" + ",".join(fields) + ")")
         self.db.execute("CREATE TABLE period_facts(object_id INTEGER, montage_before INTEGER, montage_after INTEGER, montage_change INTEGER, delivery_before INTEGER, delivery_after INTEGER, delivery_change INTEGER, montage_undated INTEGER, delivery_undated INTEGER)")
@@ -248,8 +249,8 @@ class Snapshot:
                 selected_clause = " AND e.id IN (" + (",".join("?" for _ in selected) or "NULL") + ")"
                 params += selected
             rows = conn.execute("""SELECT e.id, e.object_id, e.element_type, e.mark, e.floor, e.current_status,
-                (SELECT date(MIN(h.changed_at)) FROM status_history h WHERE h.element_id=e.id AND h.status IN ('installed','accepted')) AS montage_day,
-                (SELECT date(MIN(h.changed_at)) FROM status_history h WHERE h.element_id=e.id AND h.status IN ('delivered','installed','accepted')) AS delivery_day
+                """ + last_run_day_sql(("installed", "accepted")) + """ AS montage_day,
+                """ + last_run_day_sql(("delivered", "installed", "accepted")) + """ AS delivery_day
                 FROM elements e WHERE e.object_id=? AND e.is_current=1""" + selected_clause, params).fetchall()
             for row in rows:
                 facts, undated = [], []
