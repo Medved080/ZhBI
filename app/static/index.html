@@ -5571,6 +5571,8 @@
             <!-- 2026-10-20: показатели виртуального сервера — процессор, доступная память,
                  свободное место на дисках. Права отдельные (server_status, только админ сервиса). -->
             <button id="menu-server-status" data-feature="server_status" data-feature-kind="read">Состояние сервера</button>
+            <!-- 2026-10-23: встроенные замеры производительности (сервер и браузеры), право perf — только админ сервиса. -->
+            <button id="menu-perf" data-feature="perf" data-feature-kind="read">Замеры производительности</button>
             <!-- Последним и красным: необратимо и затрагивает ВСЕ чертежи разом. -->
             <button id="menu-reset-history" class="admin-only menu-item-danger">Очистить историю статусов</button>
           </div>
@@ -7724,6 +7726,24 @@
       <div class="actions">
         <span class="hint-text" id="server-status-time" style="margin-right:auto;"></span>
         <button class="btn btn-secondary" id="server-status-close">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Замеры производительности — 2026-10-23, см. app/perf.py и app/static/perf-panel.js (общий модуль с V2). -->
+<div class="modal-backdrop" id="perf-backdrop">
+  <div class="modal wide modal-sticky">
+    <div class="modal-sticky-head">
+      <h2>Замеры производительности</h2>
+      <p class="hint-text">Включите сбор и поработайте в системе: сервер и браузеры запишут, сколько времени занимают запросы, построение схемы, нажатия. Сводку можно выгрузить в CSV.</p>
+    </div>
+    <div class="modal-sticky-scroll">
+      <div id="perf-body"></div>
+    </div>
+    <div class="modal-sticky-foot">
+      <div class="actions">
+        <button class="btn btn-secondary" id="perf-close">Закрыть</button>
       </div>
     </div>
   </div>
@@ -10147,6 +10167,8 @@
 
 </div><!-- #app-root -->
 
+<script src="/static/perf.js"></script>
+<script src="/static/perf-panel.js"></script>
 <script src="/static/test-banner.js"></script>
 <script src="/static/timeline.js?v=20261008-1"></script>
 <script src="/static/ui-tooltips.js"></script>

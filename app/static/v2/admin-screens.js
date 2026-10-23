@@ -2,6 +2,7 @@
 // внутри — диспетчер по имени. Каждый экран возвращает {hasUnsavedChanges, guardLeave, destroy}.
 import { mountAiSettings } from "./ai-settings.js";
 import { mountServerStatusView } from "./server-status-view.js";
+import { mountPerfView } from "./perf-view.js";
 import { esc } from "./screen-view.js";
 import { mountPasswordForm } from "./password-form.js";
 import { frame, errText } from "./admin-common.js";
@@ -80,6 +81,7 @@ function mountStatusLog(el, { screen, groupTitle }) {
 const SCREENS = {
   "admin:ai": mountAiSettings,
   "admin:server-status": mountServerStatusView,
+  "admin:perf": mountPerfView,
   "admin:password": mountPassword,
   "admin:my-access": mountMyAccess,
   "admin:reset-history": mountResetHistory,

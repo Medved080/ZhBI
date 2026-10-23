@@ -11,7 +11,8 @@ import math
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app import activity
@@ -124,7 +125,7 @@ def object_geometry_features(object_id: int, user: sqlite3.Row = Depends(get_cur
 
 
 @router.get("/{model_id}/content")
-def download_content(object_id: int, model_id: int, user: sqlite3.Row = Depends(get_current_user)):
+def download_content(object_id: int, model_id: int, request: Request, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()
     try:
         _assert_object_exists(conn, object_id)
@@ -140,8 +141,18 @@ def download_content(object_id: int, model_id: int, user: sqlite3.Row = Depends(
     p = path_for(row["stored_name"])
     if not p.is_file():
         raise HTTPException(status_code=410, detail="Файл модели отсутствует на диске")
+    # Файл модели — до десятков МБ (по замерам 2026-10-23 за одно открытие схемы уходило ~26 МБ, 1–3 с даже на локальной сети) и меняется только
+    # заменой файла. Поэтому отдаётся с ETag и `Cache-Control: private, no-cache`: браузер хранит копию и на каждый запрос спрашивает
+    # сервер «не изменилось?» — ответ 304 без тела. Проверка прав выше выполняется на каждый запрос, чужой копии это не открывает.
+    # Файл отдаётся потоком (FileResponse), а не читается в память целиком.
     from fastapi.responses import Response
-    return Response(content=p.read_bytes(), media_type="application/octet-stream")
+    st = p.stat()
+    etag = f'"{row["id"]}-{st.st_size}-{st.st_mtime_ns}"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    inm = request.headers.get("if-none-match")
+    if inm and etag in [t.strip().removeprefix("W/") for t in inm.split(",")]:
+        return Response(status_code=304, headers=headers)
+    return FileResponse(p, media_type="application/octet-stream", headers=headers)
 
 
 class UploadMeta(BaseModel):

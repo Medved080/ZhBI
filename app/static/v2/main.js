@@ -92,6 +92,15 @@ function applyThemeFamily(uiTheme) {
 let activeModule = null; // {hasUnsavedChanges, guardLeave} текущего смонтированного раздела
 let mountedObjectId = null; // объект, под который смонтирован текущий раздел (сверяется при смене объекта)
 
+// Рабочие места со схемой остаются в памяти, когда человек уходит в меню или отчёт: кадр со схемой нельзя ни вынуть из документа, ни
+// перенести (браузер перезагрузит его), поэтому у каждого рабочего места свой постоянный узел-«хост» рядом с #v2-content; при уходе хост
+// прячется (hidden), при возврате показывается — без повторной загрузки и перестроения схемы. Каждый кадр держит данные объекта,
+// SVG-узлы и WebGL-контекст, поэтому спрятанных не больше KEPT_WS_MAX: вытесняется давно не открывавшееся (destroy — как раньше).
+const KEPT_WS_MAX = 3;
+let wsMode = null;          // как открыто рабочее место в этом переходе (для замера): из памяти / новая / перестроена
+const keptWs = new Map();   // id экрана → { host, module, objectId, epoch, suspended, at }
+let activeWs = null;        // запись keptWs рабочего места, открытого сейчас (null — открыто что-то другое)
+
 // Один переход за раз: пока идёт guardLeave (диалог «Несохранённые
 // изменения», возможное сохранение) и монтирование нового раздела, вторые и
 // третьи клики по вкладкам разделов и по «← Интерфейс V1» игнорируются.
@@ -460,7 +469,7 @@ async function renderShell(user, permissions) {
     } catch {} }
     return { userId:user.id, objectId:calcFrame?null:objectId, projectId:calcFrame?null:project?.id, projects: tree.projects.map(p => ({id:p.id,name:p.name})),
       label: `${screen?.title || "Начало"}${!calcFrame&&obj ? " · " + obj.name : ""}`,
-      page: { title: screen?.title || "Начало", ...pageSnapshot(content), ...extra } };
+      page: { title: screen?.title || "Начало", ...pageSnapshot(activeWs ? activeWs.host : content), ...extra } };
   }});
 
   // ---- выбор объекта в шапке: кнопка + окно выбора (shell-object-picker.js). Текст кнопки — статус-точка и
@@ -525,6 +534,7 @@ async function renderShell(user, permissions) {
       if (stay) return false;
     }
     objectId = id;
+    window.zhbiPerf?.setObject(id);
     switchCtx.objectId = id;
     writeSession("v2.objectId", String(id));
     // «Последний объект — за пользователем», ТЕМ ЖЕ эндпоинтом, что уже использует V1 (не дублируем в
@@ -541,7 +551,7 @@ async function renderShell(user, permissions) {
     const cur = currentKey === "home" ? null : screenOf(currentKey);
     // Рабочее место со схемой остаётся смонтированным и сам переключает сцену на новый объект (без пересоздания кадра),
     // если экран доступен на новом объекте; иначе — обычный путь (экран недоступен → начальная страница).
-    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { mountedObjectId = objectId; updateGateNote(cur); return true; }
+    if (cur && cur.impl === "workspace" && allowedScreen(cur) && activeModule?.onObjectChange?.(objectId)) { mountedObjectId = objectId; if (activeWs) activeWs.objectId = objectId; updateGateNote(cur); return true; }
     // Рабочее место другого типа учёта (ЖБИ ↔ МФР) на новом объекте не применяется — открываем парное, а не начальную страницу.
     if (cur && cur.impl === "workspace" && !allowedScreen(cur)) {
       const twin = registry.screens.find((x) => x.impl === "workspace" && x.id !== cur.id && allowedScreen(x)
@@ -595,6 +605,56 @@ async function renderShell(user, permissions) {
   // innerHTML не должна сбрасывать фокус клавиатуры на <body>.
   const focusKeeper = keepFocus(content);
 
+  function dropKeptWs(id) {
+    const k = keptWs.get(id);
+    if (!k) return;
+    keptWs.delete(id);
+    if (activeWs === k) activeWs = null;
+    try { k.module.destroy?.(); } catch (err) { /* уборка не должна мешать переходу */ }
+    k.host.remove();
+  }
+  // Уход с рабочего места: схема прячется, а не уничтожается. Запись об изменениях данных (api.writeEpoch) — по ней при возврате решается,
+  // не устарела ли спрятанная схема (цвета, зоны, видимость, статусы могли поменять в других разделах).
+  function leaveWorkspace() {
+    const k = activeWs;
+    activeWs = null;
+    if (!k) return;
+    k.module.suspend();
+    k.host.hidden = true;
+    k.suspended = true;
+    k.epoch = api.writeEpoch();
+    k.at = Date.now();
+    const idle = [...keptWs.entries()].filter(([, v]) => v.suspended).sort((a, b) => a[1].at - b[1].at);
+    for (const [id] of idle.slice(0, Math.max(0, idle.length - KEPT_WS_MAX))) dropKeptWs(id);
+  }
+  // Вход на рабочее место: спрятанное показывается как есть (сцена, выбор и фильтры остаются), а построенное заново — только если его
+  // нет, оно сломано, открыто принудительно (force: повтор, смена типа учёта) или за время отсутствия что-то записывали на сервер.
+  function enterWorkspace(key, target, opts) {
+    let k = keptWs.get(key);
+    wsMode = k ? "из памяти" : "новая";
+    if (k && (opts.force || !k.module.isReusable() || api.writeEpoch() !== k.epoch)) { dropKeptWs(key); k = null; wsMode = "перестроена"; }
+    content.innerHTML = "";
+    content.hidden = true;
+    if (k) {
+      k.host.hidden = false;
+      if (k.objectId !== objectId) { k.module.onObjectChange(objectId); k.objectId = objectId; }
+      k.module.resume();
+    } else {
+      const host = document.createElement("main");
+      host.className = "v2-page";
+      host.dataset.wsHost = key;
+      content.after(host);
+      const module = mountWorkspace(host, {
+        screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model", go: (kk) => openSection(kk),
+      });
+      k = { host, module, objectId, epoch: api.writeEpoch(), suspended: false, at: Date.now() };
+      keptWs.set(key, k);
+    }
+    k.suspended = false;
+    activeWs = k;
+    return k.module;
+  }
+
   // Возвращает true, когда переход СОСТОЯЛСЯ (включая «уже там были» — key === currentKey без force) — левая
   // навигация (shell-nav.js) читает это, чтобы закрыть временно открытую панель ТОЛЬКО после настоящего перехода,
   // а не после отказа guardLeave/занятости записью (тогда экран и панель остаются как были, п.1/2 задания).
@@ -629,9 +689,13 @@ async function renderShell(user, permissions) {
       // мини-карта MapLibre со своим graphics-контекстом): content.innerHTML ниже
       // уничтожит её DOM-узел, но не сам контекст — без явного remove() браузер
       // рано или поздно перестанет строить новые карты вовсе.
-      activeModule?.destroy?.();
+      // Замер перехода (perf.js): от решения открыть раздел до готового каркаса; данные раздел догружает сам (их видно по запросам)
+      const perfEnd = window.zhbiPerf?.start(`V2 экран: ${key}`, "screen");
+      wsMode = null;
+      if (activeWs) leaveWorkspace(); else activeModule?.destroy?.();
       focusKeeper.reset();
       content.innerHTML = "";
+      content.hidden = false;   // на рабочем месте со схемой он скрыт, пока работает собственный хост
       // Оформление раздела не должно зависеть от порядка посещения: классы,
       // которые раздел мог повесить на общий контейнер, сбрасываются здесь.
       content.className = "v2-page";
@@ -775,9 +839,7 @@ async function renderShell(user, permissions) {
       } else if (target.impl === "workspace") {
         // Рабочее место со схемой: сцена V1 в кадре только для чтения + собственные панели V2 (workspace.js).
         document.title = `${target.title} — ЖБИ`;
-        activeModule = mountWorkspace(content, {
-          screen: target, objectId, api, groupTitle: groupTitle(target.group), ws: target.ws || "model", go: (k) => openSection(k),
-        });
+        activeModule = enterWorkspace(key, target, opts);
       } else if (target.impl === "contracts-list") {
         // Контракты: список и переход к работе с контрактом в карточке контрагента (там же создание и правка)
         document.title = `${target.title} — ЖБИ`;
@@ -837,6 +899,7 @@ async function renderShell(user, permissions) {
       }
       mountedObjectId = objectId;
       updateGateNote(key === "home" ? null : target);
+      perfEnd?.(wsMode ? { схема: wsMode } : undefined);
       return true;
     } finally { navBusy = false; }
   }
@@ -863,6 +926,8 @@ async function renderShell(user, permissions) {
   window.addEventListener("popstate", () => { const k = routeFromHash(); if (k !== currentKey) openSection(k, { fromHash: true }); });
 
   startStatusLog();   // лента «Сообщения за сеанс» (раздел «Обучение и справка»)
+  window.zhbiPerf?.configure();   // замеры производительности: опрос состояния сбора (perf.js)
+  window.zhbiPerf?.setObject(objectId);
   openSection(routeFromHash());
 }
 

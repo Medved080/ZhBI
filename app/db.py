@@ -3,6 +3,8 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from app.perf_core import PerfConnection
+
 # ZHBI_DB_PATH — путь к базе. По умолчанию data/zhbi.db рядом с кодом (так
 # было всегда, и на этом держится bind-mount в Docker: см.
 # docker-compose.yml, том на /app/data). Переменная нужна для запуска
@@ -25,7 +27,8 @@ BUSY_TIMEOUT_MS = 15000
 
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # factory — соединение, которое мерит SQL, пока идёт замеряемый запрос (app/perf_core.py); вне замера ведёт себя как обычное
+    conn = sqlite3.connect(DB_PATH, factory=PerfConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")

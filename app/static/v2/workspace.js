@@ -88,6 +88,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   const openItems = new Set();
   const groupSearch = new Map();
   let frameKey = 0;
+  let perfScene = null;        // замер «открытие → схема показана» (perf.js); снимается при первом снимке с loaded
   // МФР: панель работ блока (ЗР, факт, сроки, отбор, шахматка, динамика) — отдельный модуль mfr-block-panel.js
   // (модуль подгружается при открытии рабочего места МФР, а не при старте V2)
   let mbp = null;
@@ -217,6 +218,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     if (dead) return;
     stopFrame();
     ready = false; sc = null; filters = null; pk = null; notice = "";
+    perfScene = window.zhbiPerf?.start(`V2 схема (${ws}): от открытия до готовности`, "scene") || null;
     const key = ++frameKey;
     paintAll();
     let html;
@@ -265,6 +267,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     sc = s;
     mbp?.onScene(s);
     mfrStartView(s);
+    if (perfScene && s.loaded && !s.loading) { perfScene({ elements: s.total }); perfScene = null; }
     if (frame) frame.style.visibility = (s.loaded || s.loading) && !s.error ? "visible" : "hidden";
     // «Показать на схеме» из отчёта «Моя работа» (locate-handoff.js): выделить изделие и навести кадр, когда схема загружена
     // «Загрузить из FBX» из меню (main.js → requestOpenFbx): окно поверх сцены открывается, когда схема загрузилась (как диалог V1 над схемой)
@@ -1078,9 +1081,30 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       if (dead || !id || id === curObject) return true;
       extm.close(true);
       assistantIds = null; curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
+      perfScene = window.zhbiPerf?.start(`V2 схема (${ws}): смена объекта`, "scene") || null;
       paintAll(); send("setObject", { objectId: id });
       return true;
     },
+    // Рабочее место, которое main.js держит в памяти, пока человек в меню или отчёте: кадр со схемой не трогаем (его выбор, фильтры, масштаб и
+    // загруженные данные остаются), возвращаем оболочке то, что рабочее место у неё забирало, — общую навигацию. destroy() при этом не вызывается.
+    suspend() {
+      if (dead) return;
+      if (found) found.hidden = true;
+      const side = shellSide(); if (side) side.hidden = navWasHidden;
+    },
+    resume() {
+      if (dead) return;
+      setNav((readSess("v2.ws.navHidden") ?? (window.innerWidth < 1500 ? "1" : "0")) === "1");   // и сообщение кадру об изменившемся размере
+      send("poll");                                                                              // чужие правки подтянуть сразу, не ждать тика опроса
+      // переходы «Показать на схеме» и «Загрузить из FBX» ждали именно этого рабочего места (схема уже загружена — onScene их больше не увидит)
+      if (sc?.loaded && !sc.error) {
+        if (takeOpenFbx(curObject)) extm.open();
+        if (!mfr) { const want = takeLocate(curObject); if (want) { send("select", { id: want }); send("locate", { id: want }); } }
+      }
+      paintAll();
+    },
+    // Годится ли спрятанное рабочее место для возврата: после ошибки или обрыва загрузки схемы показывать нечего — строим заново
+    isReusable: () => !dead && !!frame && !sc?.error,
     destroy() {
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
       clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();

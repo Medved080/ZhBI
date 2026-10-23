@@ -65,26 +65,35 @@ def filters(conn, object_id: int) -> dict:
     # у упрощённой загрузки по фасадам (2026-09-01) элементов нет вовсе,
     # только блоки; общий JOIN дал бы декартово произведение и завысил
     # счётчики там, где есть и то, и другое.
+    # Считается подзапросами по уровням/секциям, а не двумя LEFT JOIN в одном запросе: тот давал декартово произведение «элементы этажа × блоки
+    # этажа» (по замерам 2026-10-23 — 1,07 с на объекте с 25 тыс. элементов) и считал COUNT(DISTINCT). Результат тот же, проверен сравнением.
     levels = [
         _level_row(row) for row in conn.execute(
             "SELECT l.id, l.key, l.floor, l.kind, l.name, l.elevation_mm, "
-            "       l.elevation_suspect, COUNT(DISTINCT e.id) AS elements, "
-            "       COUNT(DISTINCT b.id) AS blocks "
+            "       l.elevation_suspect, COALESCE(e.n, 0) AS elements, "
+            "       COALESCE(b.n, 0) AS blocks "
             "FROM object_levels l "
-            "LEFT JOIN revit_elements e ON e.level_id = l.id AND e.is_current = 1 "
-            "LEFT JOIN blocks b ON b.level_id = l.id "
-            "WHERE l.object_id = ? GROUP BY l.id ORDER BY l.sort_order",
-            (object_id,))
+            "LEFT JOIN (SELECT level_id, COUNT(*) AS n FROM revit_elements "
+            "           WHERE is_current = 1 AND level_id IN (SELECT id FROM object_levels WHERE object_id = ?) "
+            "           GROUP BY level_id) e ON e.level_id = l.id "
+            "LEFT JOIN (SELECT level_id, COUNT(*) AS n FROM blocks "
+            "           WHERE level_id IN (SELECT id FROM object_levels WHERE object_id = ?) "
+            "           GROUP BY level_id) b ON b.level_id = l.id "
+            "WHERE l.object_id = ? ORDER BY l.sort_order, l.id",
+            (object_id, object_id, object_id))
     ]
     sections = [
         dict(row) for row in conn.execute(
-            "SELECT s.id, s.code, COUNT(DISTINCT e.id) AS elements, "
-            "       COUNT(DISTINCT b.id) AS blocks "
+            "SELECT s.id, s.code, COALESCE(e.n, 0) AS elements, COALESCE(b.n, 0) AS blocks "
             "FROM object_sections s "
-            "LEFT JOIN revit_elements e ON e.section_id = s.id AND e.is_current = 1 "
-            "LEFT JOIN blocks b ON b.section_id = s.id "
-            "WHERE s.object_id = ? GROUP BY s.id ORDER BY s.sort_order",
-            (object_id,))
+            "LEFT JOIN (SELECT section_id, COUNT(*) AS n FROM revit_elements "
+            "           WHERE is_current = 1 AND section_id IN (SELECT id FROM object_sections WHERE object_id = ?) "
+            "           GROUP BY section_id) e ON e.section_id = s.id "
+            "LEFT JOIN (SELECT section_id, COUNT(*) AS n FROM blocks "
+            "           WHERE section_id IN (SELECT id FROM object_sections WHERE object_id = ?) "
+            "           GROUP BY section_id) b ON b.section_id = s.id "
+            "WHERE s.object_id = ? ORDER BY s.sort_order, s.id",
+            (object_id, object_id, object_id))
     ]
     parts = [
         dict(row) for row in conn.execute(

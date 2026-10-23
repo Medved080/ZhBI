@@ -37,8 +37,15 @@ MAX_ZOOM = 4.0
 MARGIN_MM = 300
 # Затяжка щелей между помещениями и стенами при сборке контура этажа, мм:
 # буфер туда и обратно склеивает соседние фигуры в один контур, не
-# раздувая его (толщина стены/дверной проём — до 1м; 600 с запасом).
-CLOSE_GAP_MM = 600
+# раздувая его. Было 600 (толщина стены/дверной проём до 1м), но тогда по
+# фасаду контур шёл волной: окно (2,2–2,8м) сидит глубже простенка на
+# 150–300мм, и контур заходил внутрь у каждого окна и лоджии (2026-10-23,
+# замечание пользователя: «обрезка должна идти ровно вдоль фасада»). 1500
+# закрывает впадины шире 2×1500 = 3м — то есть любое окно и лоджию.
+CLOSE_GAP_MM = 1500
+# Буфер ОСТРЫМИ углами (mitre), а не скруглённый: на прямых фасадах затяжка
+# даёт ровную линию и прямой угол, а не дугу над окном.
+_JOIN_MITRE = 2
 
 
 def _polygons(g) -> list:
@@ -61,7 +68,8 @@ def floor_contour(polys: list) -> list:
         shapes.extend(q for q in _polygons(make_valid(Polygon(pts))) if q.area > 0)
     if not shapes:
         return []
-    merged = unary_union(shapes).buffer(CLOSE_GAP_MM).buffer(-CLOSE_GAP_MM)
+    merged = (unary_union(shapes).buffer(CLOSE_GAP_MM, join_style=_JOIN_MITRE)
+              .buffer(-CLOSE_GAP_MM, join_style=_JOIN_MITRE))
     return [q for q in _polygons(merged) if q.area > 0]
 
 
@@ -111,7 +119,7 @@ def render_floor_images(doc, rooms: list, walls: list, canonical_grid: dict) -> 
         draw = ImageDraw.Draw(mask)
         for c in contours:
             # с тем же запасом, что и охват: наружная грань стены
-            outer = c.buffer(MARGIN_MM)
+            outer = c.buffer(MARGIN_MM, join_style=_JOIN_MITRE)
             for q in _polygons(outer):
                 pts = [((px - clip.x0) * zoom, (py - clip.y0) * zoom)
                        for px, py in (to_pt(x, y) for x, y in q.exterior.coords)]

@@ -113,6 +113,9 @@ export class ApiError extends Error {
 // идёт ли прямо сейчас запись: скрыть результат операции переходом в V1
 // посреди сохранения хуже, чем на секунду заблокировать кнопку перехода.
 let pendingWrites = 0;
+// Число успешных записей данных за сеанс: рабочее место со схемой, спрятанное при уходе в меню или отчёт (main.js), по нему узнаёт,
+// менялось ли что-то, пока оно было скрыто (цвета, зоны, видимость, статусы) — и тогда не показывается устаревшим, а строится заново.
+let writeEpoch = 0;
 const writeListeners = new Set();
 function notifyPendingWrites() { for (const fn of writeListeners) fn(pendingWrites); }
 
@@ -169,6 +172,7 @@ async function request(method, path, body, { read = false, background = false } 
       const detail = data && typeof data === "object" && "detail" in data ? data.detail : data;
       throw new ApiError(res.status, detail || res.statusText);
     }
+    if (isWrite && !background) writeEpoch++;
     return data;
   } finally {
     if (isWrite && !background) { pendingWrites--; notifyPendingWrites(); }
@@ -243,5 +247,6 @@ export const api = {
     return request(method, path, body ?? {}, { background: true });
   },
   hasPendingWrites: () => pendingWrites > 0,
+  writeEpoch: () => writeEpoch,
   onPendingWritesChange(fn) { writeListeners.add(fn); return () => writeListeners.delete(fn); },
 };

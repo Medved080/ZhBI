@@ -23,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app import activity, impersonation
+from app import activity, impersonation, perf_core
 from app.db import get_connection
 
 SESSION_COOKIE = "zhbi_session"
@@ -473,6 +473,7 @@ def get_current_user(request: Request) -> sqlite3.Row:
         # пользователь — как раз самый частый повод открыть режим). Сам
         # экран смены пароля в режиме закрыт, см. _guard_impersonation.
         _guard_impersonation(request)
+        perf_core.note_user(подмена)
         return подмена
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
@@ -485,6 +486,7 @@ def get_current_user(request: Request) -> sqlite3.Row:
     if user is None:
         raise HTTPException(status_code=401, detail="Сессия истекла или недействительна")
     _guard_must_change_password(request, user)
+    perf_core.note_user(user)   # кто делает запрос — для замеров производительности (вне замера пустой вызов)
     return user
 
 
