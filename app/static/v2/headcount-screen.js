@@ -24,6 +24,7 @@ export function mountHeadcountScreen(el, { screen, objectId, api, rights, groupT
   el.querySelector("#hc-host").style.contain = "inline-size";
   const view = mountHeadcount(el.querySelector("#hc-host"), {
     api, upload: (path, form) => api.upload(path, form), objectId, startTab: screen.startTab,
+    express: { read: admin || ["read", "write"].includes(rights?.features?.express_bot), write: admin || rights?.features?.express_bot === "write", admin: admin || rights?.features?.express_admin === "write" },
     download: async (url, filename) => saveBlob(await api.download(url, undefined, { method: "GET" }), filename || "Численность.xlsx"), canWrite, canAdmin: admin,
     confirm: (text, { danger = false } = {}) => showConfirmDialog(text, { confirmLabel: danger ? "Да, продолжить" : "Продолжить", danger, multiline: true }),
   });

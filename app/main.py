@@ -246,6 +246,7 @@ from app.db_status import router as db_status_router
 from app.db_status import table_bytes as db_status_table_bytes
 from app.ldap_auth import router as ldap_router
 from app.release_tasks import router as release_tasks_router
+from app import express_api
 from app.rights_matrix import router as rights_matrix_router
 from app.roles import router as roles_router
 from app.settings import router as settings_router
@@ -490,6 +491,10 @@ app.include_router(admin_ops_router)
 app.include_router(rights_matrix_router)
 app.include_router(roles_router)
 app.include_router(release_tasks_router)
+# Бот eXpress: маршруты для CTS (/command, /status, /notification/callback — подпись JWT, без сессии) и для людей.
+app.include_router(express_api.webhook_router)
+app.include_router(express_api.router)
+app.include_router(express_api.object_router)
 app.include_router(users_router)
 app.include_router(sessions_router)
 app.include_router(ldap_router)
@@ -909,12 +914,19 @@ def on_startup():
     from app.crane_zone_activation import start_worker
     app.state.crane_zone_activation_stop = start_worker()
 
+    # Бот eXpress (2026-10-23): планировщик опроса контактов. Без включённого подключения и ключа он ничего не делает.
+    from app import express_scheduler
+    app.state.express_scheduler_stop = express_scheduler.start_worker()
+
 
 @app.on_event("shutdown")
 def stop_crane_zone_activation():
     stop = getattr(app.state, "crane_zone_activation_stop", None)
     if stop is not None:
         stop.set()
+    express_stop = getattr(app.state, "express_scheduler_stop", None)
+    if express_stop is not None:
+        express_stop.set()
 
 
 # Подсистема «Калькулятор» (2026-10-04): запускается ПОСЛЕ on_startup — ей нужны

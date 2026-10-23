@@ -1810,6 +1810,102 @@ CREATE INDEX IF NOT EXISTS idx_hc_history_key ON headcount_history (object_id, w
 CREATE INDEX IF NOT EXISTS idx_hc_history_record ON headcount_history (record_id);
 
 
+-- Бот eXpress (2026-10-23, Docs/express-bot.md): по расписанию спрашивает у контакта численность по объекту и пишет ответ в
+-- headcount_records с источником 'bot'. Ключ бота лежит НЕ в БД, а в файле рядом с базой (app/express_bot.py): копия базы
+-- на тестовом стенде не получает права писать от имени боевого бота.
+CREATE TABLE IF NOT EXISTS express_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,                  -- 0 — бот молчит: расписание не срабатывает, входящие не обрабатываются
+    cts_url TEXT NOT NULL DEFAULT '',                    -- адрес сервера eXpress (CTS), например https://cts.example.ru
+    bot_id TEXT NOT NULL DEFAULT '',                     -- UUID бота в eXpress
+    bot_name TEXT NOT NULL DEFAULT '',                   -- имя бота (pm_bot): только для показа
+    verify_tls INTEGER NOT NULL DEFAULT 1,               -- проверять сертификат CTS (0 — для внутреннего CA, которого нет в системе)
+    updated_at TEXT,
+    updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+INSERT OR IGNORE INTO express_config (id) VALUES (1);
+
+-- Кому бот пишет: физлицо из справочника ИЛИ произвольный человек. Сопоставление с eXpress — по user_huid, а до первого
+-- сообщения контакта — по e-mail / доменному логину.
+CREATE TABLE IF NOT EXISTS express_contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    individual_id INTEGER REFERENCES individuals (id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    email TEXT,
+    ad_login TEXT,
+    user_huid TEXT,
+    chat_id TEXT,                                        -- личный чат с ботом (group_chat_id); известен после первого сообщения контакта
+    bound_at TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_express_contacts_huid ON express_contacts (user_huid) WHERE user_huid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_express_contacts_individual ON express_contacts (individual_id);
+
+-- Расписание: в какие дни и во сколько спрашивать контакта, что именно, когда напомнить и кому отправить сводку.
+CREATE TABLE IF NOT EXISTS express_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    contact_id INTEGER NOT NULL REFERENCES express_contacts (id) ON DELETE CASCADE,
+    section TEXT NOT NULL DEFAULT 'headcount',           -- что спрашивать; сейчас только 'headcount'
+    weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5',          -- дни недели через запятую, 1 — понедельник … 7 — воскресенье
+    send_time TEXT NOT NULL DEFAULT '10:30',             -- ЧЧ:ММ по Москве
+    day_offset INTEGER NOT NULL DEFAULT 0 CHECK (day_offset IN (0, -1)),   -- за какой день спрашиваем: 0 — за сегодня, -1 — за вчера
+    remind_time TEXT,                                    -- ЧЧ:ММ: напомнить, если ответа нет; NULL — не напоминать
+    summary_time TEXT,                                   -- ЧЧ:ММ: отправить сводку; NULL — без сводки
+    summary_contact_id INTEGER REFERENCES express_contacts (id) ON DELETE SET NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    effective_from TEXT NOT NULL DEFAULT (datetime('now')),   -- срабатывания раньше этого момента не догоняются
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_express_schedules_object ON express_schedules (object_id);
+
+-- Один запрос = одно отправленное контакту сообщение с диалогом. Пара (расписание, день) уникальна: повторный тик планировщика
+-- и перезапуск сервера не дублируют рассылку. Ручная отправка (schedule_id NULL) — без этого ограничения.
+CREATE TABLE IF NOT EXISTS express_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER REFERENCES express_schedules (id) ON DELETE SET NULL,
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    contact_id INTEGER NOT NULL REFERENCES express_contacts (id) ON DELETE CASCADE,
+    section TEXT NOT NULL DEFAULT 'headcount',
+    work_date TEXT NOT NULL,                             -- день, за который спрашиваем (ГГГГ-ММ-ДД)
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'answered', 'closed', 'failed')),
+    dialog TEXT,                                         -- JSON: шаг диалога и выбранные подрядчик / вид работ
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT,
+    sent_at TEXT,
+    reminded_at TEXT,
+    summary_at TEXT,
+    answered_at TEXT,                                    -- когда в систему попала первая строка от контакта
+    closed_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_express_requests_schedule_day ON express_requests (schedule_id, work_date) WHERE schedule_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_express_requests_contact ON express_requests (contact_id, status);
+CREATE INDEX IF NOT EXISTS idx_express_requests_object ON express_requests (object_id, work_date);
+
+-- Журнал обмена с eXpress: что отправлено и что получено (для разбора «почему не пришло»). Тексты обрезаются.
+CREATE TABLE IF NOT EXISTS express_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    direction TEXT NOT NULL CHECK (direction IN ('out', 'in', 'sys')),
+    contact_id INTEGER REFERENCES express_contacts (id) ON DELETE SET NULL,
+    request_id INTEGER REFERENCES express_requests (id) ON DELETE SET NULL,
+    kind TEXT,                                           -- request, reminder, summary, reply, command, system, test
+    text TEXT,
+    ok INTEGER NOT NULL DEFAULT 1,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_express_log_at ON express_log (at);
+
+
 -- Производственная программа в деньгах (2026-10-23, Docs/pp-money.md): сроки работ объектов и остаток денег, распределяемый по месяцам.
 -- Источник — выгрузка «ДД.ММ.ГГГГ.xlsx» (листы «Ввод» и «Лист6»); загрузка ЗАМЕНЯЕТ работы и деньги целиком, а объекты, общие правки и
 -- группы сохраняются (ключ объекта — код проекта, ключ работы — её название внутри объекта).

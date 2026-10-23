@@ -43,6 +43,16 @@
       ],
       "port": 8021,
       "autoPort": true
+    },
+    {
+      "//": "ОБЕЗЛИЧЕННАЯ копия + МАКЕТ сервера eXpress (scripts/dev_express_stand.py): живая проверка экрана «Численность → Бот eXpress» без внешней сети. Настоящий CTS не вызывается; сообщения бота видны на http://127.0.0.1:8091/_mock/messages, ответы контакта имитирует scripts/express_say.py.",
+      "name": "zhbi-server-anon-express",
+      "runtimeExecutable": ".venv312/bin/python",
+      "runtimeArgs": [
+        "scripts/dev_express_stand.py"
+      ],
+      "port": 8031,
+      "autoPort": true
     }
   ]
 }

@@ -33763,6 +33763,7 @@ async function openHeadcount(startTab) {
     startTab,
     canWrite: can("headcount", "write"),
     canAdmin: systemAdmin(),
+    express: { read: can("express_bot", "read"), write: can("express_bot", "write"), admin: can("express_admin", "write") || systemAdmin() },
     confirm: async (text) => confirm(text),
   });
 }

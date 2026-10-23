@@ -64,12 +64,17 @@ export function mountHeadcount(el, ctx) {
   };
   const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"], ["data", "Все данные"], ["codifier", "Виды работ"]];
   if (ctx.canAdmin) tabs.push(["admin", "Загрузка данных"]);
+  // Бот eXpress (2026-10-23, Docs/express-bot.md): права — разделы `express_bot` (расписания, контакты) и `express_admin` (подключение, журнал)
+  if (ctx.express && (ctx.express.read || ctx.express.admin)) tabs.push(["express", "Бот eXpress"]);
 
   el.classList.add("hc-root");
   el.innerHTML = `<div class="hc-tabs" role="tablist" aria-label="Разделы учёта численности">${tabs.map(([k, t]) =>
     `<button type="button" role="tab" class="hc-tab" data-tab="${k}">${esc(t)}</button>`).join("")}</div><div class="hc-pane" id="hc-pane"></div>`;
   const pane = el.querySelector("#hc-pane");
-  el.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { st.tab = b.dataset.tab; paint(); }));
+  el.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => {
+    if (st.tab === "express" && b.dataset.tab !== "express" && st.expressView) { st.expressView.destroy(); st.expressView = null; }
+    st.tab = b.dataset.tab; paint();
+  }));
 
   const setMsg = (t, kind = "") => { st.msg = t; st.msgKind = kind; const n = pane.querySelector("#hc-msg"); if (n) { n.textContent = t; n.className = `hc-msg ${kind}`; } };
   const hasChanges = () => st.added.length > 0 || st.changed.size > 0;
@@ -101,9 +106,25 @@ export function mountHeadcount(el, ctx) {
     if (dead) return;
     el.querySelectorAll("[data-tab]").forEach((b) => { const on = b.dataset.tab === st.tab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
     if (st.loadError) { pane.innerHTML = `<div class="hc-callout bad" role="alert"><strong>Не удалось загрузить данные.</strong> ${esc(st.loadError)} <button type="button" class="hc-btn" id="hc-retry">Повторить</button></div>`; pane.querySelector("#hc-retry").addEventListener("click", () => { st.loadError = ""; loadRefs(); }); return; }
-    if (st.tab !== "admin" && (st.contractors === null || st.works === null)) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
+    if (st.tab !== "admin" && st.tab !== "express" && (st.contractors === null || st.works === null)) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     if ((st.tab === "report" || st.tab === "data") && !st.facets) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; loadFacets().then(() => !dead && paint()); return; }
-    ({ input: paintInput, contractors: paintContractors, report: paintReport, data: paintData, codifier: paintCodifier, admin: paintAdmin })[st.tab]();
+    ({ input: paintInput, contractors: paintContractors, report: paintReport, data: paintData, codifier: paintCodifier, admin: paintAdmin, express: paintExpress })[st.tab]();
+  }
+
+  // =====================================================================  БОТ eXPRESS
+  // Вкладка — отдельный ES-модуль (express-ui.js), грузится при первом открытии. Пока вкладка открыта, paint() может вызываться
+  // повторно (догрузились справочники) — готовый экран не пересобираем, иначе он сбросит несохранённую форму.
+  function paintExpress() {
+    if (st.expressView && pane.querySelector("#hc-express")) return;
+    pane.innerHTML = `<div id="hc-express"><p class="hc-muted" role="status">Загрузка…</p></div>`;
+    import("/static/express-ui.js").then((m) => {
+      if (dead || st.tab !== "express") return;
+      const host = pane.querySelector("#hc-express");
+      if (!host) return;
+      st.expressView?.destroy();
+      st.expressView = m.mountExpress(host, { api, objectId: ctx.objectId, canWrite: !!ctx.express?.write, canAdmin: !!ctx.express?.admin, confirm: ctx.confirm,
+        sub: st.expressSub, onSub: (k) => { st.expressSub = k; } });
+    }).catch((e) => { pane.innerHTML = `<div class="hc-callout bad" role="alert">Не удалось открыть экран бота: ${esc(errText(e))}</div>`; });
   }
 
   // =====================================================================  ВВОД
@@ -708,7 +729,7 @@ export function mountHeadcount(el, ctx) {
   loadRefs();
   return {
     hasUnsavedChanges: () => hasChanges(),
-    destroy() { dead = true; el.innerHTML = ""; el.classList.remove("hc-root"); },
+    destroy() { dead = true; st.expressView?.destroy(); el.innerHTML = ""; el.classList.remove("hc-root"); },
   };
 }
 

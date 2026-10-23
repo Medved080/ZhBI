@@ -509,6 +509,60 @@ def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, n
         (record_id, object_id, iso, contractor_id, codifier_id, old, new, old_itr, new_itr, source, stamp, user_id))
 
 
+def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codifier_id: int, workers: int, itr: int, *,
+                      contact_name: str) -> dict:
+    """Одна строка численности, пришедшая от бота eXpress (`app/express_dialog.py`). Те же правила, что у формы: ключ (объект, день,
+    подрядчик, вид работ), замена числа с историей, просрочка по первому внесению, «вместе не меньше 1». Отличия: источник `bot`, а
+    автора-пользователя нет (контакт бота не учётная запись) — в журнале действий он указан именем контакта. Ошибки правил — ValueError
+    с русским текстом, который бот показывает человеку. Возвращает {"action": created|changed|unchanged, "late": …, "workers", "itr"}."""
+    now = now_msk()
+    if work_date > now.date():
+        raise ValueError("Численность за будущую дату внести нельзя")
+    if not (0 <= workers <= MAX_WORKERS and 0 <= itr <= MAX_WORKERS):
+        raise ValueError(f"Рабочие и ИТР — целые числа от 0 до {MAX_WORKERS}")
+    if workers + itr < 1:
+        raise ValueError("Рабочие и ИТР вместе — не меньше 1: если людей не было, запись не вносят")
+    iso = work_date.isoformat()
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        if conn.execute("SELECT 1 FROM headcount_contractors WHERE id = ? AND object_id = ?", (contractor_id, object_id)).fetchone() is None:
+            raise ValueError("Подрядчик не относится к этому объекту")
+        work = conn.execute("SELECT retired_at FROM work_codifier WHERE id = ?", (codifier_id,)).fetchone()
+        if work is None:
+            raise ValueError("Вид работ не найден в кодификаторе")
+        current = conn.execute(
+            "SELECT id, workers, itr FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
+            (object_id, iso, contractor_id, codifier_id)).fetchone()
+        stamp = _db_now()
+        late = 1 if is_late(work_date, now) else 0
+        if current is None:
+            if work["retired_at"]:
+                raise ValueError("Вид работ выведен из действия: новую численность по нему не вносят")
+            cur = conn.execute(
+                "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, late, source, "
+                "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, 'bot', ?, NULL, ?, NULL)",
+                (object_id, iso, contractor_id, codifier_id, workers, itr, late, stamp, stamp))
+            _history(conn, cur.lastrowid, object_id, iso, contractor_id, codifier_id, None, workers, "bot", stamp, None, old_itr=None, new_itr=itr)
+            action = "created"
+        elif current["workers"] == workers and current["itr"] == itr:
+            action = "unchanged"
+        else:
+            conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, updated_at = ?, updated_by = NULL, source = 'bot' WHERE id = ?",
+                         (workers, itr, stamp, current["id"]))
+            _history(conn, current["id"], object_id, iso, contractor_id, codifier_id, current["workers"], workers, "bot", stamp, None,
+                     old_itr=current["itr"], new_itr=itr)
+            action = "changed"
+        conn.commit()
+    finally:
+        conn.close()
+    if action != "unchanged":
+        activity.log("headcount_set", user_name=contact_name, entity_type="object", entity_id=object_id, new_value=iso,
+                     details={"источник": "бот eXpress", "добавлено": 1 if action == "created" else 0, "изменено": 1 if action == "changed" else 0,
+                              "просрочено": bool(late), "рабочие": workers, "ИТР": itr})
+    return {"action": action, "late": bool(late), "workers": workers, "itr": itr}
+
+
 @router.delete("/records/{record_id}")
 def delete_record(object_id: int, record_id: int, user: sqlite3.Row = Depends(get_current_user)):
     conn = get_connection()

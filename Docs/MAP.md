@@ -13,6 +13,7 @@
 - Ежедневная численность рабочих по объекту × подрядчику × виду работ (кодификатор): ввод, история значений, отметка просрочки, подрядчики объекта, отчёты факта (по объектам, подрядчикам, работам; неделя/месяц/период; Excel), вкладка «Все данные» (записи и журнал изменений с отбором, постранично, Excel), загрузка кодификатора и выгрузки SharePoint с сопоставлением объектов 1С. ТЗ и решения — `Docs/headcount.md`, поведение — `Docs/TZ.md` §12а.
 - Код: `app/headcount.py` (ввод, подрядчики, история, отчёт), `app/headcount_import.py` (загрузка), общий экран V1/V2 `app/static/headcount-ui.js` + `headcount.css`, V2-оболочка `app/static/v2/headcount-screen.js`. Права — разделы `headcount` и `headcount_admin`.
 - Проверки: `scripts/verify_headcount.py`, `verify_headcount_import.py`, `dry_run_headcount_import.py` (все на КОПИИ базы).
+- Бот eXpress (ветка `claude/express-bot`, не влита): опрос контакта по расписанию, диалог кнопками, запись численности с источником «бот», напоминание и сводка — `app/express_*.py`, вкладка в `app/static/express-ui.js`, `Docs/express-bot.md`. Права — `express_bot`, `express_admin`.
 
 ## Производственная программа в деньгах (23.10.2026)
 
