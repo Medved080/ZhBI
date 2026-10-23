@@ -1145,8 +1145,195 @@ _WINDOW_SILL_MM = 900
 _WINDOW_HEIGHT_MM = 1500
 
 
+# Концевой маркер проёма на слое фасада: белый квадрат 80×80мм у каждого
+# конца окна и лоджии (2026-10-23, найдено разбором выгрузки листа 10).
+_MARKER_SIZE_MM = 80
+_MARKER_TOL_MM = 12
+_MARKER_REACH_MM = 220      # насколько далеко от конца проёма ищется маркер вдоль оси
+_MARKER_ACROSS_MM = 300     # и поперёк оси
+# Маркеры есть не на всех листах: первый этаж (лист 5, закруглённый угол,
+# 4 маркера на лист) начерчен иначе — там прежний разбор по повтору размера
+# и ручной список окон (`_FLOOR1_MANUAL_WINDOWS_MM`) остаются как были. Новые
+# правила (маркеры, лоджии, боковые окна) включаются, только если на листе
+# не меньше стольких маркеров.
+_MARKERS_MIN_PER_PAGE = 20
+
+
+def _bbox_of(poly: list) -> tuple:
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _marker_at(markers: list, axis_pos: float, across_lo: float, across_hi: float, horiz: bool) -> bool:
+    for mx, my in markers:
+        a, c = (mx, my) if horiz else (my, mx)
+        if abs(a - axis_pos) <= _MARKER_REACH_MM and across_lo - _MARKER_ACROSS_MM <= c <= across_hi + _MARKER_ACROSS_MM:
+            return True
+    return False
+
+
+def _has_end_markers(bb: tuple, markers: list) -> bool:
+    """Маркеры у ОБОИХ концов проёма (вдоль его длинной стороны)."""
+    x0, y0, x1, y1 = bb
+    horiz = (x1 - x0) >= (y1 - y0)
+    if horiz:
+        return (_marker_at(markers, x0, y0, y1, True) and _marker_at(markers, x1, y0, y1, True))
+    return (_marker_at(markers, y0, x0, x1, False) and _marker_at(markers, y1, x0, x1, False))
+
+
+# Лоджия: сплошная полоса остекления между двумя боковыми стенами. Рисуется
+# тем же слоем и теми же белыми двухслойными фигурами, что и простенок, —
+# от кладки её отличает только охват боковыми стенами с двух концов.
+_LOGGIA_GAP_MM = (700, 3600)         # расстояние между боковыми стенами
+_LOGGIA_SIDE_LEN_MM = (700, 3000)    # длина боковой стены
+_LOGGIA_THIN_MM = 260                # толщина боковой стены и полосы
+_LOGGIA_ALIGN_MM = 150               # допуск совпадения наружных торцов боковых стен
+
+
+def _loggia_windows(rest: list, side_polys: list, claimed: set, center: tuple) -> list:
+    """Лоджии: полосы кладки (`rest`), которые с обоих концов упираются в
+    боковые стены, уходящие внутрь здания. Боковые стены — фигуры слоёв
+    материала (`side_polys`) и вертикальные/горизонтальные куски самого
+    фасадного слоя. Найденные полосы уходят из кладки (в `claimed`).
+
+    Лоджия — замкнутый «ящик»: боковые стены соединены и снаружи
+    (остекление), и со стороны квартиры (стена с балконной дверью), оба торца
+    выглядят одинаково. Окном считается НАРУЖНЫЙ — тот, что дальше от центра
+    здания (`center`, середина охвата осей листа)."""
+    pieces = []   # (bbox, фигура-или-None)
+    for c in rest:
+        pieces.append((_bbox_of(c["poly"]), c))
+    sides = [(_bbox_of(p), None) for p in side_polys]
+    out = []
+    for horiz in (True, False):
+        def along(bb):   # (начало, конец) вдоль оси полосы
+            return (bb[0], bb[2]) if horiz else (bb[1], bb[3])
+
+        def across(bb):  # (начало, конец) поперёк оси полосы
+            return (bb[1], bb[3]) if horiz else (bb[0], bb[2])
+
+        def thin(bb):
+            return min(bb[2] - bb[0], bb[3] - bb[1]) <= _LOGGIA_THIN_MM
+
+        def is_side(bb):  # боковая стена: узкая, вытянута ПОПЕРЁК оси полосы
+            a0, a1 = along(bb)
+            c0, c1 = across(bb)
+            return (a1 - a0) <= _LOGGIA_THIN_MM and _LOGGIA_SIDE_LEN_MM[0] <= (c1 - c0) <= _LOGGIA_SIDE_LEN_MM[1]
+
+        cand_sides = [bb for bb, _c in pieces + sides if is_side(bb)]
+        strips = [(bb, c) for bb, c in pieces
+                  if c is not None and thin(bb) and (along(bb)[1] - along(bb)[0]) >= 500
+                  and (along(bb)[1] - along(bb)[0]) > (across(bb)[1] - across(bb)[0])]
+        cand_sides.sort(key=lambda bb: along(bb)[0])
+        for i, a in enumerate(cand_sides):
+            for b in cand_sides[i + 1:]:
+                gap = along(b)[0] - along(a)[1]
+                if gap < _LOGGIA_GAP_MM[0]:
+                    continue
+                if gap > _LOGGIA_GAP_MM[1]:
+                    break
+                # общий НАРУЖНЫЙ торец и общее направление внутрь
+                for outer_idx in (0, 1):
+                    ea, eb = across(a)[outer_idx], across(b)[outer_idx]
+                    if abs(ea - eb) > _LOGGIA_ALIGN_MM:
+                        continue
+                    ia, ib = across(a)[1 - outer_idx], across(b)[1 - outer_idx]
+                    if abs(ia - ib) > 3 * _LOGGIA_ALIGN_MM and abs(ia - ib) > 0.25 * abs(ea - ia):
+                        continue
+                    e = (ea + eb) / 2
+                    mid_c = center[1] if horiz else center[0]
+                    if abs(e - mid_c) <= abs((ia + ib) / 2 - mid_c):
+                        continue   # внутренний торец (стена к квартире), не остекление
+                    glaze = [(bb, c) for bb, c in strips
+                             if id(c) not in claimed
+                             and along(bb)[0] >= along(a)[1] - 250 and along(bb)[1] <= along(b)[0] + 250
+                             and abs((across(bb)[0] + across(bb)[1]) / 2 - e) <= 350]
+                    if not glaze:
+                        continue
+                    covered = sum(min(along(bb)[1], along(b)[0]) - max(along(bb)[0], along(a)[1]) for bb, _c in glaze)
+                    if covered < 0.7 * gap:
+                        continue
+                    lo = min(across(bb)[0] for bb, _c in glaze)
+                    hi = max(across(bb)[1] for bb, _c in glaze)
+                    ax0, ax1 = along(a)[1], along(b)[0]
+                    poly = ([(ax0, lo), (ax1, lo), (ax1, hi), (ax0, hi)] if horiz
+                            else [(lo, ax0), (hi, ax0), (hi, ax1), (lo, ax1)])
+                    out.append({
+                        "category": _WINDOW_CATEGORY[0], "material": _WINDOW_CATEGORY[1],
+                        "polygon_mm": poly, "thickness_mm": round(hi - lo, 1),
+                        "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+                        "_ids": [id(c) for _bb, c in glaze],
+                    })
+                    claimed.update(id(c) for _bb, c in glaze)
+    return out
+
+
+# Боковые окна: на самом фасадном слое у них нет ни одной своей фигуры —
+# только концевые маркеры; это РАЗРЫВ в цепочке кладки.
+_GAP_WINDOW_MM = (500, 4500)
+_LINE_TOL_MM = 450
+
+
+def _gap_windows(rest: list, markers: list, windows: list) -> list:
+    """Разрывы цепочки кладки вдоль линии фасада, у обоих концов которых
+    стоят концевые маркеры, и в которых ещё нет найденного окна."""
+    out = []
+    win_boxes = [_bbox_of(w["polygon_mm"]) for w in windows]
+    for horiz in (True, False):
+        items = []
+        for c in rest:
+            bb = _bbox_of(c["poly"])
+            wd, ht = bb[2] - bb[0], bb[3] - bb[1]
+            if horiz and wd > ht and ht <= 400:
+                items.append((bb[0], bb[2], (bb[1] + bb[3]) / 2, bb[1], bb[3]))
+            elif not horiz and ht > wd and wd <= 400:
+                items.append((bb[1], bb[3], (bb[0] + bb[2]) / 2, bb[0], bb[2]))
+        items.sort(key=lambda t: t[2])
+        lines, cur = [], []
+        for it in items:
+            if cur and it[2] - cur[-1][2] > _LINE_TOL_MM:
+                lines.append(cur)
+                cur = []
+            cur.append(it)
+        if cur:
+            lines.append(cur)
+        for line in lines:
+            line.sort(key=lambda t: t[0])
+            merged = []
+            for a0, a1, _c, c0, c1 in line:
+                if merged and a0 <= merged[-1][1] + 60:
+                    merged[-1][1] = max(merged[-1][1], a1)
+                    merged[-1][2] = min(merged[-1][2], c0)
+                    merged[-1][3] = max(merged[-1][3], c1)
+                else:
+                    merged.append([a0, a1, c0, c1])
+            for prev, nxt in zip(merged, merged[1:]):
+                g0, g1 = prev[1], nxt[0]
+                if not (_GAP_WINDOW_MM[0] <= g1 - g0 <= _GAP_WINDOW_MM[1]):
+                    continue
+                c0 = (prev[2] + nxt[2]) / 2
+                c1 = (prev[3] + nxt[3]) / 2
+                mid = (c0 + c1) / 2
+                lo, hi = mid - 75, mid + 75
+                if not (_marker_at(markers, g0, lo, hi, horiz) and _marker_at(markers, g1, lo, hi, horiz)):
+                    continue
+                poly = ([(g0, lo), (g1, lo), (g1, hi), (g0, hi)] if horiz
+                        else [(lo, g0), (hi, g0), (hi, g1), (lo, g1)])
+                bb = _bbox_of(poly)
+                if any(not (bb[2] < w[0] or bb[0] > w[2] or bb[3] < w[1] or bb[1] > w[3]) for w in win_boxes):
+                    continue
+                out.append({
+                    "category": _WINDOW_CATEGORY[0], "material": _WINDOW_CATEGORY[1],
+                    "polygon_mm": poly, "thickness_mm": 150.0,
+                    "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+                })
+    return out
+
+
 def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
-                              envelope, margin: int = _AXIS_ENVELOPE_MARGIN_MM) -> tuple:
+                              envelope, margin: int = _AXIS_ENVELOPE_MARGIN_MM,
+                              side_polys: Optional[list] = None) -> tuple:
     """Кладка простенков наружного фасада И оконные проёмы между ними
     (`_EXTERIOR_FACADE_LAYER`) — на одном слое, одним способом (заливка,
     не штриховка), различить по слою/цвету нельзя — оба белые. Надёжный
@@ -1175,6 +1362,7 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
     m = margin
     H = page.rect.height
     candidates = []
+    markers = []
     for d in page.get_cdrawings():
         if d.get("layer") != _EXTERIOR_FACADE_LAYER or d["type"] != "f":
             continue
@@ -1184,6 +1372,14 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
         rect = d["rect"]
         w_mm = (rect[2] - rect[0]) * PT_TO_MM * scale
         h_mm = (rect[3] - rect[1]) * PT_TO_MM * scale
+        if abs(w_mm - _MARKER_SIZE_MM) <= _MARKER_TOL_MM and abs(h_mm - _MARKER_SIZE_MM) <= _MARKER_TOL_MM:
+            # Концевой маркер проёма (белый квадрат 80×80): стоит у обоих
+            # концов каждого окна и лоджии, у простенка — нет.
+            mcx = (rect[0] + rect[2]) / 2 * PT_TO_MM * scale - shift_x
+            mcy = (H - (rect[1] + rect[3]) / 2) * PT_TO_MM * scale - shift_y
+            if x0 - m <= mcx <= x1 + m and y0 - m <= mcy <= y1 + m:
+                markers.append((mcx, mcy))
+            continue
         if w_mm * h_mm < _EXTERIOR_INFILL_MIN_AREA_MM2:
             continue
         pts = [it[1] for it in d["items"] if it[0] == "l"]
@@ -1245,8 +1441,30 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
                               (max(xs), max(ys)), (min(xs), max(ys))],
                 "thickness_mm": round(min(max(xs) - min(xs), max(ys) - min(ys)), 1),
                 "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
+                "_ids": [id(c) for c in group],
             })
-            claimed.update(id(c) for c in group)
+
+    # Окно по повтору размера без концевых маркеров — случайное совпадение
+    # кусков кладки (на типовом этаже башни так получались «окно» на колонне
+    # и «окно» из двух простенков); его фигуры возвращаются в кладку.
+    if len(markers) >= _MARKERS_MIN_PER_PAGE:
+        kept = []
+        for win in windows_out:
+            if _has_end_markers(_bbox_of(win["polygon_mm"]), markers):
+                kept.append(win)
+                claimed.update(win["_ids"])
+        windows_out = kept
+
+        rest = [c for c in candidates if id(c) not in claimed]
+        # Лоджии и боковые окна, которые повтором размера не находятся.
+        for win in _loggia_windows(rest, side_polys or [], claimed, ((x0 + x1) / 2, (y0 + y1) / 2)) + _gap_windows(
+                [c for c in rest if id(c) not in claimed], markers, windows_out):
+            windows_out.append(win)
+    else:
+        for win in windows_out:
+            claimed.update(win["_ids"])
+    for win in windows_out:
+        win.pop("_ids", None)
 
     for c in candidates:
         if id(c) in claimed:
@@ -1331,7 +1549,8 @@ def parse_walls_page(page, rooms: list = None, correction: tuple = (0.0, 0.0)) -
                      if page.number + 1 == _ROUNDED_CORNER_PAGE
                      else _AXIS_ENVELOPE_MARGIN_MM)
     infill_walls, infill_windows = _exterior_infill_segments(
-        page, scale, shift_x, shift_y, _axis_envelope(page, correction), infill_margin)
+        page, scale, shift_x, shift_y, _axis_envelope(page, correction), infill_margin,
+        side_polys=[sg["polygon_mm"] for sg in segments])
     segments += infill_walls
     segments += infill_windows
     if page.number + 1 == _ROUNDED_CORNER_PAGE:
