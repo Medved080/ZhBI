@@ -280,8 +280,10 @@ def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str 
                 ({"источник_pdf": filename} if filename else {})
                 | {"страница": w.page, "материал": w.material,
                    "толщина_мм": w.thickness_mm}
-                | ({"высота_и_отступ": "типовые, не измерены — в плане нет "
-                    "вертикальной привязки"} if w.z_offset_mm is not None else {}),
+                | (({"высота_и_отступ": "по отметкам листа фасада (подоконник и верх окна "
+                     "от уровня этажа)"} if w.z_source == "лист фасада"
+                     else {"высота_и_отступ": "типовые, не измерены — в плане нет "
+                           "вертикальной привязки"}) if w.z_offset_mm is not None else {}),
                 ensure_ascii=False),
         })
     return rows

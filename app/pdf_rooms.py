@@ -312,6 +312,7 @@ class WallSegment:
     page: int = 0
     z_offset_mm: Optional[float] = None   # окно: смещение низа от отметки этажа
     z_height_mm: Optional[float] = None   # окно: своя высота вместо всей высоты этажа
+    z_source: str = "типовые"             # откуда подоконник и высота: "типовые" | "лист фасада"
 
 
 # Порядковые номера кладки над/под окном начинаются с этого числа (чтобы не
@@ -343,12 +344,12 @@ def window_infill(win: "WallSegment", floor_height_mm: float) -> list:
         out.append(WallSegment(
             floor=win.floor, index=base, page=win.page, category=category, material=material,
             polygon_mm=win.polygon_mm, thickness_mm=win.thickness_mm, section=win.section,
-            z_offset_mm=0.0, z_height_mm=sill))
+            z_offset_mm=0.0, z_height_mm=sill, z_source=win.z_source))
     if floor_height_mm - top > _INFILL_MIN_MM:
         out.append(WallSegment(
             floor=win.floor, index=base + 1, page=win.page, category=category, material=material,
             polygon_mm=win.polygon_mm, thickness_mm=win.thickness_mm, section=win.section,
-            z_offset_mm=top, z_height_mm=floor_height_mm - top))
+            z_offset_mm=top, z_height_mm=floor_height_mm - top, z_source=win.z_source))
     return out
 
 
@@ -1646,6 +1647,52 @@ def _floor_slab_polygon(room_polys: list, wall_polys: list) -> Optional[list]:
     return [(round(x, 1), round(y, 1)) for x, y in merged.exterior.coords[:-1]]
 
 
+# Отметки окон на листах фасада (2026-10-23, запрос пользователя «бери высоту
+# окон с чертежа фасада»): рядом с каждым рядом окон на фасаде подписаны две
+# отметки — низ окна и верх окна, абсолютные (+41,400 и +43,150 для этажа
+# +40,650). У всех жилых этажей башни и низкой части это одна и та же пара
+# смещений от уровня этажа (подоконник +750 мм, верх +2500 мм, высота окна
+# 1750 мм) — типовые 900/1500 мм, которыми окна рисовались раньше, были
+# неверны. Читаем смещения прямо из подписей листа, а не зашиваем числа.
+_FACADE_MARK_RE = re.compile(r'^\+(\d{1,2}),(\d{3})$')
+_FACADE_MARK_MIN_COUNT = 10        # столько раз пара смещений должна повториться
+_FACADE_WINDOW_FIRST_FLOOR = 2     # первый этаж (витражи, без своих отметок) не трогаем
+
+
+def facade_window_levels(doc) -> Optional[dict]:
+    """{"sill_mm", "height_mm", "marks"} — подоконник и высота окна по подписям
+    листов фасада, либо `None`, если однозначной пары смещений на листах нет
+    (тогда остаются типовые значения). Смещение — от ближайшего НИЖЕ уровня
+    этажа из `FLOOR_PLANS` (отметка этажа = z0 плана)."""
+    levels = sorted({round(p.z0) for p in FLOOR_PLANS if p.floor.isdigit()
+                     and int(p.floor) >= _FACADE_WINDOW_FIRST_FLOOR})
+    if not levels:
+        return None
+    from collections import Counter
+    offsets = Counter()
+    for page in doc:
+        for w in page.get_text("words"):
+            m = _FACADE_MARK_RE.match(w[4])
+            if not m:
+                continue
+            z = int(m.group(1)) * 1000 + int(m.group(2))
+            below = [lv for lv in levels if lv <= z]
+            if not below:
+                continue
+            off = z - max(below)
+            if 0 < off < _FLOOR_HEIGHT:
+                offsets[off] += 1
+    # Две самые частые пары смещений: низ и верх окна. Остальные одиночные
+    # значения (парапет, техэтаж, перекрытие) встречаются заметно реже.
+    top = offsets.most_common(2)
+    if len(top) != 2 or min(n for _o, n in top) < _FACADE_MARK_MIN_COUNT:
+        return None
+    (sill, n1), (head, n2) = sorted(top)
+    if not (1000 <= head - sill <= 2600) or abs(n1 - n2) > 0.2 * max(n1, n2):
+        return None
+    return {"sill_mm": float(sill), "height_mm": float(head - sill), "marks": n1 + n2}
+
+
 def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
     """Стены, перегородки и плиты перекрытия по тем же листам, что и
     `parse_document`. `rooms` — уже разобранные помещения (тот же вызов) —
@@ -1683,6 +1730,10 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
     warnings = []
     page_cache = {}
     canonical_grid = extract_axis_grid(doc)
+    window_levels = facade_window_levels(doc)
+    if window_levels is None:
+        warnings.append("Отметки окон на листах фасада не найдены — окна построены "
+                        "по типовым подоконнику 900 мм и высоте 1500 мм")
     total_pages = len({plan.page for plan in FLOOR_PLANS})
     processed = 0
     for plan in FLOOR_PLANS:
@@ -1785,13 +1836,18 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
                     f"Лист {plan.page} (этаж {plan.floor}): {len(fat)} фигур(-ы) фасада толще "
                     f"{_MAX_INFILL_THICKNESS_MM:.0f}мм — парапет/ограждение, не кладка, отброшены")
                 floor_segments = [s for s in floor_segments if s not in fat]
+        facade_levels = (window_levels if window_levels and plan.floor.isdigit()
+                         and int(plan.floor) >= _FACADE_WINDOW_FIRST_FLOOR else None)
         for i, s in enumerate(floor_segments):
+            z_off, z_hgt, z_src = s.get("z_offset_mm"), s.get("z_height_mm"), "типовые"
+            if s["category"] == "Окна" and facade_levels:
+                z_off, z_hgt, z_src = facade_levels["sill_mm"], facade_levels["height_mm"], "лист фасада"
             all_walls.append(WallSegment(
                 floor=plan.floor, index=i, page=plan.page,
                 category=s["category"], material=s["material"],
                 polygon_mm=s["polygon_mm"], thickness_mm=s["thickness_mm"],
                 section=known_section or s.get("section"),
-                z_offset_mm=s.get("z_offset_mm"), z_height_mm=s.get("z_height_mm")))
+                z_offset_mm=z_off, z_height_mm=z_hgt, z_source=z_src))
 
         room_polys = [p for p, _ in (rooms_by_floor.get(plan.floor) or [])]
         slab_poly = _floor_slab_polygon(room_polys, [s["polygon_mm"] for s in floor_segments])
