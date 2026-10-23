@@ -28495,6 +28495,38 @@ async function ensureZhbiExternalModelsList(objectId) {
   return zhbiExternalModels.models;
 }
 
+// Файлы внешних 3D-моделей (FBX) — до десятков МБ; по замерам 2026-10-23 за одно открытие объекта скачивалось ~26 МБ (1–3 с даже на локальной
+// сети), и так при каждой пересборке сцены, потому что слой освобождает модели при смене объекта. Здесь сырые байты хранятся в памяти вкладки
+// вместе с ETag, который отдаёт сервер (app/external_models.py), и повторный запрос идёт условным: ответ 304 — тело не передаётся.
+// Работает независимо от HTTP-кэша браузера (он для файлов такого размера не всегда включается). Предел — общий объём в памяти.
+const externalModelBuffers = new Map();   // url → { etag, buf }; порядок вставки = давность использования
+const EXTERNAL_MODEL_BUFFERS_MAX = 96 * 1024 * 1024;
+async function fetchExternalModelContent(objectId, model) {
+  const url = `/objects/${objectId}/external-models/${model.id}/content`;
+  const have = externalModelBuffers.get(url);
+  const r = await fetch(url, have ? { headers: { "If-None-Match": have.etag } } : undefined);
+  if (r.status === 304 && have) {
+    externalModelBuffers.delete(url);
+    externalModelBuffers.set(url, have);   // обновили давность
+    return have.buf;
+  }
+  if (!r.ok) throw new Error("Не удалось получить файл модели");
+  const buf = await r.arrayBuffer();
+  const etag = r.headers.get("etag");
+  if (etag) {
+    externalModelBuffers.delete(url);
+    externalModelBuffers.set(url, { etag, buf });
+    let total = 0;
+    for (const v of externalModelBuffers.values()) total += v.buf.byteLength;
+    for (const k of externalModelBuffers.keys()) {
+      if (total <= EXTERNAL_MODEL_BUFFERS_MAX || externalModelBuffers.size <= 1) break;
+      total -= externalModelBuffers.get(k).buf.byteLength;
+      externalModelBuffers.delete(k);
+    }
+  }
+  return buf;
+}
+
 async function attachZhbiExternalModels(scene, objectId) {
   const models = await ensureZhbiExternalModelsList(objectId);
   if (state.view3d.scene !== scene) return;
@@ -28505,8 +28537,7 @@ async function attachZhbiExternalModels(scene, objectId) {
   if (!zhbiExternalModels.layer) {
     zhbiExternalModels.layer = createExternalModelLayer({
       THREE, FBXLoader,
-      fetchContent: (model) => fetch(`/objects/${objectId}/external-models/${model.id}/content`)
-        .then((r) => { if (!r.ok) throw new Error("Не удалось получить файл модели"); return r.arrayBuffer(); }),
+      fetchContent: (model) => fetchExternalModelContent(objectId, model),
     });
   }
   const warnings = await zhbiExternalModels.layer.attachToZhbi(
@@ -34487,8 +34518,7 @@ async function attachMfrExternalModels(scene, objectId, origin, low) {
   if (!mfrExternalModels.layer) {
     mfrExternalModels.layer = createExternalModelLayer({
       THREE, FBXLoader,
-      fetchContent: (model) => fetch(`/objects/${objectId}/external-models/${model.id}/content`)
-        .then((r) => { if (!r.ok) throw new Error("Не удалось получить файл модели"); return r.arrayBuffer(); }),
+      fetchContent: (model) => fetchExternalModelContent(objectId, model),
     });
   }
   // origin/низ нужны позже beginExternalModelPlacement, чтобы синхронизировать

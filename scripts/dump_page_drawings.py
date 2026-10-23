@@ -75,7 +75,7 @@ def dump_page(doc, page_number: int, canonical_grid: dict) -> dict:
             "box_mm": [x0, y0, x1, y1],
             "items": len(d["items"]),
             "kinds": "".join(sorted({it[0] for it in d["items"]})),
-            "pts_mm": [mm(p.x, p.y) for p in pts],
+            "pts_mm": [mm(p[0], p[1]) for p in pts],
         })
     return {
         "page": page_number,
