@@ -1276,9 +1276,33 @@ _GAP_WINDOW_MM = (500, 4500)
 _LINE_TOL_MM = 450
 
 
-def _gap_windows(rest: list, markers: list, windows: list) -> list:
-    """Разрывы цепочки кладки вдоль линии фасада, у обоих концов которых
-    стоят концевые маркеры, и в которых ещё нет найденного окна."""
+def _outline_boundary(room_polys: list, side_polys: list, candidates: list):
+    """Граница наружного контура здания на листе: объединение помещений,
+    стен и фасадных фигур, затянутое острым буфером (как `pdf_plan_images.
+    floor_contour`), — либо `None`, если собрать нечего."""
+    shapes = []
+    for poly in list(room_polys) + list(side_polys) + [c["poly"] for c in candidates]:
+        if len(poly) < 3:
+            continue
+        try:
+            shp = Polygon(poly).buffer(0)
+        except Exception:
+            continue
+        if shp and not shp.is_empty:
+            shapes.append(shp)
+    if not shapes:
+        return None
+    merged = unary_union(shapes).buffer(1500, join_style=2).buffer(-1500, join_style=2)
+    return merged.boundary if not merged.is_empty else None
+
+
+_NEAR_OUTLINE_MM = 350   # насколько близко к наружному контуру лежит окно (толщина стены)
+
+
+def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None) -> list:
+    """Разрывы цепочки кладки вдоль линии фасада, в которых ещё нет найденного
+    окна. Подтверждение: концевые маркеры у обоих краёв (`markers`), а на
+    листах без маркеров — близость к наружному контуру здания (`near`)."""
     out = []
     win_boxes = [_bbox_of(w["polygon_mm"]) for w in windows]
     for horiz in (True, False):
@@ -1317,10 +1341,13 @@ def _gap_windows(rest: list, markers: list, windows: list) -> list:
                 c1 = (prev[3] + nxt[3]) / 2
                 mid = (c0 + c1) / 2
                 lo, hi = mid - 75, mid + 75
-                if not (_marker_at(markers, g0, lo, hi, horiz) and _marker_at(markers, g1, lo, hi, horiz)):
+                if markers is not None and not (_marker_at(markers, g0, lo, hi, horiz)
+                                                and _marker_at(markers, g1, lo, hi, horiz)):
                     continue
                 poly = ([(g0, lo), (g1, lo), (g1, hi), (g0, hi)] if horiz
                         else [(lo, g0), (hi, g0), (hi, g1), (lo, g1)])
+                if near is not None and Polygon(poly).distance(near) > _NEAR_OUTLINE_MM:
+                    continue
                 bb = _bbox_of(poly)
                 if any(not (bb[2] < w[0] or bb[0] > w[2] or bb[3] < w[1] or bb[1] > w[3]) for w in win_boxes):
                     continue
@@ -1334,7 +1361,8 @@ def _gap_windows(rest: list, markers: list, windows: list) -> list:
 
 def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
                               envelope, margin: int = _AXIS_ENVELOPE_MARGIN_MM,
-                              side_polys: Optional[list] = None) -> tuple:
+                              side_polys: Optional[list] = None,
+                              room_polys: Optional[list] = None) -> tuple:
     """Кладка простенков наружного фасада И оконные проёмы между ними
     (`_EXTERIOR_FACADE_LAYER`) — на одном слое, одним способом (заливка,
     не штриховка), различить по слою/цвету нельзя — оба белые. Надёжный
@@ -1464,6 +1492,15 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
     else:
         for win in windows_out:
             claimed.update(win["_ids"])
+        # Лист без маркеров (первый этаж): окна по разрывам цепочки кладки, но
+        # только ВДОЛЬ НАРУЖНОГО КОНТУРА здания — иначе в окна попали бы
+        # внутренние остеклённые перегородки (2026-10-23: после загрузки на
+        # первом этаже витражи оставались сквозными проёмами без окон).
+        boundary = _outline_boundary(room_polys or [], side_polys or [], candidates)
+        if boundary is not None:
+            rest = [c for c in candidates if id(c) not in claimed]
+            for win in _gap_windows(rest, None, windows_out, near=boundary):
+                windows_out.append(win)
     for win in windows_out:
         win.pop("_ids", None)
 
@@ -1551,12 +1588,16 @@ def parse_walls_page(page, rooms: list = None, correction: tuple = (0.0, 0.0)) -
                      else _AXIS_ENVELOPE_MARGIN_MM)
     infill_walls, infill_windows = _exterior_infill_segments(
         page, scale, shift_x, shift_y, _axis_envelope(page, correction), infill_margin,
-        side_polys=[sg["polygon_mm"] for sg in segments])
+        side_polys=[sg["polygon_mm"] for sg in segments],
+        room_polys=room_polys)
     segments += infill_walls
     segments += infill_windows
     if page.number + 1 == _ROUNDED_CORNER_PAGE:
         win_category, win_material = _WINDOW_CATEGORY
+        found = [_bbox_of(w["polygon_mm"]) for w in infill_windows]
         for x0m, y0m, x1m, y1m in _FLOOR1_MANUAL_WINDOWS_MM:
+            if any(not (x1m < b[0] or x0m > b[2] or y1m < b[1] or y0m > b[3]) for b in found):
+                continue   # уже найдено разбором — второй раз не добавляем
             segments.append({
                 "category": win_category, "material": win_material,
                 "polygon_mm": [(x0m, y0m), (x1m, y0m), (x1m, y1m), (x0m, y1m)],
