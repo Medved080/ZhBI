@@ -33767,6 +33767,24 @@ async function openHeadcount(startTab) {
     confirm: async (text) => confirm(text),
   });
 }
+// «Администрирование → Бот eXpress» (2026-10-23): подключение, ключ, журнал обмена — тот же модуль, что и вкладка в численности, режим admin.
+let expressAdminView = null;
+function closeExpressAdmin() {
+  if (expressAdminView) { expressAdminView.destroy(); expressAdminView = null; }
+  document.getElementById("express-admin-backdrop").classList.remove("open");
+}
+document.getElementById("express-admin-close").addEventListener("click", closeExpressAdmin);
+document.getElementById("menu-express-admin").addEventListener("click", async () => {
+  document.getElementById("express-admin-backdrop").classList.add("open");
+  if (expressAdminView) { expressAdminView.destroy(); expressAdminView = null; }
+  const send = (method) => (path, body) => api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const mod = await import("/static/express-ui.js");
+  expressAdminView = mod.mountExpress(document.getElementById("express-admin-host"), {
+    mode: "admin",
+    api: { get: (path) => api(path), put: send("PUT"), post: send("POST"), patch: send("PATCH"), delete: (path) => api(path, { method: "DELETE" }) },
+    canAdmin: true, confirm: async (text) => confirm(text),
+  });
+});
 document.getElementById("menu-headcount").addEventListener("click", () => openHeadcount());
 document.getElementById("menu-work-codifier").addEventListener("click", () => openHeadcount("codifier"));
 

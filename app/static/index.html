@@ -5552,6 +5552,8 @@
             <!-- Рядом с «Пользователями» (2026-08-03): это настройка того,
                  ЧЕМ пользователь входит, и ходят сюда из той же формы. -->
             <button id="menu-ai-settings" data-feature="ai_settings" data-feature-kind="write">Интеграция с ИИ</button>
+            <!-- 2026-10-23: подключение бота eXpress (адрес CTS, идентификатор, ключ), журнал обмена. Расписания и контакты — «Численность → Бот eXpress». -->
+            <button id="menu-express-admin" data-feature="express_admin" data-feature-kind="read">Бот eXpress</button>
             <button id="menu-ldap" data-feature="ldap" data-feature-kind="read">Доменная авторизация</button>
             <button id="menu-backups" data-feature="backups" data-feature-kind="read">Резервные копии</button>
             <button id="menu-address-classifier" data-feature="address_load" data-feature-kind="write">Адресный классификатор</button>
@@ -9437,6 +9439,15 @@
     <div class="modal-sticky-head"><h2>Численность персонала — <span id="hc-object-name"></span></h2></div>
     <div class="modal-sticky-scroll"><div id="hc-host"></div></div>
     <div class="modal-sticky-foot"><div class="actions"><button class="btn btn-secondary" id="hc-close">Закрыть</button></div></div>
+  </div>
+</div>
+
+<!-- «Бот eXpress» (2026-10-23): подключение, ключ и журнал обмена; общий модуль app/static/express-ui.js (режим admin). -->
+<div class="modal-backdrop" id="express-admin-backdrop">
+  <div class="modal modal-sticky" style="max-width:1100px">
+    <div class="modal-sticky-head"><h2>Бот eXpress</h2></div>
+    <div class="modal-sticky-scroll"><div id="express-admin-host"></div></div>
+    <div class="modal-sticky-foot"><div class="actions"><button class="btn btn-secondary" id="express-admin-close">Закрыть</button></div></div>
   </div>
 </div>
 

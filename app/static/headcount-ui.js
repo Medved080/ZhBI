@@ -65,7 +65,7 @@ export function mountHeadcount(el, ctx) {
   const tabs = [["input", "Ввод численности"], ["contractors", "Подрядчики"], ["report", "Отчёт"], ["data", "Все данные"], ["codifier", "Виды работ"]];
   if (ctx.canAdmin) tabs.push(["admin", "Загрузка данных"]);
   // Бот eXpress (2026-10-23, Docs/express-bot.md): права — разделы `express_bot` (расписания, контакты) и `express_admin` (подключение, журнал)
-  if (ctx.express && (ctx.express.read || ctx.express.admin)) tabs.push(["express", "Бот eXpress"]);
+  if (ctx.express && ctx.express.read) tabs.push(["express", "Бот eXpress"]);
 
   el.classList.add("hc-root");
   el.innerHTML = `<div class="hc-tabs" role="tablist" aria-label="Разделы учёта численности">${tabs.map(([k, t]) =>

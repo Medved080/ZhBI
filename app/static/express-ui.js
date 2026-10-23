@@ -30,12 +30,23 @@ const STATUS = { pending: ["ожидает отправки", "warn"], sent: ["�
 const SUBS = [["schedules", "Расписания"], ["requests", "Запросы и ответы"], ["contacts", "Контакты"]];
 const SUBS_ADMIN = [["connection", "Подключение"], ["log", "Журнал обмена"]];
 
+function ensureCss() {
+  if (document.querySelector("link[data-hc-css]")) return;
+  const l = document.createElement("link");
+  l.rel = "stylesheet"; l.href = "/static/headcount.css"; l.setAttribute("data-hc-css", "1");
+  document.head.appendChild(l);
+}
+
+// ctx.mode: "object" (по умолчанию) — вкладка «Бот eXpress» в численности: расписания, запросы, контакты выбранного объекта;
+//           "admin" — экран «Администрирование → Бот eXpress»: подключение, ключ, журнал обмена (сервисные настройки, объекта нет).
 export function mountExpress(el, ctx) {
   const { api } = ctx;
   let dead = false;
-  const subs = SUBS.concat(ctx.canAdmin ? SUBS_ADMIN : []);
+  const adminMode = ctx.mode === "admin";
+  const subs = adminMode ? SUBS_ADMIN : SUBS;
+  if (adminMode) { ensureCss(); if (!el.closest(".hc-root")) el.classList.add("hc-root"); }
   const st = {
-    sub: subs.some(([k]) => k === ctx.sub) ? ctx.sub : "schedules", status: null, schedules: null, requests: null, contacts: null, individuals: null,
+    sub: subs.some(([k]) => k === ctx.sub) ? ctx.sub : subs[0][0], status: null, schedules: null, requests: null, contacts: null, individuals: null,
     form: null, contactForm: null, sendForm: null, config: null, log: null, logErrors: false, msg: "", msgKind: "", busy: false,
   };
   el.innerHTML = `<div class="ex-tabs" role="tablist" aria-label="Разделы бота eXpress">${subs.map(([k, t]) => `<button type="button" role="tab" class="ex-tab" data-sub="${k}">${esc(t)}</button>`).join("")}</div><div id="ex-pane"></div>`;
@@ -79,7 +90,7 @@ export function mountExpress(el, ctx) {
   const botCallout = () => {
     const s = st.status;
     if (!s || s.active) return "";
-    return `<div class="hc-callout warn" role="status"><strong>Бот выключен или не настроен</strong> — запросы по расписанию не уходят. ${ctx.canAdmin ? "Включите его на вкладке «Подключение»." : "Обратитесь к администратору сервиса."}</div>`;
+    return `<div class="hc-callout warn" role="status"><strong>Бот выключен или не настроен</strong> — запросы по расписанию не уходят. ${ctx.canAdmin ? "Включите его в «Администрирование → Бот eXpress»." : "Обратитесь к администратору сервиса."}</div>`;
   };
   const botName = () => esc(st.status?.bot_name || "бота");
 
