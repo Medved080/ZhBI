@@ -65,6 +65,7 @@ from urllib.parse import quote
 from pydantic import BaseModel, Field
 
 from app import activity
+from app import perf_core
 from app import object_team, team_access
 from app.team_access import router as team_access_router
 from app import error_log
@@ -443,6 +444,11 @@ async def _log_unhandled_exception(request: Request, exc: Exception):
 # перед uvicorn на серверах нет nginx. Подробности — app/response_compression.py.
 app.add_middleware(TextGZipMiddleware)
 
+# Замеры производительности (2026-10-23): СНАРУЖИ сжатия, чтобы мерить то, что реально ушло по сети. Пока замеры выключены,
+# запрос платит одной проверкой числа. Подробности — app/perf_core.py.
+from app.perf_core import PerfMiddleware  # noqa: E402
+app.add_middleware(PerfMiddleware)
+
 # Лимит тела запроса — САМЫМ ВНЕШНИМ слоем (add_middleware ставит
 # последний добавленный снаружи всех предыдущих), чтобы отсечь приём
 # раньше, чем тело дойдёт до разбора multipart и до зависимостей
@@ -491,6 +497,8 @@ app.include_router(training_router)
 app.include_router(db_status_router)
 from app.server_status import router as server_status_router  # noqa: E402  (показатели сервера: процессор, память, диск)
 app.include_router(server_status_router)
+from app.perf import router as perf_router  # noqa: E402  (замеры производительности: сервер и браузеры)
+app.include_router(perf_router)
 app.include_router(kladr_router)
 app.include_router(project_map_router)
 app.include_router(contracts_router)
@@ -5559,6 +5567,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
     браузере (state.selection).
     """
     conn = get_connection()
+    perf_core.mark("до обработчика: авторизация, очередь пула потоков")
     try:
         elements = []
         axis_rows_all = []
@@ -5757,6 +5766,8 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         # см. schedule_versions.forecast_dates). Одним набором запросов на всю выборку. Нет данных — None («без даты»).
         _forecast_by_element = (forecast_dates(conn, plan_object_id)
                                 if plan_object_id is not None and elements else {})
+        perf_core.mark("элементы, оси, зоны: выборка из БД")
+        perf_core.note_object(plan_object_id)
         for el in elements:
             _f = _forecast_by_element.get(el["id"])
             el["forecast_smr_start_date"] = _f[0] if _f else None
@@ -5783,6 +5794,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 (plan_object_id,),
             ).fetchall()
         }
+        perf_core.mark("прогнозные даты и контракты: выборка")
         for el in elements:
             el["counterparty_code"] = counterparty_code_by_contract_id.get(el.get("contract_id"))
 
@@ -5885,6 +5897,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         ]
         shape_rows = conn.execute("SELECT layer, element_type, shape FROM element_shapes").fetchall()
         element_shapes = {f"{r['layer']} {r['element_type']}": r["shape"] for r in shape_rows}
+        perf_core.mark("контракты, подписи, формы: выборка и сборка")
     finally:
         conn.close()
 
@@ -5924,6 +5937,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
     }
     bbox_diag = ((bbox["max_x"] - bbox["min_x"]) ** 2 + (bbox["max_y"] - bbox["min_y"]) ** 2) ** 0.5
     marker_radius = estimate_marker_radius(points, bbox_diag)
+    perf_core.mark("рамка схемы и радиус маркера")
 
     return {
         "elements": elements,

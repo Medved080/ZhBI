@@ -97,6 +97,7 @@ let mountedObjectId = null; // объект, под который смонти�
 // прячется (hidden), при возврате показывается — без повторной загрузки и перестроения схемы. Каждый кадр держит данные объекта,
 // SVG-узлы и WebGL-контекст, поэтому спрятанных не больше KEPT_WS_MAX: вытесняется давно не открывавшееся (destroy — как раньше).
 const KEPT_WS_MAX = 3;
+let wsMode = null;          // как открыто рабочее место в этом переходе (для замера): из памяти / новая / перестроена
 const keptWs = new Map();   // id экрана → { host, module, objectId, epoch, suspended, at }
 let activeWs = null;        // запись keptWs рабочего места, открытого сейчас (null — открыто что-то другое)
 
@@ -532,6 +533,7 @@ async function renderShell(user, permissions) {
       if (stay) return false;
     }
     objectId = id;
+    window.zhbiPerf?.setObject(id);
     switchCtx.objectId = id;
     writeSession("v2.objectId", String(id));
     // «Последний объект — за пользователем», ТЕМ ЖЕ эндпоинтом, что уже использует V1 (не дублируем в
@@ -628,7 +630,8 @@ async function renderShell(user, permissions) {
   // нет, оно сломано, открыто принудительно (force: повтор, смена типа учёта) или за время отсутствия что-то записывали на сервер.
   function enterWorkspace(key, target, opts) {
     let k = keptWs.get(key);
-    if (k && (opts.force || !k.module.isReusable() || api.writeEpoch() !== k.epoch)) { dropKeptWs(key); k = null; }
+    wsMode = k ? "из памяти" : "новая";
+    if (k && (opts.force || !k.module.isReusable() || api.writeEpoch() !== k.epoch)) { dropKeptWs(key); k = null; wsMode = "перестроена"; }
     content.innerHTML = "";
     content.hidden = true;
     if (k) {
@@ -685,6 +688,9 @@ async function renderShell(user, permissions) {
       // мини-карта MapLibre со своим graphics-контекстом): content.innerHTML ниже
       // уничтожит её DOM-узел, но не сам контекст — без явного remove() браузер
       // рано или поздно перестанет строить новые карты вовсе.
+      // Замер перехода (perf.js): от решения открыть раздел до готового каркаса; данные раздел догружает сам (их видно по запросам)
+      const perfEnd = window.zhbiPerf?.start(`V2 экран: ${key}`, "screen");
+      wsMode = null;
       if (activeWs) leaveWorkspace(); else activeModule?.destroy?.();
       focusKeeper.reset();
       content.innerHTML = "";
@@ -892,6 +898,7 @@ async function renderShell(user, permissions) {
       }
       mountedObjectId = objectId;
       updateGateNote(key === "home" ? null : target);
+      perfEnd?.(wsMode ? { схема: wsMode } : undefined);
       return true;
     } finally { navBusy = false; }
   }
@@ -918,6 +925,8 @@ async function renderShell(user, permissions) {
   window.addEventListener("popstate", () => { const k = routeFromHash(); if (k !== currentKey) openSection(k, { fromHash: true }); });
 
   startStatusLog();   // лента «Сообщения за сеанс» (раздел «Обучение и справка»)
+  window.zhbiPerf?.configure();   // замеры производительности: опрос состояния сбора (perf.js)
+  window.zhbiPerf?.setObject(objectId);
   openSection(routeFromHash());
 }
 

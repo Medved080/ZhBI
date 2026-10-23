@@ -538,6 +538,15 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     ).rowcount
     count("activity_log (значения)", n)
 
+    # Замеры производительности: ФИО снимком и тексты самых долгих SQL-запросов (в f-строках бывают значения) — на копию не переносятся
+    # вовсе; сбор на копии выключен (состояние лежит в app_settings).
+    try:
+        n = conn.execute("DELETE FROM perf_samples").rowcount
+    except sqlite3.OperationalError:     # база старее замеров — таблицы нет
+        n = 0
+    conn.execute("DELETE FROM app_settings WHERE key = 'perf.capture' AND object_id IS NULL")
+    count("perf_samples (удалены)", n)
+
     rows = conn.execute("SELECT id FROM report_notes").fetchall()
     conn.execute(
         "UPDATE report_notes SET key_events='[]', key_tasks='[]', open_questions='[]'"

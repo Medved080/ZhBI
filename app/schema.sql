@@ -797,6 +797,25 @@ CREATE INDEX IF NOT EXISTS idx_activity_at ON activity_log (at);
 CREATE INDEX IF NOT EXISTS idx_activity_user_at ON activity_log (user_id, at);
 CREATE INDEX IF NOT EXISTS idx_activity_action_at ON activity_log (action, at);
 CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log (entity_type, entity_id);
+
+-- Встроенные замеры производительности (2026-10-23, app/perf_core.py, app/perf.py). Не журнал действий: строк тысячи в минуту, живут
+-- трое суток (RETENTION_DAYS) и чистятся сами. Без внешних ключей — как журнал, чтобы запись не стоила проверок и переживала удаление.
+CREATE TABLE IF NOT EXISTS perf_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,                 -- 'ГГГГ-ММ-ДД ЧЧ:ММ:СС.ммм' UTC, время сервера (у браузерных — приёма минус возраст замера)
+    run_id TEXT NOT NULL,             -- сбор, в который попал замер (включается и выключается администратором)
+    side TEXT NOT NULL,               -- 'server' | 'client'
+    kind TEXT NOT NULL,               -- http | fetch | screen | scene | longtask | frame | event | page | memory | device | span | error
+    op TEXT NOT NULL,                 -- операция: 'GET /objects/{object_id}/blocks', 'V2 экран: ws-model', ...
+    duration_ms REAL,                 -- сколько заняла
+    user_id INTEGER,                  -- кто работал (снимок, без внешнего ключа)
+    user_name TEXT,
+    client_id TEXT,                   -- вкладка браузера (случайный код на время жизни страницы): связывает замеры одной машины
+    object_id INTEGER,                -- объект, с которым работали, если известен
+    details TEXT                      -- JSON с разбивкой (SQL, байты, ожидание, скачивание, длинные скрипты и т.п.)
+);
+CREATE INDEX IF NOT EXISTS idx_perf_run_op ON perf_samples (run_id, side, op);
+CREATE INDEX IF NOT EXISTS idx_perf_at ON perf_samples (at);
 -- Индекс по category СЮДА НЕ СТАВИТСЯ: колонка добавляется миграцией
 -- (app/db._COLUMN_MIGRATIONS), а этот файл выполняется РАНЬШЕ миграций —
 -- на накопленной базе CREATE INDEX упал бы на «no such column». Он живёт

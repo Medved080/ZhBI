@@ -2784,6 +2784,10 @@ function refreshSubLabelsForType(type) {
 }
 
 function applyPlacementFilters(rebuild3D = true) {
+  const perfEnd = perfStart("Схема: применение фильтров");
+  try { return applyPlacementFiltersImpl(rebuild3D); } finally { perfEnd({ rebuild3D }); }
+}
+function applyPlacementFiltersImpl(rebuild3D = true) {
   // «Предстоит связать» — СНАЧАЛА: от этого набора зависит и видимость
   // изделий (они показываются сверх среза), и пересборка 3D ниже.
   state.pendingLinkIds = pickerPendingLinkIds();
@@ -6466,6 +6470,10 @@ function computeLabelOffsets(elements, baseRadius) {
 }
 
 function renderElements(data) {
+  const perfEnd = perfStart("Схема: отрисовка элементов 2D (SVG)");
+  try { return renderElementsImpl(data); } finally { perfEnd({ elements: state.elements.length }); }
+}
+function renderElementsImpl(data) {
   const layer = document.getElementById("elements-layer");
   // Подписи — в ОТДЕЛЬНОМ слое поверх ВСЕХ фигур (не внутри одной группы
   // "фигура+подпись на элемент"), а не в одном слое вперемешку с фигурами.
@@ -7338,6 +7346,11 @@ function clearWorkspace() {
 // машинами нельзя: часы прорабских ноутбуков расходятся на минуты, а цель
 // журнала — именно сравнение машин между собой.
 const ACTIVITY_FLUSH_MS = 10000;
+
+// Встроенные замеры производительности (perf.js, 2026-10-23): отрезок «название» → функция-финиш. Пока администратор замеры не включил,
+// финиш ничего не пишет (стоимость — два вызова performance.now()). Это ДРУГОЙ механизм, чем журнал действий выше: тот пишет в
+// activity_log единичные замеры форм, этот — поток замеров в таблицу perf_samples с автоочисткой.
+const perfStart = (op, kind, details) => (window.zhbiPerf ? window.zhbiPerf.start(op, kind || "scene", details) : () => 0);
 let activityQueue = [];
 let activityRequestSeq = 0;
 
@@ -7748,9 +7761,11 @@ async function openObjectHome(objectId) {
 
 async function loadPlan(preserveView = true) {
   setStageLoading(true);
+  const perfEnd = perfStart("Схема: загрузка плана — всего");
   try {
     return await loadPlanInner(preserveView);
   } finally {
+    perfEnd({ elements: state.elements.length });
     // Снимаем в любом случае, в том числе при ошибке: над сообщением об
     // ошибке вечный «крутящийся кружок» — худший из возможных исходов.
     setStageLoading(false);
@@ -7791,9 +7806,12 @@ async function loadPlanInner(preserveView = true) {
   }
   // Личное состояние запрашивается ПАРАЛЛЕЛЬНО с данными схемы, чтобы не удлинять открытие объекта
   const состояниеОжидание = uiStateStartFetch();
+  if (window.zhbiPerf) window.zhbiPerf.setObject(state.objectId);
+  const perfData = perfStart("Схема: запрос /plan-data и разбор JSON");
   const data = await api("/plan-data", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selection }),
   });
+  perfData({ elements: data.elements.length });
   // Данные только что загружены целиком — предыдущая метка опроса больше не
   // нужна и была бы вредна: сервер прислал бы как "изменения" всё, что
   // произошло до этой загрузки, и пользователь увидел бы всплывашку
@@ -7822,15 +7840,19 @@ async function loadPlanInner(preserveView = true) {
   if (сохранённоеСостояние) uiStateApplyFilters(сохранённоеСостояние);
   uiStateApplyLabels();   // отклонения «Подписей» от умолчаний объекта (и при перезагрузке данных в сеансе — не сбрасываем выбор человека)
 
+  const perfAxes = perfStart("Схема: оси и зоны (SVG)");
   renderAxisGrid(data);
   renderZones();
+  perfAxes();
   renderElements(data);
+  const perfPanels = perfStart("Схема: легенда, переключатели, фильтры, АРМ");
   renderLegend();
   renderLabelToggles();
   renderZoneToggles();
   renderStanceZoneToggles();
   renderPlacementFilters();
   renderPicker();               // дашборд АРМ считается по тем же данным
+  perfPanels();
   applyPlacementFilters(false); // 3D-сцена собирается ниже, одним разом
   showPlaceholderCard();
 
@@ -18124,6 +18146,25 @@ document.getElementById("db-status-body").addEventListener("click", (e) => {
 
 document.getElementById("db-status-close").addEventListener("click", () =>
   dbStatusBackdrop.classList.remove("open"));
+
+// «Замеры производительности» (2026-10-23): окно V1 вокруг общего с V2 модуля perf-panel.js. Пока окно закрыто, панель не существует
+// и ничего не опрашивает; сам сбор (perf.js) от окна не зависит.
+let perfPanelInstance = null;
+function closePerfPanel() {
+  document.getElementById("perf-backdrop").classList.remove("open");
+  if (perfPanelInstance) { perfPanelInstance.destroy(); perfPanelInstance = null; }
+}
+document.getElementById("menu-perf").addEventListener("click", () => {
+  if (!window.zhbiPerfPanel) { showToast("Модуль замеров не загрузился — обновите страницу", "error"); return; }
+  const host = document.getElementById("perf-body");
+  host.innerHTML = "";
+  document.getElementById("perf-backdrop").classList.add("open");
+  perfPanelInstance = window.zhbiPerfPanel.mount(host, {
+    request: (method, path, body) => api(path, method === "GET" ? undefined
+      : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }),
+  });
+});
+document.getElementById("perf-close").addEventListener("click", closePerfPanel);
 document.getElementById("db-table-close").addEventListener("click", () =>
   dbTableBackdrop.classList.remove("open"));
 document.getElementById("db-table-prev").addEventListener("click", () => {
@@ -28239,6 +28280,10 @@ function apply3DSunSetting() {
 // по элементам ниже), и сброс камеры на общий вид при каждой галочке делал
 // бы работу с фильтрами невыносимой.
 function build3DScene(preserveCamera = false) {
+  const perfEnd = perfStart("Схема: сборка 3D-сцены");
+  try { return build3DSceneImpl(preserveCamera); } finally { perfEnd({ elements: state.elements.length }); }
+}
+function build3DSceneImpl(preserveCamera = false) {
   const v3 = state.view3d;
   if (!v3.scene) return;
   if (v3.siteBaseMesh) {
@@ -29025,6 +29070,10 @@ function updateViewModeButtons(mode) {
 }
 
 async function setViewMode(mode) {
+  const perfEnd = perfStart(`Схема: переключение режима → ${mode}`);
+  try { return await setViewModeImpl(mode); } finally { perfEnd(); }
+}
+async function setViewModeImpl(mode) {
   const v3 = state.view3d;
   const stage2d = document.getElementById("stage");
   const stage3d = document.getElementById("stage-3d");
@@ -29243,6 +29292,7 @@ async function bootApp() {
   await uiStateLoadPrefs();   // опция «раздельные настройки по рабочим местам» — от неё зависит, какую область читать
   await loadPlan(false); // первая загрузка — вписать схему целиком
   startPolling();        // совместная работа: подхватывать чужие правки
+  if (window.zhbiPerf) window.zhbiPerf.configure();   // замеры производительности: опрос состояния сбора (perf.js)
   // «Что нового» — САМО, пока человек не нажал «Ознакомился» (2026-08-03,
   // живой запрос). В самом конце bootApp, а не в checkAuth: форма поверх
   // пустой рабочей области выглядела бы как ошибка загрузки, да и человеку
