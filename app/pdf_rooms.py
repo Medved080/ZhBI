@@ -1130,7 +1130,7 @@ _WINDOW_MAX_SPAN_MM = 6000
 # и остальная геометрия листа (после `_page_shift_correction`).
 _FLOOR1_MANUAL_WINDOWS_MM = [
     (-22560, 220, -21875, 370),
-    (-38850, -180, -37730, -30),
+    # (-38850, -180, -37730, -30) — убрано 2026-10-23 (отмечено пользователем как ложное: фланг ниши входа)
     (-57710, -180, -57350, -30),
     (-46440, -180, -45430, -30),
     (-63830, -14180, -63680, -13200),
@@ -1350,6 +1350,8 @@ _NEAR_OUTLINE_MM = 350   # насколько близко к наружному
 _NICHE_DEPTH_MIN_MM = 800     # меньшая глубина — не ниша, а простенок
 _NICHE_SIDE_TOL_MM = 450      # боковая стена ниши стоит у края разрыва не дальше этого
 _NICHE_BACK_TOL_MM = 250
+_DOOR_LAYER = "Б_блок ПРОЕМ.Б"   # слой проёмов: дверь — дуга поворота створки
+_DOOR_NEAR_MM = 150
 _NICHE_DUP_MM = 400           # «задняя» панель ближе этого к обычному окну — дубль
 
 
@@ -1368,7 +1370,7 @@ def _niche_window(g0: float, g1: float, mid: float, horiz: bool, boxes: list):
 
     sides = [bb for bb in boxes
              if along(bb)[1] - along(bb)[0] <= 400 and across(bb)[1] - across(bb)[0] >= _NICHE_DEPTH_MIN_MM
-             and across(bb)[0] - 250 <= mid <= across(bb)[1] + 250]
+             and across(bb)[0] - 450 <= mid <= across(bb)[1] + 450]
     centre = lambda bb: (along(bb)[0] + along(bb)[1]) / 2
     left = [b for b in sides if abs(centre(b) - g0) <= _NICHE_SIDE_TOL_MM]
     right = [b for b in sides if abs(centre(b) - g1) <= _NICHE_SIDE_TOL_MM]
@@ -1409,13 +1411,20 @@ def _niche_window(g0: float, g1: float, mid: float, horiz: bool, boxes: list):
 
 
 def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
-                 storefront: bool = False) -> list:
+                 storefront: bool = False, doors: Optional[list] = None,
+                 extra_boxes: Optional[list] = None) -> list:
     """Разрывы цепочки кладки вдоль линии фасада, в которых ещё нет найденного
     окна. Подтверждение: концевые маркеры у обоих краёв (`markers`), а на
     листах без маркеров — близость к наружному контуру здания (`near`)."""
     out = []
     win_boxes = [_bbox_of(w["polygon_mm"]) for w in windows]
     piece_boxes = [_bbox_of(c["poly"]) for c in rest]
+    doors = doors or []
+
+    def near_door(bb):
+        return any(not (bb[2] + _DOOR_NEAR_MM < d[0] or bb[0] - _DOOR_NEAR_MM > d[2]
+                        or bb[3] + _DOOR_NEAR_MM < d[1] or bb[1] - _DOOR_NEAR_MM > d[3]) for d in doors)
+
     for horiz in (True, False):
         items = []
         for c in rest:
@@ -1461,11 +1470,14 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
                     poly = _extend_to_markers(_bbox_of(poly), markers)
                 if near is not None and Polygon(poly).distance(near) > _NEAR_OUTLINE_MM:
                     continue
+                if near is not None and near_door(_bbox_of(poly)):
+                    continue   # входная дверь (дуга створки у проёма) — это дверь, а не окно
                 if near is not None:
-                    is_niche, back_poly = _niche_window(g0, g1, mid, horiz, piece_boxes)
+                    is_niche, back_poly = _niche_window(g0, g1, mid, horiz, piece_boxes + list(extra_boxes or []))
                     if is_niche:
-                        # Ниша входа: остекление на задней стене, на линии фасада окна нет.
-                        if back_poly is not None:
+                        # Ниша входа: остекление на задней стене, на линии фасада окна нет;
+                        # а если на задней стене дверь — окна нет вовсе.
+                        if back_poly is not None and not near_door(_bbox_of(back_poly)):
                             out.append({
                                 "category": _WINDOW_CATEGORY[0], "material": _WINDOW_CATEGORY[1],
                                 "polygon_mm": back_poly, "thickness_mm": 150.0,
@@ -1525,6 +1537,12 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
     H = page.rect.height
     candidates = []
     markers = []
+    doors = []   # габариты дуг поворота дверных створок, мм
+    for dd in page.get_cdrawings():
+        if dd.get("layer") == _DOOR_LAYER and any(it[0] == "c" for it in dd["items"]):
+            rr = dd["rect"]
+            doors.append((rr[0] * PT_TO_MM * scale - shift_x, (H - rr[3]) * PT_TO_MM * scale - shift_y,
+                          rr[2] * PT_TO_MM * scale - shift_x, (H - rr[1]) * PT_TO_MM * scale - shift_y))
     for d in page.get_cdrawings():
         if d.get("layer") != _EXTERIOR_FACADE_LAYER or d["type"] != "f":
             continue
@@ -1643,7 +1661,8 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
         boundary = _outline_boundary(room_polys or [], side_polys or [], candidates)
         if boundary is not None:
             rest = [c for c in candidates if id(c) not in claimed]
-            for win in _gap_windows(rest, None, windows_out, near=boundary, storefront=True):
+            for win in _gap_windows(rest, None, windows_out, near=boundary, storefront=True,
+                                    doors=doors, extra_boxes=[_bbox_of(p) for p in (side_polys or []) if len(p) >= 3]):
                 windows_out.append(win)
     for win in windows_out:
         win.pop("_ids", None)
