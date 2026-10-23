@@ -124,6 +124,9 @@
 
   // ---------------------------------------------------------------- долгие кадры, нажатия, страница
   function describe(el) {
+    // Элемент, на котором сработало нажатие, к моменту записи замера часто уже убран перерисовкой (нажал кнопку — панель перестроилась):
+    // у такой записи цели нет. Честная подпись лучше «?».
+    if (!el || el.nodeType !== 1) return "элемент убран при перерисовке";
     for (let i = 0, n = el; n && n.nodeType === 1 && i < 4; i++, n = n.parentElement) {
       const a = n.id || n.getAttribute("data-act") || n.getAttribute("data-tab") || n.getAttribute("data-view") || n.getAttribute("data-key")
         || n.getAttribute("aria-label") || n.getAttribute("title") || n.getAttribute("name");

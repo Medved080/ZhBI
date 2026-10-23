@@ -5429,6 +5429,10 @@ function pickerRemainderSpan(value) {
 // прокрутки списков сохраняем — без этого выбор марки в конце длинного
 // списка отбрасывал бы список в начало на каждый клик.
 function renderPicker() {
+  // Дашборд АРМ комплектовщика рисуется ТОЛЬКО когда он на экране (по замерам: ~300 мс на каждую загрузку схемы из 9,6 тыс. элементов). При
+  // переключении на АРМ его строит setWorkspace. В кадре схемы V2 панели рисует оболочка — DOM-панель движка скрыта, и модель отбора для
+  // оболочки считает мост (embed-bridge.js) теми же функциями по state, а не по этой разметке.
+  if (EMBED_SCENE || workspace !== "picker") return;
   const panel = document.getElementById("picker-panel");
   const metrics = document.getElementById("picker-metrics");
   if (!panel || !metrics) return;
@@ -7846,12 +7850,14 @@ async function loadPlanInner(preserveView = true) {
   perfAxes();
   renderElements(data);
   const perfPanels = perfStart("Схема: легенда, переключатели, фильтры, АРМ");
-  renderLegend();
-  renderLabelToggles();
-  renderZoneToggles();
-  renderStanceZoneToggles();
-  renderPlacementFilters();
-  renderPicker();               // дашборд АРМ считается по тем же данным
+  // каждый шаг отдельным замером: вместе они занимали ~0,5 с, и без разбивки не видно, какой из них
+  for (const [название, шаг] of [["легенда", renderLegend], ["подписи", renderLabelToggles], ["зоны", renderZoneToggles],
+    ["стоянки", renderStanceZoneToggles], ["фильтры", renderPlacementFilters],
+    ["АРМ (дашборд по тем же данным)", renderPicker]]) {
+    const конец = perfStart(`Схема: панели — ${название}`);
+    шаг();
+    конец();
+  }
   perfPanels();
   applyPlacementFilters(false); // 3D-сцена собирается ниже, одним разом
   showPlaceholderCard();
