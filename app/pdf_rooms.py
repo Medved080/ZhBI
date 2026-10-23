@@ -1350,6 +1350,7 @@ _NEAR_OUTLINE_MM = 350   # насколько близко к наружному
 _NICHE_DEPTH_MIN_MM = 800     # меньшая глубина — не ниша, а простенок
 _NICHE_SIDE_TOL_MM = 450      # боковая стена ниши стоит у края разрыва не дальше этого
 _NICHE_BACK_TOL_MM = 250
+_NICHE_DUP_MM = 400           # «задняя» панель ближе этого к обычному окну — дубль
 
 
 def _niche_window(g0: float, g1: float, mid: float, horiz: bool, boxes: list):
@@ -1481,6 +1482,13 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
                     "z_offset_mm": _WINDOW_SILL_MM, "z_height_mm": _WINDOW_HEIGHT_MM,
                     "storefront": storefront,
                 })
+    # Окно «на задней стене ниши», стоящее вплотную к обычному окну на линии
+    # фасада, — ложное срабатывание: проём внутреннего вестибюля, у которого «задней
+    # стеной» оказалась сама линия фасада (на первом этаже так получались вторые
+    # панели рядом с окнами, 12 «ниш» вместо 4 настоящих).
+    plain = [Polygon(w["polygon_mm"]) for w in out if not w.get("niche")] + [box(*b) for b in win_boxes]
+    out = [w for w in out
+           if not w.get("niche") or all(Polygon(w["polygon_mm"]).distance(q) > _NICHE_DUP_MM for q in plain)]
     return out
 
 
