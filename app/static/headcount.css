@@ -14,181 +14,213 @@
   --hc-warn: #b36b00;
   --hc-btn-line: color-mix(in srgb, var(--hc-ink) 40%, var(--hc-bg));
   color: var(--hc-ink);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.4;
 }
 .hc-root *, .hc-root *::before, .hc-root *::after { box-sizing: border-box; }
-.hc-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hc-line); margin-bottom: 12px; flex-wrap: wrap; }
-.hc-tab { appearance: none; background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 14px; color: var(--hc-muted); font: inherit; cursor: pointer; }
+.hc-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--hc-line); margin-bottom: 0.75rem; flex-wrap: wrap; }
+.hc-tab { appearance: none; background: none; border: 0; border-bottom: 3px solid transparent; padding: 0.5rem 0.875rem; color: var(--hc-muted); font: inherit; cursor: pointer; }
 .hc-tab.on { color: var(--hc-ink); border-bottom-color: var(--hc-accent); font-weight: 600; }
 .hc-tab:focus-visible, .hc-btn:focus-visible, .hc-link:focus-visible, .hc-tog:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
-.hc-bar { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; }
-.hc-bar label { display: flex; flex-direction: column; font-size: 12px; color: var(--hc-muted); gap: 2px; }
+.hc-bar { display: flex; align-items: center; gap: 0.625rem; margin: 0.5rem 0; flex-wrap: wrap; }
+.hc-bar label { display: flex; flex-direction: column; font-size: 0.75rem; color: var(--hc-muted); gap: 2px; }
 .hc-root input[type="text"], .hc-root input[type="number"], .hc-root input[type="date"], .hc-root select {
-  font: inherit; color: var(--hc-ink); background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 6px; padding: 5px 8px; min-height: 32px; max-width: 100%;
+  font: inherit; color: var(--hc-ink); background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; padding: 0.3125rem 0.5rem; min-height: 2rem; max-width: 100%;
 }
 /* У V1 есть общие правила «input/select на всю ширину формы» — здесь поля обычного размера, ширину задают классы ниже */
 .hc-root.hc-root input:not([type="checkbox"]):not([type="file"]), .hc-root.hc-root select { width: auto; display: inline-block; margin: 0; }
 .hc-root.hc-root .hc-btn { width: auto; display: inline-block; margin: 0; }
-.hc-root.hc-root .hc-num { width: 96px !important; text-align: right; }
+.hc-root.hc-root .hc-num { width: 6rem !important; text-align: right; }
 .hc-root.hc-root .hc-pick-in { width: 100% !important; }
-.hc-root.hc-root .hc-form input[type="text"] { width: 280px !important; }
+.hc-root.hc-root .hc-form input[type="text"] { width: 17.5rem !important; }
 .hc-root input:focus-visible, .hc-root select:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 1px; }
-.hc-btn { font: inherit; color: var(--hc-ink); background: color-mix(in srgb, var(--hc-accent) 7%, var(--hc-bg)); border: 1px solid var(--hc-btn-line); border-radius: 6px; padding: 5px 12px; min-height: 32px; cursor: pointer; }
+.hc-btn { font: inherit; color: var(--hc-ink); background: color-mix(in srgb, var(--hc-accent) 7%, var(--hc-bg)); border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; padding: 0.3125rem 0.75rem; min-height: 2rem; cursor: pointer; }
 .hc-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--hc-accent) 16%, var(--hc-bg)); }
 .hc-btn:disabled { opacity: .5; cursor: default; }
 .hc-btn.primary { background: var(--hc-accent); color: var(--hc-on-accent); border-color: var(--hc-accent); }
 .hc-btn.danger { color: var(--hc-bad); border-color: var(--hc-bad); }
 .hc-btn.on { background: var(--hc-accent); color: var(--hc-on-accent); border-color: var(--hc-accent); }
-.hc-btn.mini { padding: 2px 8px; min-height: 26px; font-size: 12px; }
-.hc-seg { display: inline-flex; gap: 0; } .hc-seg .hc-btn { border-radius: 0; margin-left: -1px; } .hc-seg .hc-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; } .hc-seg .hc-btn:last-child { border-radius: 0 6px 6px 0; }
-.hc-link { background: none; border: 0; padding: 0; color: var(--hc-accent); cursor: pointer; text-decoration: underline; font: inherit; font-size: 12px; }
-.hc-muted { color: var(--hc-muted); } .hc-small { font-size: 12px; } .hc-wrap { align-items: flex-end; } .hc-grow { flex: 1 1 260px; min-width: 220px; }
-.hc-msg { min-height: 1.2em; margin: 4px 0; } .hc-msg.ok { color: var(--hc-good); } .hc-msg.bad, .hc-muted.bad { color: var(--hc-bad); } .hc-msg.warn { color: var(--hc-warn); }
-.hc-deadline { font-size: 13px; color: var(--hc-muted); } .hc-deadline.over { color: var(--hc-warn); font-weight: 600; }
-.hc-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--hc-line); border-radius: 8px; }
+.hc-btn.mini { padding: 2px 0.5rem; min-height: 1.625rem; font-size: 0.75rem; }
+.hc-seg { display: inline-flex; gap: 0; } .hc-seg .hc-btn { border-radius: 0; margin-left: -1px; } .hc-seg .hc-btn:first-child { border-radius: 0.375rem 0 0 0.375rem; margin-left: 0; } .hc-seg .hc-btn:last-child { border-radius: 0 0.375rem 0.375rem 0; }
+.hc-link { background: none; border: 0; padding: 0; color: var(--hc-accent); cursor: pointer; text-decoration: underline; font: inherit; font-size: 0.75rem; }
+.hc-muted { color: var(--hc-muted); } .hc-small { font-size: 0.75rem; } .hc-wrap { align-items: flex-end; } .hc-grow { flex: 1 1 260px; min-width: 13.75rem; }
+.hc-msg { min-height: 1.2em; margin: 0.25rem 0; } .hc-msg.ok { color: var(--hc-good); } .hc-msg.bad, .hc-muted.bad { color: var(--hc-bad); } .hc-msg.warn { color: var(--hc-warn); }
+.hc-deadline { font-size: 0.8125rem; color: var(--hc-muted); } .hc-deadline.over { color: var(--hc-warn); font-weight: 600; }
+.hc-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--hc-line); border-radius: 0.5rem; }
 /* Своей вертикальной прокрутки у таблиц нет (2026-10-09, замечание пользователя: в невысоком окне таблица сопоставления
    показывала две строки в прокрутке внутри прокрутки): длинная таблица тянет страницу, а страница (окно V1, main V2) прокручивается. */
 .hc-tbl { border-collapse: collapse; width: 100%; }
-.hc-tbl th, .hc-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--hc-line); text-align: left; vertical-align: middle; }
+.hc-tbl th, .hc-tbl td { padding: 0.375rem 0.5rem; border-bottom: 1px solid var(--hc-line); text-align: left; vertical-align: middle; }
 .hc-tbl th { position: sticky; top: 0; background: var(--hc-soft); font-weight: 600; z-index: 1; }
 .hc-tbl tfoot td { font-weight: 600; background: var(--hc-soft); position: sticky; bottom: 0; }
 .hc-tbl .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hc-tbl tr.dirty td { background: color-mix(in srgb, var(--hc-warn) 12%, var(--hc-bg)); }
 .hc-tbl tr.added td { background: color-mix(in srgb, var(--hc-accent) 8%, var(--hc-bg)); }
-.hc-num { width: 96px; text-align: right; }
+.hc-num { width: 6rem; text-align: right; }
 /* «Итого» в строке добавления — поле только для чтения: те же размеры и выравнивание цифр по правому краю, что у «Рабочих» и «ИТР», но жирным */
 .hc-root.hc-root input.hc-total-in { font-weight: 700 !important; background: var(--hc-soft); border-color: transparent; cursor: default; font-variant-numeric: tabular-nums; }
 .hc-num { font-variant-numeric: tabular-nums; }
-.hc-code { font-variant-numeric: tabular-nums; color: var(--hc-muted); font-size: 12px; }
-.hc-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--hc-line); color: var(--hc-muted); white-space: nowrap; }
+.hc-code { font-variant-numeric: tabular-nums; color: var(--hc-muted); font-size: 0.75rem; }
+.hc-badge { display: inline-block; font-size: 0.6875rem; padding: 1px 0.4375rem; border-radius: 0.625rem; border: 1px solid var(--hc-line); color: var(--hc-muted); white-space: nowrap; }
 .hc-badge.bad { color: var(--hc-bad); border-color: var(--hc-bad); } .hc-badge.warn { color: var(--hc-warn); border-color: var(--hc-warn); }
-.hc-callout { border: 1px solid var(--hc-line); border-left: 4px solid var(--hc-muted); border-radius: 6px; padding: 8px 12px; margin: 8px 0; background: var(--hc-soft); }
+.hc-callout { border: 1px solid var(--hc-line); border-left: 4px solid var(--hc-muted); border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin: 0.5rem 0; background: var(--hc-soft); }
 .hc-callout.bad { border-left-color: var(--hc-bad); } .hc-callout.warn { border-left-color: var(--hc-warn); } .hc-callout.ok { border-left-color: var(--hc-good); }
-.hc-add { margin: 12px 0 4px; padding: 10px; border: 1px dashed var(--hc-btn-line); border-radius: 8px; }
-.hc-addrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; } .hc-addrow label { display: flex; flex-direction: column; font-size: 12px; color: var(--hc-muted); gap: 2px; }
-.hc-addrow select { max-width: 320px; }
-.hc-picker { position: relative; width: 100%; min-width: 260px; }
+.hc-add { margin: 0.75rem 0 0.25rem; padding: 0.625rem; border: 1px dashed var(--hc-btn-line); border-radius: 0.5rem; }
+.hc-addrow { display: flex; gap: 0.625rem; align-items: flex-end; flex-wrap: wrap; } .hc-addrow label { display: flex; flex-direction: column; font-size: 0.75rem; color: var(--hc-muted); gap: 2px; }
+.hc-addrow select { max-width: 20rem; }
+.hc-picker { position: relative; width: 100%; min-width: 16.25rem; }
 .hc-addrow .hc-grow { flex: 1 1 340px; } .hc-pick-in { width: 100%; }
-.hc-pick-list { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 0; list-style: none; max-height: 280px; overflow: auto; background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,.18); color: var(--hc-ink); }
-.hc-pick-list li { padding: 6px 10px; cursor: pointer; } .hc-pick-list li:hover { background: var(--hc-soft); }
-.hc-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin: 8px 0; padding: 10px; border: 1px solid var(--hc-line); border-radius: 8px; }
-.hc-form label { display: flex; flex-direction: column; font-size: 12px; color: var(--hc-muted); gap: 2px; } .hc-form input[type="text"] { min-width: 260px; }
+.hc-pick-list { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 0; list-style: none; max-height: 17.5rem; overflow: auto; background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; box-shadow: 0 8px 20px rgba(0,0,0,.18); color: var(--hc-ink); }
+.hc-pick-list li { padding: 0.375rem 0.625rem; cursor: pointer; } .hc-pick-list li:hover { background: var(--hc-soft); }
+.hc-form { display: flex; gap: 0.625rem; align-items: flex-end; flex-wrap: wrap; margin: 0.5rem 0; padding: 0.625rem; border: 1px solid var(--hc-line); border-radius: 0.5rem; }
+.hc-form label { display: flex; flex-direction: column; font-size: 0.75rem; color: var(--hc-muted); gap: 2px; } .hc-form input[type="text"] { min-width: 16.25rem; }
 .hc-form .hc-msg { flex-basis: 100%; }
 .hc-rep tr.d0 td { font-weight: 600; } .hc-rep tr.d1 td:first-child { font-weight: 500; }
-.hc-tog { background: none; border: 0; cursor: pointer; width: 22px; color: var(--hc-ink); font: inherit; } .hc-leaf { display: inline-block; width: 22px; }
-.hc-sum { display: flex; gap: 8px 24px; flex-wrap: wrap; margin: 8px 0; padding: 10px; background: var(--hc-soft); border-radius: 8px; }
-.hc-chart { display: flex; align-items: flex-end; gap: 10px; height: 170px; padding: 8px 4px 0; border-bottom: 1px solid var(--hc-line); overflow-x: auto; }
-.hc-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 44px; flex: 1 0 44px; max-width: 90px; position: relative; padding-bottom: 20px; }
-.hc-bar-v { display: block; width: 70%; background: var(--hc-accent); border-radius: 3px 3px 0 0; opacity: .85; }
-.hc-val { font-size: 11px; color: var(--hc-muted); margin-bottom: 2px; } .hc-lab { position: absolute; bottom: 2px; font-size: 11px; color: var(--hc-muted); }
+.hc-tog { background: none; border: 0; cursor: pointer; width: 1.375rem; color: var(--hc-ink); font: inherit; } .hc-leaf { display: inline-block; width: 1.375rem; }
+.hc-sum { display: flex; gap: 0.5rem 1.5rem; flex-wrap: wrap; margin: 0.5rem 0; padding: 0.625rem; background: var(--hc-soft); border-radius: 0.5rem; }
+.hc-chart { display: flex; align-items: flex-end; gap: 0.625rem; height: 10.625rem; padding: 0.5rem 0.25rem 0; border-bottom: 1px solid var(--hc-line); overflow-x: auto; }
+.hc-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 2.75rem; flex: 1 0 44px; max-width: 5.625rem; position: relative; padding-bottom: 1.25rem; }
+.hc-bar-v { display: block; width: 70%; background: var(--hc-accent); border-radius: 0.1875rem 0.1875rem 0 0; opacity: .85; }
+.hc-val { font-size: 0.6875rem; color: var(--hc-muted); margin-bottom: 2px; } .hc-lab { position: absolute; bottom: 2px; font-size: 0.6875rem; color: var(--hc-muted); }
 .hc-root { min-width: 0; max-width: 100%; }
 @media (max-width: 720px) {
-  .hc-root.hc-root .hc-num { width: 80px !important; } .hc-addrow select, .hc-addrow label { max-width: 100%; min-width: 0; }
+  .hc-root.hc-root .hc-num { width: 5rem !important; } .hc-addrow select, .hc-addrow label { max-width: 100%; min-width: 0; }
   .hc-picker { min-width: 0; } .hc-addrow .hc-grow { flex-basis: 100%; min-width: 0; } .hc-root.hc-root .hc-form input[type="text"] { width: 100% !important; }
   .hc-form label, .hc-bar label { flex: 1 1 100%; } .hc-deadline { flex-basis: 100%; }
 }
 
 /* Таблица сопоставления объектов 1С: выпадашка по умолчанию шириной с самое длинное название из 190+ объектов и раздувала таблицу
    (2026-10-09, замечание пользователя: список шире окна, нужна горизонтальная прокрутка). Ширина — по доступному месту. */
-.hc-root.hc-root .hc-maptbl select { width: 100%; min-width: 180px; max-width: 460px; text-overflow: ellipsis; }
+.hc-root.hc-root .hc-maptbl select { width: 100%; min-width: 11.25rem; max-width: 28.75rem; text-overflow: ellipsis; }
 .hc-maptbl td { min-width: 0; overflow-wrap: anywhere; }
 .hc-maptbl td:first-child { width: 38%; }
-.hc-check { flex-direction: row !important; align-items: center; gap: 6px !important; padding-bottom: 6px; color: var(--hc-ink) !important; font-size: 13px !important; }
+.hc-check { flex-direction: row !important; align-items: center; gap: 0.375rem !important; padding-bottom: 0.375rem; color: var(--hc-ink) !important; font-size: 0.8125rem !important; }
 .hc-root.hc-root .hc-check input { width: auto; }
-.hc-bar .hc-picker { min-width: 240px; }
+.hc-bar .hc-picker { min-width: 15rem; }
 
 /* Панели фильтров (отчёт, «Все данные»): все поля одной высоты и выровнены по нижней кромке, подписи сверху; кнопки не прыгают на другую строку */
-.hc-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin: 8px 0; }
-.hc-filters > label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--hc-muted); }
+.hc-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.hc-filters > label { display: flex; flex-direction: column; gap: 0.1875rem; font-size: 0.75rem; color: var(--hc-muted); }
 .hc-filters > .hc-btn, .hc-filters > .hc-seg { align-self: flex-end; }
 .hc-spacer { flex: 1 1 0; }
 .hc-root.hc-root .hc-filters input:not([type="checkbox"]), .hc-root.hc-root .hc-filters select, .hc-root.hc-root .hc-filters .hc-btn,
 .hc-root.hc-root .hc-bar input:not([type="checkbox"]), .hc-root.hc-root .hc-bar select, .hc-root.hc-root .hc-bar .hc-btn:not(.mini),
 .hc-root.hc-root .hc-addrow input, .hc-root.hc-root .hc-addrow select, .hc-root.hc-root .hc-addrow .hc-btn {
-  height: 36px; min-height: 36px; padding-top: 0; padding-bottom: 0; font: inherit; font-size: 14px; line-height: normal; box-sizing: border-box;
+  height: 2.25rem; min-height: 2.25rem; padding-top: 0; padding-bottom: 0; font: inherit; font-size: 0.875rem; line-height: normal; box-sizing: border-box;
 }
-.hc-root.hc-root .hc-filters input[type="date"] { width: 140px; }
+.hc-root.hc-root .hc-filters input[type="date"] { width: 8.75rem; }
 .hc-root.hc-root .hc-f-obj select { width: 100%; text-overflow: ellipsis; }
-.hc-filters .hc-f-obj { flex: 1 1 220px; min-width: 200px; max-width: 420px; }
-.hc-root.hc-root .hc-f-ctr input { width: 210px; }
-.hc-filters .hc-grow { flex: 1 1 260px; min-width: 220px; }
+.hc-filters .hc-f-obj { flex: 1 1 220px; min-width: 12.5rem; max-width: 26.25rem; }
+.hc-root.hc-root .hc-f-ctr input { width: 13.125rem; }
+.hc-filters .hc-grow { flex: 1 1 260px; min-width: 13.75rem; }
 .hc-filters .hc-picker { min-width: 0; }
-.hc-filters .hc-check { align-self: flex-end; height: 36px; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--hc-ink); padding: 0; }
+.hc-filters .hc-check { align-self: flex-end; height: 2.25rem; flex-direction: row; align-items: center; gap: 0.375rem; font-size: 0.8125rem; color: var(--hc-ink); padding: 0; }
 .hc-tbl td.nw, .hc-tbl .nw { white-space: nowrap; }
 .hc-tbl tr.unmapped td { background: color-mix(in srgb, var(--hc-warn) 10%, var(--hc-bg)); }
-.hc-suggest { margin-top: 4px; } .hc-suggest .hc-link { font-size: 12px; text-align: left; }
-.hc-check-inline { margin-left: 16px; white-space: nowrap; color: var(--hc-ink); } .hc-root.hc-root .hc-check-inline input { width: auto; vertical-align: middle; }
+.hc-suggest { margin-top: 0.25rem; } .hc-suggest .hc-link { font-size: 0.75rem; text-align: left; }
+.hc-check-inline { margin-left: 1rem; white-space: nowrap; color: var(--hc-ink); } .hc-root.hc-root .hc-check-inline input { width: auto; vertical-align: middle; }
 
 /* Выбор вида работ — похож на выпадающий список (поле + стрелка), а не на строку ввода; список сгруппирован по разделам кодификатора */
 .hc-pickbox { position: relative; display: flex; align-items: stretch; }
-.hc-root.hc-root .hc-pickbox .hc-pick-in { padding-right: 58px; cursor: pointer; text-overflow: ellipsis; }
-.hc-pick-btn, .hc-pick-x { position: absolute; top: 1px; bottom: 1px; border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; font: inherit; padding: 0 9px; }
-.hc-pick-btn { right: 1px; border-left: 1px solid var(--hc-line); border-radius: 0 5px 5px 0; background: color-mix(in srgb, var(--hc-accent) 7%, var(--hc-bg)); color: var(--hc-ink); }
+.hc-root.hc-root .hc-pickbox .hc-pick-in { padding-right: 3.625rem; cursor: pointer; text-overflow: ellipsis; }
+.hc-pick-btn, .hc-pick-x { position: absolute; top: 1px; bottom: 1px; border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; font: inherit; padding: 0 0.5625rem; }
+.hc-pick-btn { right: 1px; border-left: 1px solid var(--hc-line); border-radius: 0 0.3125rem 0.3125rem 0; background: color-mix(in srgb, var(--hc-accent) 7%, var(--hc-bg)); color: var(--hc-ink); }
 .hc-pick-x { right: 30px; } .hc-pick-x:hover, .hc-pick-btn:hover { color: var(--hc-accent); }
-.hc-pick-list .hc-pick-sec { position: sticky; top: 0; background: var(--hc-soft); color: var(--hc-muted); font-size: 12px; font-weight: 600; cursor: default; padding: 4px 10px; }
+.hc-pick-list .hc-pick-sec { position: sticky; top: 0; background: var(--hc-soft); color: var(--hc-muted); font-size: 0.75rem; font-weight: 600; cursor: default; padding: 0.25rem 0.625rem; }
 .hc-pick-list .hc-pick-sec:hover { background: var(--hc-soft); }
 .hc-pick-list li.sel { background: color-mix(in srgb, var(--hc-accent) 14%, var(--hc-bg)); font-weight: 600; }
 .hc-tbl tr.hc-sec-row td { background: var(--hc-soft); font-weight: 600; position: sticky; top: 0; }
 .hc-tbl tr.retired td { color: var(--hc-muted); text-decoration: line-through; }
 .hc-tbl tr.retired td:last-child { text-decoration: none; }
-.hc-pick-btn { font-size: 16px; line-height: 1; min-width: 30px; } .hc-pick-x { font-size: 13px; }
-.hc-addrow .hc-ctr-f { flex: 1 1 280px; min-width: 240px; max-width: 460px; }
+.hc-pick-btn { font-size: 1rem; line-height: 1; min-width: 1.875rem; } .hc-pick-x { font-size: 0.8125rem; }
+.hc-addrow .hc-ctr-f { flex: 1 1 280px; min-width: 15rem; max-width: 28.75rem; }
 
 /* Поле выбора + всплывающая форма выбора (таблица со сворачиваемыми группами и поиском по колонкам) */
-.hc-pickbox { display: flex; gap: 6px; align-items: stretch; position: static; }
+.hc-pickbox { display: flex; gap: 0.375rem; align-items: stretch; position: static; }
 .hc-pick-inwrap { position: relative; flex: 1 1 auto; min-width: 0; }
-.hc-root.hc-root .hc-pick-inwrap .hc-pick-in { width: 100% !important; padding-right: 30px; cursor: pointer; text-overflow: ellipsis; }
-.hc-pick-inwrap .hc-pick-x { position: absolute; right: 2px; top: 1px; bottom: 1px; border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; padding: 0 8px; font-size: 13px; }
+.hc-root.hc-root .hc-pick-inwrap .hc-pick-in { width: 100% !important; padding-right: 1.875rem; cursor: pointer; text-overflow: ellipsis; }
+.hc-pick-inwrap .hc-pick-x { position: absolute; right: 2px; top: 1px; bottom: 1px; border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; padding: 0 0.5rem; font-size: 0.8125rem; }
 .hc-pick-inwrap .hc-pick-x:hover { color: var(--hc-bad); }
 .hc-pick-open { white-space: nowrap; flex: 0 0 auto; }
-.hc-dlg-back { position: fixed; inset: 0; z-index: 100000; background: rgba(15, 20, 30, .5); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.hc-dlg { background: var(--hc-bg); color: var(--hc-ink); border: 1px solid var(--hc-line); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.35);
-  width: min(1100px, 100%); max-height: min(86vh, 100%); display: flex; flex-direction: column; padding: 14px 16px; }
-.hc-dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.hc-dlg-head h3 { margin: 0; font-size: 17px; }
-.hc-dlg-hint { margin: 6px 0 8px; }
+.hc-dlg-back { position: fixed; inset: 0; z-index: 100000; background: rgba(15, 20, 30, .5); display: flex; align-items: center; justify-content: center; padding: 1.25rem; }
+.hc-dlg { background: var(--hc-bg); color: var(--hc-ink); border: 1px solid var(--hc-line); border-radius: 0.75rem; box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  width: min(68.75rem, 100%); max-height: min(86vh, 100%); display: flex; flex-direction: column; padding: 0.875rem 1rem; }
+.hc-dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.hc-dlg-head h3 { margin: 0; font-size: 1.0625rem; }
+.hc-dlg-hint { margin: 0.375rem 0 0.5rem; }
 .hc-dlg-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.hc-dlg-foot { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-.hc-pt-bar { display: flex; gap: 8px; align-items: center; margin: 4px 0 8px; flex-wrap: wrap; }
-.hc-pt-scroll { max-height: 60vh; overflow: auto; border: 1px solid var(--hc-line); border-radius: 8px; }
-.hc-dlg .hc-pt-scroll { max-height: calc(86vh - 190px); }
+.hc-dlg-foot { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.625rem; }
+.hc-pt-bar { display: flex; gap: 0.5rem; align-items: center; margin: 0.25rem 0 0.5rem; flex-wrap: wrap; }
+.hc-pt-scroll { max-height: 60vh; overflow: auto; border: 1px solid var(--hc-line); border-radius: 0.5rem; }
+.hc-dlg .hc-pt-scroll { max-height: calc(86vh - 11.875rem); }
 .hc-pt thead { position: sticky; top: 0; z-index: 3; }
 .hc-pt thead th { position: static; background: var(--hc-soft); }
-.hc-pt-filters th { padding: 4px 6px; }
-.hc-root.hc-root .hc-pt-filters input { width: 100%; height: 30px; min-height: 30px; font-size: 13px; padding: 0 8px; box-sizing: border-box; }
+.hc-pt-filters th { padding: 0.25rem 0.375rem; }
+.hc-root.hc-root .hc-pt-filters input { width: 100%; height: 1.875rem; min-height: 1.875rem; font-size: 0.8125rem; padding: 0 0.5rem; box-sizing: border-box; }
 .hc-pt tr.hc-pt-grp td { background: var(--hc-soft); font-weight: 600; cursor: pointer; user-select: none; }
 .hc-pt tr.hc-pt-grp:hover td { background: color-mix(in srgb, var(--hc-accent) 12%, var(--hc-bg)); }
-.hc-pt-caret { display: inline-block; width: 16px; color: var(--hc-muted); }
+.hc-pt-caret { display: inline-block; width: 1rem; color: var(--hc-muted); }
 .hc-pt tr.pick { cursor: pointer; } .hc-pt tr.pick:hover td, .hc-pt tr.pick:focus td { background: color-mix(in srgb, var(--hc-accent) 10%, var(--hc-bg)); outline: none; }
 .hc-pt tr.sel td { background: color-mix(in srgb, var(--hc-accent) 18%, var(--hc-bg)); font-weight: 600; }
 .hc-pt tr.retired td { color: var(--hc-muted); text-decoration: line-through; } .hc-pt tr.retired td:last-child { text-decoration: none; }
-.hc-dlg.narrow { width: min(620px, 100%); }
-.hc-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
-.hc-form-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--hc-muted); min-width: 0; }
+.hc-dlg.narrow { width: min(38.75rem, 100%); }
+.hc-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.625rem 0.75rem; }
+.hc-form-grid label { display: flex; flex-direction: column; gap: 0.1875rem; font-size: 0.75rem; color: var(--hc-muted); min-width: 0; }
 .hc-form-grid .hc-span2 { grid-column: 1 / -1; }
-.hc-root.hc-root .hc-form-grid input[type="text"], .hc-root.hc-root .hc-form-grid input[type="number"] { width: 100% !important; height: 36px; box-sizing: border-box; }
+.hc-root.hc-root .hc-form-grid input[type="text"], .hc-root.hc-root .hc-form-grid input[type="number"] { width: 100% !important; height: 2.25rem; box-sizing: border-box; }
 .hc-root.hc-root input.hc-num.bad { border-color: var(--hc-bad); }
-.hc-root.hc-root .hc-tbl td .hc-num { width: 76px !important; }
+.hc-root.hc-root .hc-tbl td .hc-num { width: 4.75rem !important; }
 
 /* Дерево видов работ: отступ по уровню, стрелка у веток */
-.hc-tree-cell { display: inline-flex; align-items: baseline; gap: 4px; }
-.hc-tree-btn { border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; width: 20px; padding: 0; font: inherit; flex: 0 0 auto; }
+.hc-tree-cell { display: inline-flex; align-items: baseline; gap: 0.25rem; }
+.hc-tree-btn { border: 0; background: transparent; color: var(--hc-muted); cursor: pointer; width: 1.25rem; padding: 0; font: inherit; flex: 0 0 auto; }
 .hc-tree-btn:hover { color: var(--hc-accent); }
-.hc-tree-gap { display: inline-block; width: 20px; flex: 0 0 auto; }
+.hc-tree-gap { display: inline-block; width: 1.25rem; flex: 0 0 auto; }
 .hc-pt tr.hc-pt-row.l1 td { font-weight: 600; background: var(--hc-soft); }
 .hc-pt tr.hc-pt-row.l2 td { font-weight: 500; }
 .hc-pt tr.hc-pt-row.ctx td { color: var(--hc-muted); }
 .hc-pt tr.hc-pt-row.sel td { background: color-mix(in srgb, var(--hc-accent) 18%, var(--hc-bg)); font-weight: 600; }
 
 /* Поле выбора — переносимый текст (название вида работ не обрезается, поле растёт по высоте) */
-.hc-root.hc-root .hc-pick-inwrap .hc-pick-show { display: block; width: 100% !important; min-height: 36px; height: auto !important; padding: 7px 30px 7px 10px; box-sizing: border-box;
-  border: 1px solid var(--hc-btn-line); border-radius: 6px; background: var(--hc-bg); color: var(--hc-ink); cursor: pointer; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; text-align: left; }
+.hc-root.hc-root .hc-pick-inwrap .hc-pick-show { display: block; width: 100% !important; min-height: 2.25rem; height: auto !important; padding: 0.4375rem 1.875rem 0.4375rem 0.625rem; box-sizing: border-box;
+  border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; background: var(--hc-bg); color: var(--hc-ink); cursor: pointer; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; text-align: left; }
 .hc-pick-show:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 1px; }
 .hc-pick-ph { color: var(--hc-muted); }
 .hc-pickbox { align-items: flex-start; } .hc-pickbox .hc-pick-open { align-self: flex-start; }
 /* Подрядчик и вид работ в строке карточки — щелчком по ячейке (форма выбора), без окна правки */
-.hc-cell-pick { display: inline-block; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 1px dashed transparent; border-radius: 6px; padding: 3px 24px 3px 6px; cursor: pointer; position: relative; white-space: normal; overflow-wrap: break-word; }
+.hc-cell-pick { display: inline-block; width: 100%; text-align: left; font: inherit; color: inherit; background: transparent; border: 1px dashed transparent; border-radius: 0.375rem; padding: 0.1875rem 1.5rem 0.1875rem 0.375rem; cursor: pointer; position: relative; white-space: normal; overflow-wrap: break-word; }
 .hc-cell-pick:hover, .hc-cell-pick:focus-visible { border-color: var(--hc-btn-line); background: color-mix(in srgb, var(--hc-accent) 6%, var(--hc-bg)); outline: none; }
-.hc-cell-ed { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: var(--hc-muted); font-size: 12px; opacity: .55; }
+.hc-cell-ed { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: var(--hc-muted); font-size: 0.75rem; opacity: .55; }
 .hc-cell-pick:hover .hc-cell-ed { opacity: 1; color: var(--hc-accent); }
+
+/* ===== Вкладка «Бот eXpress» (express-ui.js): подвкладки, карточки формы, поля и флажки в строку ===== */
+.ex-tabs { display: flex; gap: 1.5rem; border-bottom: 1px solid var(--hc-line); margin: 0 0 0.875rem; flex-wrap: wrap; }
+.ex-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 0.375rem 0; color: var(--hc-muted); font: inherit; cursor: pointer; }
+.ex-tab:hover { color: var(--hc-ink); }
+.ex-tab.on { color: var(--hc-ink); border-bottom-color: var(--hc-accent); font-weight: 600; }
+.ex-tab:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
+.ex-card { border: 1px solid var(--hc-line); border-radius: 0.5rem; padding: 0.75rem 1rem 1rem; margin: 0.625rem 0; max-width: 62rem; }
+.ex-card > h4 { margin: 0 0 0.625rem; font-size: 0.9375rem; font-weight: 600; color: var(--hc-ink); }
+.ex-card > h4 small { font-weight: 400; color: var(--hc-muted); font-size: 0.8125rem; margin-left: 0.5rem; }
+.ex-sec { margin-top: 0.875rem; }
+.ex-sec > .ex-cap { font-size: 0.75rem; color: var(--hc-muted); margin-bottom: 0.375rem; }
+.ex-row { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: flex-end; }
+.ex-field { display: flex; flex-direction: column; gap: 0.1875rem; font-size: 0.75rem; color: var(--hc-muted); min-width: 11rem; }
+.ex-field.wide { flex: 1 1 22rem; }
+.ex-field > input, .ex-field > select { width: 100% !important; }
+.ex-card input[type="time"], .ex-card input[type="password"], .ex-card input[type="date"] {
+  font: inherit; color: var(--hc-ink); background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; padding: 0.3125rem 0.5rem; min-height: 2rem; max-width: 100%;
+}
+.ex-check { display: inline-flex; flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: var(--hc-ink); cursor: pointer; }
+.ex-check input[type="checkbox"], .ex-day input[type="checkbox"] { width: 1rem !important; height: 1rem; min-height: 0; margin: 0; padding: 0; flex: none; }
+.ex-opt { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; min-height: 2.25rem; }
+.ex-opt .ex-field { flex-direction: row; align-items: center; gap: 0.5rem; min-width: 0; font-size: 0.875rem; color: var(--hc-ink); }
+.ex-opt .ex-field > select { width: auto !important; }
+.ex-days { display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: center; }
+.ex-day { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.25rem 0.625rem; border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; cursor: pointer; user-select: none; font-size: 0.875rem; color: var(--hc-ink); }
+.ex-day:has(input:checked) { background: color-mix(in srgb, var(--hc-accent) 12%, var(--hc-bg)); border-color: var(--hc-accent); }
+.ex-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1rem; }
+.ex-hint { font-size: 0.8125rem; color: var(--hc-muted); margin: 0.25rem 0 0; }
+.ex-opt-text { display: flex; flex-direction: column; }
+.ex-opt-text .ex-hint { margin: 0 0 0 1.5rem; }
+@media (max-width: 720px) { .ex-field, .ex-field.wide { flex: 1 1 100%; min-width: 0; } .ex-tabs { gap: 1rem; } }

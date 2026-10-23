@@ -29,32 +29,32 @@ function ensureStyle() {
   width: min(1040px, 100%); max-height: 100%; display: flex; flex-direction: column; background: var(--p-bg); color: var(--p-ink);
   border: 1px solid var(--p-line); border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,.28); padding: 16px 18px 14px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-.emfp h3 { margin: 0 0 2px; font-size: 16px; }
-.emfp-note { margin: 0 0 10px; color: var(--p-muted); font-size: 12px; }
+.emfp h3 { margin: 0 0 2px; font-size: 1rem; }
+.emfp-note { margin: 0 0 10px; color: var(--p-muted); font-size: 0.75rem; }
 .emfp-body { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; min-height: 0; overflow: auto; }
 @media (max-width: 760px) { .emfp-body { grid-template-columns: minmax(0, 1fr); } }
 .emfp-view { position: relative; min-width: 0; }
 .emfp-canvas { display: block; width: 100%; height: 380px; border: 1px solid var(--p-line); border-radius: 8px; background: var(--p-surface); touch-action: none; cursor: grab; }
 .emfp-canvas:active { cursor: grabbing; }
 .emfp-viewbtns { position: absolute; left: 8px; top: 8px; display: flex; gap: 4px; }
-.emfp-viewhint { margin-top: 4px; color: var(--p-muted); font-size: 11px; }
+.emfp-viewhint { margin-top: 4px; color: var(--p-muted); font-size: 0.6875rem; }
 .emfp-nogl { display: none; height: 380px; align-items: center; justify-content: center; text-align: center; padding: 16px; border: 1px dashed var(--p-line); border-radius: 8px; color: var(--p-muted); }
 .emfp-info { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .emfp dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; }
 .emfp dt { color: var(--p-muted); }
 .emfp dd { margin: 0; overflow-wrap: anywhere; }
-.emfp h4 { margin: 0 0 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--p-muted); }
+.emfp h4 { margin: 0 0 4px; font-size: 0.6875rem; letter-spacing: .04em; text-transform: uppercase; color: var(--p-muted); }
 .emfp-parts { margin: 0; padding: 0; list-style: none; max-height: 150px; overflow: auto; border: 1px solid var(--p-line); border-radius: 8px; }
 .emfp-parts li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-bottom: 1px solid var(--p-line); }
 .emfp-parts li:last-child { border-bottom: 0; }
 .emfp-parts span:last-child { color: var(--p-muted); white-space: nowrap; }
 /* замечания и предупреждения о дубле — янтарные: это «обратите внимание», а не отказ (отказ разбора до предпросмотра не доходит) */
-.emfp-warn { border-left: 4px solid #d98e04; background: var(--p-surface); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+.emfp-warn { border-left: 4px solid #d98e04; background: var(--p-surface); border-radius: 6px; padding: 6px 10px; font-size: 0.75rem; }
 .emfp-warn ul { margin: 2px 0 0; padding-left: 16px; }
 .emfp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .emfp-btn { padding: 8px 14px; border: 1px solid var(--p-line); border-radius: 7px; background: var(--p-surface); color: var(--p-ink); font: inherit; cursor: pointer; white-space: nowrap; }
 .emfp-btn:hover { border-color: var(--p-accent); }
-.emfp-btn.sm { padding: 3px 9px; font-size: 12px; background: var(--p-bg); }
+.emfp-btn.sm { padding: 3px 9px; font-size: 0.75rem; background: var(--p-bg); }
 .emfp-btn.primary { background: var(--p-accent); border-color: var(--p-accent); color: var(--p-accent-ink); font-weight: 600; }
 .emfp-btn:focus-visible { outline: 2px solid var(--p-accent); outline-offset: 2px; }
 `;

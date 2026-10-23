@@ -36,7 +36,7 @@
 .em-num-steppers { position: absolute; right: 1px; top: 1px; bottom: 1px; display: flex; flex-direction: column; width: 16px; }
 .em-num-step {
   flex: 1 1 50%; padding: 0; border: none; background: var(--surface); color: var(--muted); cursor: pointer;
-  font-size: 8px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 0.5rem; line-height: 1; display: flex; align-items: center; justify-content: center;
 }
 .em-num-step:hover { background: var(--accent); color: var(--accent-ink); }
 .em-num-step:first-child { border-radius: 0 6px 0 0; }

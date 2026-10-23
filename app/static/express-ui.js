@@ -1,8 +1,8 @@
 // Бот eXpress — вкладка «Бот eXpress» общего экрана численности для V1 и V2 (2026-10-23, Docs/express-bot.md).
 //
 // Бот по расписанию пишет выбранному контакту в eXpress и спрашивает численность по объекту; ответ попадает в систему с источником «бот».
-// Модуль ОБЩИЙ с V1/V2 (как headcount-ui.js, чьи стили и классы `hc-*` он использует) и грузится лениво из вкладки. Транспорт и права
-// передаются явно: ctx = { api, objectId, canWrite, canAdmin, confirm, sub, onSub }.
+// Модуль ОБЩИЙ с V1/V2 (как headcount-ui.js, чьи стили и классы `hc-*` он использует; свои классы `ex-*` — в конце headcount.css) и грузится
+// лениво из вкладки. Транспорт и права передаются явно: ctx = { api, objectId, canWrite, canAdmin, confirm, sub, onSub }.
 //   canWrite — раздел `express_bot` «Изменение» на объекте (расписания, контакты, ручная отправка);
 //   canAdmin — раздел `express_admin` (подключение, ключ, журнал обмена, удаление контактов).
 // Сервер (app/express_api.py) проверяет права и все значения сам; клиент только показывает и отправляет.
@@ -38,7 +38,7 @@ export function mountExpress(el, ctx) {
     sub: subs.some(([k]) => k === ctx.sub) ? ctx.sub : "schedules", status: null, schedules: null, requests: null, contacts: null, individuals: null,
     form: null, contactForm: null, sendForm: null, config: null, log: null, logErrors: false, msg: "", msgKind: "", busy: false,
   };
-  el.innerHTML = `<div class="hc-bar" role="tablist" aria-label="Разделы бота eXpress">${subs.map(([k, t]) => `<button type="button" class="hc-btn" data-sub="${k}">${esc(t)}</button>`).join("")}</div><div id="ex-pane"></div>`;
+  el.innerHTML = `<div class="ex-tabs" role="tablist" aria-label="Разделы бота eXpress">${subs.map(([k, t]) => `<button type="button" role="tab" class="ex-tab" data-sub="${k}">${esc(t)}</button>`).join("")}</div><div id="ex-pane"></div>`;
   const pane = el.querySelector("#ex-pane");
   el.querySelectorAll("[data-sub]").forEach((b) => b.addEventListener("click", () => { st.sub = b.dataset.sub; st.msg = ""; ctx.onSub?.(st.sub); paint(); }));
   const setMsg = (t, kind = "") => { st.msg = t; st.msgKind = kind; const n = pane.querySelector("#ex-msg"); if (n) { n.textContent = t; n.className = `hc-msg ${kind}`; } };
@@ -50,6 +50,9 @@ export function mountExpress(el, ctx) {
     catch (e) { setMsg(errText(e), "bad"); }
     finally { st.busy = false; }
   };
+  // разметка полей: подпись над полем, флажок — подпись СПРАВА от флажка
+  const field = (label, control, cls = "") => `<label class="ex-field ${cls}">${esc(label)}${control}</label>`;
+  const check = (id, label, on, extra = "") => `<label class="ex-check"><input type="checkbox" id="${id}" ${on ? "checked" : ""} ${extra}> ${label}</label>`;
 
   async function load(what) {
     try {
@@ -66,7 +69,7 @@ export function mountExpress(el, ctx) {
 
   function paint() {
     if (dead) return;
-    el.querySelectorAll("[data-sub]").forEach((b) => { const on = b.dataset.sub === st.sub; b.classList.toggle("primary", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    el.querySelectorAll("[data-sub]").forEach((b) => { const on = b.dataset.sub === st.sub; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
     const need = { schedules: ["status", "schedules", "contacts"], requests: ["requests"], contacts: ["status", "contacts"], connection: ["config"], log: ["log"] }[st.sub];
     const missing = need.find((k) => st[k] === null);
     if (missing) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; load(missing).then((ok) => ok && paint()); return; }
@@ -75,8 +78,7 @@ export function mountExpress(el, ctx) {
 
   const botCallout = () => {
     const s = st.status;
-    if (!s) return "";
-    if (s.active) return "";
+    if (!s || s.active) return "";
     return `<div class="hc-callout warn" role="status"><strong>Бот выключен или не настроен</strong> — запросы по расписанию не уходят. ${ctx.canAdmin ? "Включите его на вкладке «Подключение»." : "Обратитесь к администратору сервиса."}</div>`;
   };
   const botName = () => esc(st.status?.bot_name || "бота");
@@ -89,9 +91,10 @@ export function mountExpress(el, ctx) {
     pane.innerHTML = `${botCallout()}
       <div class="hc-bar"><strong>Расписания опроса</strong><span class="hc-muted">кого и когда бот спрашивает о численности по этому объекту</span>
         ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-new">Добавить расписание</button><button type="button" class="hc-btn" id="ex-send-open">Спросить сейчас</button>` : ""}</div>
-      ${sf ? `<form class="hc-form" id="ex-send-form"><label>Кого спросить<select id="ex-s-contact">${contactOptions(sf.contact_id, "— выберите —")}</select></label>
-        <label>За какой день<input type="date" id="ex-s-date" value="${esc(sf.date)}" max="${esc(todayIso())}"></label>
-        <button type="submit" class="hc-btn primary">Отправить</button><button type="button" class="hc-btn" id="ex-s-cancel">Отмена</button></form>` : ""}
+      ${sf ? `<form class="ex-card" id="ex-send-form"><h4>Спросить сейчас</h4><div class="ex-row">
+          ${field("Кого спросить", `<select id="ex-s-contact">${contactOptions(sf.contact_id, "— выберите —")}</select>`)}
+          ${field("За какой день", `<input type="date" id="ex-s-date" value="${esc(sf.date)}" max="${esc(todayIso())}">`)}</div>
+        <div class="ex-actions"><button type="submit" class="hc-btn primary">Отправить</button><button type="button" class="hc-btn" id="ex-s-cancel">Отмена</button></div></form>` : ""}
       ${f ? scheduleForm(f, contactOptions) : ""}
       ${msgLine()}
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>Дни</th><th>Отправка</th><th>Спрашиваем за</th><th>Напоминание</th><th>Сводка</th><th>Следующий запуск</th><th></th></tr></thead><tbody>${
@@ -103,22 +106,29 @@ export function mountExpress(el, ctx) {
           <td>${s.active ? esc(fmtMoment(s.next_run) || "—") : '<span class="hc-badge">приостановлено</span>'}</td>
           <td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-edit="${s.id}">Изменить</button> <button type="button" class="hc-btn danger mini" data-del="${s.id}">Удалить</button>` : ""}</td></tr>`).join("")
         : `<tr><td colspan="8" class="hc-muted">Расписаний нет. Добавьте контакт на вкладке «Контакты» и заведите расписание.</td></tr>`}</tbody></table></div>
-      <p class="hc-muted">Время — московское. Срок внесения численности по приказу — до 11:00. Ответ контакта попадает в «Ввод численности» с источником «бот».</p>`;
+      <p class="ex-hint">Время — московское. Срок внесения численности по приказу — до 11:00. Ответ контакта попадает в «Ввод численности» с источником «бот».</p>`;
     wireSchedules();
   }
 
   function scheduleForm(f, contactOptions) {
-    return `<form class="hc-form" id="ex-form"><div class="hc-form-grid">
-      <label>Кого спрашивать<select id="ex-f-contact">${contactOptions(f.contact_id, "— выберите —")}</select></label>
-      <label>Время отправки (МСК)<input type="time" id="ex-f-time" value="${esc(f.send_time)}"></label>
-      <label>Спрашиваем за<select id="ex-f-offset"><option value="0" ${f.day_offset === 0 ? "selected" : ""}>сегодняшний день</option><option value="-1" ${f.day_offset === -1 ? "selected" : ""}>вчерашний день</option></select></label>
-      <div class="hc-span2"><span class="hc-muted">Дни недели, когда бот пишет</span><br>${DAYS.map(([n, t]) => `<label class="hc-check-inline"><input type="checkbox" data-wd="${n}" ${f.weekdays.includes(n) ? "checked" : ""}> ${t}</label>`).join(" ")}</div>
-      <label class="hc-check-inline"><input type="checkbox" id="ex-f-remind-on" ${f.remind_time ? "checked" : ""}> Напомнить, если не ответил, в <input type="time" id="ex-f-remind" value="${esc(f.remind_time || "11:30")}"></label>
-      <label class="hc-check-inline"><input type="checkbox" id="ex-f-sum-on" ${f.summary_time ? "checked" : ""}> Отправить сводку в <input type="time" id="ex-f-sum" value="${esc(f.summary_time || "12:30")}"></label>
-      <label>Кому сводка<select id="ex-f-sum-contact">${contactOptions(f.summary_contact_id, "— выберите —")}</select></label>
-      <label class="hc-check-inline"><input type="checkbox" id="ex-f-active" ${f.active ? "checked" : ""}> Расписание действует</label>
-      <label class="hc-span2">Примечание<input type="text" id="ex-f-note" maxlength="300" value="${esc(f.note || "")}"></label></div>
-      <button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="ex-f-cancel">Отмена</button>
+    return `<form class="ex-card" id="ex-form"><h4>${f.id ? "Изменить расписание" : "Новое расписание"}</h4>
+      <div class="ex-row">
+        ${field("Кого спрашивать", `<select id="ex-f-contact">${contactOptions(f.contact_id, "— выберите —")}</select>`, "wide")}
+        ${field("Время отправки (МСК)", `<input type="time" id="ex-f-time" value="${esc(f.send_time)}">`)}
+        ${field("Спрашиваем за", `<select id="ex-f-offset"><option value="0" ${f.day_offset === 0 ? "selected" : ""}>сегодняшний день</option><option value="-1" ${f.day_offset === -1 ? "selected" : ""}>вчерашний день</option></select>`)}
+      </div>
+      <div class="ex-sec"><div class="ex-cap">Дни недели, когда бот пишет</div>
+        <div class="ex-days">${DAYS.map(([n, t]) => `<label class="ex-day"><input type="checkbox" data-wd="${n}" ${f.weekdays.includes(n) ? "checked" : ""}> ${t}</label>`).join("")}
+          <button type="button" class="hc-link" data-days="1,2,3,4,5">Пн–Пт</button><button type="button" class="hc-link" data-days="1,2,3,4,5,6,7">Ежедневно</button></div></div>
+      <div class="ex-sec"><div class="ex-cap">Напоминание и сводка</div>
+        <div class="ex-opt">${check("ex-f-remind-on", "Напомнить, если не ответил, в", !!f.remind_time)}
+          <input type="time" id="ex-f-remind" value="${esc(f.remind_time || "11:30")}" aria-label="Время напоминания"></div>
+        <div class="ex-opt">${check("ex-f-sum-on", "Отправить сводку в", !!f.summary_time)}
+          <input type="time" id="ex-f-sum" value="${esc(f.summary_time || "12:30")}" aria-label="Время сводки">
+          <label class="ex-field">кому <select id="ex-f-sum-contact">${contactOptions(f.summary_contact_id, "— выберите —")}</select></label></div></div>
+      <div class="ex-sec"><div class="ex-row">${field("Примечание", `<input type="text" id="ex-f-note" maxlength="300" value="${esc(f.note || "")}">`, "wide")}
+        <div class="ex-opt">${check("ex-f-active", "Расписание действует", f.active)}</div></div></div>
+      <div class="ex-actions"><button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="ex-f-cancel">Отмена</button></div>
       <p class="hc-msg ${esc(f.kind || "")}" id="ex-f-msg" role="alert">${esc(f.msg || "")}</p></form>`;
   }
 
@@ -138,6 +148,17 @@ export function mountExpress(el, ctx) {
       await guard(async () => { await api.delete(`/objects/${ctx.objectId}/express/schedules/${s.id}`); await load("schedules"); paintSchedules(); }, "Расписание удалено.");
     }));
     pane.querySelector("#ex-f-cancel")?.addEventListener("click", () => { st.form = null; paintSchedules(); });
+    // время напоминания и сводки доступно, только когда включён соответствующий флажок
+    const bindToggle = (flag, ...controls) => {
+      const sync = () => controls.forEach((c) => { const n = pane.querySelector(c); if (n) n.disabled = !pane.querySelector(flag).checked; });
+      pane.querySelector(flag)?.addEventListener("change", sync); if (pane.querySelector(flag)) sync();
+    };
+    bindToggle("#ex-f-remind-on", "#ex-f-remind");
+    bindToggle("#ex-f-sum-on", "#ex-f-sum", "#ex-f-sum-contact");
+    pane.querySelectorAll("[data-days]").forEach((b) => b.addEventListener("click", () => {
+      const set = b.dataset.days.split(",").map(Number);
+      pane.querySelectorAll("[data-wd]").forEach((c) => { c.checked = set.includes(Number(c.dataset.wd)); });
+    }));
     pane.querySelector("#ex-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = st.form, note = pane.querySelector("#ex-f-msg");
@@ -146,7 +167,7 @@ export function mountExpress(el, ctx) {
         weekdays: [...pane.querySelectorAll("[data-wd]")].filter((c) => c.checked).map((c) => Number(c.dataset.wd)),
         remind_time: pane.querySelector("#ex-f-remind-on").checked ? pane.querySelector("#ex-f-remind").value : null,
         summary_time: pane.querySelector("#ex-f-sum-on").checked ? pane.querySelector("#ex-f-sum").value : null,
-        summary_contact_id: pane.querySelector("#ex-f-sum-contact").value ? Number(pane.querySelector("#ex-f-sum-contact").value) : null,
+        summary_contact_id: pane.querySelector("#ex-f-sum-on").checked && pane.querySelector("#ex-f-sum-contact").value ? Number(pane.querySelector("#ex-f-sum-contact").value) : null,
         active: pane.querySelector("#ex-f-active").checked, note: pane.querySelector("#ex-f-note").value || null,
       };
       if (!body.contact_id) { f.msg = "Выберите контакт"; f.kind = "bad"; note.textContent = f.msg; note.className = "hc-msg bad"; return; }
@@ -181,7 +202,7 @@ export function mountExpress(el, ctx) {
             <td><span class="hc-badge ${k}">${esc(t)}</span></td><td>${esc(fmtMoment(r.sent_at))}${r.reminded_at ? '<br><span class="hc-muted">напоминали</span>' : ""}</td>
             <td class="num">${r.workers}</td><td class="num">${r.itr}</td><td>${r.last_error ? `<span class="hc-muted" title="Попыток: ${r.attempts}">${esc(r.last_error)}</span>` : ""}</td></tr>`; }).join("")
         : `<tr><td colspan="7" class="hc-muted">Запросов за последние 14 дней не было.</td></tr>`}</tbody></table></div>
-      <p class="hc-muted">«Рабочие» и «ИТР» — итог за день по всему объекту (вносит не только этот контакт). Подробности — на вкладке «Ввод численности» и в «Все данные» (источник «бот»).</p>`;
+      <p class="ex-hint">«Рабочие» и «ИТР» — итог за день по всему объекту (вносит не только этот контакт). Подробности — на вкладке «Ввод численности» и в «Все данные» (источник «бот»).</p>`;
     pane.querySelector("#ex-refresh").addEventListener("click", async () => { st.requests = null; paint(); });
   }
 
@@ -200,13 +221,15 @@ export function mountExpress(el, ctx) {
       <div class="hc-bar"><strong>Контакты бота</strong><span class="hc-muted">физлицо из справочника или произвольный человек; общий список для всех объектов</span>
         ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-c-new">Добавить контакт</button>` : ""}</div>
       <div class="hc-callout">Чтобы бот мог писать человеку, тот должен <strong>один раз открыть ${botName()} в eXpress и отправить /start</strong>. Бот опознает его по доменному логину (или по e-mail, если нажать «Найти в eXpress»).</div>
-      ${f ? `<form class="hc-form" id="ex-c-form"><div class="hc-form-grid">
-        <label>Физлицо из справочника<select id="ex-c-ind"><option value="">— произвольный контакт —</option>${(st.individuals || []).map((i) => `<option value="${i.id}" ${String(f.individual_id) === String(i.id) ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select></label>
-        <label>Имя (ФИО)<input type="text" id="ex-c-name" maxlength="200" value="${esc(f.name)}" placeholder="если выбрано физлицо — можно не заполнять"></label>
-        <label>E-mail в eXpress<input type="text" id="ex-c-email" maxlength="200" value="${esc(f.email)}"></label>
-        <label>Доменный логин<input type="text" id="ex-c-login" maxlength="100" value="${esc(f.ad_login)}" placeholder="ivanov"></label>
-        <label class="hc-check-inline"><input type="checkbox" id="ex-c-active" ${f.active ? "checked" : ""}> Контакт действует</label></div>
-        <button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="ex-c-cancel">Отмена</button>
+      ${f ? `<form class="ex-card" id="ex-c-form"><h4>${f.id ? "Изменить контакт" : "Новый контакт"}</h4>
+        <div class="ex-row">
+          ${field("Физлицо из справочника", `<select id="ex-c-ind"><option value="">— произвольный контакт —</option>${(st.individuals || []).map((i) => `<option value="${i.id}" ${String(f.individual_id) === String(i.id) ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select>`, "wide")}
+          ${field("Имя (ФИО)", `<input type="text" id="ex-c-name" maxlength="200" value="${esc(f.name)}" placeholder="можно не заполнять, если выбрано физлицо">`, "wide")}</div>
+        <div class="ex-sec"><div class="ex-cap">Как найти человека в eXpress</div><div class="ex-row">
+          ${field("E-mail в eXpress", `<input type="text" id="ex-c-email" maxlength="200" value="${esc(f.email)}">`)}
+          ${field("Доменный логин", `<input type="text" id="ex-c-login" maxlength="100" value="${esc(f.ad_login)}" placeholder="ivanov">`)}</div></div>
+        <div class="ex-sec"><div class="ex-opt">${check("ex-c-active", "Контакт действует", f.active)}</div></div>
+        <div class="ex-actions"><button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="ex-c-cancel">Отмена</button></div>
         <p class="hc-msg ${esc(f.kind || "")}" id="ex-c-msg" role="alert">${esc(f.msg || "")}</p></form>` : ""}
       ${msgLine()}
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>E-mail</th><th>Логин</th><th>Связь с eXpress</th><th class="num">Расписаний</th><th></th></tr></thead><tbody>${
@@ -254,16 +277,18 @@ export function mountExpress(el, ctx) {
     pane.innerHTML = `<div class="hc-bar"><strong>Подключение к eXpress</strong><span class="hc-muted">один бот на весь сервис; ключ хранится не в базе, а в файле рядом с ней</span></div>
       <div class="hc-callout">Адрес бота для регистрации в eXpress (CTS обращается по нему на <code>/command</code>, <code>/status</code>, <code>/notification/callback</code>):
         <strong>${esc(location.origin)}</strong>. Для тестового и боевого серверов адреса разные — бот регистрируется отдельно на каждом.</div>
-      <form class="hc-form" id="ex-conn"><div class="hc-form-grid">
-        <label class="hc-span2">Адрес сервера eXpress (CTS)<input type="text" id="ex-k-url" value="${esc(c.cts_url)}" placeholder="https://cts.example.ru"></label>
-        <label>Идентификатор бота (UUID)<input type="text" id="ex-k-id" value="${esc(c.bot_id)}"></label>
-        <label>Имя бота<input type="text" id="ex-k-name" value="${esc(c.bot_name)}" maxlength="80" placeholder="pm_bot"></label>
-        <label class="hc-check-inline"><input type="checkbox" id="ex-k-tls" ${c.verify_tls ? "checked" : ""}> Проверять сертификат сервера eXpress</label>
-        <label class="hc-check-inline"><input type="checkbox" id="ex-k-on" ${c.enabled ? "checked" : ""}> Бот включён (расписания работают, входящие обрабатываются)</label></div>
-        <button type="submit" class="hc-btn primary">Сохранить</button><button type="button" class="hc-btn" id="ex-k-test">Проверить связь</button></form>
-      <form class="hc-form" id="ex-key"><label>Ключ бота (секрет)<input type="password" id="ex-key-in" autocomplete="off" placeholder="${c.secret_configured ? "задан — введите новый, чтобы заменить" : "не задан"}"></label>
-        <button type="submit" class="hc-btn primary">Сохранить ключ</button>${c.secret_configured ? `<button type="button" class="hc-btn danger" id="ex-key-del">Удалить ключ</button>` : ""}
-        <span class="hc-badge ${c.secret_configured ? "ok" : "warn"}">${c.secret_configured ? "ключ задан" : "ключа нет"}</span></form>
+      <form class="ex-card" id="ex-conn"><h4>Сервер и бот</h4>
+        <div class="ex-row">${field("Адрес сервера eXpress (CTS)", `<input type="text" id="ex-k-url" value="${esc(c.cts_url)}" placeholder="https://cts.example.ru">`, "wide")}</div>
+        <div class="ex-sec"><div class="ex-row">
+          ${field("Идентификатор бота (UUID)", `<input type="text" id="ex-k-id" value="${esc(c.bot_id)}">`, "wide")}
+          ${field("Имя бота", `<input type="text" id="ex-k-name" value="${esc(c.bot_name)}" maxlength="80" placeholder="pm_bot">`)}</div></div>
+        <div class="ex-sec"><div class="ex-cap">Режим работы</div>
+          <div class="ex-opt-text">${check("ex-k-on", "Бот включён", c.enabled)}<p class="ex-hint">расписания срабатывают, входящие сообщения обрабатываются</p></div>
+          <div class="ex-opt-text" style="margin-top:.5rem">${check("ex-k-tls", "Проверять сертификат сервера eXpress", c.verify_tls)}<p class="ex-hint">выключайте, только если сертификат выдан внутренним удостоверяющим центром, которого нет на сервере</p></div></div>
+        <div class="ex-actions"><button type="submit" class="hc-btn primary">Сохранить</button><button type="button" class="hc-btn" id="ex-k-test">Проверить связь</button></div></form>
+      <form class="ex-card" id="ex-key"><h4>Ключ бота <span class="hc-badge ${c.secret_configured ? "ok" : "warn"}">${c.secret_configured ? "задан" : "не задан"}</span></h4>
+        <div class="ex-row">${field("Секретный ключ", `<input type="password" id="ex-key-in" autocomplete="off" placeholder="${c.secret_configured ? "задан — введите новый, чтобы заменить" : "не задан"}">`, "wide")}</div>
+        <div class="ex-actions"><button type="submit" class="hc-btn primary">Сохранить ключ</button>${c.secret_configured ? `<button type="button" class="hc-btn danger" id="ex-key-del">Удалить ключ</button>` : ""}</div></form>
       ${msgLine()}`;
     // Ключ и подключение — две формы на одной странице: после сохранения ключа поля подключения, ещё не сохранённые, пропадать не должны
     const captureConn = () => Object.assign(st.config, { cts_url: pane.querySelector("#ex-k-url").value, bot_id: pane.querySelector("#ex-k-id").value,
@@ -293,12 +318,12 @@ export function mountExpress(el, ctx) {
   function paintLog() {
     const L = st.log;
     pane.innerHTML = `<div class="hc-bar"><strong>Журнал обмена с eXpress</strong><span class="hc-muted">последние ${L.items.length} из ${L.total}</span>
-      <label class="hc-check-inline"><input type="checkbox" id="ex-l-err" ${st.logErrors ? "checked" : ""}> только ошибки</label><button type="button" class="hc-btn" id="ex-l-refresh">Обновить</button></div>${msgLine()}
+      ${check("ex-l-err", "только ошибки", st.logErrors)}<button type="button" class="hc-btn" id="ex-l-refresh">Обновить</button></div>${msgLine()}
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Когда</th><th></th><th>Что</th><th>Контакт</th><th>Текст</th><th>Результат</th></tr></thead><tbody>${
         L.items.length ? L.items.map((r) => `<tr><td class="hc-num">${esc(fmtMoment(r.at))}</td><td>${r.direction === "out" ? "→" : r.direction === "in" ? "←" : "·"}</td><td>${esc(r.kind || "")}</td>
           <td>${esc(r.contact_name || "—")}</td><td>${esc(r.text || "")}</td><td>${r.ok ? '<span class="hc-badge ok">ок</span>' : `<span class="hc-badge bad" title="${esc(r.error || "")}">ошибка</span> <span class="hc-muted">${esc(r.error || "")}</span>`}</td></tr>`).join("")
         : `<tr><td colspan="6" class="hc-muted">Записей нет.</td></tr>`}</tbody></table></div>
-      <p class="hc-muted">Записи старше 90 дней удаляются автоматически. Незнакомые отправители бота видны здесь строкой «отправитель не в списке контактов» — по их логину можно завести контакт.</p>`;
+      <p class="ex-hint">Записи старше 90 дней удаляются автоматически. Незнакомые отправители бота видны здесь строкой «отправитель не в списке контактов» — по их логину можно завести контакт.</p>`;
     pane.querySelector("#ex-l-refresh").addEventListener("click", () => { st.log = null; paint(); });
     pane.querySelector("#ex-l-err").addEventListener("change", (e) => { st.logErrors = e.target.checked; st.log = null; paint(); });
   }

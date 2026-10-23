@@ -28,7 +28,7 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
           <div class="bulk-edit-controls">
             <input name="drawing" type="file" accept=".dxf" required>
           </div>
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem">
             Толщина панели, мм
             <input name="thickness" type="number" min="1" max="500" step="0.1"
                    placeholder="по паспорту изделия" style="width:90px">

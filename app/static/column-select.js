@@ -20,20 +20,20 @@ const CSS = `
 .zcs-btn:hover:not(:disabled){border-color:var(--accent,var(--color-primary,#0d4cd3))}
 .zcs-btn:disabled{opacity:.6;cursor:default}
 .zcs-btn span.zcs-cur{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.3}
-.zcs-btn .zcs-caret{flex:none;color:var(--muted,var(--color-text-muted,#6b7683));font-size:11px}
+.zcs-btn .zcs-caret{flex:none;color:var(--muted,var(--color-text-muted,#6b7683));font-size:0.6875rem}
 .zcs-pop{position:fixed;z-index:19500;box-sizing:border-box;max-height:min(60vh,420px);overflow:auto;background:var(--bg,var(--color-surface,#fff));
   color:var(--ink,var(--color-text,inherit));border:1px solid var(--line,var(--color-border,#c9d1dc));border-radius:10px;box-shadow:0 8px 28px rgb(0 0 0/.22);padding:4px 0}
-.zcs-row{display:grid;align-items:baseline;column-gap:14px;padding:7px 12px;cursor:pointer;font-size:13px;line-height:1.3}
+.zcs-row{display:grid;align-items:baseline;column-gap:14px;padding:7px 12px;cursor:pointer;font-size:0.8125rem;line-height:1.3}
 .zcs-row:hover,.zcs-row.zcs-active{background:var(--sel,var(--color-surface-2,#eef2f9))}
 .zcs-row[aria-selected="true"]{font-weight:600;box-shadow:inset 3px 0 0 var(--accent,var(--color-primary,#0d4cd3))}
 .zcs-row.zcs-off{opacity:.5;cursor:default}
 .zcs-main{min-width:0;overflow-wrap:anywhere}
 .zcs-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.zcs-head{position:sticky;top:0;background:var(--bg,var(--color-surface,#fff));font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+.zcs-head{position:sticky;top:0;background:var(--bg,var(--color-surface,#fff));font-size:0.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
   color:var(--muted,var(--color-text-muted,#6b7683));cursor:default;border-bottom:1px solid var(--line,var(--color-border,#dde3ec));z-index:1}
 .zcs-head .zcs-num{white-space:normal;line-height:1.2}
 .zcs-head:hover{background:var(--bg,var(--color-surface,#fff))}
-.zcs-group{padding:8px 12px 3px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,var(--color-text-muted,#6b7683))}
+.zcs-group{padding:8px 12px 3px;font-size:0.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,var(--color-text-muted,#6b7683))}
 `;
 
 function ensureStyle() {

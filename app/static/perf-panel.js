@@ -16,19 +16,19 @@
     const st = document.createElement("style");
     st.id = "pf-css";
     st.textContent = `
-.pf { font-size: 13px; line-height: 1.4; }
+.pf { font-size: 0.8125rem; line-height: 1.4; }
 .pf-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 12px; }
 .pf-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(128,128,128,.4); }
 .pf-badge i { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; display: inline-block; }
 .pf-badge.on i { background: #2e9d57; box-shadow: 0 0 0 3px rgba(46,157,87,.25); }
-.pf-note { opacity: .7; font-size: 12px; }
+.pf-note { opacity: .7; font-size: 0.75rem; }
 .pf-tabs { display: flex; gap: 4px; margin: 10px 0 8px; border-bottom: 1px solid rgba(128,128,128,.3); }
 .pf-tabs button { background: none; border: 0; padding: 6px 12px; cursor: pointer; font: inherit; color: inherit; opacity: .7; border-bottom: 2px solid transparent; }
 .pf-tabs button[aria-selected="true"] { opacity: 1; border-bottom-color: currentColor; font-weight: 600; }
 .pf-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; align-items: center; }
 .pf-tools input[type=search], .pf-tools select { padding: 4px 8px; font: inherit; }
 .pf-scroll { overflow: auto; max-height: 56vh; border: 1px solid rgba(128,128,128,.25); border-radius: 6px; }
-.pf table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.pf table { border-collapse: collapse; width: 100%; font-size: 0.75rem; }
 .pf th, .pf td { padding: 4px 8px; text-align: left; border-bottom: 1px solid rgba(128,128,128,.18); white-space: nowrap; }
 .pf th { position: sticky; top: 0; background: Canvas; cursor: pointer; user-select: none; z-index: 1; }
 .pf td.n, .pf th.n { text-align: right; font-variant-numeric: tabular-nums; }
@@ -36,7 +36,7 @@
 .pf .slow { color: #d1453b; font-weight: 600; }
 .pf .mid { color: #c9831d; }
 .pf details summary { cursor: pointer; opacity: .8; }
-.pf pre { margin: 4px 0; white-space: pre-wrap; word-break: break-word; font-size: 11px; max-width: 520px; }
+.pf pre { margin: 4px 0; white-space: pre-wrap; word-break: break-word; font-size: 0.6875rem; max-width: 520px; }
 .pf button.pf-btn { padding: 5px 12px; font: inherit; cursor: pointer; }
 `;
     document.head.appendChild(st);

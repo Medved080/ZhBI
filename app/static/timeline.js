@@ -362,13 +362,13 @@
 
   // ------------------------------------------------------------------ интерфейс
   const CSS = `
-  #timeline-bar { flex: 0 0 auto; border-top: 1px solid var(--color-border); background: var(--color-surface); padding: 6px 12px 8px; font-size: 12px; user-select: none; }
+  #timeline-bar { flex: 0 0 auto; border-top: 1px solid var(--color-border); background: var(--color-surface); padding: 6px 12px 8px; font-size: 0.75rem; user-select: none; }
   #timeline-bar .tl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   #timeline-bar .tl-sep { width: 1px; align-self: stretch; background: var(--color-border); }
   #timeline-bar label { display: inline-flex; align-items: center; gap: 4px; }
-  #timeline-bar select, #timeline-bar input[type=datetime-local] { font-size: 12px; padding: 2px 4px; }
+  #timeline-bar select, #timeline-bar input[type=datetime-local] { font-size: 0.75rem; padding: 2px 4px; }
   #timeline-bar .tl-seg { display: inline-flex; border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
-  #timeline-bar .tl-seg button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; font-size: 12px; color: inherit; }
+  #timeline-bar .tl-seg button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; font-size: 0.75rem; color: inherit; }
   #timeline-bar .tl-seg button.active { background: var(--color-primary, #1f4fd8); color: #fff; }
   #timeline-bar .tl-play { min-width: 74px; }
   #timeline-bar .tl-track-wrap { position: relative; height: 38px; margin: 8px 6px 0; touch-action: none; }
@@ -378,7 +378,7 @@
   #timeline-bar .tl-cursor { position: absolute; top: 2px; width: 0; height: 34px; border-left: 2px solid #d9480f; pointer-events: none; }
   #timeline-bar .tl-cursor::before { content: ""; position: absolute; left: -6px; top: -2px; border: 5px solid transparent; border-top: 7px solid #d9480f; }
   #timeline-bar .tl-handle { position: absolute; top: 0; width: 14px; height: 12px; margin-left: -7px; cursor: ew-resize; background: #1f4fd8; clip-path: polygon(0 0, 100% 0, 50% 100%); }
-  #timeline-bar .tl-ends { display: flex; justify-content: space-between; color: var(--color-text-muted); font-size: 11px; margin: 0 6px; }
+  #timeline-bar .tl-ends { display: flex; justify-content: space-between; color: var(--color-text-muted); font-size: 0.6875rem; margin: 0 6px; }
   #timeline-bar .tl-msg { color: var(--color-text-muted); }
   #timeline-bar.tl-actual .tl-chrono-only { display: none; }
   #timeline-bar .tl-banner { color: #d9480f; font-weight: 600; }
