@@ -353,9 +353,24 @@ def verify_incoming(authorization: Optional[str]) -> dict:
         raise BotxError("Срок токена истёк", status=401, retryable=False)
     audience = claims.get("aud")
     audience = audience if isinstance(audience, list) else [audience]
-    if str(claims.get("iss")) != bot_id and bot_id not in [str(a) for a in audience]:
+    mine = bot_id.strip().lower()            # UUID сравниваем без учёта регистра: CTS может писать его заглавными
+    if str(claims.get("iss")).strip().lower() != mine and mine not in [str(a).strip().lower() for a in audience]:
         raise BotxError("Токен выписан не для этого бота", status=401, retryable=False)
     return claims
+
+
+def describe_token(authorization: Optional[str]) -> str:
+    """Что написано в токене входящего запроса (alg, iss, aud) — для журнала обмена, чтобы по записи «отклонён» было видно, ПОЧЕМУ. Подпись и содержимое
+    не проверяются; ключей и самого токена в результате нет."""
+    parts = (authorization or "").split()[-1:]
+    pieces = (parts[0] if parts else "").split(".")
+    if len(pieces) != 3:
+        return "токена нет" if not parts else "токен не разобран"
+    try:
+        header, claims = json.loads(_b64url(pieces[0])), json.loads(_b64url(pieces[1]))
+    except (ValueError, TypeError):
+        return "токен не разобран"
+    return f"alg={header.get('alg')} iss={str(claims.get('iss'))[:60]} aud={str(claims.get('aud'))[:90]}"
 
 
 # ------------------------------------------------------------------ журнал обмена

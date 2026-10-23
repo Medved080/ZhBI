@@ -48,7 +48,9 @@ def _verify(request: Request) -> Optional[JSONResponse]:
     try:
         express_bot.verify_incoming(request.headers.get("authorization"))
     except BotxError as exc:
-        log_event("in", "system", f"{request.method} {request.url.path}", ok=False, error=str(exc))
+        # В журнале видно, ЧТО пришло: метод и адрес, откуда (ip), что написано в токене. Так «бот не отвечает» разбирается без догадок.
+        log_event("in", "system", f"{request.method} {request.url.path} от {request.client.host if request.client else '?'}; "
+                  f"{express_bot.describe_token(request.headers.get('authorization'))}", ok=False, error=str(exc))
         return JSONResponse(status_code=exc.status or 403, content={"status": "error", "reason": str(exc)})
     return None
 
@@ -58,6 +60,7 @@ def bot_status(request: Request):
     denied = _verify(request)
     if denied is not None:
         return denied
+    log_event("in", "system", "GET /status — CTS спрашивает состояние бота")      # запись о ДОШЕДШЕМ запросе: нет записей вообще — CTS до сервиса не достучался
     return {"status": "ok", "result": {"enabled": True, "status_message": "Бот собирает численность по объектам", "commands": STATUS_COMMANDS}}
 
 

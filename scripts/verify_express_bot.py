@@ -74,6 +74,8 @@ jwt = sign_jwt
 good = {"iss": BOT_ID, "aud": "host", "exp": time.time() + 60}
 ok(eb.verify_incoming("Bearer " + jwt(good)), "верный JWT (iss = бот) принят")
 ok(eb.verify_incoming("Bearer " + jwt({"iss": "cts.corp", "aud": [BOT_ID], "exp": time.time() + 60})), "верный JWT (aud = [бот]) принят")
+ok(eb.verify_incoming("Bearer " + jwt({"iss": BOT_ID.upper(), "aud": "host", "exp": time.time() + 60})), "UUID бота в токене сравнивается без учёта регистра")
+ok("iss=" in eb.describe_token("Bearer " + jwt(good)) and KEY not in eb.describe_token("Bearer " + jwt(good)), "describe_token показывает iss/aud и не содержит ключа")
 for label, hdr in [("чужой ключ", "Bearer " + jwt(good, key="other-secret-1")), ("истёк", "Bearer " + jwt({**good, "exp": time.time() - 5})),
                    ("чужой бот", "Bearer " + jwt({"iss": "x", "aud": ["y"]})), ("без токена", None), ("мусор", "Bearer a.b.c"),
                    ("alg none", "Bearer " + jwt(good, alg="none"))]:
@@ -83,7 +85,9 @@ ok(True, "JWT: чужой ключ, истёкший, чужой бот, без 
 
 # ------------------------------------------------------------------ контакты и расписание
 c = db.get_connection()
-c.execute("DELETE FROM express_contacts"); c.commit()
+for table in ("express_requests", "express_schedules", "express_log", "express_contacts"):    # копия базы могла быть «грязной» (стенд, прошлые прогоны)
+    c.execute(f"DELETE FROM {table}")
+c.commit()
 ind = c.execute("SELECT id, name FROM individuals LIMIT 1").fetchone()
 cur = c.execute("INSERT INTO express_contacts (individual_id, name, email, ad_login) VALUES (?, 'Иванов И.И.', 'known@corp.ru', 'ivanov')", (ind["id"] if ind else None,))
 IVAN = cur.lastrowid
