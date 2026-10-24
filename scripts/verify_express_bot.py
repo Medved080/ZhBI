@@ -66,7 +66,28 @@ path = eb.secret_path()
 ok(path.exists() and oct(path.stat().st_mode & 0o777) == "0o600", f"ключ в файле {path.name} с правами 0600")
 c = db.get_connection(); dump = "".join(str(tuple(r)) for t in ("express_config", "express_log") for r in c.execute(f"SELECT * FROM {t}")); c.close()
 ok(KEY not in dump, "ключа нет ни в express_config, ни в журнале")
-ok(eb.ping()["ok"], "ping: токен получен у макета CTS")
+_r = eb.ping()
+ok(_r["ok"] and _r["auth"] == "v2", "ping: настоящий вызов BotX API; при обеих схемах первой работает v2 (JWT, как в pybotx)")
+_jwt = eb.build_jwt_v2({"cts_url": "https://cts.example.ru:8443/x", "bot_id": BOT_ID}, KEY, now=1000)
+_claims = json.loads(base64.urlsafe_b64decode(_jwt.split(".")[1] + "=="))
+ok(_claims["iss"] == BOT_ID and _claims["aud"] == "cts.example.ru" and _claims["exp"] == 1060 and _claims["nbf"] == 1000 and _claims["version"] == 2 and len(_claims["jti"]) == 24,
+   "JWT v2: iss — бот, aud — имя хоста без схемы и порта, срок 60 с, nbf, jti, version=2")
+STATE["auth"] = "v1only"; eb._drop_token()
+_r = eb.ping(); eb.send_message("chat-x", "проба")
+ok(_r["auth"] == "v1" and eb._auth_mode["v"] == "v1" and SENT and SENT[-1][1] == "проба", "CTS принимает только токен v1: клиент переходит на запасную схему и отправляет")
+STATE["auth"] = "v2only"; eb._drop_token()
+_r = eb.ping(); eb.send_message("chat-y", "проба2")
+ok(_r["auth"] == "v2" and SENT[-1][1] == "проба2", "CTS принимает только JWT v2: отправка проходит без токена v1")
+STATE["auth"] = "none"; eb._drop_token()
+try:
+    eb.ping(); ok(False, "отказ по обеим схемам должен давать ошибку")
+except eb.BotxError as _e:
+    ok("HTTP 401" in str(_e) and "обеим схемам" in str(_e), "CTS отклоняет обе схемы: «Проверить связь» сообщает об отказе, а не «связь есть»")
+try:
+    eb.send_message("chat-z", "x"); ok(False, "отправка при отказе")
+except eb.BotxError as _e:
+    ok("unauthorized" in str(_e) and "HTTP 401" in str(_e), "отправка при отказе по обеим схемам: ошибка с кодом и причиной CTS")
+STATE["auth"] = "both"; eb._drop_token(); SENT.clear()
 ok(KEY not in eb.redact(f"ошибка {KEY}") and "***" in eb.redact(f"ошибка {KEY}"), "redact убирает ключ из текстов")
 
 # ------------------------------------------------------------------ JWT

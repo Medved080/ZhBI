@@ -9,7 +9,10 @@ BotX API и проверка подписи входящих запросов о
 база, перенесённая с боевого сервера на тестовый вместе с включённым `enabled`, писать от имени бота НЕ сможет — ключа у неё нет.
 
 Протокол (сверено с исходниками pybotx, ExpressApp/pybotx, 2026-10-23):
-- токен: `GET /api/v2/botx/bots/{bot_id}/token?signature=…`, подпись — HMAC-SHA256 от `bot_id` ключом бота, hex в верхнем регистре;
+- авторизация вызовов BotX API — две схемы, клиент подбирает сам (`_authorized_call`): v2 (как в pybotx по умолчанию) — бот строит JWT на каждый вызов:
+  HS256 ключом бота, iss = bot_id, aud = имя хоста CTS без схемы и порта, срок 60 с; v1 (устаревшая) — токен `GET /api/v2/botx/bots/{bot_id}/token?signature=…`,
+  подпись — HMAC-SHA256 от `bot_id` ключом бота, hex в верхнем регистре. На первом подключении CTS выдавал токен v1, но отвергал его (401 на любой вызов) —
+  новый CTS принимает v2;
 - сообщение: `POST /api/v4/botx/notifications/direct` {group_chat_id, notification: {status, body, bubble}} → {result: {sync_id}};
 - поиск пользователя: `POST /api/v3/botx/users/by_email` {emails: […]};
 - входящее: CTS сам шлёт `POST /command`, `GET /status`, `POST /notification/callback` на адрес бота; заголовок
@@ -203,12 +206,17 @@ def is_active(conn=None) -> bool:
 
 _token_cache = {"key": None, "value": None}
 _token_lock = threading.Lock()
+# Схема авторизации BotX API, которую принял CTS: "v2" — JWT, который бот строит сам на каждый вызов; "v1" — токен из /api/v2/botx/bots/{id}/token
+# (устаревшая схема). Пока неизвестна — пробуем v2, затем v1, и запоминаем сработавшую. Сброс — при смене подключения или ключа.
+_auth_mode = {"v": None}
+JWT_LIFETIME = 60
 
 
 def _drop_token() -> None:
     with _token_lock:
         _token_cache["key"] = None
         _token_cache["value"] = None
+        _auth_mode["v"] = None
 
 
 def signature(bot_id: str, key: str) -> str:
@@ -251,7 +259,24 @@ def _fail(status: int, payload, what: str) -> BotxError:
     return BotxError(f"{what}: {redact(human)} (HTTP {status}{redact(extra)})", status=status, reason=reason, retryable=status >= 500 or status in (408, 429))
 
 
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def build_jwt_v2(cfg: dict, key: str, now: Optional[float] = None) -> str:
+    """Схема v2 (как в pybotx, `build_botx_jwt_v2`): HS256 ключом бота, iss — идентификатор бота, aud — ИМЯ ХОСТА CTS (без схемы и порта),
+    живёт 60 секунд, строится заново на каждый вызов, в CTS за токеном ходить не нужно."""
+    iat = int(now if now is not None else time.time())
+    host = urllib.parse.urlsplit(cfg["cts_url"]).hostname or ""
+    claims = {"iss": str(cfg["bot_id"]), "aud": host, "exp": iat + JWT_LIFETIME, "nbf": iat, "jti": os.urandom(12).hex(), "iat": iat, "version": 2}
+    head = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    body = _b64url_encode(json.dumps(claims, separators=(",", ":")).encode())
+    sig = hmac.new(key.encode("utf-8"), f"{head}.{body}".encode("ascii"), hashlib.sha256).digest()
+    return f"{head}.{body}.{_b64url_encode(sig)}"
+
+
 def _token(cfg: dict, key: str, force: bool = False) -> str:
+    """Схема v1: токен бота из CTS (кэшируется)."""
     cache_key = (cfg["cts_url"], cfg["bot_id"], hashlib.sha256(key.encode()).hexdigest())
     with _token_lock:
         if not force and _token_cache["key"] == cache_key and _token_cache["value"]:
@@ -266,6 +291,32 @@ def _token(cfg: dict, key: str, force: bool = False) -> str:
     return value
 
 
+def _authorized_call(cfg: dict, key: str, method: str, path: str, body):
+    """Один вызов BotX API с подбором схемы авторизации. Возвращает (код, ответ, схема). 401 по обеим схемам — код 401 последней попытки."""
+    order = ["v2", "v1"]
+    if _auth_mode["v"] == "v1":
+        order = ["v1", "v2"]
+    status, payload, used, token_error = 0, None, None, None
+    for mode in order:
+        for attempt in (0, 1):
+            try:
+                token = build_jwt_v2(cfg, key) if mode == "v2" else _token(cfg, key, force=attempt == 1)
+            except BotxError as exc:
+                token_error = exc                  # токен v1 не выдали — пробуем остальные схемы; если не удалось ни одной, причина — в выдаче токена
+                break
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
+            status, payload = _http(method, cfg["cts_url"] + path, body, headers, cfg["verify_tls"])
+            used = mode
+            if status != 401:
+                _auth_mode["v"] = mode
+                return status, payload, mode
+            if mode == "v2":
+                break                              # JWT строится заново каждый раз, повторять нет смысла
+    if used is None and token_error is not None:
+        raise token_error
+    return status, payload, used
+
+
 def _api(method: str, path: str, body=None, *, require_enabled: bool = True):
     cfg = get_config()
     key = secret_key()
@@ -273,24 +324,23 @@ def _api(method: str, path: str, body=None, *, require_enabled: bool = True):
         raise BotxError(not_configured_message(cfg), retryable=False)
     if require_enabled and not cfg["enabled"]:
         raise BotxError("Бот eXpress выключен", retryable=False)
-    for attempt in (0, 1):
-        token = _token(cfg, key, force=attempt == 1)
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
-        status, payload = _http(method, cfg["cts_url"] + path, body, headers, cfg["verify_tls"])
-        if status == 401 and attempt == 0:
-            continue                      # токен мог быть отозван: берём новый и повторяем один раз
-        return status, payload
+    status, payload, _ = _authorized_call(cfg, key, method, path, body)
     return status, payload
 
 
 def ping() -> dict:
-    """Проверка связи: получить токен бота. Не отправляет ничего никому."""
+    """Проверка связи: настоящий (но безвредный) вызов BotX API под авторизацией бота — список чатов. Одной выдачи токена мало: CTS может выдать токен,
+    а потом отклонить его (так и случилось на первом подключении). Ничего никому не отправляется."""
     cfg = get_config()
     key = secret_key()
     if not (cfg["cts_url"] and cfg["bot_id"] and key):
         raise BotxError(not_configured_message(cfg), retryable=False)
-    _token(cfg, key, force=True)
-    return {"ok": True, "cts_url": cfg["cts_url"], "bot_id": cfg["bot_id"]}
+    status, payload, mode = _authorized_call(cfg, key, "GET", "/api/v3/botx/chats/list", None)
+    if status == 401:
+        raise _fail(401, payload, "Сервер eXpress отклонил бота по обеим схемам авторизации (v2 JWT и токен v1): проверьте, что бот включён и ключ верный")
+    if status >= 500:
+        raise _fail(status, payload, "Сервер eXpress не смог обработать проверочный вызов")
+    return {"ok": True, "cts_url": cfg["cts_url"], "bot_id": cfg["bot_id"], "auth": mode, "http": status}
 
 
 def send_message(chat_id: str, text: str, bubble: Optional[list] = None) -> Optional[str]:

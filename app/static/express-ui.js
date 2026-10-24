@@ -319,7 +319,7 @@ export function mountExpress(el, ctx) {
       st.config = await api.put("/express/config", { enabled: pane.querySelector("#ex-k-on").checked, cts_url: pane.querySelector("#ex-k-url").value, bot_id: pane.querySelector("#ex-k-id").value,
         bot_name: pane.querySelector("#ex-k-name").value, verify_tls: pane.querySelector("#ex-k-tls").checked });
       st.status = null; paintConnection();
-      try { const r = await api.post("/express/test", {}); setMsg(`Подключение сохранено. Связь есть: сервер ${r.cts_url} выдал токен боту.`, "ok"); }
+      try { const r = await api.post("/express/test", {}); setMsg(`Подключение сохранено. Связь есть: сервер ${r.cts_url} принял бота (авторизация: ${r.auth === "v2" ? "JWT v2" : "токен v1"}).`, "ok"); }
       catch (e) { setMsg(`Подключение сохранено. ${errText(e)}`, "bad"); }
     }));
     pane.querySelector("#ex-key").addEventListener("submit", (e) => {

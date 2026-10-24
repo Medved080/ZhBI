@@ -16,7 +16,8 @@ BOT_ID = "6a05574d-f544-54ee-a8c8-5c7240f143ae"
 KEY = "test-secret-key-123"
 TOKEN = "tok-" + "x" * 20
 SENT = []                   # (chat_id, текст, кнопки)
-STATE = {"fail_chat": None, "down": False}
+# auth: какие схемы авторизации принимает макет — "both", "v2only" (JWT, строится ботом), "v1only" (токен из /token), "none" (всё отклоняет, как CTS на первом подключении)
+STATE = {"fail_chat": None, "down": False, "auth": "both"}
 
 
 def signature(bot_id, key):
@@ -29,6 +30,27 @@ def sign_jwt(claims=None, key=KEY, alg="HS256"):
     h, p = b({"alg": alg, "typ": "JWT"}), b(claims)
     sig = base64.urlsafe_b64encode(hmac.new(key.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
     return f"{h}.{p}.{sig}"
+
+
+def authorized(header, host="127.0.0.1"):
+    """Принимает ли макет заголовок Authorization по текущей схеме STATE["auth"]."""
+    mode = STATE["auth"]
+    if not header or not header.startswith("Bearer ") or mode == "none":
+        return False
+    token = header[7:]
+    if token == TOKEN:
+        return mode in ("both", "v1only")
+    if mode not in ("both", "v2only"):
+        return False
+    try:
+        h, p, sig = token.split(".")
+        pad = lambda x: x + "=" * (-len(x) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(pad(p)))
+        expected = hmac.new(KEY.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+        return (hmac.compare_digest(expected, base64.urlsafe_b64decode(pad(sig))) and claims.get("iss") == BOT_ID and claims.get("aud") == host
+                and claims.get("version") == 2 and claims.get("exp", 0) >= time.time())
+    except Exception:
+        return False
 
 
 class Cts(BaseHTTPRequestHandler):
@@ -45,6 +67,10 @@ class Cts(BaseHTTPRequestHandler):
             return self._send(200, [{"chat": c, "text": t, "buttons": [b["label"] for row in (bub or []) for b in row]} for c, t, bub in SENT])
         if STATE["down"]:
             return self._send(503, {"status": "error", "reason": "unavailable"})
+        if self.path == "/api/v3/botx/chats/list":
+            if not authorized(self.headers.get("Authorization")):
+                return self._send(401, {"reason": "unauthorized", "status": "error", "errors": [], "error_data": {}})
+            return self._send(200, {"status": "ok", "result": []})
         prefix = f"/api/v2/botx/bots/{BOT_ID}/token?signature="
         if self.path.startswith(prefix):
             if self.path[len(prefix):] == signature(BOT_ID, KEY):
@@ -54,8 +80,8 @@ class Cts(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-        if self.headers.get("Authorization") != f"Bearer {TOKEN}":
-            return self._send(401, {"status": "error", "reason": "unauthorized"})
+        if not authorized(self.headers.get("Authorization")):
+            return self._send(401, {"reason": "unauthorized", "status": "error", "errors": [], "error_data": {}})
         if STATE["down"]:
             return self._send(503, {"status": "error", "reason": "unavailable"})
         if self.path == "/api/v4/botx/notifications/direct":
