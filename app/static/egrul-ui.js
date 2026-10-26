@@ -1,4 +1,4 @@
-// Реквизиты контрагента по ИНН из ЕГРЮЛ ФНС — общий кусок интерфейса V1 и V2 (сервер: app/egrul.py).
+// Реквизиты контрагента по ИНН (DaData, запасной — ЕГРЮЛ ФНС) — общий кусок интерфейса V1 и V2 (сервер: app/egrul.py).
 //
 //   lookupRequisites(get, inn)            → { found, requisites }  (get — функция GET-запроса оболочки)
 //   openBulkFill({ get, post, onDone })   → окно массового дозаполнения контрагентов-заглушек «ИНН <номер>»: сначала предпросмотр
@@ -26,7 +26,7 @@ const STYLE = `
 .eg-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 `;
 
-export function openBulkFill({ get, post, onDone }) {
+export function openBulkFill({ get, post, put, del, onDone }) {
   if (!document.getElementById("eg-style")) {
     const st = document.createElement("style");
     st.id = "eg-style"; st.textContent = STYLE; document.head.appendChild(st);
@@ -34,11 +34,16 @@ export function openBulkFill({ get, post, onDone }) {
   const back = document.createElement("div");
   back.className = "eg-back";
   back.innerHTML = `<div class="eg-box" role="dialog" aria-modal="true" aria-label="Дозаполнение контрагентов из ЕГРЮЛ">
-    <h3>Дозаполнить контрагентов из ЕГРЮЛ</h3>
+    <h3>Дозаполнить контрагентов по ИНН</h3>
+    <p class="eg-muted" id="eg-src">Источник реквизитов: …</p>
+    <div class="eg-actions" id="eg-token" hidden style="justify-content:flex-start;align-items:center">
+      <input type="password" id="eg-token-in" placeholder="Токен DaData (ключ API)" autocomplete="off" style="min-width:260px">
+      <button type="button" class="btn btn-secondary v2-btn" id="eg-token-save">Сохранить токен</button>
+      <button type="button" class="btn btn-secondary v2-btn" id="eg-token-del" hidden>Удалить токен</button></div>
     <p class="eg-muted" id="eg-info">Загрузка списка…</p>
-    <div class="eg-scroll"><table class="eg-tbl"><thead><tr><th>ИНН</th><th>Сейчас</th><th>Из ЕГРЮЛ</th><th>Итог</th></tr></thead><tbody id="eg-rows"></tbody></table></div>
+    <div class="eg-scroll"><table class="eg-tbl"><thead><tr><th>ИНН</th><th>Сейчас</th><th>Найдено по ИНН</th><th>Итог</th></tr></thead><tbody id="eg-rows"></tbody></table></div>
     <div class="eg-actions"><button type="button" class="btn btn-secondary v2-btn" id="eg-close">Закрыть</button>
-      <button type="button" class="btn btn-secondary v2-btn" id="eg-check" disabled>Проверить в ЕГРЮЛ</button>
+      <button type="button" class="btn btn-secondary v2-btn" id="eg-check" disabled>Проверить по ИНН</button>
       <button type="button" class="btn btn-primary v2-btn v2-primary" id="eg-apply" disabled>Записать найденное</button></div></div>`;
   document.body.appendChild(back);
   const $ = (s) => back.querySelector(s);
@@ -53,7 +58,7 @@ export function openBulkFill({ get, post, onDone }) {
       let prop = "", res = "";
       if (r) {
         if (r.status === "ok" || r.status === "applied") {
-          prop = esc(r.proposed.short_name || "—") + (r.proposed.kpp ? ` · КПП ${esc(r.proposed.kpp)}` : "") + (r.proposed.ogrn ? ` · ОГРН ${esc(r.proposed.ogrn)}` : "") + (r.terminated ? " · деятельность прекращена" : "");
+          prop = esc(r.proposed.short_name || "—") + (r.proposed.kpp ? ` · КПП ${esc(r.proposed.kpp)}` : "") + (r.proposed.ogrn ? ` · ОГРН ${esc(r.proposed.ogrn)}` : "") + (r.proposed.legal_address ? ` · адрес: ${esc(r.proposed.legal_address)}` : "") + (r.terminated ? " · деятельность прекращена" : "");
           res = r.status === "applied" ? "записано" : (Object.keys(r.proposed).length ? "будет записано" : "нечего менять");
         } else res = `<span class="eg-bad">${esc(r.message || r.status)}</span>`;
       }
@@ -85,7 +90,7 @@ export function openBulkFill({ get, post, onDone }) {
     rows = new Map();
     if (await run(items.map((i) => i.id), false, "Проверка")) {
       const n = [...rows.values()].filter((r) => r.status === "ok").length;
-      $("#eg-info").textContent = `Найдено в ЕГРЮЛ: ${n} из ${items.length}. Проверьте таблицу и нажмите «Записать найденное».`;
+      $("#eg-info").textContent = `Найдено: ${n} из ${items.length}. Проверьте таблицу и нажмите «Записать найденное».`;
     }
   });
   $("#eg-apply").addEventListener("click", async () => {
@@ -93,10 +98,24 @@ export function openBulkFill({ get, post, onDone }) {
     if (await run(ids, true, "Запись")) $("#eg-info").textContent = `Записано: ${ids.length}.`;
   });
 
+  const paintSource = async () => {
+    try {
+      const s = await get("/egrul/settings");
+      $("#eg-src").textContent = `Источник реквизитов: ${s.provider_title}.` + (s.token_set ? "" : " Для юридического адреса и надёжной работы администратор может задать токен DaData.");
+      $("#eg-token").hidden = !s.can_edit;
+      $("#eg-token-del").hidden = !s.token_set;
+    } catch (e) { $("#eg-src").textContent = ""; }
+  };
+  $("#eg-token-save").addEventListener("click", async () => {
+    try { await put("/egrul/settings", { dadata_token: $("#eg-token-in").value.trim() }); $("#eg-token-in").value = ""; rows = new Map(); paint(); await paintSource(); }
+    catch (e) { $("#eg-src").innerHTML = `<span class="eg-bad">${esc(errText(e))}</span>`; }
+  });
+  $("#eg-token-del").addEventListener("click", async () => { try { await del("/egrul/settings"); rows = new Map(); paint(); await paintSource(); } catch (e) { $("#eg-src").innerHTML = `<span class="eg-bad">${esc(errText(e))}</span>`; } });
+  paintSource();
   get("/egrul/placeholders").then((r) => {
     items = r.items || [];
     $("#eg-info").textContent = items.length
-      ? `Контрагентов-заглушек «ИНН <номер>»: ${items.length}. «Проверить в ЕГРЮЛ» покажет, что будет подставлено; записывается только после подтверждения. Проверка идёт пачками и занимает около секунды на запись.`
+      ? `Контрагентов-заглушек «ИНН <номер>»: ${items.length}. «Проверить по ИНН» покажет, что будет подставлено; записывается только после подтверждения. Проверка идёт пачками и занимает около секунды на запись.`
       : "Заглушек «ИНН <номер>» нет — дозаполнять нечего.";
     paint();
   }).catch((e) => { $("#eg-info").innerHTML = `<span class="eg-bad">${esc(errText(e))}</span>`; });

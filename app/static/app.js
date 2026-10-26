@@ -19067,11 +19067,11 @@ document.getElementById("cpe-egrul").addEventListener("click", async (ev) => {
     if (!r.found) msg.textContent = " В ЕГРЮЛ по этому ИНН ничего не найдено.";
     else {
       const q = r.requisites;
-      for (const [id, v] of [["cpe-full-name", q.full_name], ["cpe-short-name", q.short_name], ["cpe-kpp", q.kpp], ["cpe-ogrn", q.ogrn]]) {
+      for (const [id, v] of [["cpe-full-name", q.full_name], ["cpe-short-name", q.short_name], ["cpe-kpp", q.kpp], ["cpe-ogrn", q.ogrn], ["cpe-legal-address", q.address]]) {
         if (v) document.getElementById(id).value = v;
       }
       document.getElementById("cpe-short-name").dispatchEvent(new Event("input"));
-      msg.textContent = ` Подставлено из ЕГРЮЛ${q.terminated ? " (деятельность прекращена)" : ""}${q.director ? "; руководитель: " + q.director : ""}. Проверьте и сохраните.`;
+      msg.textContent = ` Подставлено (${q.source})${q.terminated ? " (деятельность прекращена)" : ""}${q.director ? "; руководитель: " + q.director : ""}. Проверьте и сохраните.`;
     }
   } catch (e) { msg.textContent = " " + (e && (e.detail || e.message) || "Не удалось запросить ЕГРЮЛ"); }
   кнопка.disabled = false;
@@ -19079,7 +19079,8 @@ document.getElementById("cpe-egrul").addEventListener("click", async (ev) => {
 document.getElementById("counterparties-egrul").addEventListener("click", async () => {
   const { openBulkFill } = await import("/static/egrul-ui.js");
   const send = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  openBulkFill({ get: (p) => api(p), post: send, onDone: () => renderCounterpartiesList() });
+  const sendAs = (method) => (path, body) => api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  openBulkFill({ get: (p) => api(p), post: send, put: sendAs("PUT"), del: (p) => api(p, { method: "DELETE" }), onDone: () => renderCounterpartiesList() });
 });
 document.getElementById("counterparty-edit-save").addEventListener("click", async () => {
   const body = {
