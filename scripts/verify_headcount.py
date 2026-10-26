@@ -57,13 +57,21 @@ ok(hc.deadline_for(date(2026,10,11)).date() == date(2026,10,12), "воскрес
 ok(hc.inn_status("7745000111")=="ok" and hc.inn_status("БСТ-ГРУПП ООО")=="unverified" and hc.inn_status("123456789")=="unverified" and hc.inn_status(None)=="none", "inn_status")
 
 # подрядчики
-r = c.post(f"/objects/{obj}/headcount/contractors", json={"inn": " 7745 000111 ", "name": "Альфа ООО"}); ok(r.status_code==200 and r.json()["inn"]=="7745000111", "создан подрядчик, ИНН очищен")
-a = r.json()["id"]
-r = c.post(f"/objects/{obj}/headcount/contractors", json={"inn": "7745000111"}); ok(r.status_code==409, "дубль по ИНН — 409")
-r = c.post(f"/objects/{obj}/headcount/contractors", json={"name": "БСТ-ГРУПП ООО"}); ok(r.status_code==200 and r.json()["inn"] is None, "подрядчик без ИНН")
-b = r.json()["id"]
-r = c.post(f"/objects/{obj}/headcount/contractors", json={"name": "  бст-групп  ооо "}); ok(r.status_code==409, "дубль по названию без регистра — 409")
-r = c.patch(f"/objects/{obj}/headcount/contractors/{b}", json={"inn": "123456789"}); ok(r.status_code==200 and r.json()["inn_note"]=="ИНН не проверен", "ИНН добавлен позже, помечен непроверенным")
+# единый справочник (2026-10-26): подрядчик — ссылка на контрагента; нового контрагента заводят явным флагом
+r = c.post(f"/objects/{obj}/headcount/contractors", json={"inn": " 7745 000111 ", "name": "Альфа ООО", "create_counterparty": True}); ok(r.status_code==200 and r.json()["inn"]=="7745000111" and r.json()["counterparty_id"], "создан контрагент и подрядчик, ИНН очищен")
+a = r.json()["id"]; cp_a = r.json()["counterparty_id"]
+r = c.post(f"/objects/{obj}/headcount/contractors", json={"inn": "7745000111", "name": "Альфа ООО"}); ok(r.status_code==400, "без флага и без контрагента — 400")
+r = c.post(f"/objects/{obj}/headcount/contractors", json={"inn": "7745000111", "name": "Другая", "create_counterparty": True}); ok(r.status_code==409, "контрагент с таким ИНН уже есть — 409, дубль не заводится")
+r = c.post(f"/objects/{obj}/headcount/contractors", json={"counterparty_id": cp_a}); ok(r.status_code==409, "тот же контрагент на объект второй раз — 409")
+r = c.post(f"/objects/{obj}/headcount/contractors", json={"name": "БСТ-ГРУПП ООО", "create_counterparty": True}); ok(r.status_code==200 and r.json()["inn"] is None, "подрядчик без ИНН")
+b = r.json()["id"]; cp_b = r.json()["counterparty_id"]
+r = c.post(f"/objects/{obj}/headcount/contractors", json={"name": "  бст-групп  ооо ", "create_counterparty": True}); ok(r.status_code==409, "дубль по названию без регистра — 409")
+r = c.patch(f"/objects/{obj}/headcount/contractors/{b}", json={"inn": "123456789"}); ok(r.status_code==400, "название/ИНН связанного подрядчика здесь не правятся — 400")
+_c = db.get_connection(); _c.execute("UPDATE counterparties SET inn = '123456789' WHERE id = ?", (cp_b,)); _c.commit(); _c.close()
+r = c.get(f"/objects/{obj}/headcount/contractors"); jb = [x for x in r.json()["contractors"] if x["id"] == b][0]
+ok(jb["inn"] == "123456789" and jb["inn_note"] == "ИНН не проверен", "ИНН поменяли в справочнике контрагентов — виден в численности, помечен непроверенным")
+_c = db.get_connection(); _c.execute("UPDATE counterparties SET short_name = 'БСТ-ГРУПП (переименован)' WHERE id = ?", (cp_b,)); _c.commit(); _c.close()
+r = c.get(f"/objects/{obj}/headcount/contractors"); ok([x for x in r.json()["contractors"] if x["id"] == b][0]["display"].startswith("БСТ-ГРУПП (переименован)"), "переименование контрагента сразу видно в подрядчике")
 r = c.post(f"/objects/{obj}/headcount/contractors", json={}); ok(r.status_code==400, "пустой подрядчик — 400")
 r = c.get(f"/objects/{obj}/headcount/contractors"); ok(len(r.json()["contractors"])==2, "список подрядчиков")
 
@@ -97,7 +105,7 @@ r = c.delete(f"/objects/{obj}/headcount/contractors/{b}"); ok(r.status_code==409
 # ---- отчёт
 conn = db.get_connection()
 conn.execute("UPDATE objects SET smu_id = (SELECT id FROM smu_catalog LIMIT 1) WHERE id IN (?,?)", (obj, obj2)); conn.commit(); conn.close()
-r = hc.create_contractor(object_id=obj2, body=hc.ContractorIn(inn="7745000111", name="Альфа ООО"), user=admin); a2 = r["id"]
+r = hc.create_contractor(object_id=obj2, body=hc.ContractorIn(counterparty_id=cp_a), user=admin); a2 = r["id"]
 base = date(2026, 9, 1)
 def put(o, ctr, code, d, n):
     hc.save_records(object_id=o, body=hc.SaveIn(date=d.isoformat(), rows=[hc.RowIn(contractor_id=ctr, codifier_id=w[code], workers=n)]), user=admin)
@@ -240,8 +248,8 @@ from io import BytesIO
 from openpyxl import load_workbook
 wb = load_workbook(BytesIO(x.body)); wsx = wb.active
 heads = [c.value for c in wsx[1]]
-ok(heads[7:10] == ["Рабочие", "ИТР", "Итого"], "Excel записей: колонки Рабочие / ИТР / Итого")
-ok(sorted(r[9] for r in wsx.iter_rows(min_row=2, values_only=True)) == [5, 11], "Excel записей: «Итого» по строкам 5 и 11")
+ok(heads[7:11] == ["Рабочие", "ИТР", "Механизаторы", "Итого"], "Excel записей: колонки Рабочие / ИТР / Механизаторы / Итого")
+ok(sorted(r[10] for r in wsx.iter_rows(min_row=2, values_only=True)) == [5, 11], "Excel записей: «Итого» по строкам 5 и 11")
 xr = hc.report_xlsx(levels="object", as_of=itr_day.isoformat(), date_from=None, date_to=None, object_ids=str(obj), smu_id=None, section=None, work_code=None,
                     contractor_inn=None, staff="itr", user=admin)
 ok("ИТР" in [c.value for c in load_workbook(BytesIO(xr.body)).active[1]][1], "Excel отчёта по ИТР: показатель назван в шапке")
@@ -273,8 +281,8 @@ ok([x["id"] for x in _t].index(3) < [x["id"] for x in _t].index(4), "иерар�
 print("ИЕРАРХИЯ ПРОШЛА")
 
 # ---- смена подрядчика / вида работ у внесённой строки (re-key), в том числе обмен ключами
-mv_c1 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-1 ООО", inn="7701111111"), user=admin)["id"]
-mv_c2 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-2 ООО", inn="7702222222"), user=admin)["id"]
+mv_c1 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-1 ООО", inn="7701111111", create_counterparty=True), user=admin)["id"]
+mv_c2 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-2 ООО", inn="7702222222", create_counterparty=True), user=admin)["id"]
 D = "2026-02-02"
 def save(rows): return hc.save_records(object_id=obj, body=hc.SaveIn(date=D, rows=rows), user=admin)
 r0 = save([hc.RowIn(contractor_id=mv_c1, codifier_id=w["130-01-01"], workers=10, itr=1), hc.RowIn(contractor_id=mv_c2, codifier_id=w["130-03"], workers=5, itr=0)])
@@ -296,3 +304,108 @@ ok(r3["moved"] == 2 and k3 == {(mv_c2, w["130-03"]): 12, (mv_c1, w["340-03-02"])
 try: save([hc.RowIn(contractor_id=mv_c1, codifier_id=w["130-01-01"], workers=1, move_from=999999)]); ok(False, "чужая запись")
 except HTTPException as e: ok(e.status_code == 404, "re-key: запись не найдена — 404")
 print("RE-KEY ПРОШЁЛ")
+
+
+# ---- МЕХАНИЗАТОРЫ (2026-10-26)
+mday = date(2026, 3, 3)
+def mrows(rows, d=mday): return hc.save_records(object_id=obj, body=hc.SaveIn(date=d.isoformat(), rows=rows), user=admin)
+r = mrows([hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=10, itr=2, mech=3)])
+row = r["rows"][0]
+ok(row["mech"] == 3 and row["total"] == 15 and r["total_mech"] == 3, "механизаторы: внесены, итого = рабочие + ИТР + механизаторы (15)")
+r = mrows([hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=11, itr=2)])
+ok(r["rows"][0]["mech"] == 3 and r["rows"][0]["total"] == 16, "старый клиент без mech не затирает механизаторов (None = не менять)")
+r = mrows([hc.RowIn(contractor_id=a, codifier_id=w["130-01-01"], workers=11, itr=2, mech=0)])
+ok(r["rows"][0]["mech"] == 0 and r["rows"][0]["total"] == 13, "явный 0 механизаторов обнуляет")
+r = mrows([hc.RowIn(contractor_id=a, codifier_id=w["130-03"], workers=0, itr=0, mech=4)])
+ok([x for x in r["rows"] if x["codifier_id"] == w["130-03"]][0]["total"] == 4, "строка «только механизаторы» допустима")
+for bad, why in [(dict(workers=0, itr=0, mech=0), "0, 0 и 0"), (dict(workers=1, mech=-1), "отрицательные механизаторы"), (dict(workers=1, mech=100001), "механизаторов больше 100 000")]:
+    rr = call(hc.save_records, object_id=obj, body=hc.SaveIn(date=mday.isoformat(), rows=[hc.RowIn(contractor_id=a, codifier_id=w["340-03-02"], **bad)]))
+    ok(rr.status_code == 400, f"{why} — 400")
+h = hc.get_history(object_id=obj, date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_id=a, codifier_id=w["130-01-01"], limit=50, user=admin)["history"]
+ok(h[-1]["old_mech"] is None and h[-1]["new_mech"] == 3 and any(x["old_mech"] == 3 and x["new_mech"] == 0 for x in h), "история несёт механизаторов: создание 3, правка 3 → 0")
+ok(h[0]["new_total"] == 13 and h[0]["old_total"] == 16, "история: итого было/стало считает механизаторов")
+def mday_sum(staff):
+    j = rep(object_ids=str(obj), as_of=mday.isoformat(), levels="object", staff=staff)
+    return j["total"]["fact_day"]
+ok((mday_sum("total"), mday_sum("workers"), mday_sum("itr"), mday_sum("mech")) == (17, 11, 2, 4), "отчёт: итого 17, рабочие 11, ИТР 2, механизаторы 4")
+lr = hc.list_records(object_ids=str(obj), date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_q=None, work_code=None, source=None, late=False, limit=50, offset=0, user=admin)
+ok((lr["sum_workers"], lr["sum_itr"], lr["sum_mech"], lr["sum_total"]) == (11, 2, 4, 17), "«Все данные»: итоги по трём категориям")
+x = hc.records_xlsx(object_ids=str(obj), date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_q=None, work_code=None, source=None, late=False, user=admin)
+wsx = load_workbook(BytesIO(x.body)).active
+ok([c.value for c in wsx[1]][7:11] == ["Рабочие", "ИТР", "Механизаторы", "Итого"], "Excel записей: колонка «Механизаторы» рядом с ИТР")
+ok(sorted(r_[10] for r_ in wsx.iter_rows(min_row=2, values_only=True)) == [4, 13], "Excel записей: «Итого» учитывает механизаторов")
+xh = hc.history_log_xlsx(object_ids=str(obj), date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_q=None, work_code=None, source=None, user=admin)
+ok("Механизаторы было" in [c.value for c in load_workbook(BytesIO(xh.body)).active[1]], "Excel журнала: колонки «Механизаторы было / стало»")
+xr = hc.report_xlsx(levels="object", as_of=mday.isoformat(), date_from=None, date_to=None, object_ids=str(obj), smu_id=None, section=None, work_code=None,
+                    contractor_inn=None, staff="mech", user=admin)
+ok("Механизаторы" in [c.value for c in load_workbook(BytesIO(xr.body)).active[1]][1], "Excel отчёта по механизаторам: показатель назван в шапке")
+rid = [x_ for x_ in hc.get_day(object_id=obj, day=mday.isoformat(), user=admin)["rows"] if x_["codifier_id"] == w["130-03"]][0]["id"]
+hc.delete_record(object_id=obj, record_id=rid, user=admin)
+h = hc.get_history(object_id=obj, date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_id=a, codifier_id=w["130-03"], limit=50, user=admin)["history"]
+ok(h[0]["new"] is None and h[0]["new_mech"] is None and h[0]["old_mech"] == 4, "удаление «только механизаторов»: в журнале было 4, стало пусто")
+print("МЕХАНИЗАТОРЫ ПРОШЛИ")
+
+# ---- ЕДИНЫЙ СПРАВОЧНИК ПОДРЯДЧИКОВ (2026-10-26)
+sr = hc.search_counterparties(object_id=obj, q="7745000111", limit=30, user=admin)
+ok(sr["items"][0]["id"] == cp_a and sr["items"][0]["added"] == a and sr["can_create"], "поиск по ИНН находит контрагента, отмечает, что он уже на объекте; админу можно заводить")
+sr = hc.search_counterparties(object_id=obj, q="переименован", limit=30, user=admin)
+ok([i["id"] for i in sr["items"]] == [cp_b], "поиск по названию без учёта регистра (по актуальному названию справочника)")
+# пользователь с правом на численность, но без права на «Справочник контрагентов»: создать нельзя, выбрать из справочника — можно
+conn = db.get_connection()
+plain = conn.execute("SELECT * FROM users WHERE role = 'user' ORDER BY id LIMIT 1").fetchone()
+conn.close()
+from app import access as _acc
+_has = _acc.has_feature
+_acc_calls = []
+def _fake_has(conn_, user_, key, kind, object_id=None):
+    if key == "counterparties":
+        return False
+    return True
+import app.headcount as _hcm
+_hcm.has_feature = _fake_has
+try:
+    rr = call(hc.create_contractor, object_id=obj, body=hc.ContractorIn(name="Самовольная ООО", inn="7799999999", create_counterparty=True))
+    ok(rr.status_code == 403 and "Справочник контрагентов" in rr.json()["detail"], "без права на «Справочник контрагентов» новый контрагент не заводится — 403 с понятным текстом")
+    conn = db.get_connection()
+    ok(conn.execute("SELECT COUNT(*) FROM counterparties WHERE inn = '7799999999'").fetchone()[0] == 0, "и в справочнике он не появился")
+    conn.close()
+    sr = hc.search_counterparties(object_id=obj, q="", limit=5, user=admin)
+    ok(sr["can_create"] is False, "поиск сообщает клиенту, что заводить контрагентов нельзя")
+    ok(call(hc.create_contractor, object_id=obj, body=hc.ContractorIn(counterparty_id=cp_b)).status_code == 409, "выбрать существующего контрагента без этого права можно (здесь — уже на объекте, 409)")
+finally:
+    _hcm.has_feature = _has
+# замена контрагента подрядчика и перенос записей
+conn = db.get_connection()
+cp_c = hc.insert_counterparty(conn, "Замена ООО", "7788888888"); conn.commit(); conn.close()
+r = c.patch(f"/objects/{obj}/headcount/contractors/{b}", json={"counterparty_id": cp_c}); ok(r.status_code == 200 and r.json()["name"] == "Замена ООО" and r.json()["inn"] == "7788888888", "замена контрагента подрядчика: показ из нового")
+r = c.patch(f"/objects/{obj}/headcount/contractors/{b}", json={"counterparty_id": None}); ok(r.status_code == 400, "снять связь с контрагентом нельзя")
+r = c.patch(f"/objects/{obj}/headcount/contractors/{a}", json={"counterparty_id": cp_c}); ok(r.status_code == 409, "контрагент уже у другого подрядчика объекта — 409")
+# единая функция: найти или создать
+conn = db.get_connection()
+n0 = conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0]
+e1 = hc.ensure_counterparty(conn, "7745000111", None); ok(e1 == cp_a, "ensure_counterparty: по ИНН находит существующего")
+e2 = hc.ensure_counterparty(conn, "7766666666", None); ok(e2 and conn.execute("SELECT short_name FROM counterparties WHERE id = ?", (e2,)).fetchone()[0] == "ИНН 7766666666", "ensure_counterparty: новый без названия — «ИНН <номер>»")
+ok(hc.ensure_counterparty(conn, "7766666666", "Иное") == e2, "ensure_counterparty: повтор по ИНН не плодит контрагентов")
+e3 = hc.ensure_counterparty(conn, None, "Только Название ООО"); ok(hc.ensure_counterparty(conn, None, " только  название ооо ") == e3, "ensure_counterparty: без ИНН — по названию без учёта регистра")
+conn.execute("INSERT INTO counterparties (full_name, short_name, inn) VALUES ('Д1', 'Д1', '7755555555')"); conn.execute("INSERT INTO counterparties (full_name, short_name, inn) VALUES ('Д2', 'Д2', '7755555555')")
+ok(hc.ensure_counterparty(conn, "7755555555", "X") is None, "ensure_counterparty: два контрагента с одним ИНН — None, третий не заводится")
+ok(hc.ensure_counterparty(conn, None, None) is None, "ensure_counterparty: без ИНН и названия — None")
+conn.commit(); conn.close()
+# обработка обновления: связывает несвязанных, идемпотентна
+conn = db.get_connection()
+conn.execute("UPDATE headcount_contractors SET counterparty_id = NULL WHERE id = ?", (a,))
+conn.execute("INSERT INTO headcount_contractors (object_id, name_raw, inn_raw) VALUES (?, ?, ?)", (obj2, "Старый ООО", "7733333333"))
+conn.execute("INSERT INTO headcount_contractors (object_id, inn_raw) VALUES (?, ?)", (obj2, "7755555555"))
+conn.commit(); conn.close()
+from app import release_tasks as rt
+res1 = rt.run_by_name("2026-10-26-link-headcount-contractors"); ok(res1["status"] == "ok" and "связано" in res1["note"], f"обработка обновления выполнена: {res1['note']}")
+conn = db.get_connection()
+ok(conn.execute("SELECT counterparty_id FROM headcount_contractors WHERE id = ?", (a,)).fetchone()[0] == cp_a, "обработка: прежняя запись связана по ИНН с существующим контрагентом")
+ok(conn.execute("SELECT COUNT(*) FROM counterparties WHERE inn = '7733333333' AND short_name = 'Старый ООО'").fetchone()[0] == 1, "обработка: недостающий контрагент создан из названия и ИНН")
+ok(conn.execute("SELECT counterparty_id FROM headcount_contractors WHERE inn_raw = '7755555555'").fetchone()[0] is None, "обработка: неоднозначный ИНН остаётся несвязанным")
+n1 = conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0]; conn.close()
+res2 = rt.run_by_name("2026-10-26-link-headcount-contractors")
+conn = db.get_connection()
+ok(res2["status"] == "ok" and conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0] == n1, "обработка идемпотентна: повтор не создаёт контрагентов")
+conn.close()
+print("ЕДИНЫЙ СПРАВОЧНИК ПРОШЁЛ")

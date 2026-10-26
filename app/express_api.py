@@ -495,11 +495,11 @@ def list_requests(object_id: int, days: int = Query(14, ge=1, le=90), user: sqli
             "WHERE q.object_id = ? AND q.work_date >= ? ORDER BY q.work_date DESC, q.id DESC", (object_id, since)).fetchall()
         out = []
         for q in rows:
-            lines, workers, itr = express_dialog.day_lines(conn, object_id, q["work_date"], limit=0)
+            lines, workers, itr, mech = express_dialog.day_lines(conn, object_id, q["work_date"], limit=0)
             out.append({"id": q["id"], "schedule_id": q["schedule_id"], "work_date": q["work_date"], "contact_id": q["contact_id"],
                         "contact_name": q["contact_name"], "status": q["status"], "manual": q["schedule_id"] is None,
                         "sent_at": q["sent_at"], "reminded_at": q["reminded_at"], "answered_at": q["answered_at"], "closed_at": q["closed_at"],
-                        "attempts": q["attempts"], "last_error": q["last_error"], "workers": workers, "itr": itr})
+                        "attempts": q["attempts"], "last_error": q["last_error"], "workers": workers, "itr": itr, "mech": mech})
     finally:
         conn.close()
     return out

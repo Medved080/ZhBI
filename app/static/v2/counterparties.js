@@ -605,7 +605,7 @@ export function mountCounterparties(container, ctx) {
       return ["full_name", "short_name", "inn", "kpp", "ogrn", "legal_address", "contact_person", "contact_phone", "code"].every((k) => (creating && k === "code" && N(b.code) === null) || N(r[k]) === N(b[k])) && cap(r.capacity) === cap(b.capacity);
     }
     if (kind === "agreement") return r.number === b.number && N(r.agreement_date) === N(b.agreement_date) && N(r.object_id) === N(b.object_id) && r.counterparty_id === b.counterparty_id;
-    if (kind === "specification") return r.number === b.number && N(r.specification_date) === N(b.specification_date) && r.agreement_id === b.agreement_id;
+    if (kind === "specification") return r.number === b.number && N(r.specification_date) === N(b.specification_date) && N(r.delivery_end_date) === N(b.delivery_end_date) && r.agreement_id === b.agreement_id;
     if (kind === "contract") {
       return r.specification_id === b.specification_id && N(r.theme) === N(b.theme) && !!r.is_archived === !!b.is_archived
         && setJson((r.lines || []).map((l) => [N(l.element_type), N(l.mark), l.quantity])) === setJson((b.lines || []).map((l) => [N(l.element_type), N(l.mark), l.quantity]))
@@ -994,19 +994,20 @@ export function mountCounterparties(container, ctx) {
     if (!draft.number.trim()) { draft.error = "Укажите номер спецификации"; throw { message: draft.error }; }
     const snapshot = { ...draft };
     draft.saving = true;
-    setControlsDisabled(`[data-spec-number="${agreementId}"], [data-spec-date="${agreementId}"], [data-add-spec="${agreementId}"], [data-spec-cancel="${agreementId}"]`, true);
+    setControlsDisabled(`[data-spec-number="${agreementId}"], [data-spec-date="${agreementId}"], [data-spec-delivery-end="${agreementId}"], [data-add-spec="${agreementId}"], [data-spec-cancel="${agreementId}"]`, true);
     setButtonSaving(`[data-add-spec="${agreementId}"]`, true);
     draft._inFlight = (async () => {
       try {
         const created = await createChecked("specification", "/specifications", {
           agreement_id: agreementId, number: snapshot.number.trim(), specification_date: snapshot.date || null,
+          delivery_end_date: snapshot.deliveryEnd || null,
         });
         if (!state.contracting.specsByAgreement.has(agreementId)) state.contracting.specsByAgreement.set(agreementId, emptySpecsEntry());
         const entry = state.contracting.specsByAgreement.get(agreementId);
         entry.specs.push(created);
         entry.loaded = true;
         const cur = state.newSpecForms.get(agreementId);
-        const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date;
+        const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date && cur.deliveryEnd === snapshot.deliveryEnd;
         if (stillSame) state.newSpecForms.delete(agreementId);
         else if (cur) { cur.saving = false; delete cur._inFlight; }
       } catch (err) {
@@ -1033,18 +1034,19 @@ export function mountCounterparties(container, ctx) {
     const { agreementId } = findSpecAndAgreementId(id);
     const snapshot = { ...draft };
     draft.saving = true;
-    setControlsDisabled(`[data-s-number="${id}"], [data-s-date="${id}"], [data-save-spec="${id}"], [data-del-spec="${id}"]`, true);
+    setControlsDisabled(`[data-s-number="${id}"], [data-s-date="${id}"], [data-s-delivery-end="${id}"], [data-save-spec="${id}"], [data-del-spec="${id}"]`, true);
     setButtonSaving(`[data-save-spec="${id}"]`, true);
     draft._inFlight = (async () => {
       try {
         const updated = await patchChecked("specification", id, `/specifications/${id}`, {
           agreement_id: agreementId, number: snapshot.number.trim(), specification_date: snapshot.date || null,
+          delivery_end_date: snapshot.deliveryEnd || null,
         }, findSpecAndAgreementId(id).spec);
         const specs = state.contracting.specsByAgreement.get(agreementId)?.specs || [];
         const idx = specs.findIndex((s) => s.id === id);
         if (idx !== -1) specs[idx] = updated;
         const cur = state.specDrafts.get(id);
-        const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date;
+        const stillSame = cur && cur.number === snapshot.number && cur.date === snapshot.date && cur.deliveryEnd === snapshot.deliveryEnd;
         if (stillSame) state.specDrafts.delete(id);
         else if (cur) { cur.saving = false; delete cur._inFlight; }
       } catch (err) {
@@ -1125,8 +1127,8 @@ export function mountCounterparties(container, ctx) {
   }
   function specFieldValues(s) {
     const d = state.specDrafts.get(s.id);
-    return d ? { number: d.number, date: d.date, error: d.error, saving: d.saving, dirty: true }
-      : { number: s.number, date: s.specification_date || "", error: "", saving: false, dirty: false };
+    return d ? { number: d.number, date: d.date, deliveryEnd: d.deliveryEnd, error: d.error, saving: d.saving, dirty: true }
+      : { number: s.number, date: s.specification_date || "", deliveryEnd: s.delivery_end_date || "", error: "", saving: false, dirty: false };
   }
 
   // ---------- Полный редактор контракта (раздел 6) ----------
@@ -1598,6 +1600,7 @@ export function mountCounterparties(container, ctx) {
             <div data-new-spec-form="${a.id}" class="v2-inline">
               <input data-spec-number="${a.id}" aria-label="Номер новой спецификации" placeholder="номер" value="${escapeHtml(newSpecForm.number)}" ${newSpecForm.saving ? "disabled" : ""}>
               <input data-spec-date="${a.id}" aria-label="Дата новой спецификации" type="date" value="${escapeHtml(newSpecForm.date)}" ${newSpecForm.saving ? "disabled" : ""}>
+              <label class="v2-muted">Срок окончания поставки <input data-spec-delivery-end="${a.id}" aria-label="Срок окончания поставки по договору (новая спецификация)" type="date" value="${escapeHtml(newSpecForm.deliveryEnd || "")}" ${newSpecForm.saving ? "disabled" : ""}></label>
               ${btn("Добавить", `data-add-spec="${a.id}"`, true)}${btn("Отмена", `data-spec-cancel="${a.id}"`)}
               <span class="v2-auth-error" data-spec-form-error="${a.id}">${escapeHtml(newSpecForm.error || "")}</span>
             </div>` : ""}
@@ -1607,11 +1610,12 @@ export function mountCounterparties(container, ctx) {
               const contracts = contractsBySpec.get(s.id) || [];
               return `
               <details class="v2-agreement v2-agreement-nested" data-spec="${s.id}" ${state.expandedSpecs.has(s.id) ? "open" : ""}>
-                <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}<span data-dirty-mark>${sv.dirty ? " · не сохранено" : ""}</span>
+                <summary>Спецификация <strong>${escapeHtml(s.number)}</strong> ${fmtDate(s.specification_date)}${s.delivery_end_date ? ` · поставка до ${fmtDate(s.delivery_end_date).replace(/^от /, "")}` : ""}<span data-dirty-mark>${sv.dirty ? " · не сохранено" : ""}</span>
                   ${canDeleteRecords ? trashIconHtml(`data-del-spec="${s.id}"`, `Удалить спецификацию ${s.number}`) : ""}</summary>
                 <div class="v2-inline" style="margin:10px 0">
                   <input data-s-number="${s.id}" aria-label="Номер спецификации" value="${escapeHtml(sv.number)}" placeholder="номер" ${sv.saving ? "disabled" : ""}>
                   <input data-s-date="${s.id}" aria-label="Дата спецификации" type="date" value="${escapeHtml(sv.date)}" ${sv.saving ? "disabled" : ""}>
+                  <label class="v2-muted">Срок окончания поставки <input data-s-delivery-end="${s.id}" aria-label="Срок окончания поставки по договору" type="date" value="${escapeHtml(sv.deliveryEnd || "")}" ${sv.saving ? "disabled" : ""}></label>
                   ${btn("Сохранить", `data-save-spec="${s.id}"`, true)}
                   <span class="v2-auth-error" data-s-error="${s.id}">${escapeHtml(sv.error || "")}</span>
                 </div>
@@ -1700,7 +1704,7 @@ export function mountCounterparties(container, ctx) {
         return state.agreementDrafts.has(id);
       }
       const { spec } = findSpecAndAgreementId(id), d = state.specDrafts.get(id);
-      if (spec && d && !d.saving && d.number === spec.number && d.date === (spec.specification_date || "")) state.specDrafts.delete(id);
+      if (spec && d && !d.saving && d.number === spec.number && d.date === (spec.specification_date || "") && (d.deliveryEnd || "") === (spec.delivery_end_date || "")) state.specDrafts.delete(id);
       return state.specDrafts.has(id);
     };
     const markDirty = (selector, kind, id) => {
@@ -1737,7 +1741,7 @@ export function mountCounterparties(container, ctx) {
 
     el.querySelectorAll("[data-new-spec-toggle]").forEach((b) => b.addEventListener("click", () => {
       const id = Number(b.dataset.newSpecToggle);
-      state.newSpecForms.set(id, { number: "", date: "", error: "", saving: false });
+      state.newSpecForms.set(id, { number: "", date: "", deliveryEnd: "", error: "", saving: false });
       Promise.resolve(renderContractingTab()).then(() => container.querySelector(`[data-spec-number="${id}"]`)?.focus());
     }));
     el.querySelectorAll("[data-spec-cancel]").forEach((b) => b.addEventListener("click", () => {
@@ -1752,6 +1756,10 @@ export function mountCounterparties(container, ctx) {
     }));
     el.querySelectorAll("[data-spec-date]").forEach((inp) => inp.addEventListener("input", () => {
       state.newSpecForms.get(Number(inp.dataset.specDate)).date = inp.value;
+      renderFooter();
+    }));
+    el.querySelectorAll("[data-spec-delivery-end]").forEach((inp) => inp.addEventListener("input", () => {
+      state.newSpecForms.get(Number(inp.dataset.specDeliveryEnd)).deliveryEnd = inp.value;
       renderFooter();
     }));
     el.querySelectorAll("[data-add-spec]").forEach((b) => b.addEventListener("click", async () => {
@@ -1792,6 +1800,12 @@ export function mountCounterparties(container, ctx) {
     el.querySelectorAll("[data-s-date]").forEach((inp) => inp.addEventListener("input", () => {
       const id = Number(inp.dataset.sDate);
       ensureSpecDraft(id).date = inp.value;
+      markDirty(`[data-spec="${id}"]`, "spec", id);
+      renderFooter();
+    }));
+    el.querySelectorAll("[data-s-delivery-end]").forEach((inp) => inp.addEventListener("input", () => {
+      const id = Number(inp.dataset.sDeliveryEnd);
+      ensureSpecDraft(id).deliveryEnd = inp.value;
       markDirty(`[data-spec="${id}"]`, "spec", id);
       renderFooter();
     }));
@@ -2907,7 +2921,7 @@ export function mountCounterparties(container, ctx) {
   function ensureSpecDraft(id) {
     if (!state.specDrafts.has(id)) {
       const { spec } = findSpecAndAgreementId(id);
-      state.specDrafts.set(id, { number: spec.number, date: spec.specification_date || "", error: "", saving: false });
+      state.specDrafts.set(id, { number: spec.number, date: spec.specification_date || "", deliveryEnd: spec.delivery_end_date || "", error: "", saving: false });
     }
     return state.specDrafts.get(id);
   }

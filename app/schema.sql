@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS specifications (
     agreement_id INTEGER NOT NULL REFERENCES agreements (id) ON DELETE CASCADE,
     number TEXT NOT NULL,
     specification_date TEXT,
+    delivery_end_date TEXT,    -- «Срок окончания поставки по договору» (2026-10-26), справочная дата для сверки поставки
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (agreement_id, number)
@@ -1776,7 +1777,8 @@ CREATE TABLE IF NOT EXISTS headcount_records (
     contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE RESTRICT,
     codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
     workers INTEGER NOT NULL DEFAULT 0 CHECK (workers BETWEEN 0 AND 100000),   -- «Рабочие» (исторически — всё «количество»)
-    itr INTEGER NOT NULL DEFAULT 0 CHECK (itr BETWEEN 0 AND 100000),            -- «ИТР» (2026-10-12); «Итого» = workers + itr, не хранится
+    itr INTEGER NOT NULL DEFAULT 0 CHECK (itr BETWEEN 0 AND 100000),            -- «ИТР» (2026-10-12); «Итого» = workers + itr + mech, не хранится
+    mech INTEGER NOT NULL DEFAULT 0 CHECK (mech BETWEEN 0 AND 100000),          -- «Механизаторы» (2026-10-26)
     late INTEGER NOT NULL DEFAULT 0,   -- первое внесение позже срока (рабочий день — до 11:00, выходные — до 11:00 понедельника)
     source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
     entered_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1784,7 +1786,7 @@ CREATE TABLE IF NOT EXISTS headcount_records (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
     UNIQUE (object_id, work_date, contractor_id, codifier_id),
-    CHECK (workers + itr >= 1)
+    CHECK (workers + itr + mech >= 1)
 );
 CREATE INDEX IF NOT EXISTS idx_hc_records_date ON headcount_records (work_date, object_id);
 CREATE INDEX IF NOT EXISTS idx_hc_records_contractor ON headcount_records (contractor_id);
@@ -1802,6 +1804,8 @@ CREATE TABLE IF NOT EXISTS headcount_history (
     new_workers INTEGER,
     old_itr INTEGER,                   -- «ИТР» до/после (2026-10-12); NULL вместе с old_workers/new_workers: «было/стало пусто»
     new_itr INTEGER,
+    old_mech INTEGER,                  -- «Механизаторы» до/после (2026-10-26); NULL вместе с old_workers/new_workers: «было/стало пусто»
+    new_mech INTEGER,
     source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
     changed_at TEXT NOT NULL DEFAULT (datetime('now')),
     changed_by INTEGER REFERENCES users (id) ON DELETE SET NULL

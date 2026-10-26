@@ -91,7 +91,10 @@ h = conn.execute("SELECT old_workers, new_workers FROM headcount_history h JOIN 
                  "WHERE h.object_id = ? AND h.work_date = '2026-09-28' AND w.code = '100-01' ORDER BY h.id", (o1,)).fetchall()
 ok([(x[0], x[1]) for x in h] == [(None, 3), (3, 4)], "история: создание 3, замена 3→4")
 ctr = {(r["inn_raw"], r["name_raw"]) for r in conn.execute("SELECT inn_raw, name_raw FROM headcount_contractors WHERE object_id = ?", (o1,))}
-ok(ctr == {("7745000111", None), (None, "БСТ-ГРУПП ООО")}, "подрядчики: по ИНН и по названию из поля ИНН")
+ok(ctr == {("7745000111", "ИНН 7745000111"), (None, "БСТ-ГРУПП ООО")}, "подрядчики: по ИНН и по названию из поля ИНН (запасные значения — копия реквизитов контрагента)")
+linked = [r[0] for r in conn.execute("SELECT counterparty_id FROM headcount_contractors WHERE object_id = ?", (o1,))]
+ok(all(linked), "подрядчики связаны с контрагентами единого справочника (найдены или заведены)")
+ok(conn.execute("SELECT COUNT(*) FROM counterparties WHERE inn = '7745000111'").fetchone()[0] == 1, "по одному ИНН — один контрагент")
 
 res = hi.apply_history(conn, hist, {G1: o1, G2: None}, user=admin)
 ok(res["records_created"] == 0 and res["records_updated"] == 0 and res["history_rows"] == 0, "повтор загрузки ничего не меняет")

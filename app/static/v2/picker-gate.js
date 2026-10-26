@@ -54,9 +54,10 @@ export function agreementBodyProblem(b) {
 
 // POST /specifications, PATCH /specifications/{id}
 export function specificationBodyProblem(b) {
-  if (!isObj(b) || !onlyKeys(b, ["agreement_id", "number", "specification_date", "expected_version"])) return "лишние поля";
+  if (!isObj(b) || !onlyKeys(b, ["agreement_id", "number", "specification_date", "delivery_end_date", "expected_version"])) return "лишние поля";
   if (!isId(b.agreement_id)) return "не указан договор";
   if (!isNameStr(b.number)) return "не указан номер спецификации";
+  if ("delivery_end_date" in b && !isNullableDate(b.delivery_end_date)) return "срок окончания поставки неверен";
   if ("specification_date" in b && !isNullableDate(b.specification_date)) return "дата спецификации неверна";
   if (!optVersion(b)) return "версия записи не строка";
   return null;

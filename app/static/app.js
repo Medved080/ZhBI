@@ -18722,7 +18722,9 @@ async function renderCounterpartyAgreements() {
         <div class="cpe-new-spec-form" style="display:none;">
           <div class="row" style="gap:6px; margin-top:6px;">
             <input type="text" class="cpe-new-spec-number" placeholder="номер спецификации" style="flex:1;"/>
-            <input type="date" class="cpe-new-spec-date"/>
+            <input type="date" class="cpe-new-spec-date" title="Дата спецификации"/>
+            <label class="hint-text" style="display:flex; align-items:center; gap:4px;">Срок окончания поставки
+              <input type="date" class="cpe-new-spec-delivery-end" title="Срок окончания поставки по договору (справочно)"/></label>
             <button class="btn btn-sm btn-primary cpe-add-spec" type="button">Добавить</button>
             <button class="btn btn-sm btn-secondary cpe-new-spec-cancel" type="button">Отмена</button>
           </div>
@@ -18779,7 +18781,7 @@ async function renderCounterpartyAgreements() {
           <summary><span class="cpe-summary-row">
             <span class="dict-kind-tag">Спецификация</span>
             <b>${escapeHtml(s.number)}</b>
-            <span class="hint-text dict-row-rest">${s.specification_date ? "от " + formatDateRu(s.specification_date) : "без даты"}</span>
+            <span class="hint-text dict-row-rest">${s.specification_date ? "от " + formatDateRu(s.specification_date) : "без даты"}${s.delivery_end_date ? " · поставка до " + formatDateRu(s.delivery_end_date) : ""}</span>
             <span class="dict-row-actions">
               ${can("dict_delete", "write") ? trashButtonHtml(`data-del-spec="${s.id}"`, "Удалить спецификацию") : ""}
             </span>
@@ -18788,7 +18790,9 @@ async function renderCounterpartyAgreements() {
             <div class="row" style="gap:6px; margin:6px 0;">
               <input type="text" class="cpe-edit-spec-number" value="${escapeHtml(s.number)}"
                      style="flex:1; min-width:0;" placeholder="номер спецификации"/>
-              <input type="date" class="cpe-edit-spec-date" value="${s.specification_date || ""}"/>
+              <input type="date" class="cpe-edit-spec-date" value="${s.specification_date || ""}" title="Дата спецификации"/>
+              <label class="hint-text" style="display:flex; align-items:center; gap:4px;">Срок окончания поставки
+                <input type="date" class="cpe-edit-spec-delivery-end" value="${s.delivery_end_date || ""}" title="Срок окончания поставки по договору (справочно)"/></label>
               <button class="btn btn-sm btn-primary cpe-save-spec" type="button">Сохранить</button>
             </div>
             <div class="cpe-contracts-list"></div>
@@ -18804,9 +18808,10 @@ async function renderCounterpartyAgreements() {
           const number = sБлок.querySelector(".cpe-edit-spec-number").value.trim();
           if (!number) return;
           const date = sБлок.querySelector(".cpe-edit-spec-date").value || null;
+          const deliveryEnd = sБлок.querySelector(".cpe-edit-spec-delivery-end").value || null;
           await api(`/specifications/${s.id}`, {
             method: "PATCH", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
+            body: JSON.stringify({ agreement_id: a.id, number, specification_date: date, delivery_end_date: deliveryEnd }),
           });
           await renderCounterpartyAgreements();
         });
@@ -18867,6 +18872,7 @@ async function renderCounterpartyAgreements() {
     блок.querySelector(".cpe-new-spec-cancel").addEventListener("click", () => {
       блок.querySelector(".cpe-new-spec-number").value = "";
       блок.querySelector(".cpe-new-spec-date").value = "";
+      блок.querySelector(".cpe-new-spec-delivery-end").value = "";
       specForm.style.display = "none";
       specToggle.style.display = "";
     });
@@ -18874,9 +18880,10 @@ async function renderCounterpartyAgreements() {
       const number = блок.querySelector(".cpe-new-spec-number").value.trim();
       if (!number) return;
       const date = блок.querySelector(".cpe-new-spec-date").value || null;
+      const deliveryEnd = блок.querySelector(".cpe-new-spec-delivery-end").value || null;
       await api("/specifications", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agreement_id: a.id, number, specification_date: date }),
+        body: JSON.stringify({ agreement_id: a.id, number, specification_date: date, delivery_end_date: deliveryEnd }),
       });
       await renderCounterpartyAgreements();
     });
@@ -33834,6 +33841,36 @@ async function openHeadcount(startTab) {
     confirm: async (text) => confirm(text),
   });
 }
+// «Сверка поставки по договорам» (2026-10-26) — общий экран V1/V2, ES-модуль с ленивым import().
+let deliveryReconView = null;
+function closeDeliveryRecon() {
+  if (deliveryReconView) { deliveryReconView.destroy(); deliveryReconView = null; }
+  document.getElementById("delivery-recon-backdrop").classList.remove("open");
+}
+document.getElementById("dr-close").addEventListener("click", closeDeliveryRecon);
+document.getElementById("menu-report-delivery-recon").addEventListener("click", async () => {
+  if (!state.objectId) { showToast("Сначала выберите объект", "warning"); return; }
+  const объект = currentObject();
+  document.getElementById("dr-object-name").textContent = объект ? объект.object.name : "";
+  document.getElementById("delivery-recon-backdrop").classList.add("open");
+  if (deliveryReconView) { deliveryReconView.destroy(); deliveryReconView = null; }
+  const mod = await import("/static/delivery-recon-ui.js");
+  deliveryReconView = mod.mountDeliveryRecon(document.getElementById("dr-host"), {
+    objectId: state.objectId,
+    read: (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    get: (path) => api(path),
+    download: async (path, body) => {
+      const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(describeApiError(await res.json().catch(() => null), res));
+      const cd = res.headers.get("Content-Disposition") || "";
+      const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = utf8 ? decodeURIComponent(utf8[1]) : "Сверка поставки по договорам.xlsx";
+      document.body.appendChild(a); a.click(); a.remove();
+    },
+  });
+});
 // «Администрирование → Бот eXpress» (2026-10-23): подключение, ключ, журнал обмена — тот же модуль, что и вкладка в численности, режим admin.
 let expressAdminView = null;
 function closeExpressAdmin() {

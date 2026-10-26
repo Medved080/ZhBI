@@ -537,6 +537,8 @@ _COLUMN_MIGRATIONS = [
     ("objects", "onec_guid", "TEXT"),
     ("objects", "onec_name", "TEXT"),
     ("objects", "onec_code", "TEXT"),
+    # «Срок окончания поставки по договору» у спецификации (2026-10-26): справочная дата, выводится в отчёте сверки поставки.
+    ("specifications", "delivery_end_date", "TEXT"),
     # Аватарка — превью в дереве справочника (2026-09-08). Не отдельное
     # хранилище файла, а ссылка на уже существующее вложение объекта: две
     # параллельные системы загрузки/прав/удаления файлов ради одной
@@ -762,6 +764,68 @@ def _migrate_headcount_itr(conn: sqlite3.Connection, changes: list) -> None:
             raise RuntimeError(f"FK после пересборки численности: {len(violations)}")
         conn.commit()
         changes.append("численность: добавлено поле «ИТР» (прежнее количество — «Рабочие»), таблица пересобрана")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_headcount_mech(conn: sqlite3.Connection, changes: list) -> None:
+    """«Численность»: третья категория «Механизаторы» рядом с «Рабочие» и «ИТР» (2026-10-26).
+
+    Образец — `_migrate_headcount_itr`: у прежних записей механизаторов 0, «Итого» = рабочие + ИТР + механизаторы (в БД не хранится).
+    CHECK `workers + itr >= 1` не даёт внести строку «только механизаторы», а в SQLite он не меняется на месте, поэтому таблица
+    пересобирается (id сохраняются); в журнале изменений добавляются old_mech/new_mech — прежние значения получают 0 там, где было
+    число (NULL — «было/стало пусто» — остаётся). Повторный запуск ничего не меняет."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(headcount_records)")}
+    if not cols or "mech" in cols:
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        # Нарушения, существовавшие ДО пересборки (в обезличенной копии — ссылки на удалённых пользователей в журнале и сессиях), к
+        # ней не относятся и старт ронять не должны: сравниваем число до и после, а не требуем нуля.
+        fk_before = len(conn.execute("PRAGMA foreign_key_check").fetchall())
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("""CREATE TABLE headcount_records_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+            work_date TEXT NOT NULL,
+            contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE RESTRICT,
+            codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
+            workers INTEGER NOT NULL DEFAULT 0 CHECK (workers BETWEEN 0 AND 100000),
+            itr INTEGER NOT NULL DEFAULT 0 CHECK (itr BETWEEN 0 AND 100000),
+            mech INTEGER NOT NULL DEFAULT 0 CHECK (mech BETWEEN 0 AND 100000),
+            late INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'form' CHECK (source IN ('form', 'import', 'bot')),
+            entered_at TEXT NOT NULL DEFAULT (datetime('now')),
+            entered_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+            UNIQUE (object_id, work_date, contractor_id, codifier_id),
+            CHECK (workers + itr + mech >= 1)
+        )""")
+        old_cols = ("id, object_id, work_date, contractor_id, codifier_id, workers, itr, late, source, entered_at, entered_by, "
+                    "updated_at, updated_by")
+        conn.execute(f"INSERT INTO headcount_records_new ({old_cols}, mech) SELECT {old_cols}, 0 FROM headcount_records")
+        conn.execute("DROP TABLE headcount_records")
+        conn.execute("ALTER TABLE headcount_records_new RENAME TO headcount_records")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_records_date ON headcount_records (work_date, object_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_records_contractor ON headcount_records (contractor_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_records_codifier ON headcount_records (codifier_id)")
+        hist = {r["name"] for r in conn.execute("PRAGMA table_info(headcount_history)")}
+        for col in ("old_mech", "new_mech"):
+            if col not in hist:
+                conn.execute(f"ALTER TABLE headcount_history ADD COLUMN {col} INTEGER")
+        conn.execute("UPDATE headcount_history SET old_mech = 0 WHERE old_workers IS NOT NULL AND old_mech IS NULL")
+        conn.execute("UPDATE headcount_history SET new_mech = 0 WHERE new_workers IS NOT NULL AND new_mech IS NULL")
+        fk_after = len(conn.execute("PRAGMA foreign_key_check").fetchall())
+        if fk_after > fk_before:
+            raise RuntimeError(f"FK после пересборки численности (механизаторы): было {fk_before}, стало {fk_after}")
+        conn.commit()
+        changes.append("численность: добавлено поле «Механизаторы», таблица пересобрана")
     except Exception:
         conn.rollback()
         raise
@@ -2714,6 +2778,7 @@ def init_db() -> list:
         _apply_migrations(conn, changes)
         _migrate_crane_zone_conversion_constraints(conn, changes)
         _migrate_headcount_itr(conn, changes)   # после executescript(schema.sql): таблицы численности уже есть
+        _migrate_headcount_mech(conn, changes)  # строго ПОСЛЕ ИТР: пересборка берёт колонки с itr
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)

@@ -192,6 +192,7 @@ const MFR_SCREENS = {
   "block-bulk-edit": () => import("./block-bulk-screen.js").then((m) => m.mountBlockBulkScreen),
   "headcount-edit": () => import("./headcount-screen.js").then((m) => m.mountHeadcountScreen),
   "pp-edit": () => import("./pp-screen.js").then((m) => m.mountPpScreen),
+  "delivery-recon-edit": () => import("./delivery-recon-screen.js").then((m) => m.mountDeliveryReconScreen),
 };
 
 const MODULES = {

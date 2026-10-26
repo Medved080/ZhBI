@@ -36,7 +36,7 @@ from openpyxl import load_workbook
 from app import activity
 from app.access import require_service_feature
 from app.db import begin_write, get_connection
-from app.headcount import MAX_WORKERS, MSK, clean_inn, find_counterparty_by_inn, inn_status
+from app.headcount import MAX_WORKERS, MSK, clean_inn, ensure_counterparty, inn_status
 from app.upload_limits import read_upload_limited
 
 router = APIRouter(prefix="/headcount", tags=["headcount"])
@@ -356,7 +356,7 @@ def apply_history(conn: sqlite3.Connection, file_bytes: bytes, mapping: dict, us
             chains[(object_id, day, inn, name, code)].append((entered, order, workers))
 
     stat = {"records_created": 0, "records_updated": 0, "records_unchanged": 0, "kept_form_records": 0,
-            "history_rows": 0, "contractors_created": 0, "contractors_linked_to_counterparty": 0}
+            "history_rows": 0, "contractors_created": 0, "contractors_linked_to_counterparty": 0, "counterparties_created": 0}
     begin_write(conn)
     try:
         for guid, object_id in mapping.items():
@@ -365,17 +365,28 @@ def apply_history(conn: sqlite3.Connection, file_bytes: bytes, mapping: dict, us
         contractor_ids = {}
 
         def contractor(object_id, inn, name) -> int:
+            """Подрядчик пула объекта = контрагент ЕДИНОГО справочника (2026-10-26): находим или заводим его той же функцией, что и обработка
+            обновления (`headcount.ensure_counterparty`), затем ищем запись пула по контрагенту; ещё не связанную запись с тем же ИНН /
+            названием связываем, а не заводим вторую."""
             key = (object_id, inn, name)
             if key in contractor_ids:
                 return contractor_ids[key]
-            row = (conn.execute("SELECT id FROM headcount_contractors WHERE object_id = ? AND inn_raw = ?", (object_id, inn)).fetchone()
-                   if inn else
-                   conn.execute("SELECT id FROM headcount_contractors WHERE object_id = ? AND inn_raw IS NULL AND name_raw = ?",
-                                (object_id, name)).fetchone())
+            before = conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0]
+            cp = ensure_counterparty(conn, inn, name)
+            stat["counterparties_created"] += conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0] - before
+            row = conn.execute("SELECT id FROM headcount_contractors WHERE object_id = ? AND counterparty_id = ?", (object_id, cp)).fetchone() if cp else None
             if row is None:
-                cp = find_counterparty_by_inn(conn, inn)
+                row = (conn.execute("SELECT id FROM headcount_contractors WHERE object_id = ? AND inn_raw = ?", (object_id, inn)).fetchone()
+                       if inn else
+                       conn.execute("SELECT id FROM headcount_contractors WHERE object_id = ? AND inn_raw IS NULL AND name_raw = ?",
+                                    (object_id, name)).fetchone())
+                if row is not None and cp:
+                    conn.execute("UPDATE headcount_contractors SET counterparty_id = ? WHERE id = ? AND counterparty_id IS NULL", (cp, row["id"]))
+            if row is None:
+                # запасные name_raw/inn_raw — копия реквизитов контрагента на момент добавления (показ идёт из справочника)
+                cp_row = conn.execute("SELECT short_name FROM counterparties WHERE id = ?", (cp,)).fetchone() if cp else None
                 cur = conn.execute("INSERT INTO headcount_contractors (object_id, counterparty_id, name_raw, inn_raw) VALUES (?, ?, ?, ?)",
-                                   (object_id, cp, name, inn))
+                                   (object_id, cp, cp_row["short_name"] if cp_row else (name or (f"ИНН {inn}" if inn else None)), inn))
                 stat["contractors_created"] += 1
                 stat["contractors_linked_to_counterparty"] += 1 if cp else 0
                 contractor_ids[key] = cur.lastrowid
@@ -419,9 +430,9 @@ def apply_history(conn: sqlite3.Connection, file_bytes: bytes, mapping: dict, us
             for old, new, stamp in steps:
                 conn.execute(
                     "INSERT INTO headcount_history (record_id, object_id, work_date, contractor_id, codifier_id, old_workers, "
-                    "new_workers, old_itr, new_itr, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, ?)",
-                    # выгрузка SharePoint знает только «количество» — это «Рабочие»; ИТР в ней нет и у загруженных записей 0
-                    (record_id, object_id, iso, cid, wid, old, new, None if old is None else 0, 0, stamp, user_id))
+                    "new_workers, old_itr, new_itr, old_mech, new_mech, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, ?)",
+                    # выгрузка SharePoint знает только «количество» — это «Рабочие»; ИТР и механизаторов в ней нет, у загруженных записей 0
+                    (record_id, object_id, iso, cid, wid, old, new, None if old is None else 0, 0, None if old is None else 0, 0, stamp, user_id))
                 stat["history_rows"] += 1
         if dry_run:
             conn.rollback()

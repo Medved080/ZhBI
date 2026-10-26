@@ -901,6 +901,39 @@ def _clear_retired_object_fields(conn) -> str:
             else "стирать нечего: значений уже нет")
 
 
+def _link_headcount_contractors(conn) -> str:
+    """Единый справочник подрядчиков (2026-10-26): подрядчик объекта в учёте численности — ссылка на контрагента общей таблицы
+    `counterparties`, название и ИНН показываются оттуда. У прежних записей пула связи нет или она была только по ИНН: здесь каждой
+    несвязанной записи подбирается контрагент по ИНН, а если его нет — создаётся из запасных name_raw/inn_raw (краткое и полное
+    название = название или «ИНН <номер>»). Логика одна на обработку, загрузку из SharePoint и добавление подрядчика —
+    `headcount.ensure_counterparty`. Два контрагента с одним ИНН — запись остаётся несвязанной (молча выбирать нельзя, дубль не плодим):
+    её связывают вручную на вкладке «Подрядчики». Идемпотентно: берутся только записи без связи."""
+    from app.headcount import ensure_counterparty
+    rows = conn.execute(
+        "SELECT id, object_id, name_raw, inn_raw FROM headcount_contractors WHERE counterparty_id IS NULL ORDER BY id").fetchall()
+    if not rows:
+        return "все подрядчики уже связаны с контрагентами"
+    created = linked = skipped = doubles = 0
+    for r in rows:
+        before = conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0]
+        cp = ensure_counterparty(conn, r["inn_raw"], r["name_raw"])
+        if cp is None:
+            skipped += 1
+            continue
+        created += conn.execute("SELECT COUNT(*) FROM counterparties").fetchone()[0] - before
+        if conn.execute("SELECT 1 FROM headcount_contractors WHERE object_id = ? AND counterparty_id = ? AND id <> ?",
+                        (r["object_id"], cp, r["id"])).fetchone():
+            doubles += 1   # в пуле объекта уже есть запись с этим контрагентом — связываем всё равно (данных не теряем), но отмечаем
+        conn.execute("UPDATE headcount_contractors SET counterparty_id = ?, updated_at = datetime('now') WHERE id = ?", (cp, r["id"]))
+        linked += 1
+    note = f"подрядчиков связано с контрагентами: {linked}, из них заведено новых контрагентов: {created}"
+    if doubles:
+        note += f"; двойников в пуле одного объекта: {doubles}"
+    if skipped:
+        note += f"; не связано (два контрагента с одним ИНН или нет ни ИНН, ни названия): {skipped}"
+    return note
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -1336,6 +1369,16 @@ RELEASE_TASKS = [
                "кладка под подоконником и над перемычкой достраивается по уже загруженным окнам",
         "kind": KIND_DATA,
         "run": _add_window_infill,
+    },
+    {
+        "name": "2026-10-26-link-headcount-contractors",
+        "version": "0.115",
+        "date": "2026-10-26",
+        "title": "Связать подрядчиков численности с единым справочником контрагентов",
+        "why": "подрядчик объекта в учёте численности стал ссылкой на контрагента общего справочника (реквизиты правятся в одном месте); "
+               "у прежних подрядчиков связь подбирается по ИНН, недостающие контрагенты создаются из названия и ИНН",
+        "kind": KIND_DATA,
+        "run": _link_headcount_contractors,
     },
 ]
 

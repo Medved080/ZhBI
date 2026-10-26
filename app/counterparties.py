@@ -10,6 +10,7 @@
 встречается ни у одного загруженного элемента.
 """
 
+import datetime
 import sqlite3
 from typing import Optional
 
@@ -76,6 +77,9 @@ class SpecificationIn(BaseModel):
     agreement_id: int
     number: str
     specification_date: Optional[str] = None
+    # «Срок окончания поставки по договору» (2026-10-26): справочная дата, по ней сверяется поставка (отчёт «Сверка поставки по
+    # договорам»). Ни на статусы, ни на остатки не влияет. Формат ГГГГ-ММ-ДД; пусто — срок не задан.
+    delivery_end_date: Optional[str] = None
     expected_version: Optional[str] = None   # см. CounterpartyIn.expected_version
 
 
@@ -155,6 +159,17 @@ def find_or_create_agreement(conn, counterparty_id: int, number: str, agreement_
         (counterparty_id, number, agreement_date),
     )
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+
+def _clean_delivery_end(value: Optional[str]) -> Optional[str]:
+    """Срок окончания поставки: пусто или дата ГГГГ-ММ-ДД (иное — отказ, а не молчаливая порча справочной даты)."""
+    value = (value or "").strip() or None
+    if value is not None:
+        try:
+            datetime.date.fromisoformat(value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Срок окончания поставки: ожидается дата ГГГГ-ММ-ДД")
+    return value
 
 
 def find_or_create_specification(conn, agreement_id: int, number: str, specification_date: Optional[str] = None) -> int:
@@ -553,9 +568,12 @@ def create_specification(body: SpecificationIn, admin: sqlite3.Row = Depends(get
                         (body.agreement_id, body.number)).fetchone():
             raise HTTPException(status_code=400, detail="У этого договора уже есть спецификация с таким номером")
         try:
+            delivery_end = _clean_delivery_end(body.delivery_end_date)
             specification_id = find_or_create_specification(
                 conn, body.agreement_id, body.number, body.specification_date
             )
+            if delivery_end is not None:
+                conn.execute("UPDATE specifications SET delivery_end_date = ? WHERE id = ?", (delivery_end, specification_id))
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=400, detail="У этого договора уже есть спецификация с таким номером")
         conn.commit()
@@ -583,8 +601,8 @@ def update_specification(specification_id: int, body: SpecificationIn, admin: sq
             raise HTTPException(status_code=404, detail="Спецификация не найдена")
         record_version.assert_fresh(body.expected_version, record_version.specification_version(existing), "Спецификация")
         conn.execute(
-            "UPDATE specifications SET agreement_id=?, number=?, specification_date=?, updated_at=datetime('now') WHERE id=?",
-            (body.agreement_id, body.number, body.specification_date, specification_id),
+            "UPDATE specifications SET agreement_id=?, number=?, specification_date=?, delivery_end_date=?, updated_at=datetime('now') WHERE id=?",
+            (body.agreement_id, body.number, body.specification_date, _clean_delivery_end(body.delivery_end_date), specification_id),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM specifications WHERE id = ?", (specification_id,)).fetchone()

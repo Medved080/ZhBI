@@ -1,8 +1,9 @@
 """Учёт численности персонала по объектам — API (2026-10-09, Docs/headcount.md).
 
-Что хранится. Сколько рабочих и ИТР подрядчик вывел на объект за день по виду работ (кодификатор). С 2026-10-12 число разделено на
-«Рабочие» (`workers`; сюда относится всё, что исторически вносили как «количество») и «ИТР» (`itr`); «Итого» = рабочие + ИТР, в БД не
-хранится — считается в запросах и в ответах API (`total`). Ключ записи — (объект, день,
+Что хранится. Сколько рабочих, ИТР и механизаторов подрядчик вывел на объект за день по виду работ (кодификатор). С 2026-10-12 число
+разделено на «Рабочие» (`workers`; сюда относится всё, что исторически вносили как «количество») и «ИТР» (`itr`), с 2026-10-26 добавлены
+«Механизаторы» (`mech`); «Итого» = рабочие + ИТР + механизаторы, в БД не хранится — считается в запросах и в ответах API (`total`).
+Подрядчик объекта (с 2026-10-26) — ссылка на контрагента ЕДИНОГО справочника `counterparties`: название и ИНН показываются оттуда. Ключ записи — (объект, день,
 подрядчик, вид работ): повторный ввод по ключу заменяет число, прежнее остаётся в `headcount_history`. Вносит менеджер проекта
 (руководитель проекта) или начальник участка; право — раздел `headcount` (app/features.py).
 
@@ -37,7 +38,7 @@ MSK = ZoneInfo("Europe/Moscow")
 DEADLINE_TIME = time(11, 0)
 MAX_WORKERS = 100_000
 MAX_ROWS_PER_SAVE = 500
-STAFF_TITLES = {"total": "Итого", "workers": "Рабочие", "itr": "ИТР"}
+STAFF_TITLES = {"total": "Итого", "workers": "Рабочие", "itr": "ИТР", "mech": "Механизаторы"}
 SOURCES = ("form", "import", "bot")
 
 router = APIRouter(prefix="/objects/{object_id}/headcount", tags=["headcount"])
@@ -107,6 +108,29 @@ def _clean_name(value: Optional[str]) -> Optional[str]:
     return value or None
 
 
+def _fold(value: Optional[str]) -> str:
+    """Название для сравнения: без лишних пробелов и без учёта регистра (в Python — SQLite кириллицу к одному регистру не приводит)."""
+    return " ".join(str(value or "").split()).lower()
+
+
+# «Подрядчик глазами справочника» (2026-10-26, единый справочник): у связанного с контрагентом подрядчика название и ИНН берутся ИЗ общей
+# таблицы counterparties — правка реквизитов в «Справочнике контрагентов» сразу видна в численности, отчётах и Excel. Запасные
+# name_raw/inn_raw показываются только пока связи нет. Псевдонимы в запросах: c — headcount_contractors, cp — counterparties.
+CTR_NAME = ("(CASE WHEN cp.id IS NOT NULL THEN COALESCE(NULLIF(TRIM(cp.short_name), ''), NULLIF(TRIM(cp.full_name), '')) "
+            "ELSE c.name_raw END)")
+CTR_INN = "(CASE WHEN cp.id IS NOT NULL THEN NULLIF(REPLACE(TRIM(cp.inn), ' ', ''), '') ELSE c.inn_raw END)"
+
+
+def contractor_display(name: Optional[str], inn: Optional[str]) -> str:
+    """Подпись подрядчика: «Название (ИНН …)»; без названия — «ИНН …». Название вида «ИНН 123», заведённое по одному ИНН, не дублируется."""
+    name = _clean_name(name)
+    if name and inn:
+        return name if _fold(name) == _fold(f"ИНН {inn}") else f"{name} (ИНН {inn})"
+    if inn:
+        return f"ИНН {inn}"
+    return name or ""
+
+
 def find_counterparty_by_inn(conn: sqlite3.Connection, inn: Optional[str]) -> Optional[int]:
     """Контрагент по ИНН — только если он ОДИН: при двух с одним ИНН выбирать молча нельзя."""
     if not inn:
@@ -115,27 +139,63 @@ def find_counterparty_by_inn(conn: sqlite3.Connection, inn: Optional[str]) -> Op
     return rows[0]["id"] if len(rows) == 1 else None
 
 
-def _contractor_out(row: sqlite3.Row) -> dict:
-    name = row["name_raw"] or row["counterparty_name"]
-    inn = row["inn_raw"]
-    status = inn_status(inn)
-    if name and inn:
-        display = f"{name} (ИНН {inn})"
-    elif inn:
-        display = f"ИНН {inn}"
+def find_counterparty_by_name(conn: sqlite3.Connection, name: Optional[str]) -> Optional[int]:
+    """Контрагент по точному названию (краткому или полному, без учёта регистра) — только если он ОДИН."""
+    needle = _fold(name)
+    if not needle:
+        return None
+    found = [r["id"] for r in conn.execute("SELECT id, short_name, full_name FROM counterparties")
+             if needle in (_fold(r["short_name"]), _fold(r["full_name"]))]
+    return found[0] if len(found) == 1 else None
+
+
+def insert_counterparty(conn: sqlite3.Connection, name: str, inn: Optional[str]) -> int:
+    """Новый контрагент в общем справочнике: краткое и полное название — одно и то же (остальное дополнят в «Справочнике контрагентов»).
+    Код для подписи на схеме выдаёт та же функция, что и у справочника. Журнал ведёт вызывающий."""
+    from app.counterparties import find_or_create_counterparty
+    return find_or_create_counterparty(conn, name, name, inn=inn)
+
+
+def ensure_counterparty(conn: sqlite3.Connection, inn: Optional[str], name: Optional[str]) -> Optional[int]:
+    """Контрагент общего справочника для подрядчика с ИНН и/или названием: найти или создать. ЕДИНАЯ функция для обработки обновления,
+    загрузки из SharePoint и всего, что заводит подрядчиков без человека (решение 2026-10-26).
+
+    Порядок: по ИНН (единственный); при двух контрагентах с одним ИНН — None (молча выбирать нельзя, и третьего не заводим); без ИНН —
+    по точному названию, иначе новый. Новый получает краткое и полное название = название или «ИНН <номер>». Без ИНН и без названия — None.
+    Вызывающий владеет транзакцией и журналом."""
+    inn, name = clean_inn(inn), _clean_name(name)
+    if inn:
+        found = conn.execute("SELECT id FROM counterparties WHERE REPLACE(TRIM(COALESCE(inn, '')), ' ', '') = ?", (inn,)).fetchall()
+        if len(found) > 1:
+            return None
+        if found:
+            return found[0]["id"]
+    elif name:
+        found_id = find_counterparty_by_name(conn, name)
+        if found_id is not None:
+            return found_id
+        if any(_fold(name) in (_fold(r["short_name"]), _fold(r["full_name"])) for r in conn.execute("SELECT short_name, full_name FROM counterparties")):
+            return None   # несколько одноимённых — не выбираем
     else:
-        display = name or ""
+        return None
+    return insert_counterparty(conn, name or f"ИНН {inn}", inn)
+
+
+def _contractor_out(row: sqlite3.Row) -> dict:
+    name, inn = row["ctr_name"], row["ctr_inn"]
+    status = inn_status(inn)
+    linked = row["counterparty_id"] is not None
     return {
-        "id": row["id"], "object_id": row["object_id"], "name": row["name_raw"], "inn": inn,
-        "counterparty_id": row["counterparty_id"], "counterparty_name": row["counterparty_name"],
-        "display": display, "inn_status": status,
+        "id": row["id"], "object_id": row["object_id"], "name": name, "inn": inn,
+        "counterparty_id": row["counterparty_id"], "counterparty_name": name if linked else None, "linked": linked,
+        "display": contractor_display(name, inn), "inn_status": status,
         "inn_note": "ИНН не проверен" if status == "unverified" else None,
         "records": row["records"],
     }
 
 
 _CONTRACTOR_SELECT = (
-    "SELECT c.*, COALESCE(cp.short_name, cp.full_name) AS counterparty_name, "
+    f"SELECT c.*, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
     "(SELECT COUNT(*) FROM headcount_records r WHERE r.contractor_id = c.id) AS records "
     "FROM headcount_contractors c LEFT JOIN counterparties cp ON cp.id = c.counterparty_id ")
 
@@ -148,22 +208,42 @@ def _contractor_row(conn, object_id: int, contractor_id: int) -> sqlite3.Row:
 
 
 class ContractorIn(BaseModel):
+    """Подрядчик объекта — ссылка на контрагента общего справочника.
+    `counterparty_id` — выбрать контрагента из справочника (название и ИНН подтянутся); `create_counterparty` + `name` (+ `inn`) — завести
+    нового контрагента в общем справочнике и сразу добавить его на объект (нужно право на раздел «Справочник контрагентов»).
+    Без того и другого подрядчика не добавить. `name`/`inn` без `create_counterparty` — только правка несвязанной (старой) записи."""
     name: Optional[str] = None
     inn: Optional[str] = None
     counterparty_id: Optional[int] = None
+    create_counterparty: bool = False
 
 
-def _assert_inn_free(conn, object_id: int, inn: Optional[str], name: Optional[str], exclude_id: Optional[int] = None) -> None:
-    """Подрядчик в пуле объекта уникален: по ИНН, а без ИНН — по названию (без учёта регистра, в Python — кириллицу SQLite не сравнивает)."""
-    rows = conn.execute("SELECT id, name_raw, inn_raw FROM headcount_contractors WHERE object_id = ?", (object_id,)).fetchall()
-    for r in rows:
+NEED_COUNTERPARTY_RIGHT = ("Заводить контрагентов в общем справочнике может пользователь с правом на раздел «Справочник контрагентов» "
+                           "(Контрактация). Обратитесь к такому пользователю: он добавит контрагента, и вы выберете его из списка.")
+
+
+def _assert_can_create_counterparty(conn, user) -> None:
+    """Серверная проверка права заводить контрагентов (клиенту не доверяем): то же право, что у `POST /counterparties`, — раздел
+    `counterparties` на запись. Права на численность для этого мало и обхода нет."""
+    if not has_feature(conn, user, "counterparties", "write"):
+        raise HTTPException(status_code=403, detail=NEED_COUNTERPARTY_RIGHT)
+
+
+def _pool_conflict(conn, object_id: int, counterparty_id: Optional[int], inn: Optional[str], name: Optional[str],
+                   exclude_id: Optional[int] = None) -> Optional[sqlite3.Row]:
+    """Запись пула объекта, с которой подрядчик совпадает: тот же контрагент; либо ещё не связанная запись с тем же ИНН (а без ИНН — с тем
+    же названием, без учёта регистра)."""
+    for r in conn.execute("SELECT id, counterparty_id, name_raw, inn_raw FROM headcount_contractors WHERE object_id = ?", (object_id,)):
         if r["id"] == exclude_id:
             continue
-        if inn and r["inn_raw"] == inn:
-            raise HTTPException(status_code=409, detail=f"Подрядчик с ИНН {inn} уже есть в списке объекта")
-        if not inn and not r["inn_raw"] and name and r["name_raw"] and \
-                " ".join(r["name_raw"].split()).lower() == name.lower():
-            raise HTTPException(status_code=409, detail=f"Подрядчик «{name}» уже есть в списке объекта")
+        if counterparty_id is not None and r["counterparty_id"] == counterparty_id:
+            return r
+        if r["counterparty_id"] is None:
+            if inn and r["inn_raw"] == inn:
+                return r
+            if not inn and not r["inn_raw"] and name and r["name_raw"] and _fold(r["name_raw"]) == _fold(name):
+                return r
+    return None
 
 
 @router.get("/contractors")
@@ -178,69 +258,142 @@ def list_contractors(object_id: int, user: sqlite3.Row = Depends(get_current_use
         conn.close()
 
 
-@router.post("/contractors")
-def create_contractor(object_id: int, body: ContractorIn, user: sqlite3.Row = Depends(get_current_user)):
-    name, inn = _clean_name(body.name), clean_inn(body.inn)
+@router.get("/counterparty-search")
+def search_counterparties(object_id: int, q: str = Query("", description="Часть названия или ИНН"),
+                          limit: int = Query(30, ge=1, le=100), user: sqlite3.Row = Depends(get_current_user)):
+    """Поиск по ОБЩЕМУ справочнику контрагентов для добавления подрядчика на объект: по ИНН или по названию (краткому и полному).
+    Сначала точное совпадение ИНН, затем ИНН/название «с начала», затем «содержит». `added` — id подрядчика, если контрагент уже есть в
+    списке объекта. `can_create` — можно ли пользователю завести нового контрагента (право на раздел «Справочник контрагентов»)."""
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
-        begin_write(conn)
-        counterparty_id = body.counterparty_id
-        if counterparty_id is not None:
-            cp = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
-            if cp is None:
-                raise HTTPException(status_code=404, detail="Контрагент не найден")
-            inn = inn or clean_inn(cp["inn"])
-            name = name or _clean_name(cp["short_name"] or cp["full_name"])
-        if not name and not inn:
-            raise HTTPException(status_code=400, detail="Укажите название или ИНН подрядчика")
-        _assert_inn_free(conn, object_id, inn, name)
-        if counterparty_id is None:
-            counterparty_id = find_counterparty_by_inn(conn, inn)
-        cur = conn.execute(
-            "INSERT INTO headcount_contractors (object_id, counterparty_id, name_raw, inn_raw) VALUES (?, ?, ?, ?)",
-            (object_id, counterparty_id, name, inn))
-        conn.commit()
-        out = _contractor_out(_contractor_row(conn, object_id, cur.lastrowid))
+        added = {r["counterparty_id"]: r["id"] for r in conn.execute(
+            "SELECT id, counterparty_id FROM headcount_contractors WHERE object_id = ? AND counterparty_id IS NOT NULL", (object_id,))}
+        needle, digits = _fold(q), "".join(str(q or "").split())
+        scored = []
+        for r in conn.execute("SELECT id, short_name, full_name, inn FROM counterparties"):
+            name, full = _fold(r["short_name"]), _fold(r["full_name"])
+            inn = "".join(str(r["inn"] or "").split())
+            if not needle:
+                rank = 4
+            elif digits and inn and inn == digits:
+                rank = 0
+            elif (digits and inn.startswith(digits)) or name.startswith(needle) or full.startswith(needle):
+                rank = 1
+            elif needle in name or needle in full or (digits and digits in inn):
+                rank = 2
+            else:
+                continue
+            scored.append((rank, name, r["id"], r["short_name"], r["full_name"], inn))
+        scored.sort(key=lambda t: (t[0], t[1], t[2]))
+        items = [{"id": cid, "name": short, "full_name": full if _fold(full) != _fold(short) else None, "inn": inn or None,
+                  "inn_status": inn_status(inn or None), "added": added.get(cid)} for _, _, cid, short, full, inn in scored[:limit]]
+        return {"items": items, "total": len(scored), "can_create": has_feature(conn, user, "counterparties", "write")}
     finally:
         conn.close()
+
+
+@router.post("/contractors")
+def create_contractor(object_id: int, body: ContractorIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Добавить подрядчика на объект из общего справочника (`counterparty_id`) либо завести нового контрагента (`create_counterparty`)."""
+    new_name, new_inn = _clean_name(body.name), clean_inn(body.inn)
+    conn = get_connection()
+    created_cp = None
+    try:
+        assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
+        if body.counterparty_id is None and not body.create_counterparty:
+            raise HTTPException(status_code=400, detail="Выберите контрагента из общего справочника или заведите нового")
+        if body.counterparty_id is None:
+            _assert_can_create_counterparty(conn, user)
+            if not new_name:
+                raise HTTPException(status_code=400, detail="Укажите название нового контрагента")
+        begin_write(conn)
+        counterparty_id = body.counterparty_id
+        if counterparty_id is None:
+            if new_inn:
+                same = conn.execute("SELECT id, short_name FROM counterparties WHERE REPLACE(TRIM(COALESCE(inn, '')), ' ', '') = ?", (new_inn,)).fetchall()
+                if same:
+                    raise HTTPException(status_code=409, detail=f"Контрагент с ИНН {new_inn} уже есть в справочнике: «{same[0]['short_name']}». Выберите его из списка")
+            elif find_counterparty_by_name(conn, new_name) is not None or any(
+                    _fold(new_name) in (_fold(r["short_name"]), _fold(r["full_name"])) for r in conn.execute("SELECT short_name, full_name FROM counterparties")):
+                raise HTTPException(status_code=409, detail=f"Контрагент «{new_name}» уже есть в справочнике. Выберите его из списка")
+            counterparty_id = created_cp = insert_counterparty(conn, new_name, new_inn)
+        cp = conn.execute("SELECT * FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone()
+        if cp is None:
+            raise HTTPException(status_code=404, detail="Контрагент не найден")
+        name = _clean_name(cp["short_name"]) or _clean_name(cp["full_name"])
+        inn = clean_inn(cp["inn"])
+        clash = _pool_conflict(conn, object_id, counterparty_id, inn, name)
+        if clash is not None and clash["counterparty_id"] == counterparty_id:
+            raise HTTPException(status_code=409, detail=f"Подрядчик «{name}» уже есть в списке объекта")
+        if clash is not None:
+            # в пуле есть прежняя несвязанная запись с тем же ИНН / названием — это он и есть: связываем её, второй не заводим
+            conn.execute("UPDATE headcount_contractors SET counterparty_id = ?, updated_at = datetime('now') WHERE id = ?", (counterparty_id, clash["id"]))
+            contractor_id = clash["id"]
+        else:
+            try:
+                cur = conn.execute("INSERT INTO headcount_contractors (object_id, counterparty_id, name_raw, inn_raw) VALUES (?, ?, ?, ?)",
+                                   (object_id, counterparty_id, name, inn))
+            except sqlite3.IntegrityError:
+                raise HTTPException(status_code=409, detail="Подрядчик с таким ИНН уже есть в списке объекта")
+            contractor_id = cur.lastrowid
+        conn.commit()
+        out = _contractor_out(_contractor_row(conn, object_id, contractor_id))
+        cp_code = cp["code"]
+    finally:
+        conn.close()
+    if created_cp is not None:
+        activity.log("counterparty_create", user=user, entity_type="counterparty", entity_id=created_cp,
+                     new_value=f"{out['name']} ({cp_code})", details={"источник": "численность: новый подрядчик объекта", "объект": object_id})
     activity.log("headcount_contractor", user=user, entity_type="object", entity_id=object_id, new_value=out["display"],
-                 details={"действие": "добавлен", "подрядчик": out["id"]})
+                 details={"действие": "добавлен", "подрядчик": out["id"], "контрагент": out["counterparty_id"],
+                          "контрагент заведён": created_cp is not None})
     return out
 
 
 @router.patch("/contractors/{contractor_id}")
 def update_contractor(object_id: int, contractor_id: int, body: ContractorIn, user: sqlite3.Row = Depends(get_current_user)):
-    """Поля, которых нет в теле, не меняются; явный `null` у `counterparty_id` снимает связь с контрагентом. ИНН добавляют позже —
-    при этом, если связь не задана, она подбирается по ИНН."""
+    """Заменить контрагента подрядчика (`counterparty_id`): записи численности остаются при подрядчике и переходят к новому контрагенту.
+    Название и ИНН связанного подрядчика здесь НЕ правятся — они меняются в «Справочнике контрагентов». Для ещё несвязанной (старой) записи
+    `name`/`inn` по-прежнему правят запасные значения, а связь подбирается по ИНН."""
     given = body.model_fields_set
+    old_display = None
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
         begin_write(conn)
         row = _contractor_row(conn, object_id, contractor_id)
-        name = _clean_name(body.name) if "name" in given else row["name_raw"]
-        inn = clean_inn(body.inn) if "inn" in given else row["inn_raw"]
-        counterparty_id = row["counterparty_id"]
+        old_display = _contractor_out(row)["display"]
+        raw = conn.execute("SELECT name_raw, inn_raw, counterparty_id FROM headcount_contractors WHERE id = ?", (contractor_id,)).fetchone()
         if "counterparty_id" in given:
-            counterparty_id = body.counterparty_id
-            if counterparty_id is not None and conn.execute(
-                    "SELECT 1 FROM counterparties WHERE id = ?", (counterparty_id,)).fetchone() is None:
+            if body.counterparty_id is None:
+                raise HTTPException(status_code=400, detail="Подрядчик объекта должен быть связан с контрагентом справочника — выберите другого контрагента")
+            cp = conn.execute("SELECT id FROM counterparties WHERE id = ?", (body.counterparty_id,)).fetchone()
+            if cp is None:
                 raise HTTPException(status_code=404, detail="Контрагент не найден")
-        elif "inn" in given and counterparty_id is None:
-            counterparty_id = find_counterparty_by_inn(conn, inn)
-        if not name and not inn:
-            raise HTTPException(status_code=400, detail="У подрядчика должно остаться название или ИНН")
-        _assert_inn_free(conn, object_id, inn, name, exclude_id=contractor_id)
-        conn.execute(
-            "UPDATE headcount_contractors SET counterparty_id = ?, name_raw = ?, inn_raw = ?, updated_at = datetime('now') WHERE id = ?",
-            (counterparty_id, name, inn, contractor_id))
+            clash = _pool_conflict(conn, object_id, body.counterparty_id, None, None, exclude_id=contractor_id)
+            if clash is not None:
+                raise HTTPException(status_code=409, detail="Этот контрагент уже есть в списке объекта")
+            conn.execute("UPDATE headcount_contractors SET counterparty_id = ?, updated_at = datetime('now') WHERE id = ?", (body.counterparty_id, contractor_id))
+        elif raw["counterparty_id"] is not None:
+            raise HTTPException(status_code=400, detail="Название и ИНН подрядчика меняются в «Справочнике контрагентов» — здесь можно только заменить контрагента")
+        else:
+            name = _clean_name(body.name) if "name" in given else raw["name_raw"]
+            inn = clean_inn(body.inn) if "inn" in given else raw["inn_raw"]
+            if not name and not inn:
+                raise HTTPException(status_code=400, detail="У подрядчика должно остаться название или ИНН")
+            clash = _pool_conflict(conn, object_id, None, inn, name, exclude_id=contractor_id)
+            if clash is not None:
+                raise HTTPException(status_code=409, detail="Такой подрядчик уже есть в списке объекта")
+            cp_id = find_counterparty_by_inn(conn, inn)
+            conn.execute("UPDATE headcount_contractors SET counterparty_id = ?, name_raw = ?, inn_raw = ?, updated_at = datetime('now') WHERE id = ?",
+                         (cp_id, name, inn, contractor_id))
         conn.commit()
         out = _contractor_out(_contractor_row(conn, object_id, contractor_id))
     finally:
         conn.close()
-    activity.log("headcount_contractor", user=user, entity_type="object", entity_id=object_id, new_value=out["display"],
-                 details={"действие": "изменён", "подрядчик": contractor_id})
+    activity.log("headcount_contractor", user=user, entity_type="object", entity_id=object_id, old_value=old_display, new_value=out["display"],
+                 details={"действие": "изменён", "подрядчик": contractor_id, "контрагент": out["counterparty_id"]})
     return out
 
 
@@ -334,6 +487,7 @@ class RowIn(BaseModel):
     codifier_id: int
     workers: int
     itr: Optional[int] = None   # не передан — у существующей записи остаётся прежним, у новой 0 (старый клиент про ИТР не знает)
+    mech: Optional[int] = None   # «Механизаторы»: то же правило — None значит «не менять» (клиент без этого поля не затирает чужое)
     move_from: Optional[int] = None   # id внесённой записи, у которой в строке сменили подрядчика и/или вид работ (ключ записи): запись переезжает на новый ключ
 
 
@@ -348,8 +502,7 @@ def _user_name(row: sqlite3.Row, prefix: str) -> Optional[str]:
 
 
 _RECORD_SELECT = (
-    "SELECT r.*, w.code AS work_code, w.name AS work_name, w.section_name, c.name_raw, c.inn_raw, "
-    "COALESCE(cp.short_name, cp.full_name) AS counterparty_name, "
+    f"SELECT r.*, w.code AS work_code, w.name AS work_name, w.section_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
     "ue.last_name AS ue_last, ue.first_name AS ue_first, uu.last_name AS uu_last, uu.first_name AS uu_first, "
     "(SELECT COUNT(*) FROM headcount_history h WHERE h.object_id = r.object_id AND h.work_date = r.work_date "
     " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id) AS changes "
@@ -365,28 +518,26 @@ def _record_out(row: sqlite3.Row) -> dict:
     overdue_minutes = None
     if row["late"] and entered:
         overdue_minutes = max(1, int((entered - deadline_for(work_date)).total_seconds() // 60))
-    contractor = _contractor_out_from_parts(row["name_raw"], row["counterparty_name"], row["inn_raw"])
+    contractor = _contractor_out_from_parts(row["ctr_name"], row["ctr_inn"])
     return {
         "id": row["id"], "date": row["work_date"], "contractor_id": row["contractor_id"], "contractor": contractor["display"],
         "inn_status": contractor["inn_status"], "codifier_id": row["codifier_id"], "work_code": row["work_code"],
-        "work_name": row["work_name"], "section": row["section_name"], "workers": row["workers"], "itr": row["itr"],
-        "total": row["workers"] + row["itr"], "late": bool(row["late"]), "overdue_minutes": overdue_minutes, "source": row["source"],
+        "work_name": row["work_name"], "section": row["section_name"], "workers": row["workers"], "itr": row["itr"], "mech": row["mech"],
+        "total": row["workers"] + row["itr"] + row["mech"], "late": bool(row["late"]), "overdue_minutes": overdue_minutes, "source": row["source"],
         "entered_at": row["entered_at"], "entered_by": _user_name(row, "ue"),
         "updated_at": row["updated_at"], "updated_by": _user_name(row, "uu"),
         "changes": max(0, row["changes"] - 1),   # первое внесение — тоже строка истории, «правок» меньше на одну
     }
 
 
-def _contractor_out_from_parts(name_raw, counterparty_name, inn) -> dict:
-    name = name_raw or counterparty_name
-    status = inn_status(inn)
-    display = f"{name} (ИНН {inn})" if name and inn else (f"ИНН {inn}" if inn else (name or ""))
-    return {"display": display, "inn_status": status}
+def _contractor_out_from_parts(name, inn) -> dict:
+    """Подпись и статус ИНН подрядчика по ЭФФЕКТИВНЫМ названию и ИНН (CTR_NAME / CTR_INN: из справочника контрагентов)."""
+    return {"display": contractor_display(name, inn), "inn_status": inn_status(inn)}
 
 
 def _day_payload(conn, object_id: int, work_date: date) -> dict:
     rows = conn.execute(
-        _RECORD_SELECT + "WHERE r.object_id = ? AND r.work_date = ? ORDER BY c.name_raw, c.inn_raw, w.code",
+        _RECORD_SELECT + f"WHERE r.object_id = ? AND r.work_date = ? ORDER BY {CTR_NAME}, {CTR_INN}, w.code",
         (object_id, work_date.isoformat())).fetchall()
     items = [_record_out(r) for r in rows]
     due = deadline_for(work_date)
@@ -396,6 +547,7 @@ def _day_payload(conn, object_id: int, work_date: date) -> dict:
         "date": work_date.isoformat(), "last_date": last, "deadline": due.isoformat(), "overdue_now": now_msk() > due,
         "rows": items, "total": sum(i["total"] for i in items),
         "total_workers": sum(i["workers"] for i in items), "total_itr": sum(i["itr"] for i in items),
+        "total_mech": sum(i["mech"] for i in items),
     }
 
 
@@ -420,8 +572,9 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         raise HTTPException(status_code=400, detail="Численность за будущую дату внести нельзя")
     seen = set()
     for row in body.rows:
-        if not 0 <= row.workers <= MAX_WORKERS or (row.itr is not None and not 0 <= row.itr <= MAX_WORKERS):
-            raise HTTPException(status_code=400, detail=f"Рабочие и ИТР — целые числа от 0 до {MAX_WORKERS}")
+        if (not 0 <= row.workers <= MAX_WORKERS or (row.itr is not None and not 0 <= row.itr <= MAX_WORKERS)
+                or (row.mech is not None and not 0 <= row.mech <= MAX_WORKERS)):
+            raise HTTPException(status_code=400, detail=f"Рабочие, ИТР и механизаторы — целые числа от 0 до {MAX_WORKERS}")
         key = (row.contractor_id, row.codifier_id)
         if key in seen:
             raise HTTPException(status_code=400, detail="Карточка содержит дубликат численности, сохранение невозможно")
@@ -449,7 +602,7 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         stamp = _db_now()
         for rec in moved_meta.values():
             _history(conn, rec["id"], object_id, iso, rec["contractor_id"], rec["codifier_id"], rec["workers"], None, "form", stamp, user["id"],
-                     old_itr=rec["itr"], new_itr=None)
+                     old_itr=rec["itr"], new_itr=None, old_mech=rec["mech"], new_mech=None)
             conn.execute("DELETE FROM headcount_records WHERE id = ?", (rec["id"],))
         contractors = {r["id"] for r in conn.execute(
             "SELECT id FROM headcount_contractors WHERE object_id = ?", (object_id,))}
@@ -460,36 +613,37 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
             if row.codifier_id not in works:
                 raise HTTPException(status_code=400, detail="Вид работ не найден в кодификаторе")
             current = conn.execute(
-                "SELECT id, workers, itr FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
+                "SELECT id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
                 (object_id, iso, row.contractor_id, row.codifier_id)).fetchone()
             meta = moved_meta.get((row.contractor_id, row.codifier_id))
             if meta is not None and current is not None:
                 raise HTTPException(status_code=409, detail="После смены подрядчика или вида работ такая строка за день уже есть — выберите другую пару")
             new_itr = row.itr if row.itr is not None else (current["itr"] if current is not None else (meta["itr"] if meta is not None else 0))
-            if row.workers + new_itr < 1:
-                raise HTTPException(status_code=400, detail="Рабочие и ИТР вместе — не меньше 1: пустую строку не вносят (чтобы убрать запись, удалите её)")
+            new_mech = row.mech if row.mech is not None else (current["mech"] if current is not None else (meta["mech"] if meta is not None else 0))
+            if row.workers + new_itr + new_mech < 1:
+                raise HTTPException(status_code=400, detail="Рабочие, ИТР и механизаторы вместе — не меньше 1: пустую строку не вносят (чтобы убрать запись, удалите её)")
             if current is None:
                 if works[row.codifier_id]:
                     raise HTTPException(status_code=400, detail="Вид работ выведен из действия: новую численность по нему не вносят")
                 cur = conn.execute(
-                    "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, late, source, "
-                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (object_id, iso, row.contractor_id, row.codifier_id, row.workers, new_itr,
+                    "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, mech, late, source, "
+                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (object_id, iso, row.contractor_id, row.codifier_id, row.workers, new_itr, new_mech,
                      meta["late"] if meta is not None else late, "form" if meta is None else meta["source"],
                      meta["entered_at"] if meta is not None else stamp, meta["entered_by"] if meta is not None else user["id"], stamp, user["id"]))
                 _history(conn, cur.lastrowid, object_id, iso, row.contractor_id, row.codifier_id, None, row.workers, "form", stamp, user["id"],
-                         old_itr=None, new_itr=new_itr)
+                         old_itr=None, new_itr=new_itr, old_mech=None, new_mech=new_mech)
                 if meta is not None:
                     moved += 1
                 else:
                     created += 1
-            elif current["workers"] == row.workers and current["itr"] == new_itr:
+            elif current["workers"] == row.workers and current["itr"] == new_itr and current["mech"] == new_mech:
                 unchanged += 1
             else:
-                conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, updated_at = ?, updated_by = ?, source = 'form' WHERE id = ?",
-                             (row.workers, new_itr, stamp, user["id"], current["id"]))
+                conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, mech = ?, updated_at = ?, updated_by = ?, source = 'form' WHERE id = ?",
+                             (row.workers, new_itr, new_mech, stamp, user["id"], current["id"]))
                 _history(conn, current["id"], object_id, iso, row.contractor_id, row.codifier_id, current["workers"], row.workers, "form", stamp,
-                         user["id"], old_itr=current["itr"], new_itr=new_itr)
+                         user["id"], old_itr=current["itr"], new_itr=new_itr, old_mech=current["mech"], new_mech=new_mech)
                 changed += 1
         conn.commit()
         payload = _day_payload(conn, object_id, work_date)
@@ -501,27 +655,28 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
     return {"created": created, "changed": changed, "moved": moved, "unchanged": unchanged, "late": bool(late), **payload}
 
 
-def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id, *, old_itr=None, new_itr=None) -> None:
-    """Строка журнала: «Рабочие» было/стало и «ИТР» было/стало. NULL в паре — «было пусто» (создание) или «стало пусто» (удаление)."""
+def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id, *, old_itr=None, new_itr=None,
+             old_mech=None, new_mech=None) -> None:
+    """Строка журнала: «Рабочие», «ИТР» и «Механизаторы» было/стало. NULL в паре — «было пусто» (создание) или «стало пусто» (удаление)."""
     conn.execute(
         "INSERT INTO headcount_history (record_id, object_id, work_date, contractor_id, codifier_id, old_workers, new_workers, "
-        "old_itr, new_itr, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (record_id, object_id, iso, contractor_id, codifier_id, old, new, old_itr, new_itr, source, stamp, user_id))
+        "old_itr, new_itr, old_mech, new_mech, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (record_id, object_id, iso, contractor_id, codifier_id, old, new, old_itr, new_itr, old_mech, new_mech, source, stamp, user_id))
 
 
-def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codifier_id: int, workers: int, itr: int, *,
+def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codifier_id: int, workers: int, itr: int, mech: int = 0, *,
                       contact_name: str) -> dict:
     """Одна строка численности, пришедшая от бота eXpress (`app/express_dialog.py`). Те же правила, что у формы: ключ (объект, день,
     подрядчик, вид работ), замена числа с историей, просрочка по первому внесению, «вместе не меньше 1». Отличия: источник `bot`, а
     автора-пользователя нет (контакт бота не учётная запись) — в журнале действий он указан именем контакта. Ошибки правил — ValueError
-    с русским текстом, который бот показывает человеку. Возвращает {"action": created|changed|unchanged, "late": …, "workers", "itr"}."""
+    с русским текстом, который бот показывает человеку. Возвращает {"action": created|changed|unchanged, "late": …, "workers", "itr", "mech"}."""
     now = now_msk()
     if work_date > now.date():
         raise ValueError("Численность за будущую дату внести нельзя")
-    if not (0 <= workers <= MAX_WORKERS and 0 <= itr <= MAX_WORKERS):
-        raise ValueError(f"Рабочие и ИТР — целые числа от 0 до {MAX_WORKERS}")
-    if workers + itr < 1:
-        raise ValueError("Рабочие и ИТР вместе — не меньше 1: если людей не было, запись не вносят")
+    if not (0 <= workers <= MAX_WORKERS and 0 <= itr <= MAX_WORKERS and 0 <= mech <= MAX_WORKERS):
+        raise ValueError(f"Рабочие, ИТР и механизаторы — целые числа от 0 до {MAX_WORKERS}")
+    if workers + itr + mech < 1:
+        raise ValueError("Рабочие, ИТР и механизаторы вместе — не меньше 1: если людей не было, запись не вносят")
     iso = work_date.isoformat()
     conn = get_connection()
     try:
@@ -532,7 +687,7 @@ def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codif
         if work is None:
             raise ValueError("Вид работ не найден в кодификаторе")
         current = conn.execute(
-            "SELECT id, workers, itr FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
+            "SELECT id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
             (object_id, iso, contractor_id, codifier_id)).fetchone()
         stamp = _db_now()
         late = 1 if is_late(work_date, now) else 0
@@ -540,18 +695,19 @@ def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codif
             if work["retired_at"]:
                 raise ValueError("Вид работ выведен из действия: новую численность по нему не вносят")
             cur = conn.execute(
-                "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, late, source, "
-                "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, 'bot', ?, NULL, ?, NULL)",
-                (object_id, iso, contractor_id, codifier_id, workers, itr, late, stamp, stamp))
-            _history(conn, cur.lastrowid, object_id, iso, contractor_id, codifier_id, None, workers, "bot", stamp, None, old_itr=None, new_itr=itr)
+                "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, mech, late, source, "
+                "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'bot', ?, NULL, ?, NULL)",
+                (object_id, iso, contractor_id, codifier_id, workers, itr, mech, late, stamp, stamp))
+            _history(conn, cur.lastrowid, object_id, iso, contractor_id, codifier_id, None, workers, "bot", stamp, None, old_itr=None, new_itr=itr,
+                     old_mech=None, new_mech=mech)
             action = "created"
-        elif current["workers"] == workers and current["itr"] == itr:
+        elif current["workers"] == workers and current["itr"] == itr and current["mech"] == mech:
             action = "unchanged"
         else:
-            conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, updated_at = ?, updated_by = NULL, source = 'bot' WHERE id = ?",
-                         (workers, itr, stamp, current["id"]))
+            conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, mech = ?, updated_at = ?, updated_by = NULL, source = 'bot' WHERE id = ?",
+                         (workers, itr, mech, stamp, current["id"]))
             _history(conn, current["id"], object_id, iso, contractor_id, codifier_id, current["workers"], workers, "bot", stamp, None,
-                     old_itr=current["itr"], new_itr=itr)
+                     old_itr=current["itr"], new_itr=itr, old_mech=current["mech"], new_mech=mech)
             action = "changed"
         conn.commit()
     finally:
@@ -559,8 +715,8 @@ def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codif
     if action != "unchanged":
         activity.log("headcount_set", user_name=contact_name, entity_type="object", entity_id=object_id, new_value=iso,
                      details={"источник": "бот eXpress", "добавлено": 1 if action == "created" else 0, "изменено": 1 if action == "changed" else 0,
-                              "просрочено": bool(late), "рабочие": workers, "ИТР": itr})
-    return {"action": action, "late": bool(late), "workers": workers, "itr": itr}
+                              "просрочено": bool(late), "рабочие": workers, "ИТР": itr, "механизаторы": mech})
+    return {"action": action, "late": bool(late), "workers": workers, "itr": itr, "mech": mech}
 
 
 @router.delete("/records/{record_id}")
@@ -573,13 +729,13 @@ def delete_record(object_id: int, record_id: int, user: sqlite3.Row = Depends(ge
         if row is None:
             raise HTTPException(status_code=404, detail="Запись численности не найдена")
         _history(conn, record_id, object_id, row["work_date"], row["contractor_id"], row["codifier_id"], row["workers"], None, "form", _db_now(),
-                 user["id"], old_itr=row["itr"], new_itr=None)
+                 user["id"], old_itr=row["itr"], new_itr=None, old_mech=row["mech"], new_mech=None)
         conn.execute("DELETE FROM headcount_records WHERE id = ?", (record_id,))
         conn.commit()
     finally:
         conn.close()
-    activity.log("headcount_delete", user=user, entity_type="object", entity_id=object_id, old_value=str(row["workers"] + row["itr"]),
-                 details={"рабочие": row["workers"], "ИТР": row["itr"], "дата": row["work_date"], "подрядчик": row["contractor_id"], "вид работ": row["codifier_id"]})
+    activity.log("headcount_delete", user=user, entity_type="object", entity_id=object_id, old_value=str(row["workers"] + row["itr"] + row["mech"]),
+                 details={"рабочие": row["workers"], "ИТР": row["itr"], "механизаторы": row["mech"], "дата": row["work_date"], "подрядчик": row["contractor_id"], "вид работ": row["codifier_id"]})
     return {"deleted": record_id}
 
 
@@ -601,19 +757,18 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "read")
         rows = conn.execute(
-            "SELECT h.*, w.code AS work_code, w.name AS work_name, c.name_raw, c.inn_raw, "
-            "COALESCE(cp.short_name, cp.full_name) AS counterparty_name, u.last_name AS u_last, u.first_name AS u_first "
+            f"SELECT h.*, w.code AS work_code, w.name AS work_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
+            "u.last_name AS u_last, u.first_name AS u_first "
             "FROM headcount_history h JOIN work_codifier w ON w.id = h.codifier_id "
             "JOIN headcount_contractors c ON c.id = h.contractor_id LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
             "LEFT JOIN users u ON u.id = h.changed_by WHERE " + " AND ".join(where) +
             " ORDER BY h.changed_at DESC, h.id DESC LIMIT ?", (*params, limit)).fetchall()
         return {"history": [{
-            "id": r["id"], "date": r["work_date"], "contractor": _contractor_out_from_parts(
-                r["name_raw"], r["counterparty_name"], r["inn_raw"])["display"],
+            "id": r["id"], "date": r["work_date"], "contractor": _contractor_out_from_parts(r["ctr_name"], r["ctr_inn"])["display"],
             "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
-            "old_itr": r["old_itr"], "new_itr": r["new_itr"],
-            "old_total": None if r["old_workers"] is None else r["old_workers"] + (r["old_itr"] or 0),
-            "new_total": None if r["new_workers"] is None else r["new_workers"] + (r["new_itr"] or 0),
+            "old_itr": r["old_itr"], "new_itr": r["new_itr"], "old_mech": r["old_mech"], "new_mech": r["new_mech"],
+            "old_total": None if r["old_workers"] is None else r["old_workers"] + (r["old_itr"] or 0) + (r["old_mech"] or 0),
+            "new_total": None if r["new_workers"] is None else r["new_workers"] + (r["new_itr"] or 0) + (r["new_mech"] or 0),
             "source": r["source"], "changed_at": r["changed_at"], "changed_by": _user_name(r, "u"),
         } for r in rows]}
     finally:
@@ -623,17 +778,18 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
 # ------------------------------------------------------------------ отчёт по факту
 
 # уровень → (выражение ключа, выражение подписи). Подрядчики разных объектов с одним ИНН сводятся в одну строку.
-# что суммировать в отчёте: «Итого» — рабочие + ИТР (по умолчанию), либо одно из слагаемых
-STAFF_EXPR = {"total": "(r.workers + r.itr)", "workers": "r.workers", "itr": "r.itr"}
+# что суммировать в отчёте: «Итого» — рабочие + ИТР + механизаторы (по умолчанию), либо одно из слагаемых
+STAFF_EXPR = {"total": "(r.workers + r.itr + r.mech)", "workers": "r.workers", "itr": "r.itr", "mech": "r.mech"}
 
 _LEVELS = {
     "smu": ("COALESCE(CAST(o.smu_id AS TEXT), '')", "COALESCE(s.name, 'Без подразделения')"),
     "object": ("CAST(o.id AS TEXT)", "o.name"),
     "section": ("COALESCE(w.section_name, '')", "COALESCE(w.section_name, 'Без раздела')"),
     "work": ("CAST(w.id AS TEXT)", "w.name"),
-    "contractor": ("COALESCE(c.inn_raw, 'name:' || c.name_raw)",
-                   "COALESCE(c.name_raw, cp.short_name, cp.full_name, '') || CASE WHEN c.inn_raw IS NOT NULL "
-                   "THEN ' (ИНН ' || c.inn_raw || ')' ELSE '' END"),
+    # Подрядчики разных объектов сводятся в одну строку по КОНТРАГЕНТУ справочника; несвязанные (старые) записи — по ИНН / названию.
+    "contractor": (f"CASE WHEN cp.id IS NOT NULL THEN 'cp:' || cp.id ELSE COALESCE(c.inn_raw, 'name:' || c.name_raw) END",
+                   f"COALESCE({CTR_NAME}, '') || CASE WHEN {CTR_INN} IS NOT NULL AND COALESCE({CTR_NAME}, '') <> 'ИНН ' || {CTR_INN} "
+                   f"THEN ' (ИНН ' || {CTR_INN} || ')' ELSE '' END"),
 }
 
 
@@ -655,13 +811,13 @@ def report(levels: str = Query("object", description="Уровни через з
            smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = Query(
                None, description="Код кодификатора или его начало (130 — весь раздел)"),
            contractor_inn: Optional[str] = None,
-           staff: str = Query("total", description="Что считать: total — итого (рабочие + ИТР), workers — рабочие, itr — ИТР"),
+           staff: str = Query("total", description="Что считать: total — итого (рабочие + ИТР + механизаторы), workers — рабочие, itr — ИТР, mech — механизаторы"),
            user: sqlite3.Row = Depends(get_current_user)):
     """Факт численности: за опорный день, среднее за неделю (7 дней по опорный включительно), среднее за месяц опорного дня и, если заданы
     `date_from`/`date_to`, сумма человек-дней и среднее за период. Плана и отклонений нет (первый этап, решение 2026-10-09).
     Показатели складываются вверх по иерархии — см. докстроку модуля."""
     if staff not in STAFF_EXPR:
-        raise HTTPException(status_code=400, detail="staff: total, workers или itr")
+        raise HTTPException(status_code=400, detail="staff: total, workers, itr или mech")
     amount = STAFF_EXPR[staff]
     level_list = [x.strip() for x in levels.split(",") if x.strip()]
     if not level_list or any(x not in _LEVELS for x in level_list) or len(set(level_list)) != len(level_list):
@@ -689,7 +845,7 @@ def report(levels: str = Query("object", description="Уровни через з
             where.append("w.code LIKE ? ESCAPE '\\'")
             params.append(work_code.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
         if contractor_inn:
-            where.append("c.inn_raw = ?"); params.append(clean_inn(contractor_inn))
+            where.append(f"{CTR_INN} = ?"); params.append(clean_inn(contractor_inn))
         join = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id LEFT JOIN smu_catalog s ON s.id = o.smu_id "
                 "JOIN work_codifier w ON w.id = r.codifier_id JOIN headcount_contractors c ON c.id = r.contractor_id "
                 "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE " + " AND ".join(where))
@@ -844,9 +1000,9 @@ def _data_filters(conn, user, *, alias: str, object_ids: Optional[str], date_fro
     if contractor_q and contractor_q.strip():
         needle = " ".join(contractor_q.split()).lower()
         rows = conn.execute(
-            f"SELECT c.id, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn FROM headcount_contractors c "
+            f"SELECT c.id, c.name_raw, c.inn_raw, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn FROM headcount_contractors c "
             f"LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE c.object_id IN ({','.join('?' * len(ids))})", ids).fetchall()
-        match = [r["id"] for r in rows if needle in " ".join(f"{r['name_raw'] or ''} {r['cpn'] or ''} {r['inn_raw'] or ''}".split()).lower()]
+        match = [r["id"] for r in rows if needle in " ".join(f"{r['ctr_name'] or ''} {r['ctr_inn'] or ''} {r['name_raw'] or ''} {r['inn_raw'] or ''}".split()).lower()]
         if not match:
             return None
         where.append(f"{alias}.contractor_id IN ({','.join('?' * len(match))})"); params.extend(match)
@@ -856,16 +1012,16 @@ def _data_filters(conn, user, *, alias: str, object_ids: Optional[str], date_fro
 _DATA_FROM = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id JOIN work_codifier w ON w.id = r.codifier_id "
               "JOIN headcount_contractors c ON c.id = r.contractor_id LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
               "LEFT JOIN users ue ON ue.id = r.entered_by LEFT JOIN users uu ON uu.id = r.updated_by ")
-_DATA_COLS = ("SELECT r.id, r.object_id, o.name AS object_name, r.work_date, r.workers, r.itr, r.late, r.source, r.entered_at, r.updated_at, "
-              "w.code AS work_code, w.name AS work_name, w.section_name, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn, "
+_DATA_COLS = ("SELECT r.id, r.object_id, o.name AS object_name, r.work_date, r.workers, r.itr, r.mech, r.late, r.source, r.entered_at, r.updated_at, "
+              f"w.code AS work_code, w.name AS work_name, w.section_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
               "ue.last_name AS ue_last, ue.first_name AS ue_first, uu.last_name AS uu_last, uu.first_name AS uu_first, "
               "(SELECT COUNT(*) FROM headcount_history h WHERE h.object_id = r.object_id AND h.work_date = r.work_date "
               " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id) AS hist ")
-_DATA_ORDER = "ORDER BY r.work_date DESC, o.name, c.name_raw, c.inn_raw, w.code "
+_DATA_ORDER = f"ORDER BY r.work_date DESC, o.name, {CTR_NAME}, {CTR_INN}, w.code "
 
 
 def _data_item(r) -> dict:
-    parts = _contractor_out_from_parts(r["name_raw"], r["cpn"], r["inn_raw"])
+    parts = _contractor_out_from_parts(r["ctr_name"], r["ctr_inn"])
     overdue = None
     if r["late"]:
         entered = _db_time(r["entered_at"])
@@ -873,8 +1029,9 @@ def _data_item(r) -> dict:
             overdue = max(1, int((entered - deadline_for(date.fromisoformat(r["work_date"]))).total_seconds() // 60))
     return {
         "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"], "contractor": parts["display"],
-        "inn": r["inn_raw"], "inn_status": parts["inn_status"], "section": r["section_name"], "work_code": r["work_code"],
-        "work_name": r["work_name"], "workers": r["workers"], "itr": r["itr"], "total": r["workers"] + r["itr"],
+        "inn": r["ctr_inn"], "inn_status": parts["inn_status"], "section": r["section_name"], "work_code": r["work_code"],
+        "work_name": r["work_name"], "workers": r["workers"], "itr": r["itr"], "mech": r["mech"],
+        "total": r["workers"] + r["itr"] + r["mech"],
         "late": bool(r["late"]), "overdue_minutes": overdue,
         "source": r["source"], "entered_at": r["entered_at"], "entered_by": _user_name(r, "ue"), "updated_at": r["updated_at"],
         "updated_by": _user_name(r, "uu"), "changes": max(0, r["hist"] - 1),
@@ -919,12 +1076,12 @@ def list_records(object_ids: Optional[str] = None, date_from: Optional[str] = No
         flt = _data_filters(conn, user, alias="r", object_ids=object_ids, date_from=date_from, date_to=date_to,
                             contractor_q=contractor_q, work_code=work_code, source=source, late=late)
         if flt is None:
-            return {"items": [], "total": 0, "sum_workers": 0, "sum_itr": 0, "sum_total": 0, "offset": offset, "limit": limit, "all_total": _all_readable_total(conn, user)}
+            return {"items": [], "total": 0, "sum_workers": 0, "sum_itr": 0, "sum_mech": 0, "sum_total": 0, "offset": offset, "limit": limit, "all_total": _all_readable_total(conn, user)}
         where, params = " AND ".join(flt[0]), flt[1]
-        total, sum_w, sum_i = conn.execute(
-            f"SELECT COUNT(*), COALESCE(SUM(r.workers), 0), COALESCE(SUM(r.itr), 0) {_DATA_FROM} WHERE {where}", params).fetchone()
+        total, sum_w, sum_i, sum_m = conn.execute(
+            f"SELECT COUNT(*), COALESCE(SUM(r.workers), 0), COALESCE(SUM(r.itr), 0), COALESCE(SUM(r.mech), 0) {_DATA_FROM} WHERE {where}", params).fetchone()
         rows = conn.execute(f"{_DATA_COLS}{_DATA_FROM} WHERE {where} {_DATA_ORDER} LIMIT ? OFFSET ?", (*params, limit, offset)).fetchall()
-        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "sum_itr": sum_i, "sum_total": sum_w + sum_i,
+        return {"items": [_data_item(r) for r in rows], "total": total, "sum_workers": sum_w, "sum_itr": sum_i, "sum_mech": sum_m, "sum_total": sum_w + sum_i + sum_m,
                 "offset": offset, "limit": limit,
                 "all_total": _all_readable_total(conn, user) if not total else total}
     finally:
@@ -948,15 +1105,15 @@ def list_history_log(object_ids: Optional[str] = None, date_from: Optional[str] 
                "LEFT JOIN users u ON u.id = h.changed_by ")
         total = conn.execute(f"SELECT COUNT(*) {frm} WHERE {where}", params).fetchone()[0]
         rows = conn.execute(
-            "SELECT h.id, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.old_itr, h.new_itr, h.source, h.changed_at, "
-            "w.code AS work_code, w.name AS work_name, c.name_raw, c.inn_raw, COALESCE(cp.short_name, cp.full_name) AS cpn, "
+            "SELECT h.id, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.old_itr, h.new_itr, h.old_mech, h.new_mech, "
+            f"h.source, h.changed_at, w.code AS work_code, w.name AS work_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
             f"u.last_name AS u_last, u.first_name AS u_first {frm} WHERE {where} ORDER BY h.changed_at DESC, h.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset)).fetchall()
         return {"items": [{
             "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"],
-            "contractor": _contractor_out_from_parts(r["name_raw"], r["cpn"], r["inn_raw"])["display"],
+            "contractor": _contractor_out_from_parts(r["ctr_name"], r["ctr_inn"])["display"],
             "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
-            "old_itr": r["old_itr"], "new_itr": r["new_itr"],
+            "old_itr": r["old_itr"], "new_itr": r["new_itr"], "old_mech": r["old_mech"], "new_mech": r["new_mech"],
             "source": r["source"], "changed_at": r["changed_at"], "changed_by": _user_name(r, "u")} for r in rows],
             "total": total, "offset": offset, "limit": limit}
     finally:
@@ -1007,12 +1164,12 @@ def records_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] = No
     finally:
         conn.close()
     items = [_data_item(r) for r in rows]
-    heads = ["Дата", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Рабочие", "ИТР", "Итого", "Просрочено",
+    heads = ["Дата", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Рабочие", "ИТР", "Механизаторы", "Итого", "Просрочено",
              "Опоздание, мин", "Источник", "Внесено", "Кем внесено", "Изменено", "Кем изменено", "Правок"]
     body = [[date.fromisoformat(i["date"]), i["object"], i["contractor"], i["inn"], i["section"], i["work_code"], i["work_name"], i["workers"],
-             i["itr"], i["total"], "да" if i["late"] else "", i["overdue_minutes"], SOURCE_TITLES.get(i["source"], i["source"]), _moment_xlsx(i["entered_at"]),
+             i["itr"], i["mech"], i["total"], "да" if i["late"] else "", i["overdue_minutes"], SOURCE_TITLES.get(i["source"], i["source"]), _moment_xlsx(i["entered_at"]),
              i["entered_by"], _moment_xlsx(i["updated_at"]), i["updated_by"], i["changes"]] for i in items]
-    resp = _xlsx_response(heads, body, [12, 34, 38, 14, 34, 14, 50, 10, 8, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
+    resp = _xlsx_response(heads, body, [12, 34, 38, 14, 34, 14, 50, 10, 8, 13, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
     return resp
 
 
@@ -1032,11 +1189,12 @@ def history_log_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] 
         items.extend(more)
         offset += 500
     heads = ["Когда изменено", "Кто", "День численности", "Объект", "Подрядчик", "Код вида работ", "Вид работ", "Рабочие было", "Рабочие стало",
-             "ИТР было", "ИТР стало", "Источник"]
+             "ИТР было", "ИТР стало", "Механизаторы было", "Механизаторы стало", "Источник"]
     body = [[_moment_xlsx(i["changed_at"]), i["changed_by"], date.fromisoformat(i["date"]), i["object"], i["contractor"], i["work_code"], i["work_name"],
              i["old"], i["new"] if i["new"] is not None else "удалено", i["old_itr"], i["new_itr"] if i["new_itr"] is not None else ("удалено" if i["new"] is None else None),
+             i["old_mech"], i["new_mech"] if i["new_mech"] is not None else ("удалено" if i["new"] is None else None),
              SOURCE_TITLES.get(i["source"], i["source"])] for i in items]
-    return _xlsx_response(heads, body, [17, 24, 14, 34, 38, 14, 50, 12, 13, 10, 11, 22], "Численность_журнал_изменений.xlsx")
+    return _xlsx_response(heads, body, [17, 24, 14, 34, 38, 14, 50, 12, 13, 10, 11, 14, 15, 22], "Численность_журнал_изменений.xlsx")
 
 
 def _empty_report(level_list: list, ref: date) -> dict:

@@ -269,6 +269,9 @@ FEATURES = [
             None, ["POST /reports/dynamics(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
     Feature("report_completion", "Отчёты", "Статус комплектации",
             None, ["POST /reports/completion(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
+    Feature("report_delivery_recon", "Отчёты", "Сверка поставки по договорам",
+            "Сверка поставки с договором: спецификация, факт поставки и монтажа, плановые даты по изделиям; отбор по контрагенту, договору и спецификации.",
+            ["POST /reports/delivery-recon(.xlsx)", "GET /reports/delivery-recon/options"], SCOPE_OBJECT, _все(READ)),
     Feature("report_mywork", "Отчёты", "Моя работа",
             None, ["POST /reports/my-work"], SCOPE_OBJECT, _все(READ)),
     Feature("report_analytics", "Отчёты", "Аналитическая справка",
@@ -586,7 +589,7 @@ _ТОЛЬКО_ЖБИ = {
     "contracts", "agreements", "default_contracts",
     "doc_supplier_change", "doc_link_swap", "schedule",
     # отчёты по изделиям
-    "report_status", "report_dynamics", "report_completion", "report_analytics",
+    "report_status", "report_dynamics", "report_completion", "report_analytics", "report_delivery_recon",
     # справочники изделий
     "dict_marks", "dict_subtypes", "dict_mark_prefixes",
     "dict_status_colors", "dict_element_shapes",

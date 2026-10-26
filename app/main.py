@@ -129,6 +129,7 @@ from app import chess_flat
 from app import block_bulk_edit
 from app import report_block_schedule
 from app import report_linear_track
+from app import report_delivery_recon
 from app import pdf_facade_import
 from app import pdf_import
 from app import pdf_rooms
@@ -1772,6 +1773,10 @@ class ReportRequestIn(BaseModel):
     # «Статус комплектации», вид «перечень»: только строки с просрочкой
     # (плановая поставка позже требуемой). В сводной не действует.
     only_overdue: bool = False
+    # «Сверка поставки по договорам» (app/report_delivery_recon.py): сужение по контрагенту / договору / спецификации (любым сочетанием).
+    counterparty_id: Optional[int] = None
+    agreement_id: Optional[int] = None
+    specification_id: Optional[int] = None
     # Шкала дат сводной: "plan" / "fact" / "need" — одна на всю таблицу.
     # Названа не `scale`, потому что `scale` выше уже занят масштабом оси
     # «Графика контрактации»; два разных смысла в одном поле однажды
@@ -2267,6 +2272,50 @@ def report_linear_track_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(
         report_linear_track.build_linear_track_xlsx(report, имя_объекта),
         "Линейный трек.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ==================== «Сверка поставки по договорам» ====================
+
+def _delivery_recon(conn, user, body: "ReportRequestIn") -> dict:
+    """Общая точка для экрана и XLSX: доступ — раздел `report_delivery_recon` на объекте (чертёж отчёту не нужен)."""
+    body = _guard_report(conn, user, body, "report_delivery_recon", needs_source_file=False)
+    object_id = _report_object_id(conn, body)
+    if object_id is None:
+        raise HTTPException(status_code=400, detail="Отчёт строится по объекту — выберите объект в тулбаре")
+    return report_delivery_recon.build_recon_report(conn, object_id, body.counterparty_id, body.agreement_id, body.specification_id)
+
+
+@app.post("/reports/delivery-recon")
+def report_delivery_recon_endpoint(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        return _delivery_recon(conn, user, body)
+    finally:
+        conn.close()
+
+
+@app.post("/reports/delivery-recon.xlsx")
+def report_delivery_recon_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        report = _delivery_recon(conn, user, body)
+        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
+    finally:
+        conn.close()
+    return _report_file_response(
+        report_delivery_recon.build_recon_xlsx(report, имя_объекта), "Сверка поставки по договорам.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.get("/reports/delivery-recon/options")
+def report_delivery_recon_options(object_id: int = Query(...), user: sqlite3.Row = Depends(get_current_user)):
+    """Выбор для фильтров отчёта: контрагенты объекта → договоры → спецификации."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "report_delivery_recon", "read")
+        return {"counterparties": report_delivery_recon.recon_options(conn, object_id)}
+    finally:
+        conn.close()
 
 
 # ==================== «Моя работа»: что человек изменил за период ====================

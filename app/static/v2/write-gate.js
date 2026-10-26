@@ -464,10 +464,10 @@ export const POLICY = [
   { id: "pdf.facade.analyze", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: синхронный разбор макета блоков (в базу не пишет)", method: "POST", path: re("/import-pdf-facade/analyze"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF, отказ 403 у не-админа, 4xx на неверный/битый файл" },
   { id: "pdf.facade.apply", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: применить показанный макет блоков по токену", method: "POST", path: re("/import-pdf-facade/apply"), check: tokenOnlyProblem, risk: "секции/этажи/блоки модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
   { id: "pdf.clear", screen: "pdf-import", action: "Загрузка из PDF: отладочная очистка справочников объекта перед повторной загрузкой (применяется сразу, без сводки)", method: "POST", path: re(`/objects/\\d+/clear-import-data`), check: clearImportDataProblem, risk: "необратимо через интерфейс (помещения из PDF и/или секции/этажи и/или виды работ блоков); копия базы перед очисткой", allowed: true, proof: "настоящий backend: очистка по отмеченным группам, счётчики в ответе, отказ 403, журнал" },
-  { id: "hc.contractor.create", screen: "headcount", action: "Численность: добавить подрядчика объекта (название и/или ИНН)", method: "POST", path: re(`/objects/\\d+/headcount/contractors`), check: hcContractorProblem, risk: "список подрядчиков объекта", allowed: true, proof: "живая проверка V2 на копии обезличенной БД и scripts/verify_headcount.py: создание, дубль 409, отказ 403" },
-  { id: "hc.contractor.update", screen: "headcount", action: "Численность: изменить название / ИНН подрядчика (связь с контрагентом подбирается по ИНН)", method: "PATCH", path: re(`/objects/\\d+/headcount/contractors/\\d+`), check: hcContractorProblem, risk: "список подрядчиков объекта", allowed: true, proof: "scripts/verify_headcount.py: ИНН добавлен позже, пометка «ИНН не проверен»" },
+  { id: "hc.contractor.create", screen: "headcount", action: "Численность: добавить подрядчика объекта из общего справочника контрагентов (или завести нового контрагента — только при праве на раздел «Справочник контрагентов», проверяет сервер)", method: "POST", path: re(`/objects/\\d+/headcount/contractors`), check: hcContractorProblem, risk: "список подрядчиков объекта; новый контрагент — общий справочник", allowed: true, proof: "живая проверка V2 на копии обезличенной БД и scripts/verify_headcount.py: создание, дубль 409, отказ 403" },
+  { id: "hc.contractor.update", screen: "headcount", action: "Численность: заменить контрагента подрядчика (название и ИНН меняются в справочнике контрагентов)", method: "PATCH", path: re(`/objects/\\d+/headcount/contractors/\\d+`), check: hcContractorProblem, risk: "список подрядчиков объекта", allowed: true, proof: "scripts/verify_headcount.py: ИНН добавлен позже, пометка «ИНН не проверен»" },
   { id: "hc.contractor.delete", screen: "headcount", action: "Численность: удалить подрядчика (без записей и истории)", method: "DELETE", path: re(`/objects/\\d+/headcount/contractors/\\d+`), risk: "список подрядчиков объекта; с записями или историей — отказ сервера 409", allowed: true, proof: "scripts/verify_headcount.py: отказ 409 у подрядчика с записями и с историей" },
-  { id: "hc.records.save", screen: "headcount", action: "Численность: внести или заменить числа («Рабочие» и «ИТР») за день пакетом (повтор по ключу заменяет числа, прежние — в истории; позже срока — отметка просрочки)", method: "PUT", path: re(`/objects/\\d+/headcount/records`), check: hcSaveProblem, risk: "данные объекта; пакет атомарен", allowed: true, proof: "scripts/verify_headcount.py: ввод, замена, дубль, атомарность, просрочка, права; живая проверка V2" },
+  { id: "hc.records.save", screen: "headcount", action: "Численность: внести или заменить числа («Рабочие», «ИТР» и «Механизаторы») за день пакетом (повтор по ключу заменяет числа, прежние — в истории; позже срока — отметка просрочки)", method: "PUT", path: re(`/objects/\\d+/headcount/records`), check: hcSaveProblem, risk: "данные объекта; пакет атомарен", allowed: true, proof: "scripts/verify_headcount.py: ввод, замена, дубль, атомарность, просрочка, права; живая проверка V2" },
   { id: "hc.records.delete", screen: "headcount", action: "Численность: удалить строку (значение остаётся в истории)", method: "DELETE", path: re(`/objects/\\d+/headcount/records/\\d+`), risk: "данные объекта; история сохраняется", allowed: true, proof: "scripts/verify_headcount.py: удаление и запись в истории" },
   { id: "hc.codifier.import", screen: "headcount", action: "Численность: загрузка кодификатора видов работ из Excel (администратор сервиса; можно «без записи»)", method: "POST", path: re(`/headcount/codifier/import`), check: hcUploadProblem(["file", "dry_run"]), risk: "общий справочник; повтор безопасен", allowed: true, proof: "scripts/verify_headcount_import.py и dry_run_headcount_import.py: двойной прогон" },
   { id: "hc.import.analyze", screen: "headcount", action: "Численность: разбор выгрузки SharePoint без записи", method: "POST", path: re(`/headcount/import/analyze`), check: hcUploadProblem(["file"]), risk: "ничего не пишет", allowed: true, proof: "scripts/verify_headcount_import.py" },
@@ -680,9 +680,11 @@ function clearImportDataProblem(body) {
 // ---- Численность персонала: формы тел операций ----
 function hcContractorProblem(body) {
   if (!isObj(body)) return "тело не объект";
-  if (Object.keys(body).some((k) => !["name", "inn", "counterparty_id"].includes(k))) return "лишние поля";
+  if (Object.keys(body).some((k) => !["name", "inn", "counterparty_id", "create_counterparty"].includes(k))) return "лишние поля";
   for (const k of ["name", "inn"]) if (body[k] != null && (typeof body[k] !== "string" || body[k].length > 300)) return `поле «${k}» — строка до 300 знаков`;
   if (body.counterparty_id != null && !Number.isInteger(body.counterparty_id)) return "контрагент — целый идентификатор";
+  if (body.create_counterparty !== undefined && typeof body.create_counterparty !== "boolean") return "create_counterparty — логическое значение";
+  if (body.create_counterparty && (body.counterparty_id != null || !String(body.name || "").trim())) return "новый контрагент: нужно название и не нужен выбранный контрагент";
   return null;
 }
 function hcSaveProblem(body) {
@@ -691,11 +693,12 @@ function hcSaveProblem(body) {
   if (!Array.isArray(body.rows) || !body.rows.length || body.rows.length > 500) return "строк нет или больше 500";
   const seen = new Set();
   for (const r of body.rows) {
-    if (!isObj(r) || Object.keys(r).some((k) => !["contractor_id", "codifier_id", "workers", "itr", "move_from"].includes(k))) return "строка неверной формы";
+    if (!isObj(r) || Object.keys(r).some((k) => !["contractor_id", "codifier_id", "workers", "itr", "mech", "move_from"].includes(k))) return "строка неверной формы";
     if (r.move_from !== undefined && (!Number.isInteger(r.move_from) || r.move_from <= 0)) return "move_from — идентификатор записи";
     if (!Number.isInteger(r.contractor_id) || !Number.isInteger(r.codifier_id) || !Number.isInteger(r.workers) || r.workers < 0 || r.workers > 100000) return "число рабочих — целое от 0 до 100 000";
     if (r.itr !== undefined && (!Number.isInteger(r.itr) || r.itr < 0 || r.itr > 100000)) return "число ИТР — целое от 0 до 100 000";
-    if (r.workers + (r.itr ?? 0) < 1) return "рабочие и ИТР вместе — не меньше 1";
+    if (r.mech !== undefined && (!Number.isInteger(r.mech) || r.mech < 0 || r.mech > 100000)) return "число механизаторов — целое от 0 до 100 000";
+    if (r.workers + (r.itr ?? 0) + (r.mech ?? 0) < 1) return "рабочие, ИТР и механизаторы вместе — не меньше 1";
     const key = `${r.contractor_id}:${r.codifier_id}`;
     if (seen.has(key)) return "в карточке дубликат подрядчика и вида работ";
     seen.add(key);

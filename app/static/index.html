@@ -5470,6 +5470,7 @@
             <button id="menu-report-status">Статус монтажа</button>
             <button id="menu-report-dynamics">Отчёт о динамике поставки и монтажа</button>
             <button id="menu-report-completion">Статус комплектации</button>
+            <button id="menu-report-delivery-recon" data-feature="report_delivery_recon" data-feature-kind="read">Сверка поставки по договорам</button>
             <!-- «Моя работа» — тоже всем ролям и по той же причине: это
                  отчёт человека о СВОЕЙ работе, а не наблюдение за чужой
                  (выбор пользователя открывается только администратору
@@ -9439,6 +9440,15 @@
 </div>
 
 <!-- «Численность персонала» (2026-10-09): окно с общим экраном app/static/headcount-ui.js (ввод, подрядчики, отчёт, загрузка). -->
+<!-- «Сверка поставки по договорам» (2026-10-26): общий экран V1/V2 — app/static/delivery-recon-ui.js. -->
+<div class="modal-backdrop" id="delivery-recon-backdrop">
+  <div class="modal modal-sticky" style="max-width:1200px">
+    <div class="modal-sticky-head"><h2>Сверка поставки по договорам — <span id="dr-object-name"></span></h2></div>
+    <div class="modal-sticky-scroll"><div id="dr-host"></div></div>
+    <div class="modal-sticky-foot"><div class="actions"><button class="btn btn-secondary" id="dr-close">Закрыть</button></div></div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="headcount-backdrop">
   <div class="modal modal-sticky" style="max-width:1100px">
     <div class="modal-sticky-head"><h2>Численность персонала — <span id="hc-object-name"></span></h2></div>

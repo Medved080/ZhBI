@@ -55,7 +55,8 @@ def agreement_version(row) -> str:
 
 def specification_version(row) -> str:
     return digest({"agreement_id": row["agreement_id"], "number": row["number"],
-                   "specification_date": row["specification_date"]})
+                   "specification_date": row["specification_date"],
+                   "delivery_end_date": row["delivery_end_date"] if "delivery_end_date" in row.keys() else None})
 
 
 def contract_version(row, lines, incidents, capacity) -> str:

@@ -207,13 +207,13 @@ export function mountExpress(el, ctx) {
   // =====================================================================  ЗАПРОСЫ
   function paintRequests() {
     pane.innerHTML = `<div class="hc-bar"><strong>Запросы за 14 дней</strong><span class="hc-muted">что бот отправил и что ответили</span><button type="button" class="hc-btn" id="ex-refresh">Обновить</button></div>${msgLine()}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>За день</th><th>Контакт</th><th>Состояние</th><th>Отправлен</th><th class="num">Рабочие за день</th><th class="num">ИТР за день</th><th>Примечание</th></tr></thead><tbody>${
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>За день</th><th>Контакт</th><th>Состояние</th><th>Отправлен</th><th class="num">Рабочие за день</th><th class="num">ИТР за день</th><th class="num">Механизаторы за день</th><th>Примечание</th></tr></thead><tbody>${
         st.requests.length ? st.requests.map((r) => { const [t, k] = STATUS[r.status] || [r.status, ""];
           return `<tr><td>${esc(fmtDate(r.work_date))}</td><td>${esc(r.contact_name)}${r.manual ? ' <span class="hc-badge">вручную</span>' : ""}</td>
             <td><span class="hc-badge ${k}">${esc(t)}</span></td><td>${esc(fmtMoment(r.sent_at))}${r.reminded_at ? '<br><span class="hc-muted">напоминали</span>' : ""}</td>
-            <td class="num">${r.workers}</td><td class="num">${r.itr}</td><td>${r.last_error ? `<span class="hc-muted" title="Попыток: ${r.attempts}">${esc(r.last_error)}</span>` : ""}</td></tr>`; }).join("")
+            <td class="num">${r.workers}</td><td class="num">${r.itr}</td><td class="num">${r.mech ?? 0}</td><td>${r.last_error ? `<span class="hc-muted" title="Попыток: ${r.attempts}">${esc(r.last_error)}</span>` : ""}</td></tr>`; }).join("")
         : `<tr><td colspan="7" class="hc-muted">Запросов за последние 14 дней не было.</td></tr>`}</tbody></table></div>
-      <p class="ex-hint">«Рабочие» и «ИТР» — итог за день по всему объекту (вносит не только этот контакт). Подробности — на вкладке «Ввод численности» и в «Все данные» (источник «бот»).</p>`;
+      <p class="ex-hint">«Рабочие», «ИТР» и «Механизаторы» — итог за день по всему объекту (вносит не только этот контакт). Подробности — на вкладке «Ввод численности» и в «Все данные» (источник «бот»).</p>`;
     pane.querySelector("#ex-refresh").addEventListener("click", async () => { st.requests = null; paint(); });
   }
 

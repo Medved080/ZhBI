@@ -26,11 +26,11 @@ const fmtMoment = (s) => {
   const d = new Date(String(s).replace(" ", "T") + (String(s).includes("T") && /[zZ+]/.test(String(s)) ? "" : "Z"));
   return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
-// «Рабочие» и «ИТР» — целые от 0 до 100 000, вместе не меньше 1 («Итого» = их сумма, на сервере не хранится)
+// «Рабочие», «ИТР» и «Механизаторы» — целые от 0 до 100 000, вместе не меньше 1 («Итого» = их сумма, на сервере не хранится)
 const HC_MAX = 100000;
 const isCount = (v) => /^\d+$/.test(String(v).trim()) && Number(v) <= HC_MAX;
-const pairProblem = (w, i) => (!isCount(w) || !isCount(i) ? `Рабочие и ИТР — целые числа от 0 до ${HC_MAX.toLocaleString("ru-RU")}`
-  : Number(w) + Number(i) < 1 ? "Рабочие и ИТР вместе — не меньше 1" : "");
+const pairProblem = (w, i, m) => (!isCount(w) || !isCount(i) || !isCount(m) ? `Рабочие, ИТР и механизаторы — целые числа от 0 до ${HC_MAX.toLocaleString("ru-RU")}`
+  : Number(w) + Number(i) + Number(m) < 1 ? "Рабочие, ИТР и механизаторы вместе — не меньше 1" : "");
 const fmtNum = (n) => (n == null ? "" : Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 1 }));
 const fmtOverdue = (min) => (min >= 1440 ? `${Math.floor(min / 1440)} дн.` : min >= 60 ? `${Math.floor(min / 60)} ч` : `${min} мин`);
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -57,7 +57,7 @@ export function mountHeadcount(el, ctx) {
   const st = {
     tab: ctx.startTab || "input", works: null, contractors: null, loadError: "", cod: null, codErr: "", codQ: "", codSec: "",
     date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
-    contractorForm: null, facets: null,
+    ctrAdd: null, facets: null,
     rep: { preset: "objects", obj: null, staff: "total", bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
     data: { mode: "records", obj: null, from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
@@ -152,8 +152,8 @@ export function mountHeadcount(el, ctx) {
       ${st.dayError ? `<div class="hc-callout bad" role="alert">${esc(st.dayError)}</div>` : ""}
       <p id="hc-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
       ${d && !d.rows.length && d.last_date && d.last_date !== st.date ? `<div class="hc-callout">За этот день данных нет. Последний день с данными по объекту — <button type="button" class="hc-link" id="hc-lastday">${esc(fmtDate(d.last_date))}</button>.</div>` : ""}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Рабочие</th><th class="num">ИТР</th><th class="num">Итого</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
-        <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total-w"></td><td class="num" id="hc-total-i"></td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Рабочие</th><th class="num">ИТР</th><th class="num">Механизаторы</th><th class="num">Итого</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
+        <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total-w"></td><td class="num" id="hc-total-i"></td><td class="num" id="hc-total-m"></td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
       ${ctx.canWrite && !future ? `<div class="hc-add" id="hc-add"></div>
         <div class="hc-bar"><button type="button" class="hc-btn primary" id="hc-save">Сохранить</button><button type="button" class="hc-btn" id="hc-copy" title="Добавить в карточку строки предыдущего дня, которых за этот день ещё нет">Заполнить как за предыдущий день</button><span class="hc-muted" id="hc-dirty"></span></div>` : (ctx.canWrite ? "" : `<p class="hc-muted">Только просмотр: у вас нет права вносить численность на этом объекте.</p>`)}
       <div id="hc-history"></div>`;
@@ -181,7 +181,8 @@ export function mountHeadcount(el, ctx) {
   const workLabel = (id) => { const w = st.works.find((x) => x.id === id); return w ? `${w.code} ${w.name}` : "—"; };
 
   // Значения строки на экране: введённое человеком (до сохранения) или то, что в БД
-  const rowVals = (r) => { const c = st.changed.get(r.id); return c ? { w: c.workers, i: c.itr } : { w: String(r.workers), i: String(r.itr ?? 0) }; };
+  const rowVals = (r) => { const c = st.changed.get(r.id); return c ? { w: c.workers, i: c.itr, m: c.mech } : { w: String(r.workers), i: String(r.itr ?? 0), m: String(r.mech ?? 0) }; };
+  const FIELD_TITLES = { workers: "Рабочие", itr: "ИТР", mech: "Механизаторы" };
   const numOf = (v) => (isCount(v) ? Number(v) : 0);
   const effIds = (r) => { const c = st.changed.get(r.id) || {}; return { ctr: c.contractor_id ?? r.contractor_id, work: c.codifier_id ?? r.codifier_id }; };
   // Занята ли пара «подрядчик + вид работ» другой строкой карточки (внесённой — с учётом её ещё не сохранённой правки, или добавленной)
@@ -197,7 +198,7 @@ export function mountHeadcount(el, ctx) {
       r.source === "import" ? `<span class="hc-badge">из SharePoint</span>` : "",
     ].join(" ");
     const field = (r, f, v) => ctx.canWrite
-      ? `<input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-edit="${r.id}" data-f="${f}" value="${esc(v)}" aria-label="${f === "workers" ? "Рабочие" : "ИТР"}: ${esc(r.contractor)}, ${esc(r.work_name)}">`
+      ? `<input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-edit="${r.id}" data-f="${f}" value="${esc(v)}" aria-label="${FIELD_TITLES[f]}: ${esc(r.contractor)}, ${esc(r.work_name)}">`
       : esc(v);
     // Подрядчик и вид работ в строке — кнопки-ячейки: щелчок открывает форму выбора (справочник), выбранное подставляется в эту же строку.
     const cellPick = (kind, ref, type, inner) => ctx.canWrite
@@ -205,28 +206,28 @@ export function mountHeadcount(el, ctx) {
     const workHtml = (id) => { const w = st.works.find((x) => x.id === id); return w ? `<span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}` : "—"; };
     body.innerHTML = rows.length || st.added.length ? [
       ...rows.map((r) => { const v = rowVals(r), e = effIds(r); return `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${cellPick("saved", r.id, "ctr", esc(contractorLabel(e.ctr)))}</td><td>${cellPick("saved", r.id, "work", workHtml(e.work))}</td>
-        <td class="num">${field(r, "workers", v.w)}</td><td class="num">${field(r, "itr", v.i)}</td><td class="num"><strong data-rowtotal="${r.id}">${numOf(v.w) + numOf(v.i)}</strong></td>
+        <td class="num">${field(r, "workers", v.w)}</td><td class="num">${field(r, "itr", v.i)}</td><td class="num">${field(r, "mech", v.m)}</td><td class="num"><strong data-rowtotal="${r.id}">${numOf(v.w) + numOf(v.i) + numOf(v.m)}</strong></td>
         <td class="hc-small">${esc(fmtMoment(r.entered_at))}${r.entered_by ? " · " + esc(r.entered_by) : ""} ${flags(r)}${r.changes ? ` <button type="button" class="hc-link" data-hist="${r.id}">правок: ${r.changes}</button>` : ` <button type="button" class="hc-link" data-hist="${r.id}">история</button>`}</td>
         <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn danger mini" data-del="${r.id}" title="Удалить строку" aria-label="Удалить строку">✕</button>` : ""}</td></tr>`; }),
-      ...st.added.map((a, i) => `<tr class="added"><td>${cellPick("added", i, "ctr", esc(contractorLabel(a.contractor_id)))}</td><td>${cellPick("added", i, "work", workHtml(a.codifier_id))}</td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="workers" value="${esc(a.workers)}" aria-label="Рабочие (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="itr" value="${esc(a.itr)}" aria-label="ИТР (строка ещё не сохранена)"></td><td class="num"><strong data-add-total="${i}">${a.workers + a.itr}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
+      ...st.added.map((a, i) => `<tr class="added"><td>${cellPick("added", i, "ctr", esc(contractorLabel(a.contractor_id)))}</td><td>${cellPick("added", i, "work", workHtml(a.codifier_id))}</td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="workers" value="${esc(a.workers)}" aria-label="Рабочие (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="itr" value="${esc(a.itr)}" aria-label="ИТР (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="mech" value="${esc(a.mech ?? 0)}" aria-label="Механизаторы (строка ещё не сохранена)"></td><td class="num"><strong data-add-total="${i}">${a.workers + a.itr + (a.mech ?? 0)}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
         <td class="nw"><button type="button" class="hc-btn mini" data-unadd="${i}" title="Убрать строку из карточки" aria-label="Убрать строку из карточки">✕</button></td></tr>`),
-    ].join("") : `<tr><td colspan="7" class="hc-muted">За этот день численность не внесена.</td></tr>`;
+    ].join("") : `<tr><td colspan="8" class="hc-muted">За этот день численность не внесена.</td></tr>`;
     paintTotals();
     body.querySelectorAll("[data-edit]").forEach((i) => i.addEventListener("input", () => {
       const id = Number(i.dataset.edit), row = rows.find((r) => r.id === id), tr = i.closest("tr");
-      const w = tr.querySelector('[data-f="workers"]').value, it = tr.querySelector('[data-f="itr"]').value;
+      const w = tr.querySelector('[data-f="workers"]').value, it = tr.querySelector('[data-f="itr"]').value, mc = tr.querySelector('[data-f="mech"]').value;
       const prev = st.changed.get(id) || {}, moved = prev.contractor_id != null || prev.codifier_id != null;
-      if (w === String(row.workers) && it === String(row.itr ?? 0) && !moved) st.changed.delete(id); else st.changed.set(id, { ...prev, workers: w, itr: it });
+      if (w === String(row.workers) && it === String(row.itr ?? 0) && mc === String(row.mech ?? 0) && !moved) st.changed.delete(id); else st.changed.set(id, { ...prev, workers: w, itr: it, mech: mc });
       tr.classList.toggle("dirty", st.changed.has(id));
-      tr.querySelector("[data-rowtotal]").textContent = numOf(w) + numOf(it);
+      tr.querySelector("[data-rowtotal]").textContent = numOf(w) + numOf(it) + numOf(mc);
       paintTotals(); paintDirty();
     }));
     body.querySelectorAll("[data-add-edit]").forEach((i) => i.addEventListener("input", () => {   // числа добавленной (ещё не сохранённой) строки правятся прямо в таблице
       const idx = Number(i.dataset.addEdit), tr = i.closest("tr"), a = st.added[idx];
-      const w = tr.querySelector('[data-f="workers"]').value, it = tr.querySelector('[data-f="itr"]').value;
-      if (isCount(w) && isCount(it)) { a.workers = Number(w); a.itr = Number(it); }
-      tr.querySelector("[data-add-total]").textContent = numOf(w) + numOf(it);
-      i.classList.toggle("bad", !isCount(w) || !isCount(it));
+      const w = tr.querySelector('[data-f="workers"]').value, it = tr.querySelector('[data-f="itr"]').value, mc = tr.querySelector('[data-f="mech"]').value;
+      if (isCount(w) && isCount(it) && isCount(mc)) { a.workers = Number(w); a.itr = Number(it); a.mech = Number(mc); }
+      tr.querySelector("[data-add-total]").textContent = numOf(w) + numOf(it) + numOf(mc);
+      i.classList.toggle("bad", !isCount(w) || !isCount(it) || !isCount(mc));
       paintTotals(); paintDirty();
     }));
     body.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => pickForRow(b.dataset.kind, Number(b.dataset.ref), b.dataset.pick)));
@@ -247,10 +248,10 @@ export function mountHeadcount(el, ctx) {
         const ctr = type === "ctr" ? item.id : cur.ctr, work = type === "work" ? item.id : cur.work;
         if (pairTaken(ctr, work, { kind, ref })) { setMsg("За этот день такая строка (подрядчик + вид работ) уже есть — выберите другую пару или правьте числа в имеющейся.", "bad"); return; }
         if (saved) {
-          const prev = st.changed.get(row.id) || { workers: String(row.workers), itr: String(row.itr ?? 0) }, next = { ...prev };
+          const prev = st.changed.get(row.id) || { workers: String(row.workers), itr: String(row.itr ?? 0), mech: String(row.mech ?? 0) }, next = { ...prev };
           if (ctr === row.contractor_id) delete next.contractor_id; else next.contractor_id = ctr;
           if (work === row.codifier_id) delete next.codifier_id; else next.codifier_id = work;
-          if (next.contractor_id == null && next.codifier_id == null && next.workers === String(row.workers) && next.itr === String(row.itr ?? 0)) st.changed.delete(row.id);
+          if (next.contractor_id == null && next.codifier_id == null && next.workers === String(row.workers) && next.itr === String(row.itr ?? 0) && next.mech === String(row.mech ?? 0)) st.changed.delete(row.id);
           else st.changed.set(row.id, next);
         } else { row.contractor_id = ctr; row.codifier_id = work; }
         setMsg("");
@@ -265,12 +266,13 @@ export function mountHeadcount(el, ctx) {
     const tw = rows.reduce((n, r) => n + numOf(rowVals(r).w), 0) + st.added.reduce((n, a) => n + a.workers, 0);
     const ti = rows.reduce((n, r) => n + numOf(rowVals(r).i), 0) + st.added.reduce((n, a) => n + a.itr, 0);
     const set = (id, v) => { const n = pane.querySelector(id); if (n) n.textContent = v || ""; };
-    set("#hc-total-w", tw); set("#hc-total-i", ti); set("#hc-total", tw + ti);
+    const tm = rows.reduce((n, r) => n + numOf(rowVals(r).m), 0) + st.added.reduce((n, a) => n + (a.mech ?? 0), 0);
+    set("#hc-total-w", tw); set("#hc-total-i", ti); set("#hc-total-m", tm); set("#hc-total", tw + ti + tm);
   }
 
   function paintDirty() {
     const n = pane.querySelector("#hc-dirty"); if (!n) return;
-    const problem = [...st.changed.values()].map((c) => pairProblem(c.workers, c.itr)).find(Boolean) || "";
+    const problem = [...st.changed.values()].map((c) => pairProblem(c.workers, c.itr, c.mech)).find(Boolean) || "";
     n.textContent = problem || (hasChanges() ? `К сохранению: изменено ${st.changed.size}, добавлено ${st.added.length}` : "");
     n.className = `hc-muted ${problem ? "bad" : ""}`;
     const b = pane.querySelector("#hc-save"); if (b) b.disabled = st.saving || !!problem || !hasChanges();
@@ -284,41 +286,42 @@ export function mountHeadcount(el, ctx) {
       <label class="hc-grow">Вид работ<div class="hc-picker" id="hc-a-work"></div></label>
       <label>Рабочие<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-w" class="hc-num"></label>
       <label>ИТР<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-i" class="hc-num"></label>
-      <label>Итого<input type="text" id="hc-a-sum" class="hc-num hc-total-in" value="0" readonly tabindex="-1" aria-label="Итого: рабочие плюс ИТР"></label>
+      <label>Механизаторы<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-m" class="hc-num"></label>
+      <label>Итого<input type="text" id="hc-a-sum" class="hc-num hc-total-in" value="0" readonly tabindex="-1" aria-label="Итого: рабочие плюс ИТР плюс механизаторы"></label>
       <button type="button" class="hc-btn" id="hc-a-go">Добавить в карточку</button></div><p class="hc-msg bad" id="hc-a-err" role="alert"></p>`;
     const picker = workPicker(box.querySelector("#hc-a-work"), st.works);
     const ctrPicker = contractorPicker(box.querySelector("#hc-a-ctr"), st.contractors);
     // подрядчик, с которым вносили последнюю строку, остаётся выбранным (за день вносят по несколько видов работ одного подрядчика)
     if (st.lastCtr && st.contractors.some((c) => c.id === st.lastCtr)) ctrPicker.set(st.lastCtr); else if (st.contractors.length === 1) ctrPicker.set(st.contractors[0].id);
     const err = box.querySelector("#hc-a-err");
-    const wIn = box.querySelector("#hc-a-w"), iIn = box.querySelector("#hc-a-i"), sum = box.querySelector("#hc-a-sum");
+    const wIn = box.querySelector("#hc-a-w"), iIn = box.querySelector("#hc-a-i"), mIn = box.querySelector("#hc-a-m"), sum = box.querySelector("#hc-a-sum");
     const val = (el) => (el.value.trim() === "" ? "0" : el.value);   // пустое поле — 0: вносят чаще что-то одно
-    const upd = () => { sum.value = numOf(val(wIn)) + numOf(val(iIn)); };
-    wIn.addEventListener("input", upd); iIn.addEventListener("input", upd);
+    const upd = () => { sum.value = numOf(val(wIn)) + numOf(val(iIn)) + numOf(val(mIn)); };
+    wIn.addEventListener("input", upd); iIn.addEventListener("input", upd); mIn.addEventListener("input", upd);
     const add = () => {
       const contractor_id = ctrPicker.value(), codifier_id = picker.value();
       err.textContent = "";
       if (!contractor_id) { err.textContent = "Выберите подрядчика"; return; }
       if (!codifier_id) { err.textContent = "Выберите вид работ"; return; }
-      const problem = pairProblem(val(wIn), val(iIn));
+      const problem = pairProblem(val(wIn), val(iIn), val(mIn));
       if (problem) { err.textContent = problem; return; }
       if (pairTaken(contractor_id, codifier_id, { kind: "none", ref: -1 })) {
         err.textContent = "Карточка содержит дубликат численности, сохранение невозможно: по этому подрядчику и виду работ за день строка уже есть — измените её в таблице.";
         return;
       }
       st.lastCtr = contractor_id;
-      st.added.push({ contractor_id, codifier_id, workers: Number(val(wIn)), itr: Number(val(iIn)) });
-      wIn.value = ""; iIn.value = ""; upd(); picker.clear(); paintRows(); paintDirty();
+      st.added.push({ contractor_id, codifier_id, workers: Number(val(wIn)), itr: Number(val(iIn)), mech: Number(val(mIn)) });
+      wIn.value = ""; iIn.value = ""; mIn.value = ""; upd(); picker.clear(); paintRows(); paintDirty();
     };
     box.querySelector("#hc-a-go").addEventListener("click", add);
-    for (const el of [wIn, iIn]) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    for (const el of [wIn, iIn, mIn]) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
   }
 
   async function save() {
     if (st.saving || !hasChanges()) return;
     const rows = [
       ...(st.day?.rows || []).filter((r) => st.changed.has(r.id)).map((r) => {
-        const c = st.changed.get(r.id), e = effIds(r), row = { contractor_id: e.ctr, codifier_id: e.work, workers: Number(c.workers), itr: Number(c.itr) };
+        const c = st.changed.get(r.id), e = effIds(r), row = { contractor_id: e.ctr, codifier_id: e.work, workers: Number(c.workers), itr: Number(c.itr), mech: Number(c.mech ?? 0) };
         if (e.ctr !== r.contractor_id || e.work !== r.codifier_id) row.move_from = r.id;   // сменили ключ записи: она переезжает
         return row;
       }),
@@ -336,7 +339,7 @@ export function mountHeadcount(el, ctx) {
 
   async function removeRow(id) {
     const r = st.day.rows.find((x) => x.id === id);
-    if (!(await ctx.confirm(`Удалить строку?\n\n${r.contractor}\n${r.work_code} ${r.work_name}\nРабочие: ${r.workers}, ИТР: ${r.itr ?? 0}, итого: ${r.total ?? r.workers}\n\nЗначение останется в истории изменений.`, { danger: true }))) return;
+    if (!(await ctx.confirm(`Удалить строку?\n\n${r.contractor}\n${r.work_code} ${r.work_name}\nРабочие: ${r.workers}, ИТР: ${r.itr ?? 0}, механизаторы: ${r.mech ?? 0}, итого: ${r.total ?? r.workers}\n\nЗначение останется в истории изменений.`, { danger: true }))) return;
     try { await api.delete(`/objects/${ctx.objectId}/headcount/records/${id}`); st.changed.delete(id); await loadDay(); setMsg("Строка удалена.", "ok"); }
     catch (e) { setMsg(errText(e), "bad"); }
   }
@@ -346,7 +349,7 @@ export function mountHeadcount(el, ctx) {
       const prev = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${addDays(st.date, -1)}`);
       const have = new Set([...(st.day?.rows || []).map((r) => `${r.contractor_id}:${r.codifier_id}`), ...st.added.map((a) => `${a.contractor_id}:${a.codifier_id}`)]);
       const fresh = (prev.rows || []).filter((r) => !have.has(`${r.contractor_id}:${r.codifier_id}`));
-      fresh.forEach((r) => st.added.push({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: r.workers, itr: r.itr ?? 0 }));
+      fresh.forEach((r) => st.added.push({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: r.workers, itr: r.itr ?? 0, mech: r.mech ?? 0 }));
       paintRows(); paintDirty();
       setMsg(fresh.length ? `Добавлено строк из предыдущего дня: ${fresh.length}. Проверьте числа и сохраните.` : "За предыдущий день нечего добавить.", fresh.length ? "ok" : "");
     } catch (e) { setMsg(errText(e), "bad"); }
@@ -357,47 +360,135 @@ export function mountHeadcount(el, ctx) {
     box.innerHTML = `<p class="hc-muted">Загрузка истории…</p>`;
     try {
       const d = await api.get(`/objects/${ctx.objectId}/headcount/history?date_from=${row.date}&date_to=${row.date}&contractor_id=${row.contractor_id}&codifier_id=${row.codifier_id}`);
-      box.innerHTML = `<h4>История: ${esc(row.contractor)} · ${esc(row.work_code)} · ${esc(fmtDate(row.date))}</h4><table class="hc-tbl"><thead><tr><th>Когда</th><th>Кто</th><th class="num">Рабочие было</th><th class="num">Рабочие стало</th><th class="num">ИТР было</th><th class="num">ИТР стало</th><th>Источник</th></tr></thead><tbody>${
-        d.history.map((h) => `<tr><td>${esc(fmtMoment(h.changed_at))}</td><td>${esc(h.changed_by || "—")}</td><td class="num">${h.old ?? "—"}</td><td class="num">${h.new ?? "удалено"}</td><td class="num">${h.old_itr ?? "—"}</td><td class="num">${h.new_itr ?? (h.new == null ? "удалено" : "—")}</td><td>${h.source === "import" ? "загрузка из SharePoint" : h.source === "bot" ? "бот" : "форма"}</td></tr>`).join("")}</tbody></table>`;
+      box.innerHTML = `<h4>История: ${esc(row.contractor)} · ${esc(row.work_code)} · ${esc(fmtDate(row.date))}</h4><table class="hc-tbl"><thead><tr><th>Когда</th><th>Кто</th><th class="num">Рабочие было</th><th class="num">Рабочие стало</th><th class="num">ИТР было</th><th class="num">ИТР стало</th><th class="num">Механизаторы было</th><th class="num">Механизаторы стало</th><th>Источник</th></tr></thead><tbody>${
+        d.history.map((h) => `<tr><td>${esc(fmtMoment(h.changed_at))}</td><td>${esc(h.changed_by || "—")}</td><td class="num">${h.old ?? "—"}</td><td class="num">${h.new ?? "удалено"}</td><td class="num">${h.old_itr ?? "—"}</td><td class="num">${h.new_itr ?? (h.new == null ? "удалено" : "—")}</td><td class="num">${h.old_mech ?? "—"}</td><td class="num">${h.new_mech ?? (h.new == null ? "удалено" : "—")}</td><td>${h.source === "import" ? "загрузка из SharePoint" : h.source === "bot" ? "бот" : "форма"}</td></tr>`).join("")}</tbody></table>`;
       box.scrollIntoView({ block: "nearest" });
     } catch (e) { box.innerHTML = `<div class="hc-callout bad" role="alert">${esc(errText(e))}</div>`; }
   }
   const paintHistory = () => {};
 
   // =====================================================================  ПОДРЯДЧИКИ
+  // Подрядчик объекта — ссылка на контрагента ЕДИНОГО справочника (2026-10-26): его добавляют поиском по общему справочнику (ИНН или
+  // название), нового контрагента заводят отсюда же (право на «Справочник контрагентов» проверяет сервер). Название и ИНН подрядчика
+  // берутся из справочника и правятся только в нём — в этом экране их изменить нельзя.
   function paintContractors() {
-    const f = st.contractorForm;
     pane.innerHTML = `
-      <div class="hc-bar"><strong>Подрядчики объекта</strong><span class="hc-muted">пул, из которого выбирают при вводе численности</span>${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="hc-c-new">Добавить подрядчика</button>` : ""}</div>
-      ${f ? `<form class="hc-form" id="hc-c-form"><label>Название<input type="text" id="hc-c-name" value="${esc(f.name)}" maxlength="300"></label>
-        <label>ИНН<input type="text" id="hc-c-inn" value="${esc(f.inn)}" maxlength="20" inputmode="numeric"></label>
-        <button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="hc-c-cancel">Отмена</button>
-        <p class="hc-msg ${esc(f.kind || "")}" id="hc-c-msg" role="alert">${esc(f.msg || "")}</p></form>` : ""}
+      <div class="hc-bar"><strong>Подрядчики объекта</strong><span class="hc-muted">выбираются из общего справочника контрагентов; название и ИНН меняются в справочнике</span>${ctx.canWrite && !st.ctrAdd ? `<button type="button" class="hc-btn primary" id="hc-c-new">Добавить подрядчика</button>` : ""}</div>
+      <div id="hc-ca"></div>
       <p id="hc-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>ИНН</th><th>Контрагент в справочнике</th><th class="num">Записей</th><th></th></tr></thead><tbody>${
-        st.contractors.length ? [...st.contractors].sort((a, b) => (a.display || "").localeCompare(b.display || "", "ru")).map((c) => `<tr><td>${esc(c.name || c.counterparty_name || "—")}</td>
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>ИНН</th><th>Справочник контрагентов</th><th class="num">Записей</th><th></th></tr></thead><tbody>${
+        st.contractors.length ? [...st.contractors].sort((a, b) => (a.display || "").localeCompare(b.display || "", "ru")).map((c) => `<tr><td>${esc(c.name || "—")}</td>
           <td>${esc(c.inn || "—")} ${c.inn_note ? `<span class="hc-badge warn" title="В ИНН не 10 и не 12 цифр">${esc(c.inn_note)}</span>` : ""}</td>
-          <td>${c.counterparty_id ? esc(c.counterparty_name || "") : `<span class="hc-muted">не связан${c.inn ? "" : " — укажите ИНН"}</span>`}</td><td class="num">${c.records}</td>
-          <td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-edit="${c.id}">Изменить</button> <button type="button" class="hc-btn danger mini" data-del="${c.id}">Удалить</button>` : ""}</td></tr>`).join("")
-        : `<tr><td colspan="5" class="hc-muted">Подрядчиков нет. Добавьте вручную или загрузите историю численности.</td></tr>`}</tbody></table></div>`;
-    pane.querySelector("#hc-c-new")?.addEventListener("click", () => { st.contractorForm = { id: null, name: "", inn: "" }; paintContractors(); pane.querySelector("#hc-c-name")?.focus(); });
-    pane.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
-      const c = st.contractors.find((x) => x.id === Number(b.dataset.edit)); st.contractorForm = { id: c.id, name: c.name || "", inn: c.inn || "" }; paintContractors(); pane.querySelector("#hc-c-name")?.focus();
-    }));
+          <td>${c.counterparty_id ? "в справочнике" : `<span class="hc-badge warn">не связан</span> <span class="hc-muted">выберите контрагента</span>`}</td><td class="num">${c.records}</td>
+          <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-replace="${c.id}" title="Привязать подрядчика к другому контрагенту справочника">${c.counterparty_id ? "Заменить контрагента" : "Выбрать контрагента"}</button> <button type="button" class="hc-btn danger mini" data-del="${c.id}">Удалить</button>` : ""}</td></tr>`).join("")
+        : `<tr><td colspan="5" class="hc-muted">Подрядчиков нет. Добавьте из справочника контрагентов или загрузите историю численности.</td></tr>`}</tbody></table></div>`;
+    pane.querySelector("#hc-c-new")?.addEventListener("click", () => { openCtrAdd(null); });
+    pane.querySelectorAll("[data-replace]").forEach((b) => b.addEventListener("click", () => openCtrAdd(Number(b.dataset.replace))));
     pane.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => delContractor(Number(b.dataset.del))));
-    pane.querySelector("#hc-c-cancel")?.addEventListener("click", () => { st.contractorForm = null; paintContractors(); });
-    pane.querySelector("#hc-c-form")?.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const form = st.contractorForm, name = pane.querySelector("#hc-c-name").value, inn = pane.querySelector("#hc-c-inn").value;
-      Object.assign(form, { name, inn });
-      const note = pane.querySelector("#hc-c-msg");
+    if (st.ctrAdd) paintCtrAdd();
+  }
+
+  let ctrTimer = 0;
+  function openCtrAdd(replaceId) {
+    st.ctrAdd = { replaceId, q: "", items: [], total: 0, canCreate: null, loaded: false, msg: "", kind: "", newForm: null };
+    st.msg = ""; paintContractors();
+    pane.querySelector("#hc-ca-q")?.focus();
+    searchCtr();
+  }
+  function closeCtrAdd() { clearTimeout(ctrTimer); st.ctrAdd = null; paintContractors(); }
+
+  async function searchCtr() {
+    const a = st.ctrAdd; if (!a) return;
+    const q = a.q;
+    try {
+      const r = await api.get(`/objects/${ctx.objectId}/headcount/counterparty-search?q=${encodeURIComponent(q)}`);
+      if (dead || st.ctrAdd !== a || a.q !== q) return;
+      Object.assign(a, { items: r.items || [], total: r.total || 0, canCreate: !!r.can_create, loaded: true });
+      if (a.kind === "bad" && a.msg === a.searchErr) { a.msg = ""; a.kind = ""; }
+    } catch (e) { if (dead || st.ctrAdd !== a) return; a.msg = a.searchErr = errText(e); a.kind = "bad"; }
+    paintCtrAddMsg(); paintCtrRows(); paintCtrNew();
+  }
+
+  function paintCtrAddMsg() { const n = pane.querySelector("#hc-ca-msg"), a = st.ctrAdd; if (n && a) { n.textContent = a.msg; n.className = `hc-msg ${a.kind || ""}`; } }
+
+  function paintCtrAdd() {
+    const box = pane.querySelector("#hc-ca"), a = st.ctrAdd;
+    if (!box || !a) return;
+    const target = a.replaceId != null ? st.contractors.find((x) => x.id === a.replaceId) : null;
+    box.innerHTML = `<div class="hc-form hc-ca"><strong style="flex-basis:100%">${target ? `Заменить контрагента у подрядчика «${esc(target.display)}»` : "Добавить подрядчика из общего справочника контрагентов"}</strong>
+      <label class="hc-grow">Поиск по ИНН или названию<input type="text" id="hc-ca-q" value="${esc(a.q)}" maxlength="100" autocomplete="off" placeholder="ИНН или часть названия"></label>
+      ${target ? "" : `<button type="button" class="hc-btn" id="hc-ca-mk" title="Если нужного контрагента нет в справочнике">Завести нового контрагента</button>`}
+      <button type="button" class="hc-btn" id="hc-ca-close">Закрыть</button>
+      <div id="hc-ca-new" style="flex-basis:100%"></div>
+      <p class="hc-msg ${esc(a.kind || "")}" id="hc-ca-msg" role="alert" style="flex-basis:100%">${esc(a.msg || "")}</p>
+      <div class="hc-scroll" style="flex-basis:100%"><table class="hc-tbl"><thead><tr><th>Контрагент</th><th>ИНН</th><th></th></tr></thead><tbody id="hc-ca-rows"></tbody></table></div></div>`;
+    box.querySelector("#hc-ca-q").addEventListener("input", (e) => { a.q = e.target.value; clearTimeout(ctrTimer); ctrTimer = setTimeout(searchCtr, 250); });
+    box.querySelector("#hc-ca-close").addEventListener("click", closeCtrAdd);
+    box.querySelector("#hc-ca-mk")?.addEventListener("click", () => {
+      const q = a.q.trim();
+      a.newForm = { name: /\d/.test(q) && !/[^\d\s]/.test(q) ? "" : q, inn: /^[\d\s]+$/.test(q) ? q.replace(/\s+/g, "") : "", msg: "" };
+      paintCtrNew(); box.querySelector("#hc-ca-nm")?.focus();
+    });
+    paintCtrRows(); paintCtrNew();
+  }
+
+  function paintCtrRows() {
+    const a = st.ctrAdd, body = pane.querySelector("#hc-ca-rows");
+    if (!a || !body) return;
+    const replacing = a.replaceId != null;
+    body.innerHTML = !a.loaded ? `<tr><td colspan="3" class="hc-muted">Загрузка…</td></tr>`
+      : a.items.length ? a.items.map((c) => `<tr><td>${esc(c.name)}${c.full_name ? `<div class="hc-muted hc-small">${esc(c.full_name)}</div>` : ""}</td>
+          <td>${c.inn ? esc(c.inn) : '<span class="hc-muted">нет</span>'}${c.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
+          <td class="nw">${c.added && !(replacing && c.added === a.replaceId) ? `<span class="hc-muted">уже в списке объекта</span>` : (c.added ? `<span class="hc-muted">уже выбран</span>` : `<button type="button" class="hc-btn mini primary" data-cp="${c.id}">${replacing ? "Выбрать" : "Добавить"}</button>`)}</td></tr>`).join("")
+          + (a.total > a.items.length ? `<tr><td colspan="3" class="hc-muted hc-small">Показаны первые ${a.items.length} из ${a.total} — уточните запрос.</td></tr>` : "")
+      : `<tr><td colspan="3" class="hc-muted">В справочнике ничего не нашлось${replacing ? "" : ". Можно завести нового контрагента"}.</td></tr>`;
+    body.querySelectorAll("[data-cp]").forEach((b) => b.addEventListener("click", () => pickCounterparty(Number(b.dataset.cp), b)));
+  }
+
+  async function pickCounterparty(cpId, btn) {
+    const a = st.ctrAdd; if (!a) return;
+    if (btn) btn.disabled = true;
+    try {
+      if (a.replaceId != null) {
+        const c = st.contractors.find((x) => x.id === a.replaceId);
+        if (c && c.records && !(await ctx.confirm(`У подрядчика «${c.display}» есть записи численности (${c.records}). После замены они будут относиться к выбранному контрагенту. Продолжить?`, { danger: true }))) { if (btn) btn.disabled = false; return; }
+        const r = await api.patch(`/objects/${ctx.objectId}/headcount/contractors/${a.replaceId}`, { counterparty_id: cpId });
+        st.ctrAdd = null; await reloadContractors(); setMsg(`Контрагент заменён: ${r.display}.`, "ok");
+      } else {
+        const r = await api.post(`/objects/${ctx.objectId}/headcount/contractors`, { counterparty_id: cpId });
+        st.ctrAdd = null; await reloadContractors(); setMsg(`Подрядчик добавлен: ${r.display}${r.inn_note ? " — " + r.inn_note : ""}.`, r.inn_note ? "warn" : "ok");
+      }
+    } catch (e) { if (btn) btn.disabled = false; a.msg = errText(e); a.kind = "bad"; paintCtrAddMsg(); }
+  }
+
+  function paintCtrNew() {
+    const a = st.ctrAdd, box = pane.querySelector("#hc-ca-new");
+    if (!a || !box) return;
+    const f = a.newForm;
+    if (!f) { box.innerHTML = ""; return; }
+    if (a.canCreate === false) {
+      box.innerHTML = `<div class="hc-callout warn" role="alert">Заводить контрагентов в общем справочнике может пользователь с правом на раздел «Справочник контрагентов» (Контрактация). Обратитесь к такому пользователю: он добавит контрагента, и вы выберете его из списка выше.</div>`;
+      return;
+    }
+    box.innerHTML = `<div class="hc-form"><strong style="flex-basis:100%">Новый контрагент в общем справочнике</strong>
+      <label>ИНН<input type="text" id="hc-ca-ni" value="${esc(f.inn)}" maxlength="20" inputmode="numeric" autocomplete="off"></label>
+      <label>Название<input type="text" id="hc-ca-nm" value="${esc(f.name)}" maxlength="300" autocomplete="off"></label>
+      <button type="button" class="hc-btn primary" id="hc-ca-nok">Создать и добавить на объект</button><button type="button" class="hc-btn" id="hc-ca-ncl">Отмена</button>
+      <p class="hc-muted hc-small" style="flex-basis:100%">Контрагент появится в «Справочнике контрагентов» для всех объектов; остальные реквизиты (КПП, адрес, контакты) дополните там.</p>
+      <p class="hc-msg ${f.msg ? "bad" : ""}" id="hc-ca-nmsg" role="alert" style="flex-basis:100%">${esc(f.msg || "")}</p></div>`;
+    box.querySelector("#hc-ca-ncl").addEventListener("click", () => { a.newForm = null; paintCtrNew(); });
+    box.querySelector("#hc-ca-nok").addEventListener("click", async (ev) => {
+      f.name = box.querySelector("#hc-ca-nm").value.trim(); f.inn = box.querySelector("#hc-ca-ni").value.trim();
+      const note = box.querySelector("#hc-ca-nmsg");
+      if (!f.name) { f.msg = "Укажите название контрагента"; note.textContent = f.msg; note.className = "hc-msg bad"; return; }
+      ev.target.disabled = true;
       try {
-        const body = { name: name || null, inn: inn || null };
-        const r = form.id ? await api.patch(`/objects/${ctx.objectId}/headcount/contractors/${form.id}`, body) : await api.post(`/objects/${ctx.objectId}/headcount/contractors`, body);
-        st.contractorForm = null; await reloadContractors(); setMsg(`Сохранено: ${r.display}${r.inn_note ? " — " + r.inn_note : ""}.`, r.inn_note ? "warn" : "ok");
-      } catch (err) { form.msg = errText(err); form.kind = "bad"; if (note) { note.textContent = form.msg; note.className = "hc-msg bad"; } }
+        const r = await api.post(`/objects/${ctx.objectId}/headcount/contractors`, { create_counterparty: true, name: f.name, inn: f.inn || null });
+        st.ctrAdd = null; await reloadContractors(); setMsg(`Контрагент заведён в справочнике и добавлен на объект: ${r.display}${r.inn_note ? " — " + r.inn_note : ""}.`, r.inn_note ? "warn" : "ok");
+      } catch (e) { ev.target.disabled = false; f.msg = errText(e); note.textContent = f.msg; note.className = "hc-msg bad"; }
     });
   }
+
   async function reloadContractors() {
     try { st.contractors = (await api.get(`/objects/${ctx.objectId}/headcount/contractors`)).contractors || []; } catch (e) { setMsg(errText(e), "bad"); }
     if (!dead) paint();
@@ -421,14 +512,14 @@ export function mountHeadcount(el, ctx) {
       </div>
       <div class="hc-filters">
         <label class="hc-f-obj">Объект<select id="hc-r-obj">${objectOptions(r.obj)}</select></label>
-        <label>Показатель<select id="hc-r-staff" title="Итого — рабочие и ИТР вместе"><option value="total" ${r.staff === "total" ? "selected" : ""}>Итого</option><option value="workers" ${r.staff === "workers" ? "selected" : ""}>Рабочие</option><option value="itr" ${r.staff === "itr" ? "selected" : ""}>ИТР</option></select></label>
+        <label>Показатель<select id="hc-r-staff" title="Итого — рабочие, ИТР и механизаторы вместе"><option value="total" ${r.staff === "total" ? "selected" : ""}>Итого</option><option value="workers" ${r.staff === "workers" ? "selected" : ""}>Рабочие</option><option value="itr" ${r.staff === "itr" ? "selected" : ""}>ИТР</option><option value="mech" ${r.staff === "mech" ? "selected" : ""}>Механизаторы</option></select></label>
         <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}" title="Пусто — последний день с данными"></label>
         <label>Период с<input type="date" id="hc-r-from" value="${esc(r.from)}"></label>
         <label>по<input type="date" id="hc-r-to" value="${esc(r.to)}"></label>
         <button type="button" class="hc-btn primary" id="hc-r-go">Обновить</button>
         ${ctx.download ? `<button type="button" class="hc-btn" id="hc-r-xlsx" title="Выгрузить отчёт в Excel">В Excel</button>` : ""}
       </div>
-      <p class="hc-muted hc-small">Показатель «Итого» — рабочие и ИТР вместе; «Рабочие» и «ИТР» показывают одно слагаемое. Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
+      <p class="hc-muted hc-small">Показатель «Итого» — рабочие, ИТР и механизаторы вместе; «Рабочие», «ИТР» и «Механизаторы» показывают одно слагаемое. Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
       <div id="hc-r-body"></div>`;
     pane.querySelector("#hc-r-obj").addEventListener("change", (e) => { r.obj = e.target.value; loadReport(); });
     pane.querySelector("#hc-r-staff").addEventListener("change", (e) => { r.staff = e.target.value; loadReport(); });
@@ -583,18 +674,18 @@ export function mountHeadcount(el, ctx) {
     const from = r.offset + 1, to = r.offset + r.items.length;
     const sourceText = (x) => (x === "import" ? "загрузка из SharePoint" : x === "bot" ? "бот" : "форма");
     const head = `<div class="hc-bar"><span><strong>${from.toLocaleString("ru-RU")}–${to.toLocaleString("ru-RU")}</strong> из ${r.total.toLocaleString("ru-RU")}</span>
-      ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: итого <strong>${(r.sum_total ?? r.sum_workers).toLocaleString("ru-RU")}</strong> (рабочие ${r.sum_workers.toLocaleString("ru-RU")}, ИТР ${(r.sum_itr ?? 0).toLocaleString("ru-RU")})</span>` : ""}
+      ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: итого <strong>${(r.sum_total ?? r.sum_workers).toLocaleString("ru-RU")}</strong> (рабочие ${r.sum_workers.toLocaleString("ru-RU")}, ИТР ${(r.sum_itr ?? 0).toLocaleString("ru-RU")}, механизаторы ${(r.sum_mech ?? 0).toLocaleString("ru-RU")})</span>` : ""}
       <button type="button" class="hc-btn mini" id="hc-d-prev" ${r.offset <= 0 ? "disabled" : ""}>◀ Назад</button><button type="button" class="hc-btn mini" id="hc-d-next" ${to >= r.total ? "disabled" : ""}>Вперёд ▶</button></div>`;
     const objCol = (name) => (all ? `<td>${esc(name)}</td>` : "");
     const rows = d.mode === "records" ? r.items.map((i) => `<tr><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
-        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td><td class="num">${i.itr ?? 0}</td><td class="num"><strong>${i.total ?? i.workers}</strong></td>
+        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td><td class="num">${i.itr ?? 0}</td><td class="num">${i.mech ?? 0}</td><td class="num"><strong>${i.total ?? i.workers}</strong></td>
         <td class="hc-small"><span class="nw">${esc(fmtMoment(i.entered_at))}</span>${i.entered_by ? " · " + esc(i.entered_by) : ""}<br>${i.late ? `<span class="hc-badge bad">просрочено${i.overdue_minutes ? " на " + fmtOverdue(i.overdue_minutes) : ""}</span> ` : ""}<span class="hc-badge">${esc(sourceText(i.source))}</span>${i.changes ? ` <span class="hc-badge" title="Последняя правка: ${esc(fmtMoment(i.updated_at))}${i.updated_by ? " · " + esc(i.updated_by) : ""}">правок: ${i.changes}</span>` : ""}</td></tr>`).join("")
       : r.items.map((i) => `<tr><td class="hc-small"><span class="nw">${esc(fmtMoment(i.changed_at))}</span><br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
-        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td><td class="num">${i.old_itr ?? "—"} → ${i.new_itr ?? (i.new == null ? "удалено" : "—")}</td></tr>`).join("");
+        <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td><td class="num">${i.old_itr ?? "—"} → ${i.new_itr ?? (i.new == null ? "удалено" : "—")}</td><td class="num">${i.old_mech ?? "—"} → ${i.new_mech ?? (i.new == null ? "удалено" : "—")}</td></tr>`).join("");
     const heads = d.mode === "records"
-      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие", "ИТР", "Итого", "Внесено (кто и когда)"]
-      : ["Когда и кто изменил", "День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие: было → стало", "ИТР: было → стало"];
-    box.innerHTML = `${head}<div class="hc-scroll"><table class="hc-tbl"><thead><tr>${heads.map((h) => `<th class="${["Рабочие", "ИТР", "Итого", "Рабочие: было → стало", "ИТР: было → стало"].includes(h) ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+      ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие", "ИТР", "Механизаторы", "Итого", "Внесено (кто и когда)"]
+      : ["Когда и кто изменил", "День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие: было → стало", "ИТР: было → стало", "Механизаторы: было → стало"];
+    box.innerHTML = `${head}<div class="hc-scroll"><table class="hc-tbl"><thead><tr>${heads.map((h) => `<th class="${["Рабочие", "ИТР", "Механизаторы", "Итого", "Рабочие: было → стало", "ИТР: было → стало", "Механизаторы: было → стало"].includes(h) ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
     box.querySelector("#hc-d-prev").addEventListener("click", () => { d.offset = Math.max(0, d.offset - d.limit); loadData(); });
     box.querySelector("#hc-d-next").addEventListener("click", () => { d.offset += d.limit; loadData(); });
   }
@@ -715,7 +806,7 @@ export function mountHeadcount(el, ctx) {
       try {
         const fd = new FormData(); fd.append("file", a.file); fd.append("mapping", JSON.stringify(a.mapping)); fd.append("dry_run", dry ? "true" : "false");
         const r = await ctx.upload("/headcount/import/apply", fd);
-        a.result = `${dry ? "Проверка, ничего не записано — получилось бы: " : "Загружено: "}записей создано ${r.records_created}, обновлено ${r.records_updated}, без изменений ${r.records_unchanged}, оставлено как внесено в системе ${r.kept_form_records}; строк истории ${r.history_rows}; новых подрядчиков ${r.contractors_created}${Object.keys(r.skipped).length ? "; пропущено: " + Object.entries(r.skipped).map(([x, n]) => `${x} — ${n}`).join(", ") : ""}.`;
+        a.result = `${dry ? "Проверка, ничего не записано — получилось бы: " : "Загружено: "}записей создано ${r.records_created}, обновлено ${r.records_updated}, без изменений ${r.records_unchanged}, оставлено как внесено в системе ${r.kept_form_records}; строк истории ${r.history_rows}; новых подрядчиков ${r.contractors_created}${r.counterparties_created ? `, из них заведено новых контрагентов в общем справочнике: ${r.counterparties_created}` : ""}${Object.keys(r.skipped).length ? "; пропущено: " + Object.entries(r.skipped).map(([x, n]) => `${x} — ${n}`).join(", ") : ""}.`;
         if (!dry) { st.day = null; st.contractors = null; st.facets = null; loadRefs(); }
       } catch (e) { a.error = errText(e); }
       a.busy = false; paintAdmin();
@@ -883,12 +974,11 @@ const WORK_CFG = {
   ],
 };
 const CTR_CFG = {
-  placeholder: "Подрядчик не выбран", title: "Выбор подрядчика", hint: "Поиск — в полях под заголовками колонок (название, ИНН, контрагент). Щёлкните строку, чтобы выбрать.",
+  placeholder: "Подрядчик не выбран", title: "Выбор подрядчика", hint: "Подрядчики объекта — контрагенты общего справочника. Поиск — в полях под заголовками колонок (название, ИНН). Щёлкните строку, чтобы выбрать.",
   label: (c) => c.display,
   columns: [
-    { key: "name", title: "Наименование", filter: true, text: (c) => `${c.name || ""} ${c.counterparty_name || ""}`, html: (c) => esc(c.name || c.counterparty_name || "—") },
+    { key: "name", title: "Наименование", filter: true, text: (c) => c.name || "", html: (c) => esc(c.name || "—") },
     { key: "inn", title: "ИНН", filter: true, cls: "nw", text: (c) => c.inn || "", html: (c) => `${c.inn ? esc(c.inn) : '<span class="hc-muted">нет</span>'}${c.inn_note ? ` <span class="hc-badge warn">${esc(c.inn_note)}</span>` : ""}` },
-    { key: "cp", title: "Контрагент в справочнике", filter: true, text: (c) => c.counterparty_name || "", html: (c) => (c.counterparty_id ? esc(c.counterparty_name || "") : '<span class="hc-muted">не связан</span>') },
   ],
 };
 const workPicker = (box, works) => pickField(box, works, WORK_CFG);
