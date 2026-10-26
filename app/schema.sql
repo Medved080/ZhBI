@@ -1769,6 +1769,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_contractors_inn ON headcount_contractor
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hc_contractors_name ON headcount_contractors (object_id, name_raw) WHERE inn_raw IS NULL;
 CREATE INDEX IF NOT EXISTS idx_hc_contractors_cp ON headcount_contractors (counterparty_id);
 
+-- Виды работ подрядчика на объекте и ответственный за каждую пару «подрядчик + вид работ» (2026-10-26). Бот eXpress спрашивает контакт только по тем
+-- парам, где ответственным указан его физлицо (express_contacts.individual_id). Перечень не ограничивает ввод численности в форме.
+CREATE TABLE IF NOT EXISTS headcount_contractor_works (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE CASCADE,
+    codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
+    responsible_id INTEGER REFERENCES individuals (id) ON DELETE SET NULL,   -- физлицо из справочника; NULL — ответственный не назначен
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    UNIQUE (contractor_id, codifier_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hc_cw_responsible ON headcount_contractor_works (responsible_id);
+
 -- Актуальное значение на ключ (объект, дата, подрядчик, вид работ). Прежние значения — в headcount_history.
 CREATE TABLE IF NOT EXISTS headcount_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

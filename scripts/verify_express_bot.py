@@ -119,7 +119,14 @@ PETR = cur.lastrowid
 cur = c.execute("INSERT INTO express_schedules (object_id, contact_id, weekdays, send_time, day_offset, remind_time, summary_time, summary_contact_id, effective_from) "
                 "VALUES (?, ?, '1,2,3,4,5', '10:30', 0, '11:30', '12:30', ?, '2000-01-01 00:00:00')", (OBJ, IVAN, PETR))
 SCH = cur.lastrowid
+IVAN_IND = ind["id"]
+OTHER_IND = c.execute("INSERT INTO individuals (name) VALUES ('Другой Ответственный')").lastrowid
 c.commit(); c.close()
+
+# Виды работ подрядчиков и ответственные (физлицо из справочника): Иванов отвечает за «Альфа + Арматура» и «Бета + Бетон», чужая строка — «Альфа + Земляные»
+CW = {}
+for _ctr, _work, _who in (("7701000001", "130-03", IVAN_IND), ("7701000002", "130-01-01", IVAN_IND), ("7701000001", "340-03-02", OTHER_IND)):
+    CW[(_ctr, _work)] = hc.add_contractor_work(OBJ, CON[_ctr], hc.ContractorWorkIn(codifier_id=W[_work], responsible_id=_who), user=admin)["id"]
 
 FRI = datetime(2026, 10, 23, 10, 30, tzinfo=hc.MSK)           # пятница
 SAT = datetime(2026, 10, 24, 10, 30, tzinfo=hc.MSK)
@@ -171,21 +178,15 @@ c = db.get_connection(); bad = c.execute("SELECT * FROM express_log WHERE ok = 0
 ok(bad and "stranger" in bad["text"], "в журнале обмена виден логин постороннего (админ может завести контакт)")
 ok(not say("/start", chat="55555555-5555-5555-5555-555555555555", chat_type="group_chat") , "групповой чат не обслуживается")
 
-# ------------------------------------------------------------------ диалог
+# ------------------------------------------------------------------ диалог: бот спрашивает только строки, где контакт — ответственный
+ok("Строк, за которые вы ответственны: 2" in out[0][1], "приглашение называет число строк контакта")
 menu = press("Внести", out[0])[0]
-ok("Пока ничего не внесено" in menu[1] and "Альфа" in str(buttons(menu)) and "Бета" in str(buttons(menu)), "меню: подрядчики объекта")
-out = press("Альфа")
-ok(out and "Напишите часть названия" in out[-1][1] and "К подрядчикам" in str(buttons(out[-1])), "выбран подрядчик → экран видов работ: подсказка писать название или код, кнопка возврата")
-say_search = out
-ok("названия или код" in say_search[-1][1], "поиск: бот просит слово")
-out = say("арматур")
-ok(out and "3.3. Арматура" in str(buttons(out[-1])), "поиск по части названия без учёта регистра находит вид работ")
-out = say("130-01")
-ok(out and "3.1.1. Бетон" in str(buttons(out[-1])), "поиск по коду")
-out = say("неттакого")
-ok("Ничего не нашлось" in out[-1][1], "пустой поиск: понятное сообщение")
-out = say("арматур"); out = press("3.3. Арматура")
-ok("РАБОЧИХ" in out[-1][1], "выбран вид работ → вопрос про рабочих")
+btns = str(buttons(menu))
+ok("внесено 0 из 2" in menu[1] and "Арматура" in btns and "Бетон" in btns and "Земляные" not in btns,
+   "меню: только строки, где контакт назначен ответственным (чужая строка «Альфа + Земляные» не показана)")
+ok("Альфа" in btns and "Бета" in btns, "кнопка строки называет подрядчика и вид работ")
+out = press("Арматура")
+ok("РАБОЧИХ" in out[-1][1] and "Альфа" in out[-1][1], "выбрана строка → сразу вопрос про рабочих (выбора подрядчика и поиска вида работ больше нет)")
 ok("число" in say("много")[-1][1], "нечисловой ввод отклоняется с подсказкой")
 ok("число" in say("-5")[-1][1] and "число" in say("100001")[-1][1], "отрицательное и слишком большое отклоняются")
 out = say("12")
@@ -203,34 +204,42 @@ ok(len(hist) == 1 and hist[0]["source"] == "bot" and hist[0]["old_workers"] is N
 ok(rec["entered_by"] is None, "автор — не учётная запись (контакт бота)")
 q = c.execute("SELECT status, answered_at FROM express_requests WHERE id = ?", (RID,)).fetchone(); c.close()
 ok(q["status"] == "answered" and q["answered_at"], "запрос перешёл в answered")
-ok(any("Внесено за день" in m[1] and "Альфа" in m[1] for m in out), "после записи меню снова с итогом дня")
+ok("внесено 1 из 2" in out[-1][1] and "✓" in str(buttons(out[-1])) and "Итого по вашим строкам: рабочие 12" in out[-1][1], "после записи меню отмечает внесённую строку ✓ и показывает итог по строкам контакта")
 
-# вторая строка кнопкой «0» у ИТР; замена числа
-out = press("Бета", out[-1]); out = say("бетон"); out = press("3.1.1. Бетон"); out = say("7")
+# вторая строка: кнопка «0» у ИТР и механизаторов
+out = press("Бетон", out[-1]); out = say("7")
 out = press("0", out[-1]); out = press("0", out[-1])
 c = db.get_connection(); r2 = c.execute("SELECT workers, itr, mech FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000002"], W["130-01-01"])).fetchone(); c.close()
 ok(r2 and r2["workers"] == 7 and r2["itr"] == 0 and r2["mech"] == 0, "кнопка «0» у ИТР и у механизаторов: запись 7/0/0")
-out = press("Альфа", out[-1])
-ok("кнопкой из недавних" in out[-1][1] and "3.3. Арматура" in str(buttons(out[-1])), "у подрядчика с историей: недавние виды работ — кнопками, и можно писать название")
-out = say("арматур")
-ok("Нашлось" in out[-1][1] and "3.3. Арматура" in str(buttons(out[-1])), "текст, набранный сразу после выбора подрядчика, идёт в поиск (а не возвращает в список подрядчиков)")
-out = press("3.3. Арматура")
+out = press("Арматура", out[-1])
 ok("Сейчас внесено: рабочие 12, ИТР 3, механизаторы 2" in out[-1][1], "при повторном вводе показано текущее значение")
 out = say("20"); out = say("4"); out = say("1")
 ok(any("Заменено" in m[1] for m in out), "повторный ввод заменяет число")
 c = db.get_connection()
 rec = c.execute("SELECT workers, itr, mech FROM headcount_records WHERE id = ?", (rec["id"],)).fetchone()
-hist = c.execute("SELECT old_workers, new_workers, old_itr, new_itr, old_mech, new_mech, source FROM headcount_history WHERE record_id = ? ORDER BY id", (hc and c.execute("SELECT id FROM headcount_records WHERE contractor_id=? AND codifier_id=?", (CON["7701000001"], W["130-03"])).fetchone()["id"],)).fetchall(); c.close()
+hist = c.execute("SELECT old_workers, new_workers, old_itr, new_itr, old_mech, new_mech, source FROM headcount_history WHERE record_id = ? ORDER BY id", (c.execute("SELECT id FROM headcount_records WHERE contractor_id=? AND codifier_id=?", (CON["7701000001"], W["130-03"])).fetchone()["id"],)).fetchall(); c.close()
 ok(rec["workers"] == 20 and rec["itr"] == 4 and len(hist) == 2 and (hist[1]["old_workers"], hist[1]["new_workers"], hist[1]["old_itr"], hist[1]["new_itr"], hist[1]["old_mech"], hist[1]["new_mech"]) == (12, 20, 3, 4, 2, 1), "история: было 12/3/2 → стало 20/4/1")
 
-# запрет «0 и 0»
-out = press("Альфа", out[-1]); out = say("земл"); out = press("Земляные"); out = say("0"); out = say("0"); out = say("0")
+# запрет «0 и 0 и 0»
+out = press("Бетон", out[-1]); out = say("0"); out = say("0"); out = say("0")
 ok(any("не меньше 1" in m[1] for m in out), "0 рабочих, 0 ИТР и 0 механизаторов не записываются, бот объясняет почему")
-c = db.get_connection(); ok(c.execute("SELECT 1 FROM headcount_records WHERE codifier_id = ?", (W["340-03-02"],)).fetchone() is None, "пустая строка в БД не попала"); c.close()
-# выведенный из действия вид работ не находится поиском
-say("/hc", {"a": "search", "r": RID})
-out = say("выведен")
-ok(out and "Ничего не нашлось" in out[-1][1], "выведенный вид работ в поиске не предлагается")
+c = db.get_connection(); ok(c.execute("SELECT workers FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000002"], W["130-01-01"])).fetchone()["workers"] == 7, "прежняя запись при отказе не изменилась"); c.close()
+
+# чужая строка недоступна: кнопка со строкой другого ответственного, выведенный вид работ, строка, снятая посреди диалога
+foreign_row = CW[("7701000001", "340-03-02")]
+out = say("/hc", {"a": "row", "r": RID, "i": foreign_row})
+ok("не закреплена" in out[0][1], "кнопка с чужой строкой отклонена: ответственный — другой человек")
+c = db.get_connection(); c.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id) VALUES (?, ?, ?)", (CON["7701000001"], W["999-X"], IVAN_IND)); c.commit(); c.close()
+out = say("/hc", {"a": "menu", "r": RID})
+ok("из 2" in out[-1][1] and "Выведен" not in str(buttons(out[-1])), "выведенный из действия вид работ контакту не предлагается")
+out = say("/hc", {"a": "con", "r": RID, "c": CON["7701000001"]})
+ok("Ваши строки" in out[-1][1], "кнопки прежней версии диалога (выбор подрядчика) показывают актуальный список строк")
+out = press("Арматура", out[-1])
+hc.set_contractor_work_responsible(OBJ, CON["7701000001"], CW[("7701000001", "130-03")], hc.ResponsibleIn(responsible_id=OTHER_IND), user=admin)
+out = say("30"); out = say("0"); out = say("0")
+c = db.get_connection(); w30 = c.execute("SELECT workers FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000001"], W["130-03"])).fetchone()["workers"]; c.close()
+ok(any("больше за вами не закреплена" in m[1] for m in out) and w30 == 20, "строку переназначили посреди диалога: число не записывается, бот сообщает об этом")
+hc.set_contractor_work_responsible(OBJ, CON["7701000001"], CW[("7701000001", "130-03")], hc.ResponsibleIn(responsible_id=IVAN_IND), user=admin)
 
 # защита кнопок
 foreign = {"a": "con", "r": 999999, "c": CON["7701000001"]}
@@ -302,7 +311,9 @@ STATE["auth"] = "both"; eb._drop_token(); SENT.clear()
 c = db.get_connection(); c.execute("UPDATE express_config SET enabled = 1"); c.commit(); c.close()
 
 def code_contact(name, **fields):
-    return api_mod.create_contact(api_mod.ContactIn(name=name, **fields), user=admin)
+    """Контакт заводится только из справочника физлиц: для проверки на каждое имя заводится своё физлицо."""
+    c = db.get_connection(); iid = c.execute("INSERT INTO individuals (name) VALUES (?)", (name,)).lastrowid; c.commit(); c.close()
+    return api_mod.create_contact(api_mod.ContactIn(individual_id=iid, **fields), user=admin)
 ext = code_contact("Внешний Подрядчик", phone="+7 (900) 000-00-00")
 ok(ext["phone"] == "+7 (900) 000-00-00" and not ext["code_active"] and not ext["bound"], "контакт с телефоном заведён (телефон справочный, кода нет)")
 try:
@@ -375,6 +386,84 @@ try:
 except HTTPException as e:
     ok(e.status_code == 400, "отключённому контакту код не выдаётся")
 SENT.clear()
+
+# ------------------------------------------------------------------ контакт — только из справочника физлиц; нет строк — не спрашиваем
+try:
+    api_mod.create_contact(api_mod.ContactIn(name="Без справочника"), user=admin); ok(False, "контакт без физлица должен отклоняться")
+except HTTPException as e:
+    ok(e.status_code == 400 and "справочника физлиц" in e.detail, "контакт без физлица из справочника не создаётся (имя вручную больше не принимается)")
+try:
+    api_mod.create_contact(api_mod.ContactIn(individual_id=IVAN_IND), user=admin); ok(False, "второй контакт на то же физлицо")
+except HTTPException as e:
+    ok(e.status_code == 409, "второй контакт на то же физлицо не заводится")
+c = db.get_connection(); ind_name = c.execute("SELECT name FROM individuals WHERE id = ?", (OTHER_IND,)).fetchone()["name"]; c.close()
+_oc = api_mod.create_contact(api_mod.ContactIn(individual_id=OTHER_IND, name="Имя, набранное руками"), user=admin)
+ok(_oc["name"] == ind_name, "имя контакта берётся из справочника физлиц, а не из введённого")
+
+norows = code_contact("Контакт без строк")
+c = db.get_connection()
+c.execute("INSERT INTO express_schedules (object_id, contact_id, weekdays, send_time, day_offset, effective_from) VALUES (?, ?, '1,2,3,4,5,6,7', '10:30', 0, '2000-01-01 00:00:00')", (OBJ, norows["id"]))
+c.commit(); c.close()
+SENT.clear()
+st = es.tick(FRI)
+c = db.get_connection(); nq = c.execute("SELECT * FROM express_requests WHERE contact_id = ?", (norows["id"],)).fetchone(); c.close()
+ok(st["skipped"] == 1 and nq and nq["status"] == "closed" and "не закреплено ни одной строки" in nq["last_error"] and nq["attempts"] == 0 and nq["sent_at"] is None,
+   "у контакта нет строк, где он ответственный: запрос не отправляется (попыток 0), фиксируется закрытым с причиной")
+ok(es.tick(FRI)["skipped"] == 0, "повторный обход не повторяет пропуск (пара «расписание + день» занята)")
+try:
+    api_mod.send_now(OBJ, api_mod.SendNowIn(contact_id=norows["id"]), user=admin); ok(False, "ручной запрос без строк")
+except HTTPException as e:
+    ok(e.status_code == 400 and "Подрядчики" in e.detail, "«Спросить сейчас» контакту без строк отклоняется с указанием, где назначить ответственного")
+try:
+    api_mod.send_now(OBJ, api_mod.SendNowIn(contact_id=PETR), user=admin); ok(False, "ручной запрос контакту без физлица")
+except HTTPException as e:
+    ok(e.status_code == 400 and "не привязан к физлицу" in e.detail, "контакт не из справочника: ручной запрос отклоняется, подсказка выбрать физлицо")
+c = db.get_connection(); c.execute("UPDATE express_contacts SET active = 0 WHERE id = ?", (norows["id"],)); c.commit(); c.close()
+
+# ------------------------------------------------------------------ виды работ подрядчика: API
+cl = hc.list_contractors(OBJ, user=admin)["contractors"]
+alfa = next(x for x in cl if x["id"] == CON["7701000001"])
+ok(len(alfa["works"]) >= 3 and any(w["responsible_id"] == IVAN_IND for w in alfa["works"]), "список подрядчиков отдаёт виды работ с ответственными")
+try:
+    hc.add_contractor_work(OBJ, CON["7701000001"], hc.ContractorWorkIn(codifier_id=W["130-03"]), user=admin); ok(False, "дубль вида работ")
+except HTTPException as e:
+    ok(e.status_code == 409, "тот же вид работ подрядчику второй раз не добавляется")
+try:
+    hc.add_contractor_work(OBJ, CON["7701000001"], hc.ContractorWorkIn(codifier_id=W["999-X"]), user=admin); ok(False, "выведенный вид работ")
+except HTTPException as e:
+    ok(e.status_code == 400, "выведенный из действия вид работ подрядчику не добавляется")
+try:
+    hc.set_contractor_work_responsible(OBJ, CON["7701000001"], CW[("7701000001", "130-03")], hc.ResponsibleIn(responsible_id=99999999), user=admin); ok(False, "ответственный вне справочника")
+except HTTPException as e:
+    ok(e.status_code == 400, "ответственный выбирается только из справочника физлиц")
+hc.set_contractor_work_responsible(OBJ, CON["7701000001"], CW[("7701000001", "130-03")], hc.ResponsibleIn(responsible_id=None), user=admin)
+ok(not [r for r in hc.responsible_rows(db.get_connection(), OBJ, IVAN_IND) if r["id"] == CW[("7701000001", "130-03")]], "ответственный снят — строка у бота пропала")
+hc.set_contractor_work_responsible(OBJ, CON["7701000001"], CW[("7701000001", "130-03")], hc.ResponsibleIn(responsible_id=IVAN_IND), user=admin)
+try:
+    hc.delete_contractor_work(OBJ, CON["7701000002"], CW[("7701000001", "130-03")], user=admin); ok(False, "чужой подрядчик")
+except HTTPException as e:
+    ok(e.status_code == 404, "вид работ нельзя убрать через другого подрядчика")
+
+# ------------------------------------------------------------------ удаление физлица: новые ссылки учтены
+from app import dict_delete
+c = db.get_connection()
+row = dict_delete._individual_load(c, IVAN_IND)
+checks = dict_delete._сверка_ссылок(c, "individual", row)
+ok(all(x["handled"] != "НЕ УЧТЕНО" for x in checks if x["label"] in ("express_contacts.individual_id", "headcount_contractor_works.responsible_id")) and len(checks) >= 6, "сверка ссылок по схеме: на физлицо ссылаются контакты бота и ответственные за виды работ, и обе ссылки объяснены")
+a_id = c.execute("INSERT INTO individuals (name) VALUES ('Заменяемый А')").lastrowid
+b_id = c.execute("INSERT INTO individuals (name) VALUES ('Замена Б')").lastrowid
+c.execute("INSERT INTO express_contacts (individual_id, name) VALUES (?, 'Контакт А')", (a_id,))
+c.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id) VALUES (?, ?, ?)", (CON["7701000002"], W["340-03-02"], a_id))
+c.commit()
+dict_delete._individual_repoint(c, dict_delete._individual_load(c, a_id), dict_delete._individual_load(c, b_id)); c.commit()
+ok(c.execute("SELECT individual_id FROM express_contacts WHERE name = 'Контакт А'").fetchone()[0] == b_id
+   and c.execute("SELECT responsible_id FROM headcount_contractor_works WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000002"], W["340-03-02"])).fetchone()[0] == b_id,
+   "удаление физлица с заменой: контакт бота и ответственность переходят на замену")
+e_id = c.execute("INSERT INTO individuals (name) VALUES ('Заменяемый В')").lastrowid
+c.execute("INSERT INTO express_contacts (individual_id, name) VALUES (?, 'Контакт В')", (e_id,)); c.commit()
+dict_delete._individual_repoint(c, dict_delete._individual_load(c, e_id), dict_delete._individual_load(c, b_id)); c.commit()
+ok(c.execute("SELECT individual_id FROM express_contacts WHERE name = 'Контакт В'").fetchone()[0] is None, "если у замены уже есть контакт, второй не заводится: прежний остаётся без физлица, а не пропадает")
+c.close()
 
 # ------------------------------------------------------------------ настоящие HTTP-маршруты
 import uvicorn

@@ -242,13 +242,13 @@ export function mountExpress(el, ctx) {
     const f = st.contactForm;
     if (f && st.individuals === null) { load("individuals").then((ok) => ok && paintContacts()); pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     pane.innerHTML = `${botCallout()}
-      <div class="hc-bar"><strong>Контакты бота</strong><span class="hc-muted">физлицо из справочника или произвольный человек; общий список для всех объектов</span>
+      <div class="hc-bar"><strong>Контакты бота</strong><span class="hc-muted">только физлица из справочника; общий список для всех объектов</span>
         ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-c-new">Добавить контакт</button>` : ""}<button type="button" class="hc-btn" id="ex-c-refresh">Обновить</button></div>
       <div class="hc-callout">Чтобы бот мог писать человеку, тот должен <strong>один раз открыть ${botName()} в eXpress и отправить /start</strong>. Бот опознает его по доменному логину (или по e-mail, если нажать «Найти в eXpress»). Если у человека нет ни доменного логина, ни e-mail в eXpress (внешний пользователь), нажмите <strong>«Код привязки»</strong>: он отправляет боту <code>/start КОД</code>.</div>
       ${f ? `<form class="ex-card" id="ex-c-form"><h4>${f.id ? "Изменить контакт" : "Новый контакт"}</h4>
         <div class="ex-row">
-          ${field("Физлицо из справочника", `<select id="ex-c-ind"><option value="">— произвольный контакт —</option>${(st.individuals || []).map((i) => `<option value="${i.id}" ${String(f.individual_id) === String(i.id) ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select>`, "wide")}
-          ${field("Имя (ФИО)", `<input type="text" id="ex-c-name" maxlength="200" value="${esc(f.name)}" placeholder="можно не заполнять, если выбрано физлицо">`, "wide")}</div>
+          ${field("Физлицо из справочника", `<select id="ex-c-ind" required><option value="">— выберите физлицо —</option>${(st.individuals || []).map((i) => `<option value="${i.id}" ${String(f.individual_id) === String(i.id) ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select>`, "wide")}</div>
+        <p class="ex-hint">Контакт выбирается только из справочника физлиц: по физлицу бот находит строки (подрядчик + вид работ), где человек назначен ответственным. Нет человека в списке — сначала добавьте его в «Справочники → Физлица».</p>
         <div class="ex-sec"><div class="ex-cap">Как найти человека в eXpress</div><div class="ex-row">
           ${field("E-mail в eXpress", `<input type="text" id="ex-c-email" maxlength="200" value="${esc(f.email)}">`)}
           ${field("Доменный логин", `<input type="text" id="ex-c-login" maxlength="100" value="${esc(f.ad_login)}" placeholder="ivanov">`)}
@@ -260,7 +260,7 @@ export function mountExpress(el, ctx) {
       ${st.codeShown ? codeCard(st.codeShown) : ""}
       ${msgLine()}
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>E-mail</th><th>Логин</th><th>Телефон</th><th>Связь с eXpress</th><th class="num">Расписаний</th><th></th></tr></thead><tbody>${
-        st.contacts.length ? st.contacts.map((c) => `<tr${c.active ? "" : ' class="hc-muted"'}><td>${esc(c.name)}${c.individual_id ? "" : ' <span class="hc-badge">произвольный</span>'}</td>
+        st.contacts.length ? st.contacts.map((c) => `<tr${c.active ? "" : ' class="hc-muted"'}><td>${esc(c.name)}${c.individual_id ? "" : ' <span class="hc-badge warn" title="Контакт заведён не из справочника физлиц. Откройте «Изменить» и выберите физлицо, иначе бот не знает, за какие строки его спрашивать.">не из справочника</span>'}</td>
           <td>${esc(c.email || "—")}</td><td>${esc(c.ad_login || "—")}</td><td style="white-space:nowrap">${esc(c.phone || "—")}</td><td>${contactState(c)}</td><td class="num">${c.schedules ?? 0}</td>
           <td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-c-edit="${c.id}">Изменить</button> ${c.email && !c.recognized ? `<button type="button" class="hc-btn mini" data-c-look="${c.id}" title="Найти этого человека в eXpress по e-mail">Найти в eXpress</button> ` : ""}${c.active ? `<button type="button" class="hc-btn mini" data-c-code="${c.id}" title="Одноразовый код: человек отправляет боту /start КОД">Код привязки</button> ` : ""}` : ""}${ctx.canAdmin ? `<button type="button" class="hc-btn danger mini" data-c-del="${c.id}">Удалить</button>` : ""}</td></tr>`).join("")
         : `<tr><td colspan="7" class="hc-muted">Контактов нет.</td></tr>`}</tbody></table></div>`;
@@ -290,21 +290,17 @@ export function mountExpress(el, ctx) {
       await guard(async () => { await api.delete(`/express/contacts/${c.id}`); st.contacts = null; st.schedules = null; st.requests = null; paint(); }, "Контакт удалён.");
     }));
     pane.querySelector("#ex-c-cancel")?.addEventListener("click", () => { st.contactForm = null; paintContacts(); });
-    pane.querySelector("#ex-c-ind")?.addEventListener("change", (e) => {
-      const i = (st.individuals || []).find((x) => String(x.id) === e.target.value), name = pane.querySelector("#ex-c-name");
-      if (i && !name.value.trim()) name.value = i.name;
-    });
     pane.querySelector("#ex-c-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const form = st.contactForm, note = pane.querySelector("#ex-c-msg");
-      const body = { individual_id: pane.querySelector("#ex-c-ind").value ? Number(pane.querySelector("#ex-c-ind").value) : null, name: pane.querySelector("#ex-c-name").value || null,
+      const body = { individual_id: pane.querySelector("#ex-c-ind").value ? Number(pane.querySelector("#ex-c-ind").value) : null,
         email: pane.querySelector("#ex-c-email").value || null, ad_login: pane.querySelector("#ex-c-login").value || null, phone: pane.querySelector("#ex-c-phone").value || null, active: pane.querySelector("#ex-c-active").checked };
       if (st.busy) return;
       st.busy = true;
       try {
         if (form.id) await api.patch(`/express/contacts/${form.id}`, body); else await api.post("/express/contacts", body);
         st.contactForm = null; await load("contacts"); st.schedules = null; st.busy = false; paintContacts(); setMsg("Контакт сохранён.", "ok");
-      } catch (err) { Object.assign(form, { ...body, individual_id: body.individual_id ?? "", name: body.name || "", email: body.email || "", ad_login: body.ad_login || "", phone: body.phone || "", msg: errText(err), kind: "bad" }); note.textContent = form.msg; note.className = "hc-msg bad"; }
+      } catch (err) { Object.assign(form, { ...body, individual_id: body.individual_id ?? "", email: body.email || "", ad_login: body.ad_login || "", phone: body.phone || "", msg: errText(err), kind: "bad" }); note.textContent = form.msg; note.className = "hc-msg bad"; }
       finally { st.busy = false; }
     });
   }

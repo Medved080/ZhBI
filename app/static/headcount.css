@@ -224,3 +224,9 @@
 .ex-opt-text { display: flex; flex-direction: column; }
 .ex-opt-text .ex-hint { margin: 0 0 0 1.5rem; }
 @media (max-width: 720px) { .ex-field, .ex-field.wide { flex: 1 1 100%; min-width: 0; } .ex-tabs { gap: 1rem; } }
+
+/* Закладка «Подрядчики»: раскрывающийся перечень видов работ подрядчика с ответственными (2026-10-26) */
+.hc-works-row > td { background: var(--hc-soft); padding: 0.5rem 0.75rem 0.75rem; }
+.hc-works { max-width: 62rem; }
+.hc-works .hc-tbl { background: var(--hc-bg); }
+.hc-works select { max-width: 24rem; width: 100%; }

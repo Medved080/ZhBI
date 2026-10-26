@@ -757,8 +757,11 @@ def _individual_refs(conn, row):
     команда = conn.execute(
         "SELECT COUNT(*) AS n FROM object_team_members WHERE individual_id = ?", (row["id"],)
     ).fetchone()["n"]
+    контакты = conn.execute("SELECT COUNT(*) AS n FROM express_contacts WHERE individual_id = ?", (row["id"],)).fetchone()["n"]
+    за_работы = conn.execute("SELECT COUNT(*) AS n FROM headcount_contractor_works WHERE responsible_id = ?", (row["id"],)).fetchone()["n"]
     return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный),
-                      ("Проектные команды объектов", команда)])
+                      ("Проектные команды объектов", команда), ("Контакты бота eXpress", контакты),
+                      ("Ответственные за виды работ подрядчиков (численность)", за_работы)])
 
 
 def _individual_candidates(conn, row, parent_target):
@@ -790,8 +793,19 @@ def _individual_repoint(conn, row, target):
     ).rowcount
     from app import team_access
     team_access.sync_all(conn)   # другой человек в роли — другие права (B2)
+    # Контакт бота eXpress привязан к физлицу. Если у замены контакт уже есть, второй контакт на то же физлицо не заводится: этот остаётся без физлица
+    # («не из справочника» — его надо будет привязать к человеку из справочника руками), а не теряет привязку к аккаунту eXpress и расписания.
+    есть_у_замены = conn.execute("SELECT 1 FROM express_contacts WHERE individual_id = ?", (target["id"],)).fetchone() is not None
+    if есть_у_замены:
+        контакты = conn.execute("UPDATE express_contacts SET individual_id = NULL, updated_at = datetime('now') WHERE individual_id = ?", (row["id"],)).rowcount
+    else:
+        контакты = conn.execute("UPDATE express_contacts SET individual_id = ?, updated_at = datetime('now') WHERE individual_id = ?",
+                                (target["id"], row["id"])).rowcount
+    за_работы = conn.execute("UPDATE headcount_contractor_works SET responsible_id = ?, updated_at = datetime('now') WHERE responsible_id = ?",
+                             (target["id"], row["id"])).rowcount
     return _непустые([("Объекты (директор СМУ)", директор), ("Объекты (ответственный)", ответственный),
-                      ("Проектные команды объектов", команда)])
+                      ("Проектные команды объектов", команда), ("Контакты бота eXpress", контакты),
+                      ("Ответственные за виды работ подрядчиков (численность)", за_работы)])
 
 
 def _individual_delete(conn, row):
@@ -829,6 +843,8 @@ KINDS = {
             "objects.smu_director_id": "перевод на замену",
             "objects.responsible_id": "перевод на замену",
             "object_team_members.individual_id": "перевод на замену",
+            "express_contacts.individual_id": "перевод на замену (если у замены уже есть контакт — контакт остаётся без физлица)",
+            "headcount_contractor_works.responsible_id": "перевод на замену",
         },
     },
     "subtype": {

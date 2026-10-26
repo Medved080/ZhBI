@@ -28,6 +28,7 @@ SUMMARY_CATCHUP = timedelta(hours=3)
 RETRY_PAUSE = timedelta(minutes=5)
 MAX_ATTEMPTS = 5
 SECTIONS = ("headcount",)
+NO_ROWS_REASON = "за контактом не закреплено ни одной строки (подрядчик + вид работ) по этому объекту"
 _DB_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -105,7 +106,7 @@ def flush_waiting(contact_id: int) -> int:
 def _dispatch_new(conn, now: datetime, stats: dict) -> None:
     today = now.date()
     for s in conn.execute(
-            "SELECT s.* FROM express_schedules s JOIN express_contacts c ON c.id = s.contact_id "
+            "SELECT s.*, c.individual_id AS contact_individual FROM express_schedules s JOIN express_contacts c ON c.id = s.contact_id "
             "WHERE s.active = 1 AND c.active = 1 AND s.section IN ({})".format(",".join("?" * len(SECTIONS))), SECTIONS).fetchall():
         if now.isoweekday() not in weekdays_of(s["weekdays"]):
             continue
@@ -113,6 +114,17 @@ def _dispatch_new(conn, now: datetime, stats: dict) -> None:
         if moment is None or not (moment <= now <= moment + CATCHUP) or _utc(moment) < s["effective_from"]:
             continue
         work_date = (today + timedelta(days=s["day_offset"])).isoformat()
+        # Бот спрашивает контакт только по строкам, где ответственным назначено его физлицо. Нет таких строк — спрашивать не о чем: запрос заводится сразу
+        # закрытым с причиной (пара «расписание + день» остаётся занятой, повторных обходов нет), контакту ничего не отправляется.
+        if not headcount.responsible_rows(conn, s["object_id"], s["contact_individual"]):
+            cur = conn.execute("INSERT OR IGNORE INTO express_requests (schedule_id, object_id, contact_id, section, work_date, status, closed_at, last_error) "
+                               "VALUES (?, ?, ?, ?, ?, 'closed', datetime('now'), ?)",
+                               (s["id"], s["object_id"], s["contact_id"], s["section"], work_date, NO_ROWS_REASON))
+            conn.commit()
+            if cur.rowcount:
+                stats["skipped"] += 1
+                log_event("sys", "request", f"Запрос не отправлен: {NO_ROWS_REASON}", contact_id=s["contact_id"], request_id=cur.lastrowid, ok=False, error=NO_ROWS_REASON)
+            continue
         cur = conn.execute("INSERT OR IGNORE INTO express_requests (schedule_id, object_id, contact_id, section, work_date, status) "
                            "VALUES (?, ?, ?, ?, ?, 'pending')", (s["id"], s["object_id"], s["contact_id"], s["section"], work_date))
         conn.commit()
@@ -179,7 +191,7 @@ def _summaries(conn, now: datetime, stats: dict) -> None:
 
 def tick(now: Optional[datetime] = None) -> dict:
     """Один обход. `now` — московское время (в проверках подставляется). Неактивный бот — ничего не делает."""
-    stats = {"created": 0, "sent": 0, "failed": 0, "retried": 0, "reminded": 0, "summaries": 0}
+    stats = {"created": 0, "sent": 0, "failed": 0, "retried": 0, "reminded": 0, "summaries": 0, "skipped": 0}
     if not express_bot.is_active():
         return stats
     now = now or headcount.now_msk()

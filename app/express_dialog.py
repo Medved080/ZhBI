@@ -47,14 +47,6 @@ def _short(text: str, limit: int = MAX_LABEL) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-def _contractor_label(row) -> str:
-    """Подрядчик для кнопки: название и ИНН ИЗ справочника контрагентов (строка запроса несёт ctr_name / ctr_inn — headcount.CTR_NAME/CTR_INN)."""
-    name, inn = row["ctr_name"], row["ctr_inn"]
-    if name and inn and name != f"ИНН {inn}":
-        return _short(f"{name} · {inn}")
-    return _short(name or (f"ИНН {inn}" if inn else f"Подрядчик №{row['id']}"))
-
-
 def _load_dialog(row) -> dict:
     try:
         data = json.loads(row["dialog"] or "{}")
@@ -118,35 +110,65 @@ def day_lines(conn, object_id: int, work_date: str, limit: int = 12):
     return lines, sum(r["workers"] for r in rows), sum(r["itr"] for r in rows), sum(r["mech"] for r in rows)
 
 
+def _own_rows(conn, req) -> list:
+    """Строки («подрядчик + вид работ»), по которым бот спрашивает ЭТОГО контакта: те, где ответственным назначено его физлицо
+    («Численность → Подрядчики → виды работ»). По остальным строкам объекта бот контакта не спрашивает и их не показывает."""
+    contact = _contact(conn, req["contact_id"])
+    return list(headcount.responsible_rows(conn, req["object_id"], contact["individual_id"]))
+
+
+def _row_label(r, limit: int = MAX_LABEL) -> str:
+    who = r["ctr_name"] or (f"ИНН {r['ctr_inn']}" if r["ctr_inn"] else f"Подрядчик №{r['contractor_id']}")
+    return _short(f"{who} · {r['code']} {r['work_name']}", limit)
+
+
+def _entered(conn, req) -> dict:
+    return {(r["contractor_id"], r["codifier_id"]): r for r in conn.execute(
+        "SELECT contractor_id, codifier_id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ?", (req["object_id"], req["work_date"]))}
+
+
+def own_lines(conn, req, rows):
+    """Внесено за день по строкам контакта: (строки текста, рабочих, ИТР, механизаторов, сколько строк уже внесено)."""
+    entered = _entered(conn, req)
+    lines, workers, itr, mech, done = [], 0, 0, 0, 0
+    for r in rows:
+        e = entered.get((r["contractor_id"], r["codifier_id"]))
+        if e is None:
+            continue
+        done += 1
+        workers, itr, mech = workers + e["workers"], itr + e["itr"], mech + e["mech"]
+        lines.append(f"• {_row_label(r, 60)}: рабочие {e['workers']}, ИТР {e['itr']}, механизаторы {e['mech']}")
+    return lines, workers, itr, mech, done
+
+
 def intro(conn, request_id: int):
     req = _request(conn, request_id)
     deadline = headcount.deadline_for(date.fromisoformat(req["work_date"]))
+    n = len(_own_rows(conn, req))
     text = (f"Здравствуйте! Объект «{req['object_name']}».\n"
-            f"Нужна численность за {_fmt_date(req['work_date'])}. Срок внесения — до {deadline.strftime('%H:%M %d.%m')}.")
+            f"Нужна численность за {_fmt_date(req['work_date'])}. Срок внесения — до {deadline.strftime('%H:%M %d.%m')}.\n"
+            f"Строк, за которые вы ответственны: {n}.")
     bubble = [[button("Внести численность", {"a": "menu", "r": request_id})],
               [button("Вносить нечего", {"a": "close", "r": request_id})]]
     return text, bubble
 
 
 def _menu(conn, req, page: int = 0):
-    contractors = conn.execute(
-        f"SELECT c.*, {headcount.CTR_NAME} AS ctr_name, {headcount.CTR_INN} AS ctr_inn, "
-        "(SELECT COUNT(*) FROM headcount_records r WHERE r.contractor_id = c.id AND r.work_date >= date(?, '-30 day')) AS recent "
-        "FROM headcount_contractors c LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE c.object_id = ?",
-        (req["work_date"], req["object_id"])).fetchall()
-    contractors = sorted(contractors, key=lambda c: (-c["recent"], (c["ctr_name"] or "").lower()))
-    lines, workers, itr, mech = day_lines(conn, req["object_id"], req["work_date"])
+    rows = _own_rows(conn, req)
+    lines, workers, itr, mech, done = own_lines(conn, req, rows)
     head = f"Объект «{req['object_name']}», {_fmt_date(req['work_date'])}."
-    if lines:
-        head += "\nВнесено за день:\n" + "\n".join(lines) + f"\nИтого: рабочие {workers}, ИТР {itr}, механизаторы {mech}."
-    else:
-        head += "\nПока ничего не внесено."
-    if not contractors:
-        text = head + "\n\nУ объекта нет подрядчиков. Добавьте их в системе (вкладка «Подрядчики» учёта численности) и вернитесь сюда."
+    if not rows:
+        text = (head + "\n\nЗа вами не закреплено ни одной строки (подрядчик + вид работ) по этому объекту. "
+                "Руководитель назначает ответственных в «Численность → Подрядчики».")
         return text, [[button("Готово", {"a": "close", "r": req["id"]})]]
-    pages = (len(contractors) + PAGE - 1) // PAGE
+    head += f"\nВаши строки: внесено {done} из {len(rows)}."
+    if lines:
+        head += "\n" + "\n".join(lines) + f"\nИтого по вашим строкам: рабочие {workers}, ИТР {itr}, механизаторы {mech}."
+    entered = _entered(conn, req)
+    pages = (len(rows) + PAGE - 1) // PAGE
     page = max(0, min(page, pages - 1))
-    bubble = [[button(_contractor_label(c), {"a": "con", "r": req["id"], "c": c["id"]})] for c in contractors[page * PAGE:(page + 1) * PAGE]]
+    bubble = [[button(("✓ " if (r["contractor_id"], r["codifier_id"]) in entered else "") + _row_label(r, MAX_LABEL - 2), {"a": "row", "r": req["id"], "i": r["id"]})]
+              for r in rows[page * PAGE:(page + 1) * PAGE]]
     nav = []
     if page > 0:
         nav.append(button("‹ Назад", {"a": "menu", "r": req["id"], "p": page - 1}))
@@ -155,43 +177,11 @@ def _menu(conn, req, page: int = 0):
     if nav:
         bubble.append(nav)
     bubble.append([button("Готово", {"a": "close", "r": req["id"]})])
-    return head + ("\n\nВыберите подрядчика" + (f" (стр. {page + 1} из {pages})" if pages > 1 else "") + ":"), bubble
+    return head + ("\n\nВыберите строку" + (f" (стр. {page + 1} из {pages})" if pages > 1 else "") + ":"), bubble
 
 
-def _recent_works(conn, req, contractor_id: int):
-    return conn.execute(
-        "SELECT w.id, w.code, w.name, COUNT(*) AS n FROM headcount_records r JOIN work_codifier w ON w.id = r.codifier_id "
-        "WHERE r.object_id = ? AND r.contractor_id = ? AND r.work_date >= date(?, '-60 day') AND w.retired_at IS NULL "
-        "GROUP BY w.id ORDER BY n DESC, w.code LIMIT 6", (req["object_id"], contractor_id, req["work_date"])).fetchall()
-
-
-def _contractor_row(conn, req, contractor_id: int):
-    return conn.execute(
-        f"SELECT c.*, {headcount.CTR_NAME} AS ctr_name, {headcount.CTR_INN} AS ctr_inn FROM headcount_contractors c "
-        "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE c.id = ? AND c.object_id = ?", (contractor_id, req["object_id"])).fetchone()
-
-
-def _work_screen(conn, req, contractor_id: int):
-    contractor = _contractor_row(conn, req, contractor_id)
-    works = _recent_works(conn, req, contractor_id)
-    text = f"Подрядчик: {_contractor_label(contractor)}.\n"
-    # Вид работ выбирают кнопкой из недавних по этому подрядчику на этом объекте (за 60 дней, чаще всего вносимые — первыми) ИЛИ пишут часть названия / код:
-    # текст в этом шаге сразу идёт в поиск (отдельной кнопки «Найти» не нужно — раньше текст, набранный сразу, молча возвращал в список подрядчиков).
-    text += ("Выберите вид работ кнопкой из недавних или напишите часть названия или код — я найду." if works
-             else "Напишите часть названия или код вида работ — я найду.")
-    bubble = [[button(_short(f"{w['code']} {w['name']}"), {"a": "work", "r": req["id"], "w": w["id"]})] for w in works]
-    bubble.append([button("‹ К подрядчикам", {"a": "menu", "r": req["id"]})])
-    return text, bubble
-
-
-def search_works(conn, query: str, limit: int = 8):
-    """Действующие виды работ, у которых в коде или названии есть запрос (без учёта регистра — в Python, SQLite кириллицу не сравнивает)."""
-    needle = " ".join(query.lower().split())
-    if not needle:
-        return [], 0
-    found = [w for w in conn.execute("SELECT id, code, name FROM work_codifier WHERE retired_at IS NULL ORDER BY sort_order, code")
-             if needle in (w["code"] or "").lower() or needle in (w["name"] or "").lower()]
-    return found[:limit], len(found)
+def _assigned_row(conn, req, cw_id: int):
+    return next((r for r in _own_rows(conn, req) if r["id"] == cw_id), None)
 
 
 def _existing_text(conn, req, contractor_id: int, codifier_id: int) -> str:
@@ -445,38 +435,24 @@ def _button(conn, contact, data: dict) -> None:
         _show_menu(conn, contact, req, int(data.get("p") or 0))
     elif action == "close":
         _close(conn, contact, req)
-    elif action == "con":
-        cid = int(data.get("c") or 0)
-        if _contractor_row(conn, req, cid) is None:
-            _say(contact, req["id"], "Подрядчик не найден на этом объекте.")
-            return
-        dialog.update({"step": "work", "contractor_id": cid})
-        dialog.pop("codifier_id", None)
-        _store_dialog(conn, req["id"], dialog)
-        conn.commit()
-        text, bubble = _work_screen(conn, req, cid)
-        _say(contact, req["id"], text, bubble)
-    elif action == "search":
-        if not dialog.get("contractor_id"):
+    elif action == "row":
+        row = _assigned_row(conn, req, int(data.get("i") or 0))
+        if row is None:
+            _say(contact, req["id"], "Эта строка за вами не закреплена (руководитель мог переназначить ответственного). Вот ваш актуальный список.")
             _show_menu(conn, contact, req)
             return
-        dialog["step"] = "search"
-        _store_dialog(conn, req["id"], dialog)
-        conn.commit()
-        _say(contact, req["id"], "Напишите часть названия или код вида работ.", [[button("‹ Назад", {"a": "con", "r": req["id"], "c": dialog["contractor_id"]})]])
-    elif action == "work":
-        wid = int(data.get("w") or 0)
-        work = conn.execute("SELECT * FROM work_codifier WHERE id = ? AND retired_at IS NULL", (wid,)).fetchone()
-        if work is None or not dialog.get("contractor_id"):
-            _say(contact, req["id"], "Вид работ не найден или выведен из действия.")
-            return
-        dialog.update({"step": "workers", "codifier_id": wid})
+        dialog.update({"step": "workers", "contractor_id": row["contractor_id"], "codifier_id": row["codifier_id"]})
+        dialog.pop("workers", None)
+        dialog.pop("itr", None)
         _store_dialog(conn, req["id"], dialog)
         conn.commit()
         _say(contact, req["id"],
-             f"{_short(work['code'] + ' ' + work['name'], 90)}.{_existing_text(conn, req, dialog['contractor_id'], wid)}\n"
+             f"{_row_label(row, 100)}.{_existing_text(conn, req, row['contractor_id'], row['codifier_id'])}\n"
              "Сколько РАБОЧИХ? Напишите число (0, если рабочих не было).",
-             [[button("‹ К видам работ", {"a": "con", "r": req["id"], "c": dialog["contractor_id"]})]])
+             [[button("‹ К списку строк", {"a": "menu", "r": req["id"]})]])
+    elif action in ("con", "search", "work"):
+        # кнопки прежней версии диалога (выбор подрядчика и поиск вида работ отменён): показываем актуальный список строк
+        _show_menu(conn, contact, req)
     elif action == "itr":
         _after_itr(conn, contact, req, dialog, int(data.get("v") or 0))
     elif action == "mech":
@@ -492,17 +468,7 @@ def _text(conn, contact, body: str) -> None:
         return
     dialog = _load_dialog(req)
     step = dialog.get("step")
-    if step in ("search", "work"):
-        found, total = search_works(conn, body)
-        back = [button("‹ К подрядчикам", {"a": "menu", "r": req["id"]})]
-        if not found:
-            _say(contact, req["id"], "Ничего не нашлось. Попробуйте другое слово или код.", [back])
-            return
-        bubble = [[button(_short(f"{w['code']} {w['name']}"), {"a": "work", "r": req["id"], "w": w["id"]})] for w in found]
-        bubble.append([button("Искать заново", {"a": "search", "r": req["id"]})])
-        _say(contact, req["id"], "Нашлось: " + (f"показаны первые {len(found)} из {total} — уточните запрос." if total > len(found) else f"{total}.") +
-             "\nВыберите вид работ:", bubble)
-    elif step == "workers":
+    if step == "workers":
         value = parse_count(body)
         if value is None:
             _say(contact, req["id"], f"Нужно целое число от 0 до {headcount.MAX_WORKERS}. Сколько РАБОЧИХ?")
@@ -548,6 +514,10 @@ def _save_row(conn, contact, req, dialog: dict, *, mech: int) -> None:
     if not (contractor_id and codifier_id and workers is not None):
         _show_menu(conn, contact, req)
         return
+    if not any(r["contractor_id"] == contractor_id and r["codifier_id"] == codifier_id for r in _own_rows(conn, req)):
+        _say(contact, req["id"], "Эта строка больше за вами не закреплена — ничего не записано. Вот ваш актуальный список.")
+        _show_menu(conn, contact, req)
+        return
     try:
         result = headcount.save_row_from_bot(req["object_id"], date.fromisoformat(req["work_date"]), contractor_id, codifier_id,
                                             workers, itr, mech, contact_name=contact["name"])
@@ -566,11 +536,10 @@ def _save_row(conn, contact, req, dialog: dict, *, mech: int) -> None:
         dialog.pop(key, None)
     _store_dialog(conn, req["id"], dialog)
     conn.commit()
-    work = conn.execute("SELECT code, name FROM work_codifier WHERE id = ?", (codifier_id,)).fetchone()
-    contractor = _contractor_row(conn, _request(conn, req["id"]), contractor_id)
+    row = next(r for r in _own_rows(conn, req) if r["contractor_id"] == contractor_id and r["codifier_id"] == codifier_id)
     verdict = {"created": "Записано", "changed": "Заменено", "unchanged": "Без изменений"}[result["action"]]
     note = " Внесено позже срока — это отмечено в системе." if result["action"] == "created" and result["late"] else ""
-    _say(contact, req["id"], f"{verdict}: {_contractor_label(contractor)} · {_short(work['code'] + ' ' + work['name'], 50)} — рабочие {workers}, ИТР {itr}, механизаторы {mech}.{note}")
+    _say(contact, req["id"], f"{verdict}: {_row_label(row, 90)} — рабочие {workers}, ИТР {itr}, механизаторы {mech}.{note}")
     text, bubble = _menu(conn, _request(conn, req["id"]), 0)
     _say(contact, req["id"], text, bubble)
 
@@ -578,8 +547,8 @@ def _save_row(conn, contact, req, dialog: dict, *, mech: int) -> None:
 def _close(conn, contact, req) -> None:
     conn.execute("UPDATE express_requests SET status = 'closed', closed_at = datetime('now') WHERE id = ? AND status IN ('sent', 'answered')", (req["id"],))
     conn.commit()
-    lines, workers, itr, mech = day_lines(conn, req["object_id"], req["work_date"])
-    tail = f"Внесено за день: рабочие {workers}, ИТР {itr}, механизаторы {mech}." if lines else "Ничего не внесено."
+    lines, workers, itr, mech, done = own_lines(conn, req, _own_rows(conn, req))
+    tail = f"Внесено по вашим строкам: рабочие {workers}, ИТР {itr}, механизаторы {mech}." if lines else "Ничего не внесено."
     _say(contact, req["id"], f"Спасибо! Запрос по объекту «{req['object_name']}» за {_fmt_date(req['work_date'])} закрыт. {tail}")
 
 
@@ -611,6 +580,8 @@ def send_reminder(request_id: int) -> None:
 def summary_text(conn, req) -> str:
     lines, workers, itr, mech = day_lines(conn, req["object_id"], req["work_date"], limit=25)
     contact = _contact(conn, req["contact_id"])
+    if req["status"] == "closed" and req["last_error"]:
+        return "\n".join([f"Сводка: объект «{req['object_name']}», {_fmt_date(req['work_date'])}.", f"Опрос {contact['name']} не проводился: {req['last_error']}."])
     state = {"sent": "не ответил", "answered": "внёс, но не закрыл запрос", "closed": "ответил", "failed": "сообщение не доставлено", "pending": "не отправлено"}[req["status"]]
     out = [f"Сводка: объект «{req['object_name']}», {_fmt_date(req['work_date'])}.", f"Опрошен: {contact['name']} — {state}."]
     out += lines if lines else ["Численность за день не внесена."]

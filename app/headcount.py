@@ -252,10 +252,132 @@ def list_contractors(object_id: int, user: sqlite3.Row = Depends(get_current_use
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "read")
         rows = conn.execute(_CONTRACTOR_SELECT + "WHERE c.object_id = ?", (object_id,)).fetchall()
-        items = sorted((_contractor_out(r) for r in rows), key=lambda x: (x["display"] or "").lower())
+        works = _works_by_contractor(conn, object_id)
+        items = []
+        for r in rows:
+            out = _contractor_out(r)
+            out["works"] = works.get(r["id"], [])
+            items.append(out)
+        items.sort(key=lambda x: (x["display"] or "").lower())
         return {"contractors": items}
     finally:
         conn.close()
+
+
+# ------------------------------------------------------------------ виды работ подрядчика и ответственные (2026-10-26)
+
+class ContractorWorkIn(BaseModel):
+    codifier_id: int
+    responsible_id: Optional[int] = None
+
+
+class ResponsibleIn(BaseModel):
+    responsible_id: Optional[int] = None      # null — снять ответственного
+
+
+def _work_out(row) -> dict:
+    return {"id": row["id"], "codifier_id": row["codifier_id"], "code": row["code"], "name": row["name"], "retired": bool(row["retired_at"]),
+            "responsible_id": row["responsible_id"], "responsible": row["responsible_name"]}
+
+
+_WORKS_SELECT = ("SELECT cw.id, cw.contractor_id, cw.codifier_id, cw.responsible_id, w.code, w.name, w.retired_at, ind.name AS responsible_name "
+                 "FROM headcount_contractor_works cw JOIN headcount_contractors c ON c.id = cw.contractor_id "
+                 "JOIN work_codifier w ON w.id = cw.codifier_id LEFT JOIN individuals ind ON ind.id = cw.responsible_id ")
+
+
+def _works_by_contractor(conn, object_id: int) -> dict:
+    out: dict = {}
+    for r in conn.execute(_WORKS_SELECT + "WHERE c.object_id = ? ORDER BY w.sort_order, w.code", (object_id,)):
+        out.setdefault(r["contractor_id"], []).append(_work_out(r))
+    return out
+
+
+def responsible_rows(conn, object_id: int, individual_id: Optional[int]) -> list:
+    """Пары «подрядчик + вид работ» объекта, где ответственный — это физлицо. Именно по ним бот eXpress спрашивает контакт; выведенные из действия виды работ
+    не спрашиваются. Пусто, если физлицо не задано. Название и ИНН подрядчика — эффективные (из справочника контрагентов, CTR_NAME / CTR_INN)."""
+    if individual_id is None:
+        return []
+    return conn.execute(
+        f"SELECT cw.id, cw.contractor_id, cw.codifier_id, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, w.code, w.name AS work_name "
+        "FROM headcount_contractor_works cw JOIN headcount_contractors c ON c.id = cw.contractor_id JOIN work_codifier w ON w.id = cw.codifier_id "
+        "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
+        f"WHERE c.object_id = ? AND cw.responsible_id = ? AND w.retired_at IS NULL ORDER BY {CTR_NAME}, w.sort_order, w.code",
+        (object_id, individual_id)).fetchall()
+
+
+def _check_individual(conn, individual_id: Optional[int]) -> None:
+    if individual_id is not None and conn.execute("SELECT 1 FROM individuals WHERE id = ?", (individual_id,)).fetchone() is None:
+        raise HTTPException(status_code=400, detail="Ответственный выбирается из справочника физлиц: такого физлица нет")
+
+
+def _work_row(conn, object_id: int, contractor_id: int, work_id: int):
+    row = conn.execute(_WORKS_SELECT + "WHERE cw.id = ? AND c.id = ? AND c.object_id = ?", (work_id, contractor_id, object_id)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Вид работ у этого подрядчика не найден")
+    return row
+
+
+@router.post("/contractors/{contractor_id}/works")
+def add_contractor_work(object_id: int, contractor_id: int, body: ContractorWorkIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Добавить подрядчику вид работ (и, если указан, ответственного за эту пару)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
+        begin_write(conn)
+        _contractor_row(conn, object_id, contractor_id)
+        work = conn.execute("SELECT id, code, name, retired_at FROM work_codifier WHERE id = ?", (body.codifier_id,)).fetchone()
+        if work is None:
+            raise HTTPException(status_code=400, detail="Вид работ не найден в кодификаторе")
+        if work["retired_at"]:
+            raise HTTPException(status_code=400, detail="Вид работ выведен из действия: добавить его подрядчику нельзя")
+        _check_individual(conn, body.responsible_id)
+        if conn.execute("SELECT 1 FROM headcount_contractor_works WHERE contractor_id = ? AND codifier_id = ?", (contractor_id, body.codifier_id)).fetchone():
+            raise HTTPException(status_code=409, detail="Этот вид работ у подрядчика уже есть")
+        cur = conn.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id, updated_by) VALUES (?, ?, ?, ?)",
+                           (contractor_id, body.codifier_id, body.responsible_id, user["id"]))
+        conn.commit()
+        out = _work_out(_work_row(conn, object_id, contractor_id, cur.lastrowid))
+    finally:
+        conn.close()
+    activity.log("headcount_contractor_works", user=user, entity_type="object", entity_id=object_id, new_value=f"{work['code']} {work['name']}",
+                 details={"действие": "вид работ добавлен", "подрядчик": contractor_id, "ответственный": out["responsible"]})
+    return out
+
+
+@router.patch("/contractors/{contractor_id}/works/{work_id}")
+def set_contractor_work_responsible(object_id: int, contractor_id: int, work_id: int, body: ResponsibleIn, user: sqlite3.Row = Depends(get_current_user)):
+    """Назначить ответственного за пару «подрядчик + вид работ» (null — снять)."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
+        begin_write(conn)
+        old = _work_row(conn, object_id, contractor_id, work_id)
+        _check_individual(conn, body.responsible_id)
+        conn.execute("UPDATE headcount_contractor_works SET responsible_id = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?",
+                     (body.responsible_id, user["id"], work_id))
+        conn.commit()
+        out = _work_out(_work_row(conn, object_id, contractor_id, work_id))
+    finally:
+        conn.close()
+    activity.log("headcount_contractor_works", user=user, entity_type="object", entity_id=object_id, new_value=f"{old['code']} {old['name']}",
+                 old_value=old["responsible_name"], details={"действие": "ответственный изменён", "подрядчик": contractor_id, "ответственный": out["responsible"]})
+    return out
+
+
+@router.delete("/contractors/{contractor_id}/works/{work_id}")
+def delete_contractor_work(object_id: int, contractor_id: int, work_id: int, user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
+        begin_write(conn)
+        old = _work_row(conn, object_id, contractor_id, work_id)
+        conn.execute("DELETE FROM headcount_contractor_works WHERE id = ?", (work_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    activity.log("headcount_contractor_works", user=user, entity_type="object", entity_id=object_id, old_value=f"{old['code']} {old['name']}",
+                 details={"действие": "вид работ убран", "подрядчик": contractor_id, "был ответственный": old["responsible_name"]})
+    return {"deleted": work_id}
 
 
 @router.get("/counterparty-search")

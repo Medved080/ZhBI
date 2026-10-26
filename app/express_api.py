@@ -218,17 +218,17 @@ def _contact_out(row) -> dict:
 
 
 def _clean_contact(conn, body: ContactIn, exclude_id: Optional[int] = None) -> dict:
-    name = " ".join((body.name or "").split())
-    if body.individual_id is not None:
-        ind = conn.execute("SELECT id, name FROM individuals WHERE id = ?", (body.individual_id,)).fetchone()
-        if ind is None:
-            raise HTTPException(status_code=400, detail="Физлицо не найдено в справочнике")
-        name = name or ind["name"]
-        dup = conn.execute("SELECT id FROM express_contacts WHERE individual_id = ? AND id IS NOT ?", (body.individual_id, exclude_id)).fetchone()
-        if dup is not None:
-            raise HTTPException(status_code=409, detail="Для этого физлица контакт уже заведён")
-    if not name:
-        raise HTTPException(status_code=400, detail="Укажите ФИО контакта или выберите физлицо из справочника")
+    # Контакт бота выбирается ТОЛЬКО из справочника физлиц (решение 2026-10-26): по физлицу бот находит строки, где оно назначено ответственным
+    # (headcount_contractor_works), а имя берётся из справочника. Человека нет в списке — его сначала заводят в «Справочники → Физлица».
+    if body.individual_id is None:
+        raise HTTPException(status_code=400, detail="Контакт выбирается из справочника физлиц. Если человека там нет, добавьте его в «Справочники → Физлица»")
+    ind = conn.execute("SELECT id, name FROM individuals WHERE id = ?", (body.individual_id,)).fetchone()
+    if ind is None:
+        raise HTTPException(status_code=400, detail="Физлицо не найдено в справочнике")
+    name = ind["name"]
+    dup = conn.execute("SELECT id FROM express_contacts WHERE individual_id = ? AND id IS NOT ?", (body.individual_id, exclude_id)).fetchone()
+    if dup is not None:
+        raise HTTPException(status_code=409, detail="Для этого физлица контакт уже заведён")
     email = (body.email or "").strip() or None
     if email and not _EMAIL.fullmatch(email):
         raise HTTPException(status_code=400, detail="E-mail: ожидается адрес вида имя@домен")
@@ -546,6 +546,11 @@ def send_now(object_id: int, body: SendNowIn, user: sqlite3.Row = Depends(get_cu
         contact = conn.execute("SELECT * FROM express_contacts WHERE id = ?", (body.contact_id,)).fetchone()
         if contact is None or not contact["active"]:
             raise HTTPException(status_code=400, detail="Контакт не найден или отключён")
+        if not headcount.responsible_rows(conn, object_id, contact["individual_id"]):
+            raise HTTPException(status_code=400, detail=(
+                "За контактом не закреплено ни одной строки (подрядчик + вид работ) по этому объекту: бот спрашивает только по строкам, где контакт назначен "
+                "ответственным. Назначьте его в «Численность → Подрядчики»." if contact["individual_id"] is not None else
+                "Контакт не привязан к физлицу из справочника: бот не знает, за какие строки его спрашивать. Выберите физлицо в карточке контакта."))
         request_id = express_scheduler.create_manual(conn, object_id, body.contact_id, work_date, user["id"])
         row = conn.execute("SELECT status, last_error FROM express_requests WHERE id = ?", (request_id,)).fetchone()
     finally:
