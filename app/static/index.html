@@ -4945,8 +4945,10 @@
   .release-ok { border-color: var(--color-success); color: var(--color-success); }
   .release-bad { border-color: var(--color-danger); color: var(--color-danger); }
   .release-line b { font-weight: 600; }
+  /* Без собственной высоты и прокрутки (2026-10-27): окно «Что нового» имеет заданный размер и прокручивается само; рамка в 210px
+     обрывала список на полпути, а ниже оставалось пустое место. */
   .release-tasks { margin-top: 8px; border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm); max-height: 210px; overflow-y: auto; }
+    border-radius: var(--radius-sm); }
   .release-task { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 10px;
     align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--color-border); }
   .release-task:last-child { border-bottom: none; }

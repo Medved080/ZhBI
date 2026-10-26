@@ -30,10 +30,9 @@ export async function openWhatsNew(ctx) {
       <div data-panel="release" id="wn-release" hidden></div>
     </div>
     <div class="v2-wn-foot">
-      <button type="button" class="v2-btn" id="wn-help">Справка</button>
-      <span class="v2-wn-spacer"></span>
-      <button type="button" class="v2-btn" id="wn-close">Закрыть</button>
-      <button type="button" class="v2-btn v2-primary" id="wn-ack" style="visibility:${user?.changelog_unseen ? "visible" : "hidden"}">Ознакомился</button>
+      <button type="button" class="v2-wn-btn2" id="wn-help">Справка</button>
+      <button type="button" class="v2-wn-btn2" id="wn-close">Закрыть</button>
+      <button type="button" class="v2-wn-btn2 primary" id="wn-ack" style="visibility:${user?.changelog_unseen ? "visible" : "hidden"}">Ознакомился</button>
     </div></div>`;
   document.body.appendChild(back);
   const box = back.querySelector(".v2-wn");
@@ -69,9 +68,9 @@ export async function openWhatsNew(ctx) {
   // ---- журнал версий: непрочитанное помечает сервер (поле unseen)
   try {
     const list = await api.get("/changelog");
-    $("#wn-news").innerHTML = list.map((e) => `<section class="v2-wn-entry${e.unseen ? " unseen" : ""}">
+    $("#wn-news").innerHTML = `<div class="v2-wn-list">` + list.map((e) => `<section class="v2-wn-entry${e.unseen ? " unseen" : ""}">
       <div class="v2-wn-eyebrow">${e.unseen ? `<span class="v2-wn-new">Новое</span>` : ""}<b>v${esc(e.version)}</b><span class="v2-muted">${esc(e.date)}</span></div>
-      <h4>${esc(e.title)}</h4><ul>${(e.items || []).map((i) => `<li>${esc(i)}</li>`).join("")}</ul></section>`).join("") || `<p class="v2-muted">Записей нет.</p>`;
+      <h4>${esc(e.title)}</h4><ul>${(e.items || []).map((i) => `<li>${esc(i)}</li>`).join("")}</ul></section>`).join("") + `</div>` || `<p class="v2-muted">Записей нет.</p>`;
   } catch (err) { $("#wn-news").innerHTML = `<p class="v2-note">Не удалось загрузить: ${esc(errText(err))}</p>`; }
 
   // ---- состояние обновления: всем — версии и итог, администратору — ещё и обработки
@@ -85,11 +84,11 @@ export async function openWhatsNew(ctx) {
       const versions = `Версия сервиса <b>${esc(d.code_version || "—")}</b> · данные обновлены до <b>${esc(d.db_version || "—")}</b>`;
       const line = d.complete ? `<p class="v2-wn-line ok">${versions} · обновление завершено</p>`
         : `<p class="v2-wn-line bad">${versions} · обновление НЕ завершено${d.failed ? ` · с ошибкой: ${d.failed}` : ""}${d.pending ? ` · ожидают выполнения: ${d.pending}` : ""}</p>`;
-      const tasks = (d.tasks || []).map((t) => `<div class="v2-wn-task"><div class="v2-wn-task-main"><span class="v2-muted">${[t.version ? `v${esc(t.version)}` : "", t.date ? ruDate(t.date) : ""].filter(Boolean).join(" · ")}</span>
-          ${esc(t.title)}${t.kind === "cleanup" ? " · уборка" : ""}<span class="v2-wn-st ${esc(t.status)}">${esc(TASK_STATUS[t.status] || t.status)}</span>
-          ${canRunTasks && t.status !== "ok" ? `<button type="button" class="v2-btn" data-run="${esc(t.name)}">${t.kind === "cleanup" ? "Выполнить уборку" : t.status === "error" || t.status === "failed" ? "Повторить" : "Выполнить"}</button>` : ""}</div>
-          ${t.why ? `<div class="v2-muted">${esc(t.why)}</div>` : ""}${t.note ? `<div class="v2-muted">${esc(t.note)}</div>` : ""}</div>`).join("");
-      host.innerHTML = line + tasks + `<p class="v2-muted" id="wn-task-status" role="status" aria-live="polite"></p>`;
+      const tasks = (d.tasks || []).map((t) => `<div class="v2-wn-task"><span class="v2-wn-task-title"><span class="v2-wn-when">${[t.version ? `v${esc(t.version)}` : "", t.date ? ruDate(t.date) : ""].filter(Boolean).join(" · ")}</span>
+          ${esc(t.title)}${t.kind === "cleanup" ? " · уборка" : ""}</span><span class="v2-wn-st ${esc(t.status)}">${esc(TASK_STATUS[t.status] || t.status)}</span>
+          <span>${canRunTasks && t.status !== "ok" ? `<button type="button" class="v2-wn-btn2" data-run="${esc(t.name)}">${t.kind === "cleanup" ? "Выполнить уборку" : t.status === "error" || t.status === "failed" ? "Повторить" : "Выполнить"}</button>` : ""}</span>
+          ${t.why ? `<span class="v2-wn-sub">${esc(t.why)}</span>` : ""}${t.note ? `<span class="v2-wn-note">${esc(t.note)}</span>` : ""}</div>`).join("");
+      host.innerHTML = line + (tasks ? `<div class="v2-wn-list">${tasks}</div>` : "") + `<p class="v2-muted" id="wn-task-status" role="status" aria-live="polite"></p>`;
       const badge = $("#wn-badge"); if (badge) badge.hidden = !!d.complete;
     } catch (err) { host.innerHTML = `<p class="v2-muted">Состояние обновления недоступно: ${esc(errText(err))}</p>`; }
   }
