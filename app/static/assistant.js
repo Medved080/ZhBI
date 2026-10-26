@@ -39,6 +39,7 @@ export function mountAssistant({getContext}) {
       <div class="ai-suggestions"><button type="button" data-question="Что изменилось за последнюю неделю?">Что изменилось?</button><button type="button" data-question="Где есть отставание от плана и что это подтверждает?">Отставание</button><button type="button" data-question="Какие позиции не обеспечены контрактами?">Дефицит</button></div>
       <label class="ai-question-label">Вопрос<textarea name="question" maxlength="4000" rows="3" required placeholder="Например: сколько смонтировали по всем проектам за сентябрь?"></textarea></label>
       <div class="ai-actions"><button type="submit" class="ai-send" title="Задать вопрос локальному помощнику">Отправить</button><button type="button" data-ai-stop hidden>Остановить</button><button type="button" data-ai-clear>Новый диалог</button></div>
+      <div class="ai-wait" hidden aria-hidden="true"><img src="/static/assistant-wait.gif" width="96" height="96" alt="" decoding="async"></div>
       <ol class="ai-progress" id="ai-progress" hidden aria-label="Этапы обработки"></ol>
       <p class="ai-status" id="ai-status" role="status"></p></form>
     </section>`;
@@ -72,7 +73,7 @@ export function mountAssistant({getContext}) {
     const state={connecting:"Соединяемся с сервером модели",waiting_first_token:"Ждём первые данные от модели",reasoning:"Модель рассуждает; результат ещё не получен",generating:"Получаем данные от модели"}[p.modelState]||"";
     say([`${Math.floor(result.elapsedSeconds||0)} с`,state,p.chars?`получено ${p.chars} знаков`:p.reasoningChars?`рассуждение: ${p.reasoningChars} знаков`:""].filter(Boolean).join(" · "));
   }
-  function controls() { for(const e of form.elements) if(e.name!=="question")e.disabled=busy;$("[data-ai-stop]").disabled=false;$("[data-ai-stop]").hidden=!busy;$(".ai-send").hidden=busy; }
+  function controls() { for(const e of form.elements) if(e.name!=="question")e.disabled=busy;$("[data-ai-stop]").disabled=false;$("[data-ai-stop]").hidden=!busy;$(".ai-send").hidden=busy;$(".ai-wait").hidden=!busy; }
   function append(role,text,result) {
     const item=document.createElement("article");item.className=`ai-message ai-message-${role}`;
     const name=document.createElement("strong");name.textContent=role==="user"?"Вы":"Помощник";

@@ -44,6 +44,12 @@
 [data-assistant] .ai-step-failed::before{content:"! ";}
 [data-assistant] .ai-step-retry::before{content:"↻ ";}
 
+/* Гифка ожидания (2026-10-26): видна, пока модель готовит ответ (busy в assistant.js). Без анимации (prefers-reduced-motion) не показывается — статус и шаги остаются. */
+[data-assistant] .ai-wait{display:flex;justify-content:center}
+[data-assistant] .ai-wait img{width:96px;height:96px;display:block}
+@media(max-height:700px){[data-assistant] .ai-wait img{width:64px;height:64px}}
+@media(prefers-reduced-motion:reduce){[data-assistant] .ai-wait{display:none!important}}
+
 /* Кнопка вызова — в правом верхнем углу (2026-10-07): верхним панелям текущего и нового интерфейсов и калькулятора оставлено место справа,
    чтобы она ничего не закрывала. Класс на <html> ставит сам помощник, пока он подключён. */
 html.has-ai-launch #toolbar,html.has-ai-launch .v2-head,html.has-ai-launch #precast-concept .pc-workspace-nav{padding-right:88px}
