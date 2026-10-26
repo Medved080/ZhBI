@@ -92,7 +92,7 @@ TABLES = [
                              "пусто — объект не привязан; один GUID — один объект"),
     ("project_id", "INTEGER", "FK", "проект-владелец → projects.id (RESTRICT)"),
     ("kind", "TEXT", "", "тип учёта: zhbi — изделия по чертежу, mfr — блоки из модели; задаёт состав разделов"),
-    ("status", "TEXT", "", "perspective/active/suspended/completed/archived — archived скрыт из крошки и выпадашек"),
+    ("status", "TEXT", "", "perspective/active/handover/suspended/completed/archived — archived скрыт из крошки и выпадашек"),
     ("smu", "TEXT", "", "УСТАРЕЛО (2026-09-08) — свободный текст, замена: smu_id → smu_catalog. "
                         "Код больше не пишет сюда; поле оставлено с накопленными данными (релиз только добавляет)"),
     ("smu_director", "TEXT", "", "УСТАРЕЛО (2026-09-08) — замена: smu_director_id → individuals"),
@@ -101,6 +101,9 @@ TABLES = [
     ("smu_director_id", "INTEGER", "FK", "директор подразделения → individuals.id (SET NULL)"),
     ("responsible_id", "INTEGER", "FK", "УСТАРЕЛО (2026-10-07): «Ответственный (ДП/РП)» убран из карточки, обмена и ИИ («Справочник ОС WEB» его не ведёт); колонка осталась, значения стирает уборка 2026-10-07-clear-retired-object-fields → individuals.id (SET NULL)"),
     ("media_url", "TEXT", "", "ссылка на папку с фото/видео объекта (внешнее хранилище); сервер её не скачивает"),
+    ("onec_guid", "TEXT", "", "GUID объекта в справочнике «Объекты строительства» 1С (в нижнем регистре, 36 знаков); пусто — связи с 1С нет"),
+    ("onec_name", "TEXT", "", "наименование объекта в 1С — как оно записано там, может отличаться от name"),
+    ("onec_code", "TEXT", "", "код записи справочника «Объекты строительства» в 1С"),
     ("avatar_attachment_id", "INTEGER", "FK", "превью в дереве справочника → attachments.id (SET NULL); NULL — превью нет"),
     ("smr_start_reported", "TEXT", "", "УСТАРЕЛО (2026-10-07): «Старт СМР» убран из карточки, обмена и ИИ («Справочник ОС WEB» его не ведёт); колонка осталась, значения стирает уборка 2026-10-07-clear-retired-object-fields"),
     ("address", "TEXT", "", "адрес объекта строкой (показ, поиск, печать)"),

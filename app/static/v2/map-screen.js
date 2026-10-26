@@ -33,13 +33,13 @@ import { esc } from "./screen-view.js";
 })();
 
 const STATUS_LABELS = {
-  perspective: "Перспективный", active: "В работе", suspended: "Приостановлен",
+  perspective: "Перспективный", active: "В работе", handover: "Сдаточный", suspended: "Приостановлен",
   completed: "Завершён", archived: "Архивный",
 };
 // Тот же светофор по стадии, что и .v2-status-dot[data-dot] (styles.css) — но нужен ещё и СТРОКОЙ цвета:
 // всплывашку строит map.js, ему нужен именно колбэк statusColor(status) -> "#rrggbb", а не CSS-класс.
 const STATUS_COLORS = {
-  active: "#2F9E44", perspective: "#4C6EF5", suspended: "#F08C00",
+  active: "#2F9E44", perspective: "#4C6EF5", handover: "#0CA678", suspended: "#F08C00",
   completed: "#1971C2", archived: "#868E96",
 };
 // Цвет заливки точки по доле смонтированного — та же шкала, что в приватной цветПоДоле() внутри map.js

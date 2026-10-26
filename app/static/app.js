@@ -1452,7 +1452,7 @@ const objectSwitch = {
 // Метка в крошке тулбара — у любого статуса, кроме «в работе» (он и так
 // подразумевается по умолчанию и не нуждается в пометке).
 const OBJECT_STATUS_BADGE = {
-  perspective: "перспективный", suspended: "приостановлен",
+  perspective: "перспективный", handover: "сдаточный", suspended: "приостановлен",
   completed: "завершён", archived: "архив",
 };
 
@@ -7651,7 +7651,7 @@ function setStageLoading(on, text) {
 // (реквизиты, проектная команда, показатели учёта), справа — карта с отметкой места расположения (та же мини-карта createPinMap,
 // что в форме справочника, без правки точки). Закрывается кнопкой «Открыть схему» и при смене рабочего места. Дерево проектов
 // (`/projects-tree`) несёт только навигацию, поэтому данные читаются из справочника объектов (`GET /objects`).
-const OBJECT_STATUS_RU = { perspective: "Перспективный", active: "В работе", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
+const OBJECT_STATUS_RU = { perspective: "Перспективный", active: "В работе", handover: "Сдаточный", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
 const OBJECT_KIND_RU = { zhbi: "Учёт ЖБИ по чертежу", mfr: "Учёт МФР по модели" };
 let objectHomeMap = null;   // мини-карта заглавной страницы: перед пересозданием и при закрытии обязательно remove() (контекст WebGL)
 let objectHomeFor = null;
@@ -7704,6 +7704,8 @@ async function fillObjectCard(box, o, { openLabel, onOpen, onHeadcount, onEdit, 
           ${строка("Адрес", e(o.address))}${строка("Координаты", есть ? `${e(o.lat)}, ${e(o.lon)}` : "")}
           ${медиа ? строка("Фото и видео", `<a href="${escapeHtml(медиа)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
           ${строка("Описание", e(o.description))}</dl></section>
+        ${o.onec_guid || o.onec_name || o.onec_code ? `<section class="ohv-card"><h4>Связь с 1С</h4><dl class="ohv-dl">
+          ${строка("GUID в 1С", e(o.onec_guid))}${строка("Наименование в 1С", e(o.onec_name))}${строка("Код в справочнике «Объекты строительства»", e(o.onec_code))}</dl></section>` : ""}
       </div>
       <div class="ohv-col">
         <section class="ohv-card"><h4>Проектная команда</h4>${команда
@@ -12493,6 +12495,7 @@ function setCatalogCoordsStatus(text, isError) {
 const CATALOG_STATUS_LABELS = {
   perspective: "Перспективный",
   active: "В работе",
+  handover: "Сдаточный",
   suspended: "Приостановлен",
   completed: "Завершён",
   archived: "Архивный",
@@ -12513,6 +12516,7 @@ const CATALOG_STATUS_LABELS = {
 const OBJ_STATUS_COLORS = {
   perspective: "#4C6EF5",
   active: "#2F9E44",
+  handover: "#0CA678",
   suspended: "#F08C00",
   completed: "#1971C2",
   archived: "#868E96",
@@ -12559,7 +12563,8 @@ function catalogObjectsOf(projectId) {
 }
 
 function catalogMatches(запись, имяПроекта) {
-  if (catalog.status && (запись.status || "active") !== catalog.status) return false;
+  // Статус — реквизит ОБЪЕКТА; у проекта его нет (убран 2026-10-26), проект в дереве определяют его объекты.
+  if ("smu_id" in запись && catalog.status && (запись.status || "active") !== catalog.status) return false;
   // Подразделение/регион — только у объекта ('smu_id' в записи отличает
   // объект от проекта, у которого этих полей вовсе нет).
   const объектныйФильтрАктивен = !!(catalog.smu || catalog.region);
@@ -12611,18 +12616,20 @@ function catalogNodeButton({ тип, запись, проект }) {
   }
 
   const статус = запись.status || "active";
-  const точка = document.createElement("span");
-  точка.className = "status-dot";
-  точка.style.background = objStatusColor(статус);
-  точка.title = CATALOG_STATUS_LABELS[статус] || "";
-  b.appendChild(точка);
+  if (тип === "object") {
+    const точка = document.createElement("span");
+    точка.className = "status-dot";
+    точка.style.background = objStatusColor(статус);
+    точка.title = CATALOG_STATUS_LABELS[статус] || "";
+    b.appendChild(точка);
+  }
 
   const имя = document.createElement("span");
   имя.className = "catalog-node-name";
   имя.textContent = запись.name;
   b.appendChild(имя);
 
-  if (статус !== "active") {
+  if (тип === "object" && статус !== "active") {
     // Полная подпись по статусу, а не только «архив»/«завершён»: раньше
     // любой ИНОЙ статус (перспективный, приостановлен) молча показывался
     // как «завершён» — двузначная ветка не поспевала за пятью значениями.
@@ -12674,7 +12681,8 @@ function renderCatalogTree() {
 
   for (const проект of catalog.projects) {
     const свои = catalogObjectsOf(проект.id).filter((o) => catalogMatches(o, проект.name));
-    const проектПодходит = catalogMatches(проект, null);
+    // Пустой проект при статусном отборе (кроме «В работе» и «Все») не показывается: своего статуса у проекта нет.
+    const проектПодходит = catalogMatches(проект, null) && (!catalog.status || catalog.status === "active");
     // Проект показывается, если подходит сам ИЛИ подходит хоть один его
     // объект: иначе поиск по адресу объекта прятал бы найденное вместе с
     // родителем.
@@ -12752,6 +12760,7 @@ function catalogFieldsHtml(запись, тип, редактируем) {
       <div class="object-fields">
         <label class="object-field"><span>Наименование</span>
           <input type="text" data-field="name" value="${з(запись && запись.name)}" ${выкл}/></label>
+        ${тип === "object" ? `
         <label class="object-field"><span>Статус</span>
           <div class="field-with-link">
             <span class="status-dot" id="catalog-status-dot" style="background:${objStatusColor(статус)}"></span>
@@ -12760,7 +12769,6 @@ function catalogFieldsHtml(запись, тип, редактируем) {
                 `<option value="${k}" ${статус === k ? "selected" : ""}>${v}</option>`).join("")}
             </select>
           </div></label>
-        ${тип === "object" ? `
         <label class="object-field"><span>Проект</span>
           <select data-field="project_id" ${выкл}>${проекты}</select></label>
         <!-- Тип учёта задаёт СОСТАВ разделов объекта: на ЖБИ нет модели
@@ -12843,7 +12851,21 @@ function catalogFieldsHtml(запись, тип, редактируем) {
           </select></label>`).join("")}
       </div>
     </div>` : "";
-  return реквизиты + командаПроекта + адрес;
+  // Связь с 1С (2026-10-26): GUID, наименование и код записи справочника «Объекты строительства». Только у объекта.
+  const связь1С = тип === "object" ? `
+    <div class="form-card">
+      <h4>Связь с 1С</h4>
+      <div class="object-fields">
+        <label class="object-field"><span>GUID в 1С</span>
+          <input type="text" data-field="onec_guid" value="${з(запись && запись.onec_guid)}" ${выкл}
+                 placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off"/></label>
+        <label class="object-field"><span>Наименование в 1С</span>
+          <input type="text" data-field="onec_name" value="${з(запись && запись.onec_name)}" ${выкл} autocomplete="off"/></label>
+        <label class="object-field"><span>Код справочника «Объекты строительства» в 1С</span>
+          <input type="text" data-field="onec_code" value="${з(запись && запись.onec_code)}" ${выкл} autocomplete="off"/></label>
+      </div>
+    </div>` : "";
+  return реквизиты + командаПроекта + связь1С + адрес;
 }
 
 function catalogSummaryHtml(запись, тип) {
@@ -12864,7 +12886,7 @@ function catalogSummaryHtml(запись, тип) {
 }
 
 // Роли проектной команды объекта (2026-10-05, B1) — ТОТ ЖЕ список и порядок, что TEAM_ROLES в app/object_team.py.
-const OBJECT_TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
+const OBJECT_TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Планирование"],
   ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 
 function renderCatalogCard(место, запись) {
@@ -13052,6 +13074,12 @@ function renderCatalogForm() {
     el.addEventListener("input", markCatalogDirty);
     el.addEventListener("change", markCatalogDirty);
   });
+  // Поиск по ФИО в списках людей (директор СМУ и роли команды) — после обработчиков: поиск шлёт <select> input/change.
+  if (редактируем) {
+    import("/static/searchable-select.js").then((m) => {
+      место.querySelectorAll('select[data-field="smu_director_id"], select[data-field^="team_"]').forEach((s) => m.enhanceSearchableSelect(s));
+    }).catch(() => { /* без модуля остаётся обычный список */ });
+  }
 
   // Кнопка «открыть ссылку» следует за полем вживую — иначе она вела бы на
   // старое значение, если человек уже вписал новую ссылку, но ещё не сохранил.
@@ -13454,6 +13482,45 @@ document.getElementById("catalog-status-filter").addEventListener("change", (e) 
   catalog.status = e.target.value;
   renderCatalogTree();
 });
+
+// Ширина левой панели «Проекты и объекты» тянется за границу (2026-10-26); запоминается в браузере.
+(function mountCatalogResizer() {
+  const панель = document.querySelector(".catalog-tree-pane");
+  if (!панель) return;
+  const КЛЮЧ = "zhbi.v1.catalogTreeWidth", МИН = 200, МАКС = 640;
+  const ручка = document.createElement("div");
+  ручка.className = "catalog-resizer";
+  ручка.setAttribute("role", "separator");
+  ручка.setAttribute("aria-orientation", "vertical");
+  ручка.tabIndex = 0;
+  ручка.title = "Потяните, чтобы изменить ширину списка; двойной щелчок — вернуть";
+  панель.appendChild(ручка);
+  const макс = () => Math.min(МАКС, Math.max(МИН, (панель.parentElement ? панель.parentElement.clientWidth : 1000) - 360));
+  const применить = (w) => панель.style.setProperty("--catalog-tree-w", w == null ? "" : Math.round(Math.max(МИН, Math.min(макс(), w))) + "px");
+  const запомнить = (w) => { try { localStorage.setItem(КЛЮЧ, String(Math.round(w))); } catch (e) { /* без хранилища не запоминается */ } };
+  try { const v = Number(localStorage.getItem(КЛЮЧ)); if (v >= МИН && v <= МАКС) применить(v); } catch (e) { /* ширина по умолчанию */ }
+  let тянем = false, x0 = 0, w0 = 0;
+  ручка.addEventListener("pointerdown", (e) => {
+    тянем = true; x0 = e.clientX; w0 = панель.getBoundingClientRect().width;
+    ручка.setPointerCapture(e.pointerId); ручка.classList.add("active"); document.body.style.userSelect = "none"; e.preventDefault();
+  });
+  ручка.addEventListener("pointermove", (e) => { if (тянем) применить(w0 + e.clientX - x0); });
+  const отпустить = (e) => {
+    if (!тянем) return;
+    тянем = false; ручка.classList.remove("active"); document.body.style.userSelect = "";
+    try { ручка.releasePointerCapture(e.pointerId); } catch (err) { /* уже отпущен */ }
+    запомнить(панель.getBoundingClientRect().width);
+  };
+  ручка.addEventListener("pointerup", отпустить);
+  ручка.addEventListener("pointercancel", отпустить);
+  ручка.addEventListener("dblclick", () => { применить(null); запомнить(320); try { localStorage.removeItem(КЛЮЧ); } catch (e) { /* — */ } });
+  ручка.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    применить(панель.getBoundingClientRect().width + (e.key === "ArrowRight" ? 16 : -16));
+    запомнить(панель.getBoundingClientRect().width);
+  });
+})();
 
 // Регион показывается по имени, если оно известно (address_parts.region.name
 // у ЛЮБОГО объекта этого региона, откуда бы ни взялся код — сам классификатор

@@ -12,7 +12,7 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-const STATUS_LABEL = { active: "в работе", perspective: "перспективный", suspended: "приостановлен", completed: "завершён", archived: "архив" };
+const STATUS_LABEL = { active: "в работе", perspective: "перспективный", handover: "сдаточный", suspended: "приостановлен", completed: "завершён", archived: "архив" };
 const ARCHIVED_KEY = "zhbi.v2.objectPicker.archived";
 function readArchivedPref() { try { return localStorage.getItem(ARCHIVED_KEY) === "1"; } catch (e) { return false; } }
 function writeArchivedPref(v) { try { localStorage.setItem(ARCHIVED_KEY, v ? "1" : "0"); } catch (e) { /* приватный режим — переживёт только сеанс */ } }

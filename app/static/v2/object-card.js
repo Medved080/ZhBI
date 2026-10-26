@@ -9,10 +9,10 @@
 // map.js с ленивым import(); при уходе с карточки карта обязательно remove(): у каждой карты свой graphics-контекст, и без этого карты в
 // браузере перестают строиться (CLAUDE.md).
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const STATUS = { perspective: "Перспективный", active: "В работе", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
+const STATUS = { perspective: "Перспективный", active: "В работе", handover: "Сдаточный", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
 const KIND = { zhbi: "Учёт ЖБИ по чертежу", mfr: "Учёт МФР по модели" };
 // Роли проектной команды — тот же список и порядок, что TEAM_ROLES в app/object_team.py.
-const TEAM = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
+const TEAM = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Планирование"],
   ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 // Куда можно перейти с карточки: (экран, подпись). Показываются только доступные на этом объекте.
 const LINKS = [["ws-model", "Модель: схема 2D/3D"], ["ws-mfr", "Модель МФР"], ["ws-picker", "АРМ комплектовщика"], ["ws-foreman", "АРМ прораба"],
@@ -72,6 +72,8 @@ export function renderObjectCard(page, o, { api, go, isAllowed, openObject, onEd
           ${row("Адрес", esc(o.address))}${row("Координаты", coords ? `${esc(o.lat)}, ${esc(o.lon)}` : "")}
           ${media ? row("Фото и видео", `<a href="${esc(media)}" target="_blank" rel="noopener noreferrer">открыть папку</a>`) : ""}
           ${row("Описание", esc(o.description))}</dl></section>
+        ${o.onec_guid || o.onec_name || o.onec_code ? `<section class="oh-card"><h3>Связь с 1С</h3><dl class="oh-dl">
+          ${row("GUID в 1С", esc(o.onec_guid))}${row("Наименование в 1С", esc(o.onec_name))}${row("Код в справочнике «Объекты строительства»", esc(o.onec_code))}</dl></section>` : ""}
       </div>
       <div class="oh-col">
         <section class="oh-card"><h3>Проектная команда</h3>${team ? `<dl class="oh-dl">${team}</dl>` : `<p class="v2-muted">Команда не заполнена${onEdit ? " — заполните её кнопкой «Изменить реквизиты»" : ""}.</p>`}</section>

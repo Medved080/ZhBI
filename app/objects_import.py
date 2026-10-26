@@ -95,6 +95,7 @@ _COLUMN_LABELS = [
     ("media_url", "Фото/Видео"),
 ] + [("team_" + key, label) for key, label in TEAM_ROLES] + [
     ("team_site_chief", "Нач.участка"),    # в файле без пробела после точки
+    ("team_pm_office", "Проектный офис"),  # прежнее название роли (до 2026-10-26): старые файлы продолжают читаться
 ]
 
 
@@ -138,6 +139,7 @@ _ADDRESS_LINK_FIELDS = frozenset(
 _STATUS_MAP = {
     "активный": "active",
     "перспективный": "perspective",
+    "сдаточный": "handover",
     "приостановлен": "suspended",
     "завершен": "completed",
     "завершён": "completed",

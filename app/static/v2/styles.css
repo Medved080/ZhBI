@@ -277,6 +277,11 @@ table.v2-table { width: 100%; border-collapse: separate; border-spacing: 0; text
 
 .v2-cols { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 26px; }
 .v2-side { border-right: 1px solid var(--line); padding-right: 20px; }
+/* «Проекты и объекты»: ширина левой панели меняется (2026-10-26) — граница-ручка у правого края панели. */
+.v2-cols:has(.po-resizer) { grid-template-columns: var(--po-tree-w, 220px) minmax(0, 1fr); }
+.po-resizer { position: absolute; top: 0; bottom: 0; right: -15px; width: 11px; cursor: col-resize; touch-action: none; z-index: 2; }
+.po-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 5px; width: 2px; background: transparent; transition: background .12s; }
+.po-resizer:hover::after, .po-resizer:focus-visible::after, .po-resizer-active::after { background: var(--accent, #1f7a52); }
 .v2-side button {
   display: block;
   width: 100%;
@@ -601,6 +606,7 @@ label.v2-field textarea { font-size: 0.875rem; color: var(--ink); width: 100%; f
 }
 .v2-status-dot[data-dot="active"] { background: #2F9E44; }
 .v2-status-dot[data-dot="perspective"] { background: #4C6EF5; }
+.v2-status-dot[data-dot="handover"] { background: #0CA678; }
 .v2-status-dot[data-dot="suspended"] { background: #F08C00; }
 .v2-status-dot[data-dot="completed"] { background: #1971C2; }
 .v2-status-dot[data-dot="archived"] { background: #868E96; }
@@ -627,7 +633,8 @@ label.v2-field textarea { font-size: 0.875rem; color: var(--ink); width: 100%; f
 
 @media (max-width: 720px) {
   .v2-container { padding: 0 16px; }
-  .v2-cols { grid-template-columns: 1fr; }
+  .v2-cols, .v2-cols:has(.po-resizer) { grid-template-columns: 1fr; }
+  .po-resizer { display: none; }
   .v2-side:not(.v2-tree-pane) { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
   .v2-side:not(.v2-tree-pane) button { width: auto; }
   .v2-tree-pane { border: 0; padding: 0; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
@@ -1433,6 +1440,7 @@ input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default
 .oh-chip { padding: 1px 9px; border-radius: 999px; background: var(--bg-soft, #eef2f7); color: var(--fg, inherit); font-weight: 600; }
 .oh-chip-active { background: #dff3e4; color: #1d6b34; }
 .oh-chip-perspective { background: #e3e9fb; color: #2b4aa8; }
+.oh-chip-handover { background: #d9f3ea; color: #0b6b4d; }
 .oh-chip-suspended { background: #fdf0d5; color: #8a5a00; }
 .oh-chip-completed { background: #e9e9ee; color: #44444f; }
 .oh-actions { display: flex; flex-wrap: wrap; gap: 6px; }

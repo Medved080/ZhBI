@@ -3012,9 +3012,13 @@
      из виду форму, которую в этот момент заполняют. */
   .catalog-layout { display: flex; gap: 0; align-items: stretch; padding: 0; overflow: hidden; }
   .catalog-tree-pane {
-    flex: 0 0 320px; display: flex; flex-direction: column; min-height: 0;
+    flex: 0 0 var(--catalog-tree-w, 320px); display: flex; flex-direction: column; min-height: 0; position: relative;
     border-right: 1px solid var(--color-border); background: var(--color-surface-sunken);
   }
+  /* Граница-ручка: ширину левой панели можно менять (2026-10-26). */
+  .catalog-resizer { position: absolute; top: 0; bottom: 0; right: -4px; width: 9px; cursor: col-resize; z-index: 3; touch-action: none; }
+  .catalog-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background .12s; }
+  .catalog-resizer:hover::after, .catalog-resizer:focus-visible::after, .catalog-resizer.active::after { background: var(--color-primary, #1f7a52); }
   .catalog-tree-tools { display: flex; gap: 6px; padding: 10px; }
   .catalog-tree-tools input { flex: 1 1 auto; min-width: 0; }
   .catalog-tree-tools select { flex: 0 0 auto; max-width: 130px; }
@@ -3191,7 +3195,7 @@
   /* На узком экране (ноутбук 1366 и меньше в масштабе) дерево ужимается, но
      не исчезает: без него теряется навигация. */
   @media (max-width: 1100px) {
-    .catalog-tree-pane { flex-basis: 250px; }
+    .catalog-tree-pane { flex-basis: var(--catalog-tree-w, 250px); }
   }
   /* -------- выбор рабочего места (2026-08-17) -------- */
   /* Пояснение к пункту — строкой под названием, а не в title: в ряду кнопок
@@ -6752,6 +6756,7 @@
           <select id="catalog-status-filter" title="Отбор по статусу записи">
             <option value="active">В работе</option>
             <option value="perspective">Перспективные</option>
+            <option value="handover">Сдаточные</option>
             <option value="suspended">Приостановленные</option>
             <option value="completed">Завершённые</option>
             <option value="archived">Архивные</option>

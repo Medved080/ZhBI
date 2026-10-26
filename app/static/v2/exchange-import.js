@@ -221,11 +221,11 @@ const OBJECTS_FIELD_LABELS = {
   status: "Статус", lat: "Широта", lon: "Долгота", media_url: "Ссылка на фото/видео", postal_code: "Почтовый индекс",
   // «Справочник ОС WEB» (2026-10-05, B1): проект и проектная команда (те же роли, что TEAM_ROLES в app/object_team.py)
   project: "Проект", project_id: "Проект", team_dir_project: "Директор проекта", team_head_project: "Руководитель проекта",
-  team_pm_office: "Проектный офис", team_estimate: "Сметный отдел", team_pto: "ПТО", team_supply: "Снабжение",
+  team_pm_office: "Планирование", team_estimate: "Сметный отдел", team_pto: "ПТО", team_supply: "Снабжение",
   team_site_chief: "Нач. участка", team_gip: "ГИП",
 };
 const OBJECTS_HIDDEN = new Set(["address_code", "address_source", "address_parts"]);
-const CATALOG_STATUS = { active: "В работе", perspective: "Перспективный", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
+const CATALOG_STATUS = { active: "В работе", perspective: "Перспективный", handover: "Сдаточный", suspended: "Приостановлен", completed: "Завершён", archived: "Архивный" };
 const objValue = (field, v) => (v === null || v === undefined || v === "" ? "—" : field === "status" ? (CATALOG_STATUS[v] || v) : String(v));
 const objFieldsSummary = (fields) => {
   const rows = Object.entries(fields || {}).filter(([k]) => !OBJECTS_HIDDEN.has(k));

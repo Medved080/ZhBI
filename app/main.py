@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
@@ -4735,7 +4736,7 @@ def _адресные_правки(body) -> list:
 # на справочники (smu_catalog/individuals), проверяются отдельно, см.
 # _справочные_правки: обычному тексту чужого id не проверить.
 # «Старт СМР» и «Ответственный (ДП/РП)» убраны 2026-10-07 («Справочник ОС WEB» их не ведёт): колонки остались, но не пишутся и не читаются.
-_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("media_url",)
+_РЕКВИЗИТНЫЕ_КОЛОНКИ = ("media_url", "onec_guid", "onec_name", "onec_code")
 
 
 def _реквизитные_правки(body) -> list:
@@ -4744,7 +4745,13 @@ def _реквизитные_правки(body) -> list:
         if поле not in body.model_fields_set:
             continue
         значение = getattr(body, поле)
-        правки.append((поле, значение.strip() or None if isinstance(значение, str) else значение))
+        значение = значение.strip() or None if isinstance(значение, str) else значение
+        if поле == "onec_guid" and значение is not None:
+            try:
+                значение = str(uuid.UUID(значение))   # канонический вид: нижний регистр, дефисы
+            except ValueError:
+                raise HTTPException(status_code=400, detail="GUID в 1С: ожидается идентификатор вида xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+        правки.append((поле, значение))
     return правки
 
 
@@ -4792,7 +4799,7 @@ def _адрес_из_строки(row) -> dict:
 # 409, если запись за это время изменил кто-то другой. Аватар и служебные метки времени в него не входят: их меняет сама форма.
 _PROJECT_VERSION_COLS = ("name", "status", "description") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
 _OBJECT_VERSION_COLS = ("name", "status", "project_id", "kind", "description", "smu_id", "smu_director_id",
-                        "media_url") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
+                        "media_url", "onec_guid", "onec_name", "onec_code") + tuple(_АДРЕСНЫЕ_КОЛОНКИ)
 
 
 def _object_version(row, team) -> str:
@@ -5173,6 +5180,9 @@ def list_objects(user: sqlite3.Row = Depends(get_current_user)):
                 smu_director_id=(row["smu_director_id"] if "smu_director_id" in row.keys() else None),
                 smu_director_name=физлица.get(row["smu_director_id"] if "smu_director_id" in row.keys() else None),
                 media_url=row["media_url"] if "media_url" in row.keys() else None,
+                onec_guid=row["onec_guid"] if "onec_guid" in row.keys() else None,
+                onec_name=row["onec_name"] if "onec_name" in row.keys() else None,
+                onec_code=row["onec_code"] if "onec_code" in row.keys() else None,
                 has_avatar=bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False,
                 avatar_attachment_id=(row["avatar_attachment_id"] if "avatar_attachment_id" in row.keys() else None),
                 has_photo=(bool(row["avatar_attachment_id"]) if "avatar_attachment_id" in row.keys() else False) or row["id"] in картинки_вложений,
@@ -5210,6 +5220,9 @@ class ObjectCreateIn(AddressFields):
     smu_id: Optional[int] = None
     smu_director_id: Optional[int] = None
     media_url: Optional[str] = None
+    onec_guid: Optional[str] = None     # связь с 1С (2026-10-26): GUID, наименование и код записи справочника «Объекты строительства»
+    onec_name: Optional[str] = None
+    onec_code: Optional[str] = None
     team: Optional[dict] = None   # проектная команда {ключ роли: id физлица | null}, см. app/object_team.py
 
 

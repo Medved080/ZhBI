@@ -29,6 +29,7 @@
 import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 import { trashIconHtml } from "./icons.js";
 import { renderObjectCard } from "./object-card.js";
+import { enhanceSearchableSelect } from "/static/searchable-select.js";
 
 // Кэш загруженных модулей — на уровне файла, а не mountProjectsObjects(): при
 // повторном монтировании раздела (уход на другую вкладку V2 и возврат) не
@@ -85,14 +86,19 @@ function geocodeQueryFromAddress(addr) {
 
 // Роли проектной команды объекта (2026-10-05, B1) — ТОТ ЖЕ список и порядок, что TEAM_ROLES в app/object_team.py.
 // «Директор СМУ» сюда не входит: он стоит первым в «Проектной команде» рядом с «Отв. подразделением» (колонка objects.smu_director_id).
-const TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Проектный офис"],
+const TEAM_ROLES = [["dir_project", "Директор проекта"], ["head_project", "Руководитель проекта"], ["pm_office", "Планирование"],
   ["estimate", "Сметный отдел"], ["pto", "ПТО"], ["supply", "Снабжение"], ["site_chief", "Нач. участка"], ["gip", "ГИП"]];
 const teamDraftOf = (rec) => Object.fromEntries(TEAM_ROLES.map(([k]) => ["team_" + k, rec?.team?.[k]?.id ?? ""]));
 const STATUS_LABELS = {
-  perspective: "Перспективный", active: "В работе", suspended: "Приостановлен",
+  perspective: "Перспективный", active: "В работе", handover: "Сдаточный", suspended: "Приостановлен",
   completed: "Завершён", archived: "Архивный",
 };
-const STATUS_ORDER = ["active", "perspective", "suspended", "completed", "archived"];
+const STATUS_ORDER = ["active", "handover", "perspective", "suspended", "completed", "archived"];
+// Ширина левой панели с деревом (2026-10-26): тянется за границу, запоминается в браузере.
+const TREE_W_KEY = "zhbi.v2.projectsTreeWidth";
+const TREE_W_MIN = 200, TREE_W_MAX = 640;
+function readTreeWidth() { try { const v = Number(localStorage.getItem(TREE_W_KEY)); return v >= TREE_W_MIN && v <= TREE_W_MAX ? v : null; } catch (e) { return null; } }
+function saveTreeWidth(px) { try { localStorage.setItem(TREE_W_KEY, String(Math.round(px))); } catch (e) { /* без хранилища ширина просто не запоминается */ } }
 const KIND_LABELS = { zhbi: "ЖБИ — изделия по чертежу", mfr: "МФР — блоки из модели" };
 
 function escapeHtml(s) {
@@ -242,7 +248,8 @@ export function mountProjectsObjects(container, ctx) {
   function objectsOf(projectId) { return state.objects.filter((o) => o.project_id === projectId); }
 
   function matches(rec, projectName) {
-    if (state.status && rec.status !== state.status && !(state.status === "active" && !rec.status)) return false;
+    // Статус — реквизит ОБЪЕКТА: у проекта его нет (убран 2026-10-26), проект в дереве определяется своими объектами.
+    if (rec.project_id !== undefined && state.status && rec.status !== state.status && !(state.status === "active" && !rec.status)) return false;
     if (rec.smu_id !== undefined) {
       if (state.smu && String(rec.smu_id || "") !== state.smu) return false;
     }
@@ -285,17 +292,18 @@ export function mountProjectsObjects(container, ctx) {
     const rec = selectedRecord();
     if (state.selected?.type === "project") {
       state.draft = rec
-        ? { name: rec.name, status: rec.status || "active", description: rec.description || "", ...addressFieldsOf(rec) }
-        : { name: "", status: "active", description: "", ...addressFieldsOf(null) };
+        ? { name: rec.name, description: rec.description || "", ...addressFieldsOf(rec) }
+        : { name: "", description: "", ...addressFieldsOf(null) };
     } else {
       state.draft = rec
         ? { name: rec.name, status: rec.status || "active", project_id: rec.project_id,
             kind: rec.kind || "zhbi", description: rec.description || "",
             smu_id: rec.smu_id ?? "", smu_director_id: rec.smu_director_id ?? "",
-            media_url: rec.media_url || "", ...teamDraftOf(rec), ...addressFieldsOf(rec) }
+            media_url: rec.media_url || "", onec_guid: rec.onec_guid || "", onec_name: rec.onec_name || "", onec_code: rec.onec_code || "",
+            ...teamDraftOf(rec), ...addressFieldsOf(rec) }
         : { name: "", status: "active", project_id: state.newObjectProjectId || (state.projects[0]?.id ?? ""),
             kind: "zhbi", description: "", smu_id: "", smu_director_id: "",
-            media_url: "", ...teamDraftOf(null), ...addressFieldsOf(null) };
+            media_url: "", onec_guid: "", onec_name: "", onec_code: "", ...teamDraftOf(null), ...addressFieldsOf(null) };
     }
     // У уже сохранённой записи с координатами автопозиционирование по адресу
     // не трогает точку — вдруг она уточнена руками именно там, где нужно
@@ -407,7 +415,7 @@ export function mountProjectsObjects(container, ctx) {
     const wasNew = state.isNew;
     const snapshot = { ...state.draft };
     if (!snapshot.name || !snapshot.name.trim()) throw { message: "Укажите наименование" };
-    const body = { name: snapshot.name.trim(), status: snapshot.status, description: snapshot.description.trim() || null,
+    const body = { name: snapshot.name.trim(), description: snapshot.description.trim() || null,
       address: (snapshot.address || "").trim() || null, address_note: (snapshot.address_note || "").trim() || null,
       address_code: snapshot.address_code || null, address_source: snapshot.address_source || null,
       address_region: snapshot.address_region || null, address_parts: snapshot.address_parts || null,
@@ -419,7 +427,9 @@ export function mountProjectsObjects(container, ctx) {
         project_id: snapshot.project_id ? Number(snapshot.project_id) : null,
         kind: snapshot.kind, smu_id: snapshot.smu_id === "" ? null : Number(snapshot.smu_id),
         smu_director_id: snapshot.smu_director_id === "" ? null : Number(snapshot.smu_director_id),
+        status: snapshot.status,
         media_url: snapshot.media_url.trim() || null,
+        onec_guid: snapshot.onec_guid.trim() || null, onec_name: snapshot.onec_name.trim() || null, onec_code: snapshot.onec_code.trim() || null,
         team: Object.fromEntries(TEAM_ROLES.map(([k]) => [k, snapshot["team_" + k] === "" || snapshot["team_" + k] == null ? null : Number(snapshot["team_" + k])])),
       });
     }
@@ -440,7 +450,7 @@ export function mountProjectsObjects(container, ctx) {
         state.projects = r.projects; state.objects = r.objects; state.smuList = r.smuList; state.individualsList = r.individualsList;
         const list = type === "project" ? r.projects : r.objects;
         const norm = (v) => (v === undefined || v === null || v === "" ? null : String(v));
-        const cmp = ["name", "status", "description", "address", "address_note", "kind", "project_id", "smu_id", "smu_director_id", "media_url"];
+        const cmp = ["name", "status", "description", "address", "address_note", "kind", "project_id", "smu_id", "smu_director_id", "media_url", "onec_name", "onec_code"];
         found = wasNew
           ? list.find((r0) => r0.name === body.name && (type === "project" || String(r0.project_id) === String(body.project_id)))
           : list.find((r0) => r0.id === state.selected.id && cmp.every((k) => !(k in body) || norm(r0[k]) === norm(body[k])));
@@ -493,7 +503,10 @@ export function mountProjectsObjects(container, ctx) {
       // Отв. подразделение — реквизит ОБЪЕКТА (у проекта его нет): при таком фильтре проект остаётся в дереве
       // только вместе с подошедшими объектами, а не как пустая «оболочка» (иначе фильтр ничего не сужает).
       const objectOnlyFilter = !!state.smu;
-      const projectMatches = !objectOnlyFilter && matches(p, p.name);
+      // Своего статуса у проекта нет: по статусному фильтру он виден, только если подошёл какой-то его объект
+      // (пустой проект остаётся виден при «В работе» и «Все» — иначе только что заведённый проект пропадал бы из дерева).
+      const statusAllowsEmpty = !state.status || state.status === "active";
+      const projectMatches = !objectOnlyFilter && matches(p, p.name) && statusAllowsEmpty;
       const matchingObjects = objs.filter((o) => matches(o, p.name));
       if (!projectMatches && !matchingObjects.length) continue;
       const expanded = filterActive || state.expanded.has(p.id);
@@ -501,7 +514,6 @@ export function mountProjectsObjects(container, ctx) {
       rows.push(`<div class="v2-tree-row">
         <button type="button" class="v2-tree-node v2-tree-project${sel ? " v2-tree-selected" : ""}" data-project="${p.id}">
           <span class="v2-tree-chevron">${expanded ? "▼" : "▶"}</span>
-          <span class="v2-status-dot" data-dot="${p.status || "active"}"></span>
           <span class="v2-tree-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
           <span class="v2-tree-count">${p.objects_count} · ${p.elements_count}</span>
         </button></div>`);
@@ -578,7 +590,7 @@ export function mountProjectsObjects(container, ctx) {
       <div class="v2-group">Реквизиты</div>
       <div class="v2-fields">
         ${fieldRow("Наименование", `<input id="pf-name" value="${escapeHtml(d.name)}">`)}
-        ${fieldRow("Статус", statusSelect("pf-status", d.status, false))}
+        ${type === "object" ? fieldRow("Статус", statusSelect("pf-status", d.status, false)) : ""}
         ${type === "object" ? fieldRow("Проект", refSelect("pf-project", state.projects, d.project_id, false, "— выберите проект —")) : ""}
         ${type === "object" ? fieldRow("Тип учёта", `<select id="pf-kind">${Object.entries(KIND_LABELS).map(([k, l]) =>
           `<option value="${k}" ${d.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>`) : ""}
@@ -591,6 +603,13 @@ export function mountProjectsObjects(container, ctx) {
         ${fieldRow("Отв. подразделение", refSelect("pf-smu", state.smuList, d.smu_id, false, "— не выбрано —"))}
         ${fieldRow("Директор СМУ", refSelect("pf-smu-director", state.individualsList, d.smu_director_id, false, "— не выбрано —"))}
         ${TEAM_ROLES.map(([k, label]) => fieldRow(label, refSelect("pf-team-" + k, state.individualsList, d["team_" + k], false, "— не назначен —"))).join("")}
+      </div>` : ""}
+      ${type === "object" ? `
+      <div class="v2-group">Связь с 1С</div>
+      <div class="v2-fields">
+        ${fieldRow("GUID в 1С", `<input id="pf-onec-guid" value="${escapeHtml(d.onec_guid)}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" spellcheck="false" autocomplete="off">`)}
+        ${fieldRow("Наименование в 1С", `<input id="pf-onec-name" value="${escapeHtml(d.onec_name)}" autocomplete="off">`)}
+        ${fieldRow("Код справочника «Объекты строительства» в 1С", `<input id="pf-onec-code" value="${escapeHtml(d.onec_code)}" autocomplete="off">`)}
       </div>` : ""}
       <div class="v2-group">Адрес и координаты</div>
       <div id="po-address"></div>
@@ -613,11 +632,14 @@ export function mountProjectsObjects(container, ctx) {
     const FIELD_KEYS = { "pf-name": "name", "pf-status": "status", "pf-project": "project_id", "pf-kind": "kind",
       "pf-smu": "smu_id", "pf-smu-director": "smu_director_id",
       "pf-media": "media_url", "pf-description": "description",
+      "pf-onec-guid": "onec_guid", "pf-onec-name": "onec_name", "pf-onec-code": "onec_code",
       "pf-lat": "lat", "pf-lon": "lon",
       ...Object.fromEntries(TEAM_ROLES.map(([k]) => ["pf-team-" + k, "team_" + k])) };
     const syncDraftField = (elm) => { const key = FIELD_KEYS[elm.id]; if (key) state.draft[key] = elm.value; };
     el.querySelectorAll("input, select, textarea").forEach((elm) => elm.addEventListener("input", () => { syncDraftField(elm); markDirty(); }));
     el.querySelectorAll("input, select").forEach((elm) => elm.addEventListener("change", () => syncDraftField(elm)));
+    // Поиск по ФИО в списках людей — после того, как форма навесила обработчики на сами <select> (поиск шлёт им input/change).
+    el.querySelectorAll("#pf-smu-director, [id^='pf-team-']").forEach((s) => enhanceSearchableSelect(s));
     el.querySelector("#po-to-card")?.addEventListener("click", () => withNavGuard(async () => {
       if (!(await requestLeave())) return;
       initDraft();
@@ -1019,6 +1041,44 @@ export function mountProjectsObjects(container, ctx) {
     smuSel.value = state.smu;
   }
 
+  // Граница левой панели тянется мышью (и стрелками с клавиатуры); ширина запоминается в браузере человека.
+  function mountTreeResizer() {
+    const cols = body.querySelector(".v2-cols"), handle = body.querySelector("#po-resizer");
+    if (!cols || !handle) return;
+    const DEFAULT_W = 220;
+    const apply = (w) => cols.style.setProperty("--po-tree-w", w == null ? `${DEFAULT_W}px` : `${w}px`);
+    const clamp = (w) => Math.max(TREE_W_MIN, Math.min(TREE_W_MAX, Math.min(w, cols.clientWidth - 360)));
+    const saved = readTreeWidth();
+    if (saved) apply(clamp(saved));
+    let startX = 0, startW = 0, dragging = false;
+    const current = () => cols.firstElementChild.getBoundingClientRect().width;
+    handle.addEventListener("pointerdown", (e) => {
+      dragging = true; startX = e.clientX; startW = current();
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add("po-resizer-active");
+      document.body.style.userSelect = "none";
+      e.preventDefault();
+    });
+    handle.addEventListener("pointermove", (e) => { if (dragging) apply(clamp(startW + e.clientX - startX)); });
+    const stop = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove("po-resizer-active");
+      document.body.style.userSelect = "";
+      try { handle.releasePointerCapture(e.pointerId); } catch (err) { /* уже отпущен */ }
+      saveTreeWidth(current());
+    };
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+    handle.addEventListener("dblclick", () => { apply(null); saveTreeWidth(DEFAULT_W); });
+    handle.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const w = clamp(current() + (e.key === "ArrowRight" ? 16 : -16));
+      apply(w); saveTreeWidth(w);
+    });
+  }
+
   async function render() {
     if (!state.loaded) {
       const ok = await ensureLoaded();
@@ -1044,16 +1104,19 @@ export function mountProjectsObjects(container, ctx) {
         <aside class="v2-side v2-tree-pane">
           <input id="po-search" aria-label="Поиск проекта или объекта" placeholder="Название или адрес" value="${escapeHtml(state.query)}">
           <select id="po-status-filter" aria-label="Фильтр по статусу">
-            ${[["active", "В работе"], ["perspective", "Перспективный"], ["suspended", "Приостановлен"], ["completed", "Завершён"], ["archived", "Архивный"], ["", "Все"]]
+            ${[["active", "В работе"], ["handover", "Сдаточный"], ["perspective", "Перспективный"], ["suspended", "Приостановлен"], ["completed", "Завершён"], ["archived", "Архивный"], ["", "Все"]]
               .map(([v, l]) => `<option value="${v}" ${state.status === v ? "selected" : ""}>${l}</option>`).join("")}
           </select>
           <select id="po-smu-filter" aria-label="Фильтр по ответственному подразделению"></select>
           <div id="po-tree" class="v2-tree"></div>
           <div class="v2-tree-foot">${btn("+ Проект", 'id="po-add-project"')}${btn("+ Объект", 'id="po-add-object"')}</div>
+          <div class="po-resizer" id="po-resizer" role="separator" aria-orientation="vertical" tabindex="0"
+               aria-label="Ширина списка проектов и объектов (стрелки влево/вправо)" title="Потяните, чтобы изменить ширину списка; двойной щелчок — вернуть"></div>
         </aside>
         <section id="po-form"></section>
       </div>`;
     populateFilterOptions();
+    mountTreeResizer();
     renderTree();
     await renderForm();
     renderFooter();

@@ -336,6 +336,7 @@ class ZonePatchIn(BaseModel):
 #
 # perspective — рассматривается, работы ещё не идут;
 # active      — в работе, показывается везде;
+# handover    — «Сдаточный» (2026-10-26): строительство подходит к сдаче, объект виден везде, как «в работе»;
 # suspended   — приостановлен: видна, но с меткой, как и завершённая;
 # completed   — работы закончены; видна, но с меткой и в свёрнутой группе;
 # archived    — скрыта из крошки в тулбаре, дерева справочника, карты и
@@ -345,11 +346,12 @@ class ZonePatchIn(BaseModel):
 #
 # Набор значений держит КОД, а не CHECK в схеме: SQLite не принимает CHECK в
 # ALTER TABLE ADD COLUMN — ровно как у objects.kind.
-CATALOG_STATUSES = ("perspective", "active", "suspended", "completed", "archived")
+CATALOG_STATUSES = ("perspective", "active", "handover", "suspended", "completed", "archived")
 
 CATALOG_STATUS_LABELS_RU = {
     "perspective": "Перспективный",
     "active": "В работе",
+    "handover": "Сдаточный",
     "suspended": "Приостановлен",
     "completed": "Завершён",
     "archived": "Архивный",
@@ -454,6 +456,9 @@ class ObjectOut(AddressFields):
     smu_director_name: Optional[str] = None
     # «Ответственный (ДП/РП)» и «Старт СМР» убраны 2026-10-07 по «Справочнику ОС WEB» — полей в ответе больше нет.
     media_url: Optional[str] = None
+    onec_guid: Optional[str] = None
+    onec_name: Optional[str] = None
+    onec_code: Optional[str] = None
     # Проектная команда (2026-10-05, B1): {ключ роли: {"id", "name"}}; пустая роль — ключа нет (app/object_team.py).
     team: dict = {}
     # Есть ли превью — а не сама картинка: дерево справочника рисует
@@ -486,6 +491,9 @@ class ObjectPatchIn(AddressFields):
     smu_id: Optional[int] = None
     smu_director_id: Optional[int] = None
     media_url: Optional[str] = None
+    onec_guid: Optional[str] = None
+    onec_name: Optional[str] = None
+    onec_code: Optional[str] = None
     # Проектная команда: {ключ роли: id физлица | null}; меняются только присланные роли, null снимает назначение.
     team: Optional[dict] = None
     # V2: отпечаток, который форма видела при открытии (ObjectOut.version). Не передан — проверки нет (V1).
