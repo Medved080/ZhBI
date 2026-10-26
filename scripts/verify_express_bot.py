@@ -295,6 +295,87 @@ c = db.get_connection(); rid = es.create_manual(c, OBJ, IVAN, date(2026, 10, 23)
 ok(c.execute("SELECT status FROM express_requests WHERE id = ?", (rid,)).fetchone()["status"] == "sent", "ручная отправка доставлена"); c.close()
 ok(eb.find_user_by_email("known@corp.ru")["user_huid"] == "11111111-1111-1111-1111-111111111111" and eb.find_user_by_email("none@corp.ru") is None, "поиск пользователя eXpress по e-mail")
 
+# ------------------------------------------------------------------ привязка по одноразовому коду и телефон
+from fastapi import HTTPException
+from app import express_api as api_mod
+STATE["auth"] = "both"; eb._drop_token(); SENT.clear()
+c = db.get_connection(); c.execute("UPDATE express_config SET enabled = 1"); c.commit(); c.close()
+
+def code_contact(name, **fields):
+    return api_mod.create_contact(api_mod.ContactIn(name=name, **fields), user=admin)
+ext = code_contact("Внешний Подрядчик", phone="+7 (900) 000-00-00")
+ok(ext["phone"] == "+7 (900) 000-00-00" and not ext["code_active"] and not ext["bound"], "контакт с телефоном заведён (телефон справочный, кода нет)")
+try:
+    code_contact("Плохой", phone="звоните вечером"); ok(False, "телефон с буквами должен отклоняться")
+except HTTPException as e:
+    ok(e.status_code == 400, "телефон: буквы отклоняются")
+issued = api_mod.issue_bind_code(ext["id"], user=admin)
+CODE = issued["code"]
+ok(len(CODE) == 9 and CODE[4] == "-" and set(CODE.replace("-", "")) <= set(ed.CODE_ALPHABET), "код: 8 знаков из алфавита без I, O, 0, 1, показан как ABCD-EFGH")
+c = db.get_connection(); row = c.execute("SELECT * FROM express_contacts WHERE id = ?", (ext["id"],)).fetchone()
+dump = " ".join(str(v) for v in tuple(row)) + " ".join(str(tuple(r)) for r in c.execute("SELECT * FROM express_log")); c.close()
+ok(CODE not in dump and CODE.replace("-", "") not in dump and row["bind_code_hash"] == ed.hash_code(CODE), "в БД и журнале нет самого кода — только sha256")
+ok(api_mod.list_contacts(user=admin) and next(x for x in api_mod.list_contacts(user=admin) if x["id"] == ext["id"])["code_active"], "в списке контактов виден «код выдан»")
+
+NEW_HUID, NEW_CHAT = "aaaaaaaa-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000001"
+def ext_say(body, huid=NEW_HUID, chat=NEW_CHAT):
+    return say(body, huid=huid, login=None, chat=chat)
+bad = ext_say("/start ZZZZ-ZZZZ")
+ok(bad and "не подошёл" in bad[-1][1], "неверный код: бот отвечает отказом и подсказывает, что делать")
+ok(ext_say("привет") and "нет в списке" in SENT[-1][1] and "/start КОД" in SENT[-1][1], "незнакомому на обычное сообщение — отказ с подсказкой про код привязки")
+out = ext_say("/start " + CODE.lower().replace("-", " "))
+ok(out and "привязаны как «Внешний Подрядчик»" in out[0][1], "верный код (в любом регистре, с пробелом вместо дефиса) привязывает аккаунт")
+c = db.get_connection(); row = c.execute("SELECT * FROM express_contacts WHERE id = ?", (ext["id"],)).fetchone(); c.close()
+ok(row["user_huid"] == NEW_HUID and row["chat_id"] == NEW_CHAT and row["bound_at"] and row["bind_code_hash"] is None and row["bind_code_expires"] is None,
+   "контакт привязан без e-mail и логина: аккаунт и личный чат записаны, код погашен")
+ok("не подошёл" in ext_say("/start " + CODE, huid="aaaaaaaa-0000-0000-0000-000000000002", chat="bbbbbbbb-0000-0000-0000-000000000002")[-1][1], "использованный код повторно не работает")
+out = ext_say("/start")
+ok(out and not any("не подошёл" in m[1] or "нет в списке" in m[1] for m in out), "после привязки этот человек — обычный контакт: /start принимается")
+out = ext_say("/start QQQQ-QQQQ")
+ok(out and not any("не подошёл" in m[1] for m in out), "известный контакт с лишним аргументом после /start: аргумент игнорируется, ошибки кода нет")
+out = ext_say("ABCD2345")
+ok(not any("не подошёл" in m[1] for m in out), "известному контакту слово, похожее на код, кодом не считается")
+
+# срок действия
+issued = api_mod.issue_bind_code(ext["id"], user=admin)
+c = db.get_connection(); c.execute("UPDATE express_contacts SET bind_code_expires = datetime('now', '-1 minute') WHERE id = ?", (ext["id"],)); c.commit(); c.close()
+ed._FAILS.clear()
+ok("не подошёл" in say("/start " + issued["code"], huid="aaaaaaaa-0000-0000-0000-000000000003", login=None, chat="bbbbbbbb-0000-0000-0000-000000000003")[-1][1], "истёкший код не принимается")
+ok(next(x for x in api_mod.list_contacts(user=admin) if x["id"] == ext["id"])["code_active"] is False, "истёкший код в списке контактов не показывается как действующий")
+
+# перепривязка по новому коду (человек сменил аккаунт)
+issued = api_mod.issue_bind_code(ext["id"], user=admin)
+OTHER_HUID, OTHER_CHAT = "aaaaaaaa-0000-0000-0000-000000000004", "bbbbbbbb-0000-0000-0000-000000000004"
+out = say("/start " + issued["code"], huid=OTHER_HUID, login=None, chat=OTHER_CHAT)
+c = db.get_connection(); row = c.execute("SELECT user_huid, chat_id FROM express_contacts WHERE id = ?", (ext["id"],)).fetchone(); c.close()
+ok(out and row["user_huid"] == OTHER_HUID and row["chat_id"] == OTHER_CHAT, "новый код перепривязывает контакт к другому аккаунту eXpress")
+
+# один аккаунт — один контакт
+second = code_contact("Второй Контакт")
+issued2 = api_mod.issue_bind_code(second["id"], user=admin)
+out = say("/start " + issued2["code"], huid=OTHER_HUID, login=None, chat=OTHER_CHAT)
+c = db.get_connection(); row2 = c.execute("SELECT user_huid FROM express_contacts WHERE id = ?", (second["id"],)).fetchone(); c.close()
+ok(out and "уже привязан к контакту «Внешний Подрядчик»" in out[-1][1] and row2["user_huid"] is None, "аккаунт, уже привязанный к другому контакту, второй код не принимает")
+
+# подбор: пять неверных кодов с аккаунта — и блокировка, даже верный код не пройдёт, пока окно не истечёт
+ed._FAILS.clear()
+BR_HUID, BR_CHAT = "aaaaaaaa-0000-0000-0000-000000000005", "bbbbbbbb-0000-0000-0000-000000000005"
+for _i in range(ed.FAIL_LIMIT):
+    say("/start ZZZZ-ZZZ" + "ABCDE"[_i], huid=BR_HUID, login=None, chat=BR_CHAT)
+out = say("/start " + issued2["code"], huid=BR_HUID, login=None, chat=BR_CHAT)
+ok(out and "Слишком много" in out[-1][1], "после пяти неверных кодов аккаунт блокируется на десять минут, верный код тоже не принимается")
+ed._FAILS.clear()
+out = say("/start " + issued2["code"], huid=BR_HUID, login=None, chat=BR_CHAT)
+ok(out and "привязаны как «Второй Контакт»" in out[0][1], "после окончания блокировки верный код работает")
+
+# отключённому контакту код не выдаётся
+c = db.get_connection(); c.execute("UPDATE express_contacts SET active = 0 WHERE id = ?", (second["id"],)); c.commit(); c.close()
+try:
+    api_mod.issue_bind_code(second["id"], user=admin); ok(False, "отключённому контакту код выдавать нельзя")
+except HTTPException as e:
+    ok(e.status_code == 400, "отключённому контакту код не выдаётся")
+SENT.clear()
+
 # ------------------------------------------------------------------ настоящие HTTP-маршруты
 import uvicorn
 from app.main import app

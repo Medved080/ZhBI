@@ -206,11 +206,13 @@ class ContactIn(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     ad_login: Optional[str] = None
+    phone: Optional[str] = None
     active: bool = True
 
 
 def _contact_out(row) -> dict:
     return {"id": row["id"], "individual_id": row["individual_id"], "name": row["name"], "email": row["email"], "ad_login": row["ad_login"],
+            "phone": row["phone"], "code_active": bool(row["bind_code_hash"]) and bool(row["code_live"]), "code_expires": row["bind_code_expires"] if row["code_live"] else None,
             "bound": bool(row["chat_id"]), "recognized": bool(row["user_huid"]), "bound_at": row["bound_at"], "active": bool(row["active"]),
             "schedules": row["schedules"] if "schedules" in row.keys() else None}
 
@@ -235,10 +237,14 @@ def _clean_contact(conn, body: ContactIn, exclude_id: Optional[int] = None) -> d
         login = login.split("\\")[-1]                       # «DOMAIN\ivanov» → «ivanov»
     if login and "@" in login:
         login = login.split("@")[0]
-    return {"individual_id": body.individual_id, "name": name[:200], "email": email, "ad_login": login, "active": 1 if body.active else 0}
+    phone = " ".join((body.phone or "").split()) or None
+    if phone and (len(phone) > 30 or not re.fullmatch(r"[0-9+\-() ]+", phone)):
+        raise HTTPException(status_code=400, detail="Телефон: только цифры, +, -, пробелы и скобки, не длиннее 30 знаков")
+    return {"individual_id": body.individual_id, "name": name[:200], "email": email, "ad_login": login, "phone": phone, "active": 1 if body.active else 0}
 
 
-_CONTACT_SELECT = ("SELECT c.*, (SELECT COUNT(*) FROM express_schedules s WHERE s.contact_id = c.id) AS schedules FROM express_contacts c ")
+_CONTACT_SELECT = ("SELECT c.*, (SELECT COUNT(*) FROM express_schedules s WHERE s.contact_id = c.id) AS schedules, "
+                   "(c.bind_code_expires > datetime('now')) AS code_live FROM express_contacts c ")
 
 
 @router.get("/contacts")
@@ -257,8 +263,8 @@ def create_contact(body: ContactIn, user: sqlite3.Row = Depends(require_service_
     try:
         begin_write(conn)
         c = _clean_contact(conn, body)
-        cur = conn.execute("INSERT INTO express_contacts (individual_id, name, email, ad_login, active, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-                           (c["individual_id"], c["name"], c["email"], c["ad_login"], c["active"], user["id"]))
+        cur = conn.execute("INSERT INTO express_contacts (individual_id, name, email, ad_login, phone, active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (c["individual_id"], c["name"], c["email"], c["ad_login"], c["phone"], c["active"], user["id"]))
         conn.commit()
         row = conn.execute(_CONTACT_SELECT + "WHERE c.id = ?", (cur.lastrowid,)).fetchone()
     finally:
@@ -278,9 +284,9 @@ def update_contact(contact_id: int, body: ContactIn, user: sqlite3.Row = Depends
         c = _clean_contact(conn, body, exclude_id=contact_id)
         # Сменили e-mail или логин — прежнее сопоставление с eXpress больше не доказано: контакт опознаётся заново.
         reset = (c["email"] != old["email"] or c["ad_login"] != old["ad_login"]) and not old["chat_id"]
-        conn.execute("UPDATE express_contacts SET individual_id = ?, name = ?, email = ?, ad_login = ?, active = ?, "
+        conn.execute("UPDATE express_contacts SET individual_id = ?, name = ?, email = ?, ad_login = ?, phone = ?, active = ?, "
                      "user_huid = CASE WHEN ? THEN NULL ELSE user_huid END, updated_at = datetime('now') WHERE id = ?",
-                     (c["individual_id"], c["name"], c["email"], c["ad_login"], c["active"], 1 if reset else 0, contact_id))
+                     (c["individual_id"], c["name"], c["email"], c["ad_login"], c["phone"], c["active"], 1 if reset else 0, contact_id))
         conn.commit()
         row = conn.execute(_CONTACT_SELECT + "WHERE c.id = ?", (contact_id,)).fetchone()
     finally:
@@ -331,6 +337,25 @@ def lookup_contact(contact_id: int, user: sqlite3.Row = Depends(require_service_
     finally:
         conn.close()
     return {**_contact_out(out), "express_name": found.get("name")}
+
+
+@router.post("/contacts/{contact_id}/bind-code")
+def issue_bind_code(contact_id: int, user: sqlite3.Row = Depends(require_service_feature("express_bot", "write"))):
+    """Одноразовый код привязки контакта: человек отправляет боту `/start КОД`, и бот запоминает его аккаунт eXpress и личный чат — без e-mail, доменного
+    логина и поиска. Действует сутки, прежний код отменяется, сам код в БД не хранится (только sha256) и показывается один раз — в ответе на этот запрос."""
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        row = conn.execute("SELECT id, name, active FROM express_contacts WHERE id = ?", (contact_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Контакт не найден")
+        if not row["active"]:
+            raise HTTPException(status_code=400, detail="Контакт отключён: включите его, чтобы выдать код")
+        code, expires = express_dialog.issue_code(conn, contact_id)
+    finally:
+        conn.close()
+    activity.log("express_bind_code", user=user, entity_type="express_contact", entity_id=contact_id, new_value=row["name"], details={"действие": "выдан код привязки"})   # сам код в журнал не пишется
+    return {"code": code, "expires": expires, "hours": express_dialog.CODE_HOURS}
 
 
 # ------------------------------------------------------------------ расписания

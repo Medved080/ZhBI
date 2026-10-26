@@ -536,7 +536,7 @@ FEATURES = [
             "его объекту: прав в системе у контакта нет. Справочник контактов общий для всех объектов (как справочник контрагентов): "
             "вести его может тот, у кого есть «Изменение» хотя бы на одном объекте.",
             ["GET/POST/PATCH/DELETE /objects/{id}/express/schedules", "GET /objects/{id}/express/requests",
-             "POST /objects/{id}/express/send-now", "GET/POST/PATCH /express/contacts"],
+             "POST /objects/{id}/express/send-now", "GET/POST/PATCH /express/contacts", "POST /express/contacts/{id}/bind-code"],
             SCOPE_SERVICE, _от(ADMIN, WRITE)),
     Feature("express_admin", "Администрирование", "Бот eXpress: подключение, ключ, журнал обмена",
             "Адрес сервера eXpress, идентификатор и ключ бота, включение, проверка связи, журнал обмена, удаление контактов.",

@@ -771,6 +771,18 @@ def _migrate_headcount_itr(conn: sqlite3.Connection, changes: list) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _migrate_express_bind(conn: sqlite3.Connection, changes: list) -> None:
+    """Бот eXpress (2026-10-26): «Телефон» (справочно) и одноразовый код привязки контакта. Колонки добавляются, если таблица создана прежней схемой.
+    Идемпотентно; существующие контакты не меняются."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(express_contacts)")}
+    if not cols:
+        return
+    for name in ("phone", "bind_code_hash", "bind_code_expires"):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE express_contacts ADD COLUMN {name} TEXT")
+            changes.append(f"express_contacts: добавлена колонка {name}")
+
+
 def _migrate_headcount_mech(conn: sqlite3.Connection, changes: list) -> None:
     """«Численность»: третья категория «Механизаторы» рядом с «Рабочие» и «ИТР» (2026-10-26).
 
@@ -2779,6 +2791,7 @@ def init_db() -> list:
         _migrate_crane_zone_conversion_constraints(conn, changes)
         _migrate_headcount_itr(conn, changes)   # после executescript(schema.sql): таблицы численности уже есть
         _migrate_headcount_mech(conn, changes)  # строго ПОСЛЕ ИТР: пересборка берёт колонки с itr
+        _migrate_express_bind(conn, changes)
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)

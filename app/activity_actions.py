@@ -226,6 +226,7 @@ ACTIONS = {
     "express_test": ("Проверка связи с eXpress", _ST),
     "express_contact": ("Контакт бота eXpress добавлен или изменён", _D),
     "express_contact_delete": ("Контакт бота eXpress удалён", _D),
+    "express_bind_code": ("Выдан код привязки контакта бота eXpress", _S),
     "express_schedule": ("Расписание опроса через бота eXpress добавлено или изменено", _D),
     "express_schedule_delete": ("Расписание опроса через бота eXpress удалено", _D),
     "express_send_now": ("Запрос через бота eXpress отправлен вручную", _D),

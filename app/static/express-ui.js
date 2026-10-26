@@ -51,7 +51,11 @@ export function mountExpress(el, ctx) {
   };
   el.innerHTML = `<div class="ex-tabs" role="tablist" aria-label="Разделы бота eXpress">${subs.map(([k, t]) => `<button type="button" role="tab" class="ex-tab" data-sub="${k}">${esc(t)}</button>`).join("")}</div><div id="ex-pane"></div>`;
   const pane = el.querySelector("#ex-pane");
-  el.querySelectorAll("[data-sub]").forEach((b) => b.addEventListener("click", () => { st.sub = b.dataset.sub; st.msg = ""; ctx.onSub?.(st.sub); paint(); }));
+  // При переходе между подвкладками данные запрашиваются заново: пока вкладка была закрыта, контакт мог привязаться, ответить боту, расписание — сработать
+  el.querySelectorAll("[data-sub]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.sub !== st.sub) { st.contacts = st.requests = st.schedules = st.status = st.log = null; }
+    st.sub = b.dataset.sub; st.msg = ""; ctx.onSub?.(st.sub); paint();
+  }));
   const setMsg = (t, kind = "") => { st.msg = t; st.msgKind = kind; const n = pane.querySelector("#ex-msg"); if (n) { n.textContent = t; n.className = `hc-msg ${kind}`; } };
   const msgLine = () => `<p id="ex-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>`;
   const guard = async (fn, okText) => {
@@ -218,9 +222,18 @@ export function mountExpress(el, ctx) {
   }
 
   // =====================================================================  КОНТАКТЫ
+  // Выданный код показывается ОДИН раз: на сервере хранится только его хэш. Пока панель открыта, код можно скопировать и передать человеку.
+  function codeCard(k) {
+    return `<div class="ex-card" role="status"><h4>Код привязки для «${esc(k.name)}»<small>действует ${k.hours} ч, до ${esc(fmtMoment(k.expires))} (МСК), один раз</small></h4>
+      <div class="ex-row"><code style="font-size:1.5rem;letter-spacing:0.12em;font-weight:700">${esc(k.code)}</code>
+        <button type="button" class="hc-btn" data-code-copy>Скопировать</button><button type="button" class="hc-btn" data-code-close>Скрыть</button></div>
+      <p class="ex-hint">Передайте код человеку (например, по телефону или в SMS). Он открывает ${botName()} в eXpress и отправляет сообщение <b>/start ${esc(k.code)}</b> (можно и просто код). После этого бот может писать ему по расписанию. Код показан один раз: если потерян, выдайте новый.</p></div>`;
+  }
+
   function contactState(c) {
     if (!c.active) return '<span class="hc-badge">отключён</span>';
     if (c.bound) return '<span class="hc-badge ok">писал боту — можно слать</span>';
+    if (c.code_active) return `<span class="hc-badge warn" title="Человек отправляет боту /start КОД">ждёт привязки по коду до ${esc(fmtMoment(c.code_expires))}</span>`;
     if (c.recognized) return '<span class="hc-badge warn">найден в eXpress, ждём /start</span>';
     return '<span class="hc-badge warn">ждём первого сообщения боту</span>';
   }
@@ -230,29 +243,43 @@ export function mountExpress(el, ctx) {
     if (f && st.individuals === null) { load("individuals").then((ok) => ok && paintContacts()); pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; return; }
     pane.innerHTML = `${botCallout()}
       <div class="hc-bar"><strong>Контакты бота</strong><span class="hc-muted">физлицо из справочника или произвольный человек; общий список для всех объектов</span>
-        ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-c-new">Добавить контакт</button>` : ""}</div>
-      <div class="hc-callout">Чтобы бот мог писать человеку, тот должен <strong>один раз открыть ${botName()} в eXpress и отправить /start</strong>. Бот опознает его по доменному логину (или по e-mail, если нажать «Найти в eXpress»).</div>
+        ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-c-new">Добавить контакт</button>` : ""}<button type="button" class="hc-btn" id="ex-c-refresh">Обновить</button></div>
+      <div class="hc-callout">Чтобы бот мог писать человеку, тот должен <strong>один раз открыть ${botName()} в eXpress и отправить /start</strong>. Бот опознает его по доменному логину (или по e-mail, если нажать «Найти в eXpress»). Если у человека нет ни доменного логина, ни e-mail в eXpress (внешний пользователь), нажмите <strong>«Код привязки»</strong>: он отправляет боту <code>/start КОД</code>.</div>
       ${f ? `<form class="ex-card" id="ex-c-form"><h4>${f.id ? "Изменить контакт" : "Новый контакт"}</h4>
         <div class="ex-row">
           ${field("Физлицо из справочника", `<select id="ex-c-ind"><option value="">— произвольный контакт —</option>${(st.individuals || []).map((i) => `<option value="${i.id}" ${String(f.individual_id) === String(i.id) ? "selected" : ""}>${esc(i.name)}</option>`).join("")}</select>`, "wide")}
           ${field("Имя (ФИО)", `<input type="text" id="ex-c-name" maxlength="200" value="${esc(f.name)}" placeholder="можно не заполнять, если выбрано физлицо">`, "wide")}</div>
         <div class="ex-sec"><div class="ex-cap">Как найти человека в eXpress</div><div class="ex-row">
           ${field("E-mail в eXpress", `<input type="text" id="ex-c-email" maxlength="200" value="${esc(f.email)}">`)}
-          ${field("Доменный логин", `<input type="text" id="ex-c-login" maxlength="100" value="${esc(f.ad_login)}" placeholder="ivanov">`)}</div></div>
+          ${field("Доменный логин", `<input type="text" id="ex-c-login" maxlength="100" value="${esc(f.ad_login)}" placeholder="ivanov">`)}
+          ${field("Телефон (справочно)", `<input type="text" id="ex-c-phone" maxlength="30" value="${esc(f.phone)}" placeholder="+7 900 000-00-00">`)}</div>
+          <p class="ex-hint">Телефон нужен, чтобы позвонить и передать код привязки. По нему бот человека не опознаёт: eXpress номер боту не присылает.</p></div>
         <div class="ex-sec"><div class="ex-opt">${check("ex-c-active", "Контакт действует", f.active)}</div></div>
         <div class="ex-actions"><button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="ex-c-cancel">Отмена</button></div>
         <p class="hc-msg ${esc(f.kind || "")}" id="ex-c-msg" role="alert">${esc(f.msg || "")}</p></form>` : ""}
+      ${st.codeShown ? codeCard(st.codeShown) : ""}
       ${msgLine()}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>E-mail</th><th>Логин</th><th>Связь с eXpress</th><th class="num">Расписаний</th><th></th></tr></thead><tbody>${
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>E-mail</th><th>Логин</th><th>Телефон</th><th>Связь с eXpress</th><th class="num">Расписаний</th><th></th></tr></thead><tbody>${
         st.contacts.length ? st.contacts.map((c) => `<tr${c.active ? "" : ' class="hc-muted"'}><td>${esc(c.name)}${c.individual_id ? "" : ' <span class="hc-badge">произвольный</span>'}</td>
-          <td>${esc(c.email || "—")}</td><td>${esc(c.ad_login || "—")}</td><td>${contactState(c)}</td><td class="num">${c.schedules ?? 0}</td>
-          <td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-c-edit="${c.id}">Изменить</button> ${c.email && !c.recognized ? `<button type="button" class="hc-btn mini" data-c-look="${c.id}" title="Найти этого человека в eXpress по e-mail">Найти в eXpress</button> ` : ""}` : ""}${ctx.canAdmin ? `<button type="button" class="hc-btn danger mini" data-c-del="${c.id}">Удалить</button>` : ""}</td></tr>`).join("")
-        : `<tr><td colspan="6" class="hc-muted">Контактов нет.</td></tr>`}</tbody></table></div>`;
-    pane.querySelector("#ex-c-new")?.addEventListener("click", () => { st.contactForm = { id: null, individual_id: "", name: "", email: "", ad_login: "", active: true }; paintContacts(); pane.querySelector("#ex-c-ind")?.focus(); });
+          <td>${esc(c.email || "—")}</td><td>${esc(c.ad_login || "—")}</td><td style="white-space:nowrap">${esc(c.phone || "—")}</td><td>${contactState(c)}</td><td class="num">${c.schedules ?? 0}</td>
+          <td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-c-edit="${c.id}">Изменить</button> ${c.email && !c.recognized ? `<button type="button" class="hc-btn mini" data-c-look="${c.id}" title="Найти этого человека в eXpress по e-mail">Найти в eXpress</button> ` : ""}${c.active ? `<button type="button" class="hc-btn mini" data-c-code="${c.id}" title="Одноразовый код: человек отправляет боту /start КОД">Код привязки</button> ` : ""}` : ""}${ctx.canAdmin ? `<button type="button" class="hc-btn danger mini" data-c-del="${c.id}">Удалить</button>` : ""}</td></tr>`).join("")
+        : `<tr><td colspan="7" class="hc-muted">Контактов нет.</td></tr>`}</tbody></table></div>`;
+    pane.querySelector("#ex-c-refresh")?.addEventListener("click", () => { st.contacts = null; paint(); });
+    pane.querySelector("#ex-c-new")?.addEventListener("click", () => { st.contactForm = { id: null, individual_id: "", name: "", email: "", ad_login: "", phone: "", active: true }; paintContacts(); pane.querySelector("#ex-c-ind")?.focus(); });
     pane.querySelectorAll("[data-c-edit]").forEach((b) => b.addEventListener("click", () => {
       const c = st.contacts.find((x) => x.id === Number(b.dataset.cEdit));
-      st.contactForm = { id: c.id, individual_id: c.individual_id || "", name: c.name, email: c.email || "", ad_login: c.ad_login || "", active: c.active }; paintContacts();
+      st.contactForm = { id: c.id, individual_id: c.individual_id || "", name: c.name, email: c.email || "", ad_login: c.ad_login || "", phone: c.phone || "", active: c.active }; paintContacts();
     }));
+    pane.querySelectorAll("[data-c-code]").forEach((b) => b.addEventListener("click", () => guard(async () => {
+      const c = st.contacts.find((x) => x.id === Number(b.dataset.cCode));
+      const r = await api.post(`/express/contacts/${c.id}/bind-code`, {});
+      st.codeShown = { name: c.name, code: r.code, expires: r.expires, hours: r.hours };
+      await load("contacts"); paintContacts();
+    })));
+    pane.querySelector("[data-code-close]")?.addEventListener("click", () => { st.codeShown = null; paintContacts(); });
+    pane.querySelector("[data-code-copy]")?.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(st.codeShown.code); setMsg("Код скопирован.", "ok"); } catch (e) { setMsg("Не удалось скопировать: выделите код и скопируйте вручную.", "warn"); }
+    });
     pane.querySelectorAll("[data-c-look]").forEach((b) => b.addEventListener("click", () => guard(async () => {
       const r = await api.post(`/express/contacts/${b.dataset.cLook}/lookup`, {}); await load("contacts"); paintContacts();
       setMsg(`Найден в eXpress: ${r.express_name || r.name}. Теперь ему достаточно отправить боту /start.`, "ok");
@@ -271,13 +298,13 @@ export function mountExpress(el, ctx) {
       e.preventDefault();
       const form = st.contactForm, note = pane.querySelector("#ex-c-msg");
       const body = { individual_id: pane.querySelector("#ex-c-ind").value ? Number(pane.querySelector("#ex-c-ind").value) : null, name: pane.querySelector("#ex-c-name").value || null,
-        email: pane.querySelector("#ex-c-email").value || null, ad_login: pane.querySelector("#ex-c-login").value || null, active: pane.querySelector("#ex-c-active").checked };
+        email: pane.querySelector("#ex-c-email").value || null, ad_login: pane.querySelector("#ex-c-login").value || null, phone: pane.querySelector("#ex-c-phone").value || null, active: pane.querySelector("#ex-c-active").checked };
       if (st.busy) return;
       st.busy = true;
       try {
         if (form.id) await api.patch(`/express/contacts/${form.id}`, body); else await api.post("/express/contacts", body);
         st.contactForm = null; await load("contacts"); st.schedules = null; st.busy = false; paintContacts(); setMsg("Контакт сохранён.", "ok");
-      } catch (err) { Object.assign(form, { ...body, individual_id: body.individual_id ?? "", name: body.name || "", email: body.email || "", ad_login: body.ad_login || "", msg: errText(err), kind: "bad" }); note.textContent = form.msg; note.className = "hc-msg bad"; }
+      } catch (err) { Object.assign(form, { ...body, individual_id: body.individual_id ?? "", name: body.name || "", email: body.email || "", ad_login: body.ad_login || "", phone: body.phone || "", msg: errText(err), kind: "bad" }); note.textContent = form.msg; note.className = "hc-msg bad"; }
       finally { st.busy = false; }
     });
   }

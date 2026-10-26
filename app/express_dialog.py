@@ -13,8 +13,10 @@
 это записано в самом запросе, а не берётся из слов контакта.
 """
 
+import hashlib
 import json
 import re
+import secrets
 import sqlite3
 import time
 from datetime import date, datetime
@@ -250,6 +252,102 @@ def current_request(conn, contact_id: int):
     return max(rows, key=lambda r: (_load_dialog(r).get("ts", 0), r["id"]))
 
 
+# ------------------------------------------------------------------ привязка по одноразовому коду (2026-10-26)
+
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"      # без I, O, 0, 1: код читают по телефону и вводят вручную
+CODE_LENGTH = 8
+CODE_HOURS = 24
+FAIL_LIMIT = 5                                           # неверных кодов с одного аккаунта eXpress за окно — и блокировка на окно
+FAIL_WINDOW = 600
+_FAILS: dict = {}
+
+
+def normalize_code(text: str) -> str:
+    return re.sub(r"[\s\-]", "", text or "").upper()
+
+
+def hash_code(code: str) -> str:
+    return hashlib.sha256(normalize_code(code).encode("utf-8")).hexdigest()
+
+
+def issue_code(conn, contact_id: int):
+    """Новый одноразовый код привязки контакта (прежний перестаёт действовать). Возвращает (код для показа «ABCD-EFGH», момент окончания по БД, UTC).
+    В БД лежит только sha256 кода: показать его можно один раз, при выдаче."""
+    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+    conn.execute("UPDATE express_contacts SET bind_code_hash = ?, bind_code_expires = datetime('now', ?), updated_at = datetime('now') WHERE id = ?",
+                 (hash_code(raw), f"+{CODE_HOURS} hours", contact_id))
+    conn.commit()
+    expires = conn.execute("SELECT bind_code_expires FROM express_contacts WHERE id = ?", (contact_id,)).fetchone()[0]
+    return f"{raw[:4]}-{raw[4:]}", expires
+
+
+def extract_code(body: str, known: bool) -> Optional[str]:
+    """Код привязки в сообщении: «/start КОД» от любого; просто «КОД» — только от того, кого бот ещё не знает (иначе число или слово в диалоге могло бы сойти за код)."""
+    text = (body or "").strip()
+    m = re.match(r"(?is)^/start(?:@\S+)?\s+(.+)$", text)
+    arg = m.group(1) if m else (None if known else text)
+    if arg is None:
+        return None
+    norm = normalize_code(arg)
+    return norm if len(norm) == CODE_LENGTH and all(c in CODE_ALPHABET for c in norm) else None
+
+
+def bind_by_code(conn, sender: dict, code: str):
+    """Привязать аккаунт отправителя к контакту, которому выдан этот код. Возвращает (контакт, причина): причина ok / throttled / invalid / conflict:<имя>.
+    Неверные коды считаются по аккаунту eXpress: пять за десять минут — и пока ждать (код из 8 знаков перебором не подобрать, а сутки жизни ограничивают окно)."""
+    huid = str(sender.get("user_huid") or "").lower()
+    now = time.time()
+    fails = [t for t in _FAILS.get(huid, []) if now - t < FAIL_WINDOW]
+    if len(fails) >= FAIL_LIMIT:
+        _FAILS[huid] = fails
+        return None, "throttled"
+    row = conn.execute("SELECT * FROM express_contacts WHERE bind_code_hash = ? AND active = 1 AND bind_code_expires > datetime('now')", (hash_code(code),)).fetchone()
+    if row is None:
+        fails.append(now)
+        _FAILS[huid] = fails
+        return None, "invalid"
+    other = conn.execute("SELECT name FROM express_contacts WHERE lower(user_huid) = ? AND id != ?", (huid, row["id"])).fetchone()
+    if other is not None:
+        return None, f"conflict:{other['name']}"
+    conn.execute("UPDATE express_contacts SET user_huid = ?, chat_id = ?, bound_at = datetime('now'), bind_code_hash = NULL, bind_code_expires = NULL, "
+                 "updated_at = datetime('now') WHERE id = ?", (sender.get("user_huid"), sender.get("group_chat_id"), row["id"]))
+    conn.commit()
+    _FAILS.pop(huid, None)
+    return _contact(conn, row["id"]), "ok"
+
+
+def _try_code(conn, sender: dict, body: str, known) -> bool:
+    """Если сообщение — код привязки, обработать его. True — сообщение разобрано полностью; False — это обычное сообщение, идём дальше."""
+    code = extract_code(body, known is not None and bool(known["active"]))
+    if code is None:
+        return False
+    chat = sender.get("group_chat_id")
+    if sender.get("chat_type") not in (None, "chat") or not chat or not sender.get("user_huid"):
+        return False
+    contact, reason = bind_by_code(conn, sender, code)
+    who = f"huid={sender.get('user_huid')} логин={sender.get('ad_login')} имя={sender.get('username')}"
+    if contact is not None:
+        log_event("in", "command", f"привязка по коду ({who})", contact_id=contact["id"])
+        was_waiting = current_request(conn, contact["id"])
+        _say(contact, None, f"Готово: вы привязаны как «{contact['name']}». Теперь я могу писать вам по расписанию.")
+        _after_bind(conn, contact)
+        if was_waiting is not None:
+            _show_menu(conn, contact, was_waiting)
+        return True
+    log_event("in", "command", f"код привязки не принят ({who})", ok=False, error=reason)
+    if known is not None and known["active"] and reason in ("invalid", "throttled"):
+        return False                        # известный контакт прислал «/start что-то»: это обычный /start, лишний аргумент игнорируем (конфликт аккаунтов — сообщаем)
+    text = {"throttled": "Слишком много неверных кодов. Подождите десять минут и попробуйте снова.",
+            "invalid": "Код не подошёл или срок его действия истёк. Попросите руководителя выдать новый код и отправьте: /start КОД"}.get(reason)
+    if text is None and reason.startswith("conflict:"):
+        text = f"Этот аккаунт eXpress уже привязан к контакту «{reason[9:]}». Обратитесь к руководителю проекта."
+    try:
+        express_bot.send_message(chat, text or "Не удалось привязать контакт.")
+    except BotxError:
+        pass
+    return True
+
+
 def handle_incoming(payload: dict) -> None:
     """Обработать входящую команду от CTS (вызывается рабочим потоком, не обработчиком HTTP). Ничего не бросает наружу."""
     try:
@@ -268,12 +366,15 @@ def _handle(payload: dict) -> None:
         if not express_bot.is_active(conn):
             return
         contact = identify(conn, sender)
+        if not data.get("a") and not body.startswith("system:") and _try_code(conn, sender, body, contact):
+            return
         if contact is None or not contact["active"]:
             who = f"huid={sender.get('user_huid')} логин={sender.get('ad_login')} имя={sender.get('username')}"
             log_event("in", "command", f"{body[:80]} ({who})", ok=False, error="отправитель не в списке контактов бота")
             if sender.get("group_chat_id"):
                 try:
-                    express_bot.send_message(sender["group_chat_id"], "Вас нет в списке контактов бота. Обратитесь к руководителю проекта, чтобы вас добавили.")
+                    express_bot.send_message(sender["group_chat_id"], "Вас нет в списке контактов бота. Если руководитель выдал вам код привязки, отправьте: /start КОД. "
+                                                                    "Иначе обратитесь к руководителю проекта, чтобы вас добавили.")
                 except BotxError:
                     pass
             return

@@ -1837,9 +1837,12 @@ CREATE TABLE IF NOT EXISTS express_contacts (
     name TEXT NOT NULL,
     email TEXT,
     ad_login TEXT,
+    phone TEXT,                                          -- телефон: справочно (позвонить, передать код); контакта по нему НЕ опознают
     user_huid TEXT,
     chat_id TEXT,                                        -- личный чат с ботом (group_chat_id); известен после первого сообщения контакта
     bound_at TEXT,
+    bind_code_hash TEXT,                                 -- sha256 одноразового кода привязки (сам код хранится только у того, кому его выдали)
+    bind_code_expires TEXT,                              -- до какого момента (UTC) код действует
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
