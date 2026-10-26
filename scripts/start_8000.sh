@@ -18,4 +18,9 @@ if [ ! -f data/calc/calczhbi.sqlite3 ] && [ -f "$LEGACY/data/calczhbi.sqlite3" ]
   .venv312/bin/python -m app.calc.manage import-legacy "$LEGACY"
 fi
 mkdir -p logs
-exec .venv312/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port "${PORT:-8000}" 2>&1 | tee -a logs/uvicorn-8000.log
+# --reload сам следит только за .py, а отпечаток сборки (/app-build) считается при старте процесса: правка одного js/css/html
+# не перезапускала сервер, и открытые вкладки не получали полосу «Вышло обновление» (2026-10-26). Поэтому добавлены статика и json.
+# Каталоги ограничены кодом (app, scripts): под data/, uploads/, output/ json и html пишутся при работе — там перезагрузка зациклилась бы.
+exec .venv312/bin/uvicorn app.main:app --reload --reload-dir app --reload-dir scripts \
+  --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' \
+  --host 0.0.0.0 --port "${PORT:-8000}" 2>&1 | tee -a logs/uvicorn-8000.log
