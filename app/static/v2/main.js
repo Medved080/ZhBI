@@ -349,14 +349,31 @@ async function renderShell(user, permissions) {
       <main class="v2-page" id="v2-content"></main>
     </div>
   `;
-  // Индикатор версии сборки: метка кода, который сейчас отдаёт сервер (файл пишется при публикации, scripts/stamp_v2_build.py)
-  fetch("/static/v2/build.json", { credentials: "same-origin", cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((b) => {
+  // Индикатор версии сборки: номер версии сервиса и отпечаток кода, который СЕЙЧАС отдаёт сервер (GET /app-build, считается при
+  // старте процесса — меняется с каждым обновлением сам). Прежняя метка из файла build.json (scripts/stamp_v2_build.py) ставилась руками
+  // и застывала на давнем коммите, из-за чего по ней нельзя было понять, обновился ли сервер (2026-10-27); файл остаётся запасным.
+  (async () => {
     const el = document.getElementById("v2-build");
-    if (!el || !b || !b.commit) return;
-    el.textContent = `сборка ${String(b.commit).slice(0, 7)}`;
-    el.title = `Сборка интерфейса V2: код ${b.commit}${b.built ? `, опубликовано ${b.built}` : ""}`;
-    el.hidden = false;
-  }).catch(() => { /* индикатор вторичен */ });
+    if (!el) return;
+    try {
+      const d = await api.get("/app-build");
+      if (d && d.build) {
+        el.textContent = `v${d.version || "?"} · сборка ${String(d.build).slice(0, 7)}`;
+        el.title = `Версия сервиса ${d.version || "?"}, отпечаток кода ${d.build}: меняется при каждом обновлении сервера`;
+        el.hidden = false;
+        return;
+      }
+    } catch (err) { /* запасной вариант ниже */ }
+    try {
+      const r = await fetch("/static/v2/build.json", { credentials: "same-origin", cache: "no-cache" });
+      const bj = r.ok ? await r.json() : null;
+      if (bj && bj.commit) {
+        el.textContent = `сборка ${String(bj.commit).slice(0, 7)}`;
+        el.title = `Сборка интерфейса V2: код ${bj.commit}${bj.built ? `, опубликовано ${bj.built}` : ""}`;
+        el.hidden = false;
+      }
+    } catch (err) { /* индикатор вторичен */ }
+  })();
   const backBtn = document.getElementById("v2-back-btn");
   backBtn.addEventListener("click", onBackClick);
   // «Выйти»: как в V1 — POST /logout (сервер гасит сеанс и cookie), затем экран входа. Несохранённое защищает тот же сторож, что и переход.
