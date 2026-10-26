@@ -1603,3 +1603,21 @@ input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default
 /* Спрятанное рабочее место со схемой (main.js держит его в памяти, пока человек в меню или отчёте): иначе display: flex рабочего места
    перебил бы атрибут hidden и две области встали бы рядом. */
 .v2-body > .v2-page[hidden] { display: none; }
+
+/* Страница «Действия» — режим «Настройка» (администратор, 2026-10-26) */
+.v2-home-editbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface, transparent); }
+.v2-home-editbar .v2-muted:first-child { flex: 1 1 320px; font-size: 0.8125rem; }
+.v2-card-edit .v2-card-title { width: 70%; font: inherit; font-weight: 600; padding: 3px 6px; }
+.v2-card-edit .v2-card-del { margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; }
+.v2-card-edit .v2-card-list li[draggable] { cursor: grab; align-items: center; padding: 3px 4px; border-radius: 6px; border: 1px solid transparent; }
+.v2-card-edit .v2-card-list li[draggable]:hover { border-color: var(--line); background: var(--surface, transparent); }
+.v2-card-edit .v2-grip { color: var(--muted); margin-right: 6px; }
+.v2-card-edit .v2-card-name { flex: 1 1 auto; min-width: 0; }
+.v2-card-edit .v2-card-move { display: inline-flex; gap: 2px; }
+.v2-card-edit .v2-card-move .v2-btn { padding: 0 6px; font-size: 0.6875rem; line-height: 1.5; }
+.v2-card-edit .v2-card-off .v2-card-name { color: var(--muted); font-style: italic; }
+.v2-card-edit .v2-card-empty { color: var(--muted); font-size: 0.8125rem; padding: 10px 4px; border: 1px dashed var(--line); border-radius: 6px; justify-content: center; }
+.v2-card-edit .v2-dragging { opacity: .4; }
+.v2-card-edit .v2-drop-before { box-shadow: 0 -2px 0 var(--accent, #1f7a52); }
+.v2-card-edit .v2-drop-after { box-shadow: 0 2px 0 var(--accent, #1f7a52); }
+.v2-card-edit .v2-drop-end { outline: 2px dashed var(--accent, #1f7a52); outline-offset: 2px; }

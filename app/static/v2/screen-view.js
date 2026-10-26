@@ -6,7 +6,8 @@
 // текстом сказано: функция работает только в интерфейсе V1, здесь показан состав экрана — так что
 // ложного успеха и непроверенных запросов нет. Данные не показываются вовсе (демо-режима нет).
 import { STATUS_LABEL, v1Href, statusChip } from "./registry.js";
-import { GROUPINGS, homeCards } from "./home-groups.js";
+import { GROUPINGS, homeCards, effectiveLayout } from "./home-groups.js";
+import { showConfirmDialog } from "./dialogs.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -133,15 +134,33 @@ function ruPlural(n, one, few, many) {
   return n10 === 1 && n100 !== 11 ? one : n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20) ? few : many;
 }
 
-export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRights = 0, go, prefsStore }) {
+export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRights = 0, go, prefsStore, api = null, isAdmin = false }) {
   el.className = "v2-page";
   const allowedItems = registry.screens.filter((s) => s.listed !== false && allowed(s));
+  const listed = registry.screens.filter((s) => s.listed !== false && s.group !== "home");
+  const titleOf = new Map(listed.map((s) => [s.id, s.title]));
   let grouping = prefsStore?.getHomeGrouping() ?? "kind";   // личная настройка, хранится на сервере (shell-prefs.js)
-  const cardsHtml = () => homeCards(grouping, registry.groups, allowedItems).map((c) => `<section class="v2-card">
+  // Раскладка «по процессам» общая для всех и хранится на сервере (app/home_layout.py); править её может только администратор.
+  let savedLayout = null;
+  let draft = null, draftBase = "";   // правка в режиме «Настройка»: { cards: [{ id, title, items }] }
+  let busy = false, note = "";
+  const canEdit = !!(isAdmin && api);
+  const cardsHtml = () => homeCards(grouping, registry.groups, allowedItems, effectiveLayout(savedLayout, registry.groups, listed)).map((c) => `<section class="v2-card">
       <h3>${esc(c.title)} <span class="v2-muted">· ${c.items.length}</span></h3>
       <ul class="v2-card-list">${c.items.map((s, i) => `${c.labels.has(i) ? `<li class="v2-card-kind">${esc(c.labels.get(i))}</li>` : ""}<li><a class="v2-link" href="#/${esc(s.id)}" data-screen-link="${esc(s.id)}">${esc(s.title)}</a>
         ${homeChip(s)}</li>`).join("")}</ul>
     </section>`).join("");
+  // Режим «Настройка»: те же блоки, но с перетаскиванием пунктов (мышью) и кнопками ▲▼ (с клавиатуры), названием блока в поле,
+  // удалением пустого блока и добавлением нового. Показываются ВСЕ разделы реестра — и те, что скрыты правами или типом объекта.
+  const availableIds = new Set(allowedItems.map((s) => s.id));
+  const editHtml = () => draft.cards.map((c, ci) => `<section class="v2-card v2-card-edit" data-card="${esc(c.id)}">
+      <h3><input class="v2-card-title" data-card-title="${ci}" value="${esc(c.title)}" maxlength="80" aria-label="Название блока"> <span class="v2-muted">· ${c.items.length}</span>
+        ${c.items.length ? "" : `<button type="button" class="v2-btn v2-card-del" data-card-del="${ci}">Удалить блок</button>`}</h3>
+      <ul class="v2-card-list v2-card-drop" data-drop="${ci}">${c.items.length ? c.items.map((id, ii) => `<li draggable="true" data-item="${esc(id)}" class="${availableIds.has(id) ? "" : "v2-card-off"}"
+          title="${availableIds.has(id) ? "" : "Сейчас скрыт по правам или типу объекта — у пользователей его видно по их правам"}">
+          <span class="v2-grip" aria-hidden="true">⠿</span><span class="v2-card-name">${esc(titleOf.get(id) || id)}</span>
+          <span class="v2-card-move"><button type="button" class="v2-btn" data-move="${ci}:${ii}:-1" aria-label="Выше">▲</button><button type="button" class="v2-btn" data-move="${ci}:${ii}:1" aria-label="Ниже">▼</button></span></li>`).join("")
+        : `<li class="v2-card-empty">Блок пуст — перетащите сюда раздел</li>`}</ul></section>`).join("");
   const mine = registry.screens.filter((s) => allowed(s) && s.group !== "home" && s.listed !== false);
   const inV2 = mine.filter((s) => !inV1Only(s)).length;
   const full = mine.filter((s) => !inV1Only(s) && s.status === 5).length;
@@ -150,22 +169,143 @@ export function mountHome(el, { registry, allowed, hiddenByType = 0, hiddenByRig
       <h2 class="v2-home-title">Действия</h2>
       <div class="v2-home-grouping"><span class="v2-muted">Группировка</span>
         <div class="v2-seg" role="group" aria-label="Группировка разделов">${GROUPINGS.map((g) => `<button type="button" data-grouping="${g.id}" aria-pressed="${g.id === grouping}">${g.label}</button>`).join("")}</div>
+        ${canEdit ? `<button type="button" class="v2-btn" id="home-edit" hidden title="Только для администратора: блоки, их состав и порядок — общие для всех">Настройка</button>` : ""}
       </div>
     </div>
-    <p class="v2-muted">Все разделы сервиса — здесь и в левой навигации. Доступно вам: ${mine.length} ${ruPlural(mine.length, "раздел", "раздела", "разделов")}.${hiddenByRights ? ` Скрыто по правам: ${hiddenByRights}.` : ""}${hiddenByType ? ` Не относятся к типу текущего объекта: ${hiddenByType}.` : ""}</p>
+    <div class="v2-home-editbar" id="home-editbar" hidden></div>
+    <p class="v2-muted" id="home-lead">Все разделы сервиса — здесь и в левой навигации. Доступно вам: ${mine.length} ${ruPlural(mine.length, "раздел", "раздела", "разделов")}.${hiddenByRights ? ` Скрыто по правам: ${hiddenByRights}.` : ""}${hiddenByType ? ` Не относятся к типу текущего объекта: ${hiddenByType}.` : ""}</p>
     <div class="v2-cards"></div>
   </div>`;
   const cardsEl = el.querySelector(".v2-cards");
+  const editBtn = el.querySelector("#home-edit");
+  const barEl = el.querySelector("#home-editbar");
+  const leadEl = el.querySelector("#home-lead");
+  const dirty = () => !!draft && JSON.stringify(draft) !== draftBase;
   const wireCards = () => cardsEl.querySelectorAll("[data-screen-link]").forEach((a) => a.addEventListener("click", (e) => {
     e.preventDefault(); go(a.dataset.screenLink);
   }));
-  const drawCards = () => { cardsEl.innerHTML = cardsHtml(); wireCards(); };
-  drawCards();
-  el.querySelectorAll("[data-grouping]").forEach((b) => b.addEventListener("click", () => {
+  const drawBar = () => {
+    barEl.hidden = !draft;
+    leadEl.hidden = !!draft;
+    if (!draft) return;
+    barEl.innerHTML = `<span class="v2-muted">Настройка страницы: перетаскивайте разделы между блоками и внутри блока (или кнопками ▲▼), переименовывайте блоки. Раскладка общая для всех пользователей.</span>
+      <div class="v2-inline"><button type="button" class="v2-btn" id="home-add">+ Блок</button>
+        <button type="button" class="v2-btn" id="home-reset" ${busy ? "disabled" : ""}>Вернуть исходную</button>
+        <button type="button" class="v2-btn" id="home-cancel" ${busy ? "disabled" : ""}>Отмена</button>
+        <button type="button" class="v2-btn v2-primary" id="home-save" ${busy || !dirty() ? "disabled" : ""}>Сохранить</button></div>
+      <span class="v2-muted" id="home-note" role="status" aria-live="polite">${esc(note)}</span>`;
+    barEl.querySelector("#home-add").addEventListener("click", () => {
+      draft.cards.push({ id: "c-" + Date.now().toString(36), title: "Новый блок", items: [] });
+      drawCards();
+      const last = cardsEl.querySelector(".v2-card-edit:last-child .v2-card-title");
+      last?.focus(); last?.select();
+    });
+    barEl.querySelector("#home-cancel").addEventListener("click", () => leaveEdit());
+    barEl.querySelector("#home-save").addEventListener("click", () => saveDraft());
+    barEl.querySelector("#home-reset").addEventListener("click", () => resetLayout());
+  };
+  const moveItem = (from, to) => {   // from: {ci, ii}; to: {ci, ii} — позиция вставки в целевой блок ПОСЛЕ изъятия
+    const [id] = draft.cards[from.ci].items.splice(from.ii, 1);
+    draft.cards[to.ci].items.splice(Math.max(0, Math.min(to.ii, draft.cards[to.ci].items.length)), 0, id);
+    drawCards();
+  };
+  const wireEdit = () => {
+    cardsEl.querySelectorAll("[data-card-title]").forEach((inp) => inp.addEventListener("input", () => {
+      draft.cards[Number(inp.dataset.cardTitle)].title = inp.value;
+      barEl.querySelector("#home-save").disabled = busy || !dirty();
+    }));
+    cardsEl.querySelectorAll("[data-card-del]").forEach((b) => b.addEventListener("click", () => {
+      draft.cards.splice(Number(b.dataset.cardDel), 1);
+      drawCards();
+    }));
+    cardsEl.querySelectorAll("[data-move]").forEach((b) => b.addEventListener("click", () => {
+      const [ci, ii, d] = b.dataset.move.split(":").map(Number);
+      const cards = draft.cards;
+      if (d < 0 && ii === 0) {   // выше первого — в конец предыдущего блока
+        if (ci > 0) moveItem({ ci, ii }, { ci: ci - 1, ii: cards[ci - 1].items.length });
+      } else if (d > 0 && ii === cards[ci].items.length - 1) {   // ниже последнего — в начало следующего
+        if (ci < cards.length - 1) moveItem({ ci, ii }, { ci: ci + 1, ii: 0 });
+      } else moveItem({ ci, ii }, { ci, ii: ii + d });
+    }));
+    // Перетаскивание мышью: пункт кладётся перед тем, над кем отпущен (по верхней/нижней половине), или в конец блока.
+    let drag = null;
+    const clearMarks = () => cardsEl.querySelectorAll(".v2-drop-before, .v2-drop-after, .v2-drop-end").forEach((x) => x.classList.remove("v2-drop-before", "v2-drop-after", "v2-drop-end"));
+    cardsEl.querySelectorAll("li[draggable]").forEach((li) => {
+      const ul = li.parentElement, ci = Number(ul.dataset.drop), ii = [...ul.children].indexOf(li);
+      li.addEventListener("dragstart", (e) => { drag = { ci, ii }; li.classList.add("v2-dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", li.dataset.item); });
+      li.addEventListener("dragend", () => { drag = null; li.classList.remove("v2-dragging"); clearMarks(); });
+      li.addEventListener("dragover", (e) => {
+        if (!drag) return;
+        e.preventDefault(); e.stopPropagation();
+        const r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+        clearMarks(); li.classList.add(after ? "v2-drop-after" : "v2-drop-before");
+      });
+      li.addEventListener("drop", (e) => {
+        if (!drag) return;
+        e.preventDefault(); e.stopPropagation();
+        const r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+        let target = ii + (after ? 1 : 0);
+        if (drag.ci === ci && drag.ii < target) target -= 1;   // индекс сдвигается из-за изъятия
+        const from = drag; drag = null; moveItem(from, { ci, ii: target });
+      });
+    });
+    cardsEl.querySelectorAll("ul[data-drop]").forEach((ul) => {
+      ul.addEventListener("dragover", (e) => { if (!drag) return; e.preventDefault(); clearMarks(); ul.classList.add("v2-drop-end"); });
+      ul.addEventListener("drop", (e) => {
+        if (!drag) return;
+        e.preventDefault();
+        const ci = Number(ul.dataset.drop), from = drag; drag = null;
+        moveItem(from, { ci, ii: draft.cards[ci].items.length - (from.ci === ci ? 1 : 0) });
+      });
+    });
+  };
+  const drawCards = () => {
+    if (draft) { cardsEl.innerHTML = editHtml(); wireEdit(); drawBar(); return; }
+    cardsEl.innerHTML = cardsHtml(); wireCards();
+  };
+  const syncMode = () => {
+    if (editBtn) editBtn.hidden = grouping !== "process" || !!draft;
+    drawBar();
+  };
+  const enterEdit = () => {
+    draft = { cards: effectiveLayout(savedLayout, registry.groups, listed).cards.map((c) => ({ id: c.id, title: c.title, items: [...c.items] })) };
+    draftBase = JSON.stringify(draft); note = "";
+    syncMode(); drawCards();
+  };
+  const leaveEdit = async () => {
+    if (dirty() && !(await showConfirmDialog("Изменения раскладки не сохранены. Выйти без сохранения?", { confirmLabel: "Выйти без сохранения", danger: true }))) return;
+    draft = null; note = ""; syncMode(); drawCards();
+  };
+  const saveDraft = async () => {
+    const titles = draft.cards.map((c) => c.title.trim());
+    if (titles.some((t) => !t)) { note = "У каждого блока должно быть название."; drawBar(); return; }
+    busy = true; note = "Сохраняю…"; drawBar();
+    try {
+      const r = await api.put("/home-layout", { cards: draft.cards.map((c, i) => ({ id: c.id, title: titles[i], items: c.items })) });
+      savedLayout = r.layout; draft = null; note = "";
+    } catch (err) { note = err?.detail || err?.message || "Не удалось сохранить"; }
+    busy = false; syncMode(); drawCards();
+  };
+  const resetLayout = async () => {
+    if (!(await showConfirmDialog("Вернуть исходную раскладку? Блоки и порядок, настроенные администратором, будут потеряны — у всех пользователей.", { confirmLabel: "Вернуть исходную", danger: true }))) return;
+    busy = true; drawBar();
+    try { await api.delete("/home-layout"); savedLayout = null; draft = null; note = ""; }
+    catch (err) { note = err?.detail || err?.message || "Не удалось сбросить"; }
+    busy = false; syncMode(); drawCards();
+  };
+  syncMode(); drawCards();
+  editBtn?.addEventListener("click", enterEdit);
+  el.querySelectorAll("[data-grouping]").forEach((b) => b.addEventListener("click", async () => {
+    if (draft && b.dataset.grouping !== "process") { if (dirty() && !(await showConfirmDialog("Изменения раскладки не сохранены. Выйти без сохранения?", { confirmLabel: "Выйти без сохранения", danger: true }))) return; draft = null; }
     grouping = b.dataset.grouping;
     prefsStore?.setHomeGrouping(grouping);
     el.querySelectorAll("[data-grouping]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    drawCards();
+    syncMode(); drawCards();
   }));
-  return { hasUnsavedChanges: () => false, guardLeave: async () => true };
+  // Сохранённую раскладку подтягиваем отдельно, не задерживая страницу: до ответа показана исходная.
+  if (api) api.get("/home-layout").then((r) => { savedLayout = r?.layout || null; if (!draft) drawCards(); }).catch(() => { /* без раскладки остаётся исходная */ });
+  return {
+    hasUnsavedChanges: () => dirty(),
+    guardLeave: async () => !dirty() || showConfirmDialog("Изменения раскладки страницы «Действия» не сохранены. Уйти без сохранения?", { confirmLabel: "Уйти без сохранения", danger: true }),
+  };
 }
