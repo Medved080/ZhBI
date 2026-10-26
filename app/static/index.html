@@ -3340,7 +3340,8 @@
   .objects-import-group-row.is-create td { color: var(--color-primary); }
   .modal.modal-sticky { display: flex; flex-direction: column; overflow: hidden; padding: 22px 0; }
   /* «Что нового»: высота задана, а не следует за содержимым — «Журнал версий» и «Обновление» разной длины, и окно прыгало при смене закладок. */
-  #changelog-backdrop .modal.modal-sticky { height: min(82vh, 780px); }
+  /* 2026-10-26 (живой запрос): окно почти на весь экран, как «Блоки» — журнал версий длинный, а в узком окне он читался с прокруткой. */
+  #changelog-backdrop .modal.modal-sticky { width: 96vw; max-width: 96vw; height: 92vh; max-height: 92vh; }
   #changelog-backdrop .modal-sticky-scroll { flex: 1 1 auto; min-height: 0; }
   .modal-sticky-head, .modal-sticky-foot { flex: 0 0 auto; padding: 0 24px; }
   /* «Обучение», выбор роли под строкой закладок. display задан ЗДЕСЬ, а не

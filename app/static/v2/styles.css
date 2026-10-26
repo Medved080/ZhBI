@@ -1627,7 +1627,7 @@ input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default
 .v2-wn-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; background: #d9480f; }
 /* Вид окна — как «Что нового» в V1: заголовок по центру, закладки с подчёркиванием, список карточек на тонированной подложке,
    округлые кнопки. Цвета — токены гаммы V2 (--accent и др.), поэтому окно следует выбранной гамме. */
-.v2-dialog.v2-wn { width: min(860px, calc(100vw - 32px)); height: min(80vh, 760px); display: flex; flex-direction: column; padding: 0; overflow: hidden;
+.v2-dialog.v2-wn { width: calc(100vw - 32px); max-width: calc(100vw - 32px); height: 92vh; max-height: 92vh; display: flex; flex-direction: column; padding: 0; overflow: hidden;
   border: 0; border-radius: 16px; box-shadow: 0 8px 28px rgba(11, 31, 51, .22); }
 .v2-wn-head { flex: 0 0 auto; padding: 18px 24px 0; }
 .v2-wn-head h3 { margin: 0 0 10px; font-size: 1.5rem; font-weight: 700; text-align: center; }
