@@ -472,11 +472,23 @@ export function mountHeadcount(el, ctx) {
     }
     box.innerHTML = `<div class="hc-form"><strong style="flex-basis:100%">Новый контрагент в общем справочнике</strong>
       <label>ИНН<input type="text" id="hc-ca-ni" value="${esc(f.inn)}" maxlength="20" inputmode="numeric" autocomplete="off"></label>
+      <button type="button" class="hc-btn" id="hc-ca-eg" title="Подставить название из ЕГРЮЛ ФНС по ИНН (наружу уходит только ИНН)">Найти в ЕГРЮЛ</button>
       <label>Название<input type="text" id="hc-ca-nm" value="${esc(f.name)}" maxlength="300" autocomplete="off"></label>
       <button type="button" class="hc-btn primary" id="hc-ca-nok">Создать и добавить на объект</button><button type="button" class="hc-btn" id="hc-ca-ncl">Отмена</button>
       <p class="hc-muted hc-small" style="flex-basis:100%">Контрагент появится в «Справочнике контрагентов» для всех объектов; остальные реквизиты (КПП, адрес, контакты) дополните там.</p>
       <p class="hc-msg ${f.msg ? "bad" : ""}" id="hc-ca-nmsg" role="alert" style="flex-basis:100%">${esc(f.msg || "")}</p></div>`;
     box.querySelector("#hc-ca-ncl").addEventListener("click", () => { a.newForm = null; paintCtrNew(); });
+    box.querySelector("#hc-ca-eg").addEventListener("click", async (ev) => {
+      const note = box.querySelector("#hc-ca-nmsg");
+      ev.target.disabled = true; note.className = "hc-msg"; note.textContent = "Запрашиваю ЕГРЮЛ…";
+      try {
+        const { lookupRequisites } = await import("/static/egrul-ui.js");
+        const r = await lookupRequisites((p) => api.get(p), box.querySelector("#hc-ca-ni").value);
+        if (r.found) { box.querySelector("#hc-ca-nm").value = r.requisites.short_name || r.requisites.full_name || ""; note.textContent = "Название подставлено из ЕГРЮЛ — проверьте и создайте контрагента."; }
+        else note.textContent = "В ЕГРЮЛ по этому ИНН ничего не найдено.";
+      } catch (e) { note.className = "hc-msg bad"; note.textContent = errText(e); }
+      ev.target.disabled = false;
+    });
     box.querySelector("#hc-ca-nok").addEventListener("click", async (ev) => {
       f.name = box.querySelector("#hc-ca-nm").value.trim(); f.inn = box.querySelector("#hc-ca-ni").value.trim();
       const note = box.querySelector("#hc-ca-nmsg");

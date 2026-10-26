@@ -19057,6 +19057,30 @@ async function openCounterpartyEdit(cp) {
   counterpartyEditBackdrop.classList.add("open");
 }
 document.getElementById("counterparty-edit-cancel").addEventListener("click", () => counterpartyEditBackdrop.classList.remove("open"));
+// Реквизиты по ИНН из ЕГРЮЛ ФНС (2026-10-26): подстановка в форму контрагента и массовое дозаполнение заглушек «ИНН <номер>».
+document.getElementById("cpe-egrul").addEventListener("click", async (ev) => {
+  const msg = document.getElementById("cpe-egrul-msg"), кнопка = ev.currentTarget;
+  кнопка.disabled = true; msg.textContent = " Запрашиваю ЕГРЮЛ…";
+  try {
+    const { lookupRequisites } = await import("/static/egrul-ui.js");
+    const r = await lookupRequisites((p) => api(p), document.getElementById("cpe-inn").value);
+    if (!r.found) msg.textContent = " В ЕГРЮЛ по этому ИНН ничего не найдено.";
+    else {
+      const q = r.requisites;
+      for (const [id, v] of [["cpe-full-name", q.full_name], ["cpe-short-name", q.short_name], ["cpe-kpp", q.kpp], ["cpe-ogrn", q.ogrn]]) {
+        if (v) document.getElementById(id).value = v;
+      }
+      document.getElementById("cpe-short-name").dispatchEvent(new Event("input"));
+      msg.textContent = ` Подставлено из ЕГРЮЛ${q.terminated ? " (деятельность прекращена)" : ""}${q.director ? "; руководитель: " + q.director : ""}. Проверьте и сохраните.`;
+    }
+  } catch (e) { msg.textContent = " " + (e && (e.detail || e.message) || "Не удалось запросить ЕГРЮЛ"); }
+  кнопка.disabled = false;
+});
+document.getElementById("counterparties-egrul").addEventListener("click", async () => {
+  const { openBulkFill } = await import("/static/egrul-ui.js");
+  const send = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  openBulkFill({ get: (p) => api(p), post: send, onDone: () => renderCounterpartiesList() });
+});
 document.getElementById("counterparty-edit-save").addEventListener("click", async () => {
   const body = {
     full_name: document.getElementById("cpe-full-name").value.trim(),

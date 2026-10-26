@@ -733,7 +733,7 @@ export function mountCounterparties(container, ctx) {
 
   function renderList() {
     body.innerHTML = `
-      <div class="v2-bar"><h3>Контрагенты</h3>${btn("Добавить контрагента", 'id="cp-add"', true)}</div>
+      <div class="v2-bar"><h3>Контрагенты</h3>${btn("Дозаполнить из ЕГРЮЛ", 'id="cp-egrul-bulk"')}${btn("Добавить контрагента", 'id="cp-add"', true)}</div>
       <div id="cp-list"></div>
     `;
     const listEl = body.querySelector("#cp-list");
@@ -760,6 +760,10 @@ export function mountCounterparties(container, ctx) {
       }));
     }
     body.querySelector("#cp-add").addEventListener("click", () => openCard(null));
+    body.querySelector("#cp-egrul-bulk").addEventListener("click", async () => {
+      const { openBulkFill } = await import("/static/egrul-ui.js");
+      openBulkFill({ get: (p) => api.get(p), post: (p, b) => api.post(p, b), onDone: () => { location.reload(); } });
+    });
   }
 
   function renderMainTab() {
@@ -779,6 +783,7 @@ export function mountCounterparties(container, ctx) {
           ${fieldRow("КПП", "cpf-kpp", d.kpp, 'maxlength="9" inputmode="numeric" title="9 знаков"')}
           ${fieldRow("ОГРН", "cpf-ogrn", d.ogrn, 'maxlength="15" inputmode="numeric" title="13 знаков у юрлица, 15 у ИП (ОГРНИП)"')}
         </div>
+        <div class="v2-inline" style="margin-top:6px">${btn("Заполнить по ИНН из ЕГРЮЛ", 'id="cpf-egrul"')}<span class="v2-muted" id="cpf-egrul-msg" role="status"></span></div>
         <div class="v2-group">Адреса</div>
         <div class="v2-fields"><label class="v2-field v2-span">Юридический адрес<input id="cpf-address" value="${escapeHtml(d.legal_address)}"></label></div>
         <div class="v2-group">Контакты</div>
@@ -795,6 +800,27 @@ export function mountCounterparties(container, ctx) {
       state.draft[key] = inp.value;
       syncMainDirty();
     }));
+    el.querySelector("#cpf-egrul")?.addEventListener("click", async (ev) => {
+      const msg = el.querySelector("#cpf-egrul-msg");
+      const btnEl = ev.currentTarget;
+      btnEl.disabled = true; msg.textContent = "Запрашиваю ЕГРЮЛ…";
+      try {
+        const { lookupRequisites } = await import("/static/egrul-ui.js");
+        const r = await lookupRequisites((p) => api.get(p), state.draft.inn);
+        if (!r.found) { msg.textContent = "В ЕГРЮЛ по этому ИНН ничего не найдено."; }
+        else {
+          const q = r.requisites;
+          for (const [key, id, v] of [["full_name", "cpf-full", q.full_name], ["short_name", "cpf-short", q.short_name], ["kpp", "cpf-kpp", q.kpp], ["ogrn", "cpf-ogrn", q.ogrn]]) {
+            if (!v) continue;
+            const inp = el.querySelector("#" + id);
+            if (inp) { inp.value = v; state.draft[key] = v; }
+          }
+          syncMainDirty();
+          msg.textContent = `Подставлено из ЕГРЮЛ${q.terminated ? " (деятельность прекращена)" : ""}${q.director ? "; руководитель: " + q.director : ""}. Проверьте и сохраните.`;
+        }
+      } catch (e) { msg.textContent = e?.detail || e?.message || "Не удалось запросить ЕГРЮЛ"; }
+      btnEl.disabled = false;
+    });
   }
 
   function objectLabel(id) {

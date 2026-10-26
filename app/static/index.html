@@ -9592,6 +9592,7 @@
     <h2>Контрагенты</h2>
     <div id="counterparties-list"></div>
     <button class="btn btn-secondary" id="counterparties-add">Добавить контрагента</button>
+    <button class="btn btn-secondary" id="counterparties-egrul">Дозаполнить из ЕГРЮЛ</button>
     <div class="actions">
       <button class="btn btn-secondary" id="counterparties-close">Закрыть</button>
     </div>
@@ -9667,6 +9668,8 @@
                  inputmode="numeric" title="13 знаков у юрлица, 15 у ИП (ОГРНИП)"/>
         </div>
       </div>
+      <div style="margin:6px 0"><button type="button" class="btn btn-sm btn-secondary" id="cpe-egrul">Заполнить по ИНН из ЕГРЮЛ</button>
+        <span class="hint-text" id="cpe-egrul-msg" role="status"></span></div>
       <h3 class="cpe-group">Адреса</h3>
       <label class="field">Юридический адрес</label><input type="text" id="cpe-legal-address"/>
       <h3 class="cpe-group">Контакты</h3>
