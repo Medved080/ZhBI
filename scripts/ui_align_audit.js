@@ -36,3 +36,20 @@ function alignAudit(root, tolerance = 2.5) {
   });
   return bad;
 }
+
+// Поля ОДНОГО вида в одном блоке — одного размера. Пользователь поймал два выпадающих списка рядом (в строке и в панели добавления) разной высоты: оба в рамках
+// одной панели, но под разными общими правилами. Возвращает группы «вид поля → разные высоты/шрифты». Мини-кнопки и значки (.mini, ✕) не сравниваются.
+//     sizeAudit(document.querySelector("#нужный-блок") || document.body)
+function sizeAudit(root, tolerance = 1.5) {
+  const groups = {};
+  root.querySelectorAll("select, input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=file]), textarea").forEach((e) => {
+    const r = e.getBoundingClientRect();
+    if (!r.height || getComputedStyle(e).visibility === "hidden") return;
+    const key = `${e.tagName}:${e.type || ""}`;
+    (groups[key] = groups[key] || []).push({ h: Math.round(r.height * 10) / 10, fs: getComputedStyle(e).fontSize, name: e.name || e.id || e.dataset.resp || e.getAttribute("aria-label") || "" });
+  });
+  return Object.entries(groups).map(([k, v]) => {
+    const hs = v.map((x) => x.h), fss = [...new Set(v.map((x) => x.fs))];
+    return Math.max(...hs) - Math.min(...hs) > tolerance || fss.length > 1 ? { field: k, heights: [...new Set(hs)], fonts: fss, examples: v.slice(0, 4).map((x) => x.name) } : null;
+  }).filter(Boolean);
+}

@@ -229,9 +229,13 @@
 .hc-works-row > td { background: var(--hc-soft); padding: 0.5rem 0.75rem 0.75rem; }
 .hc-works { max-width: 62rem; }
 .hc-works .hc-tbl { background: var(--hc-bg); }
-.hc-works select { max-width: 24rem; width: 100%; }
 /* Панель под перечнем: кнопка и «ответственный для нового» — в одну линию, подпись СЛЕВА от списка (общее правило .hc-bar label ставит подпись над полем и сдвигает поле ниже кнопки) */
 .hc-works .hc-bar { align-items: center; gap: 0.75rem; }
 .hc-works .hc-bar label { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: var(--hc-ink); margin: 0; }
-.hc-works .hc-bar select { width: auto; max-width: 20rem; }
-.hc-works .hc-bar .hc-btn, .hc-works .hc-bar select { min-height: 2rem; }
+/* ВСЕ выпадающие списки панели — одного размера (в строке вида работ и «ответственный для нового»): общие правила .hc-root select и .hc-bar select задают разную высоту,
+   поэтому размер задан одним правилом с перебивающей специфичностью. Кнопки панели — той же высоты. */
+.hc-root.hc-root .hc-works select { box-sizing: border-box; height: 2.25rem; min-height: 2.25rem; padding: 0 0.5rem; font-size: 0.875rem; width: 18rem; max-width: 100%; }
+.hc-works .hc-bar .hc-btn { min-height: 2.25rem; }
+/* Поля формы вкладки «Бот eXpress»: один шрифт и одна высота у всех полей одного вида (подпись над полем даёт полю 0.75rem, в строке с флажком — 0.875rem: раньше
+   «Кого спрашивать» и «Время напоминания» выглядели разными по размеру) */
+.hc-root.hc-root .ex-card :is(select, input:not([type="checkbox"]):not([type="radio"])) { font-size: 0.875rem; height: 2.25rem; min-height: 2.25rem; box-sizing: border-box; }
