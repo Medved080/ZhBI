@@ -327,6 +327,7 @@ async function renderShell(user, permissions) {
              display:none и отсутствие визуального следа исключают путаницу с настоящим полем выбора. -->
         <select id="v2-object" class="v2-hide" aria-hidden="true" tabindex="-1"></select>
         <span class="v2-nav-note" id="v2-nav-note" role="status" aria-live="polite"></span>
+        <button type="button" class="v2-back v2-wn-btn" id="v2-whatsnew-btn" title="Что нового" aria-label="Что нового">?<span class="v2-wn-dot" id="v2-whatsnew-dot" hidden></span></button>
         <span class="v2-user-name">${escapeHtml(user.display_name)}</span>
         <button type="button" class="v2-back" id="v2-logout-btn" title="Завершить свой сеанс и вернуться на экран входа">Выйти</button>
         <div class="v2-ui-switch" role="group" aria-label="Интерфейс">
@@ -374,6 +375,14 @@ async function renderShell(user, permissions) {
       }
     } catch (err) { /* индикатор вторичен */ }
   })();
+  // «Что нового» (2026-10-27): окно как в V1 по кнопке «?»; точка на кнопке — есть непрочитанное (признак приходит с сервера в /me).
+  const wnDot = document.getElementById("v2-whatsnew-dot");
+  const paintWnDot = () => { wnDot.hidden = !user.changelog_unseen; };
+  paintWnDot();
+  document.getElementById("v2-whatsnew-btn").addEventListener("click", async () => {
+    const { openWhatsNew } = await import("./whats-new.js");
+    openWhatsNew({ api, user, go: (k) => openSection(k), canRunTasks: !!(permissions.system_admin || permissions.features?.release_tasks === "write"), onAck: paintWnDot });
+  });
   const backBtn = document.getElementById("v2-back-btn");
   backBtn.addEventListener("click", onBackClick);
   // «Выйти»: как в V1 — POST /logout (сервер гасит сеанс и cookie), затем экран входа. Несохранённое защищает тот же сторож, что и переход.
