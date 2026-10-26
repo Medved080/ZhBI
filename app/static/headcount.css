@@ -230,3 +230,8 @@
 .hc-works { max-width: 62rem; }
 .hc-works .hc-tbl { background: var(--hc-bg); }
 .hc-works select { max-width: 24rem; width: 100%; }
+/* Панель под перечнем: кнопка и «ответственный для нового» — в одну линию, подпись СЛЕВА от списка (общее правило .hc-bar label ставит подпись над полем и сдвигает поле ниже кнопки) */
+.hc-works .hc-bar { align-items: center; gap: 0.75rem; }
+.hc-works .hc-bar label { flex-direction: row; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: var(--hc-ink); margin: 0; }
+.hc-works .hc-bar select { width: auto; max-width: 20rem; }
+.hc-works .hc-bar .hc-btn, .hc-works .hc-bar select { min-height: 2rem; }

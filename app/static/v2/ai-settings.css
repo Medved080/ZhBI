@@ -40,3 +40,6 @@
 .aip-optional .v2-rmr > h3 { display: none; }
 .aip-optional .v2-result { margin-top: 0.75rem; border-top: 0; padding-top: 0; }
 @media (max-width: 900px) { .aip-steps { grid-template-columns: minmax(0, 1fr); } .aip-grid { grid-template-columns: minmax(0, 1fr); } }
+/* Роутер (шаг 4): в строках «поле с подписью + кнопки» кнопки стоят на одной линии с САМИМ полем, а не по центру вместе с подписью над ним */
+.aip-optional .v2-inline { align-items: flex-end; }
+.aip-optional .v2-inline > .v2-role-check { align-self: center; }
