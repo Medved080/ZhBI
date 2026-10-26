@@ -175,8 +175,8 @@ ok(not say("/start", chat="55555555-5555-5555-5555-555555555555", chat_type="gro
 menu = press("Внести", out[0])[0]
 ok("Пока ничего не внесено" in menu[1] and "Альфа" in str(buttons(menu)) and "Бета" in str(buttons(menu)), "меню: подрядчики объекта")
 out = press("Альфа")
-ok(out and "Найти по названию" in str(buttons(out[-1])), "выбран подрядчик → экран видов работ с поиском")
-say_search = press("Найти")
+ok(out and "Напишите часть названия" in out[-1][1] and "К подрядчикам" in str(buttons(out[-1])), "выбран подрядчик → экран видов работ: подсказка писать название или код, кнопка возврата")
+say_search = out
 ok("названия или код" in say_search[-1][1], "поиск: бот просит слово")
 out = say("арматур")
 ok(out and "3.3. Арматура" in str(buttons(out[-1])), "поиск по части названия без учёта регистра находит вид работ")
@@ -203,11 +203,15 @@ ok(q["status"] == "answered" and q["answered_at"], "запрос перешёл 
 ok(any("Внесено за день" in m[1] and "Альфа" in m[1] for m in out), "после записи меню снова с итогом дня")
 
 # вторая строка кнопкой «0» у ИТР; замена числа
-out = press("Бета", out[-1]); out = press("Найти"); out = say("бетон"); out = press("3.1.1. Бетон"); out = say("7")
+out = press("Бета", out[-1]); out = say("бетон"); out = press("3.1.1. Бетон"); out = say("7")
 out = press("0", out[-1])
 c = db.get_connection(); r2 = c.execute("SELECT workers, itr FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000002"], W["130-01-01"])).fetchone(); c.close()
 ok(r2 and r2["workers"] == 7 and r2["itr"] == 0, "кнопка «0» у ИТР: запись 7/0")
-out = press("Альфа", out[-1]); out = press("Найти"); out = say("арматур"); out = press("3.3. Арматура")
+out = press("Альфа", out[-1])
+ok("кнопкой из недавних" in out[-1][1] and "3.3. Арматура" in str(buttons(out[-1])), "у подрядчика с историей: недавние виды работ — кнопками, и можно писать название")
+out = say("арматур")
+ok("Нашлось" in out[-1][1] and "3.3. Арматура" in str(buttons(out[-1])), "текст, набранный сразу после выбора подрядчика, идёт в поиск (а не возвращает в список подрядчиков)")
+out = press("3.3. Арматура")
 ok("Сейчас внесено: рабочие 12, ИТР 3" in out[-1][1], "при повторном вводе показано текущее значение")
 out = say("20"); out = say("4")
 ok(any("Заменено" in m[1] for m in out), "повторный ввод заменяет число")
@@ -217,7 +221,7 @@ hist = c.execute("SELECT old_workers, new_workers, old_itr, new_itr, source FROM
 ok(rec["workers"] == 20 and rec["itr"] == 4 and len(hist) == 2 and (hist[1]["old_workers"], hist[1]["new_workers"], hist[1]["old_itr"], hist[1]["new_itr"]) == (12, 20, 3, 4), "история: было 12/3 → стало 20/4")
 
 # запрет «0 и 0»
-out = press("Альфа", out[-1]); out = press("Найти"); out = say("земл"); out = press("Земляные"); out = say("0"); out = say("0")
+out = press("Альфа", out[-1]); out = say("земл"); out = press("Земляные"); out = say("0"); out = say("0")
 ok(any("не меньше 1" in m[1] for m in out), "0 рабочих и 0 ИТР не записываются, бот объясняет почему")
 c = db.get_connection(); ok(c.execute("SELECT 1 FROM headcount_records WHERE codifier_id = ?", (W["340-03-02"],)).fetchone() is None, "пустая строка в БД не попала"); c.close()
 # выведенный из действия вид работ не находится поиском

@@ -172,9 +172,11 @@ def _work_screen(conn, req, contractor_id: int):
     contractor = _contractor_row(conn, req, contractor_id)
     works = _recent_works(conn, req, contractor_id)
     text = f"Подрядчик: {_contractor_label(contractor)}.\n"
-    text += "Выберите вид работ или найдите его по названию или коду." if works else "Напишите часть названия или код вида работ — я найду."
+    # Вид работ выбирают кнопкой из недавних по этому подрядчику на этом объекте (за 60 дней, чаще всего вносимые — первыми) ИЛИ пишут часть названия / код:
+    # текст в этом шаге сразу идёт в поиск (отдельной кнопки «Найти» не нужно — раньше текст, набранный сразу, молча возвращал в список подрядчиков).
+    text += ("Выберите вид работ кнопкой из недавних или напишите часть названия или код — я найду." if works
+             else "Напишите часть названия или код вида работ — я найду.")
     bubble = [[button(_short(f"{w['code']} {w['name']}"), {"a": "work", "r": req["id"], "w": w["id"]})] for w in works]
-    bubble.append([button("Найти по названию или коду", {"a": "search", "r": req["id"]})])
     bubble.append([button("‹ К подрядчикам", {"a": "menu", "r": req["id"]})])
     return text, bubble
 
@@ -386,7 +388,7 @@ def _text(conn, contact, body: str) -> None:
         return
     dialog = _load_dialog(req)
     step = dialog.get("step")
-    if step == "search":
+    if step in ("search", "work"):
         found, total = search_works(conn, body)
         back = [button("‹ К подрядчикам", {"a": "menu", "r": req["id"]})]
         if not found:
