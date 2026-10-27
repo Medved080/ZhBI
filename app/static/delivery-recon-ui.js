@@ -1,6 +1,6 @@
 // Отчёт «Сверка поставки по договорам» — общий экран V1 и V2 (2026-10-26; сервер: app/report_delivery_recon.py).
 //
-// Три вкладки — «Спецификация договора», «Факт поставки», «Плановые даты поставки» — и отбор по контрагенту, договору и спецификации.
+// Три вкладки — «Спецификация договора», «Факт поставки», «План поставки» — и отбор по контрагенту, договору и спецификации.
 // Данные считает сервер; здесь только вёрстка присланного и кнопка «Выгрузить в Excel» (те же три вкладки листами одного файла).
 // Зависимости передаются явно (глобалей у ES-модуля нет): транспорт и скачивание живут в каждой оболочке по-своему.
 //
@@ -29,6 +29,11 @@ const STYLE = `
 .dr-table td.date { text-align: center; }
 .dr-table tfoot td { font-weight: 600; position: sticky; bottom: 0; background: var(--surface, #eef2f7); }
 .dr-status { font-size: 0.8125rem; opacity: .8; }
+.dr-head { display: flex; flex-direction: column; gap: 2px; font-size: 0.8125rem; max-height: 9.5rem; overflow: auto; }
+.dr-head-row { display: flex; align-items: flex-start; gap: 10px; }
+.dr-head-date { min-width: 6.5rem; padding: 1px 8px; text-align: center; background: #ffff00; color: #1a1d21; font-weight: 600; border-radius: 3px; }
+.dr-head-date:empty::before { content: "не задан"; font-weight: 400; opacity: .7; }
+.dr-overdue { color: #c0392b; font-weight: 600; }
 `;
 
 export function mountDeliveryRecon(host, { objectId, read, get, download }) {
@@ -51,6 +56,7 @@ export function mountDeliveryRecon(host, { objectId, read, get, download }) {
     <p class="dr-warn" hidden></p>
     <div class="dr-tabs" role="tablist"></div>
     <p class="dr-note" hidden></p>
+    <div class="dr-head" hidden></div>
     <div class="dr-scroll"><table class="dr-table"></table></div>
   </div>`;
   const $ = (sel) => host.querySelector(sel);
@@ -83,12 +89,17 @@ export function mountDeliveryRecon(host, { objectId, read, get, download }) {
     const tab = r.tabs.find((t) => t.id === state.tab) || r.tabs[0];
     const note = $(".dr-note");
     note.hidden = !tab.note; note.textContent = tab.note || "";
+    // Аналитика над таблицей (у «Спецификации договора» — срок окончания поставки: атрибут спецификации, не колонка).
+    const headEl = $(".dr-head");
+    headEl.hidden = !(tab.header && tab.header.length);
+    headEl.innerHTML = (tab.header || []).map((h) => `<div class="dr-head-row"><span class="dr-head-date">${esc(ruDate(h.value))}</span><span>${esc(h.label)}</span></div>`).join("");
     const warn = $(".dr-warn");
     warn.hidden = !r.warning; warn.textContent = r.warning || "";
     const cls = (c) => (c.kind === "num" ? "num" : c.kind === "date" ? "date" : "");
     const cell = (c, row) => {
       const v = row[c.key];
       if (v === null || v === undefined || v === "") return "";
+      if (c.key === "status" && v === "Просрочено") return `<span class="dr-overdue">${esc(v)}</span>`;
       return c.kind === "date" ? ruDate(v) : c.kind === "num" ? Number(v).toLocaleString("ru-RU") : esc(v);
     };
     const shown = tab.rows.slice(0, SHOWN_ROWS);

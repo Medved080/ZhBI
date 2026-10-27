@@ -2303,11 +2303,10 @@ def report_delivery_recon_xlsx(body: ReportRequestIn, user: sqlite3.Row = Depend
     conn = get_connection()
     try:
         report = _delivery_recon(conn, user, body)
-        имя_объекта = _block_schedule_object_name(conn, report["object_id"])
     finally:
         conn.close()
     return _report_file_response(
-        report_delivery_recon.build_recon_xlsx(report, имя_объекта), "Сверка поставки по договорам.xlsx",
+        report_delivery_recon.build_recon_xlsx(report), "Сверка поставки по договорам.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 

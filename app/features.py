@@ -270,7 +270,7 @@ FEATURES = [
     Feature("report_completion", "Отчёты", "Статус комплектации",
             None, ["POST /reports/completion(.xlsx|.pdf)"], SCOPE_OBJECT, _все(READ)),
     Feature("report_delivery_recon", "Отчёты", "Сверка поставки по договорам",
-            "Сверка поставки с договором: спецификация, факт поставки и монтажа, плановые даты по изделиям; отбор по контрагенту, договору и спецификации.",
+            "Сверка поставки с договором: спецификация и срок окончания поставки, факт поставки по датам, план поставки ещё не доставленных изделий; отбор по контрагенту, договору и спецификации.",
             ["POST /reports/delivery-recon(.xlsx)", "GET /reports/delivery-recon/options"], SCOPE_OBJECT, _все(READ)),
     Feature("report_mywork", "Отчёты", "Моя работа",
             None, ["POST /reports/my-work"], SCOPE_OBJECT, _все(READ)),
