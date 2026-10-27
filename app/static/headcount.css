@@ -236,6 +236,8 @@
    поэтому размер задан одним правилом с перебивающей специфичностью. Кнопки панели — той же высоты. */
 .hc-root.hc-root .hc-works select { box-sizing: border-box; height: 2.25rem; min-height: 2.25rem; padding: 0 0.5rem; font-size: 0.875rem; width: 18rem; max-width: 100%; }
 .hc-works .hc-bar .hc-btn { min-height: 2.25rem; }
+/* «Примечание» вида работ (до 20 символов) — того же размера, что списки в строке */
+.hc-root.hc-root .hc-works input.hc-note { box-sizing: border-box; height: 2.25rem; min-height: 2.25rem; padding: 0 0.5rem; font-size: 0.875rem; width: 12rem; max-width: 100%; }
 /* Поля формы вкладки «Бот eXpress»: один шрифт и одна высота у всех полей одного вида (подпись над полем даёт полю 0.75rem, в строке с флажком — 0.875rem: раньше
    «Кого спрашивать» и «Время напоминания» выглядели разными по размеру) */
 .hc-root.hc-root .ex-card :is(select, input:not([type="checkbox"]):not([type="radio"])) { font-size: 0.875rem; height: 2.25rem; min-height: 2.25rem; box-sizing: border-box; }

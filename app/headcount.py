@@ -266,21 +266,40 @@ def list_contractors(object_id: int, user: sqlite3.Row = Depends(get_current_use
 
 # ------------------------------------------------------------------ виды работ подрядчика и ответственные (2026-10-26)
 
+NOTE_MAX = 20     # длина примечания к виду работ подрядчика: бот добавляет его в скобках к названию вида работ
+
+
 class ContractorWorkIn(BaseModel):
     codifier_id: int
     responsible_id: Optional[int] = None
+    note: Optional[str] = None
 
 
 class ResponsibleIn(BaseModel):
-    responsible_id: Optional[int] = None      # null — снять ответственного
+    """Правка пары «подрядчик + вид работ»: поле, которого нет в теле, не меняется (`responsible_id` null — снять ответственного, `note` пустое — убрать)."""
+    responsible_id: Optional[int] = None
+    note: Optional[str] = None
+
+
+def _clean_note(value: Optional[str]) -> Optional[str]:
+    note = " ".join(str(value or "").split())
+    if len(note) > NOTE_MAX:
+        raise HTTPException(status_code=400, detail=f"Примечание — не больше {NOTE_MAX} символов (сейчас {len(note)})")
+    return note or None
+
+
+def first_level_ids(conn) -> set:
+    """Виды работ ПЕРВОГО уровня кодификатора (разделы «7.», «12.») среди действующих — только их назначают подрядчику (решение 2026-10-27)."""
+    rows = conn.execute("SELECT id, code, name, parent_name, section_name, unit FROM work_codifier WHERE retired_at IS NULL").fetchall()
+    return {r["id"] for r in codifier_tree(rows) if r["level"] == 1}
 
 
 def _work_out(row) -> dict:
     return {"id": row["id"], "codifier_id": row["codifier_id"], "code": row["code"], "name": row["name"], "retired": bool(row["retired_at"]),
-            "responsible_id": row["responsible_id"], "responsible": row["responsible_name"]}
+            "responsible_id": row["responsible_id"], "responsible": row["responsible_name"], "note": row["note"]}
 
 
-_WORKS_SELECT = ("SELECT cw.id, cw.contractor_id, cw.codifier_id, cw.responsible_id, w.code, w.name, w.retired_at, ind.name AS responsible_name "
+_WORKS_SELECT = ("SELECT cw.id, cw.contractor_id, cw.codifier_id, cw.responsible_id, cw.note, w.code, w.name, w.retired_at, ind.name AS responsible_name "
                  "FROM headcount_contractor_works cw JOIN headcount_contractors c ON c.id = cw.contractor_id "
                  "JOIN work_codifier w ON w.id = cw.codifier_id LEFT JOIN individuals ind ON ind.id = cw.responsible_id ")
 
@@ -298,7 +317,7 @@ def responsible_rows(conn, object_id: int, individual_id: Optional[int]) -> list
     if individual_id is None:
         return []
     return conn.execute(
-        f"SELECT cw.id, cw.contractor_id, cw.codifier_id, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, w.code, w.name AS work_name "
+        f"SELECT cw.id, cw.contractor_id, cw.codifier_id, cw.note, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, w.code, w.name AS work_name "
         "FROM headcount_contractor_works cw JOIN headcount_contractors c ON c.id = cw.contractor_id JOIN work_codifier w ON w.id = cw.codifier_id "
         "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
         f"WHERE c.object_id = ? AND cw.responsible_id = ? AND w.retired_at IS NULL ORDER BY {CTR_NAME}, w.sort_order, w.code",
@@ -330,11 +349,14 @@ def add_contractor_work(object_id: int, contractor_id: int, body: ContractorWork
             raise HTTPException(status_code=400, detail="Вид работ не найден в кодификаторе")
         if work["retired_at"]:
             raise HTTPException(status_code=400, detail="Вид работ выведен из действия: добавить его подрядчику нельзя")
+        if body.codifier_id not in first_level_ids(conn):
+            raise HTTPException(status_code=400, detail="Подрядчику назначаются только виды работ первого уровня кодификатора (разделы)")
         _check_individual(conn, body.responsible_id)
+        note = _clean_note(body.note)
         if conn.execute("SELECT 1 FROM headcount_contractor_works WHERE contractor_id = ? AND codifier_id = ?", (contractor_id, body.codifier_id)).fetchone():
             raise HTTPException(status_code=409, detail="Этот вид работ у подрядчика уже есть")
-        cur = conn.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id, updated_by) VALUES (?, ?, ?, ?)",
-                           (contractor_id, body.codifier_id, body.responsible_id, user["id"]))
+        cur = conn.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id, note, updated_by) VALUES (?, ?, ?, ?, ?)",
+                           (contractor_id, body.codifier_id, body.responsible_id, note, user["id"]))
         conn.commit()
         out = _work_out(_work_row(conn, object_id, contractor_id, cur.lastrowid))
     finally:
@@ -346,21 +368,26 @@ def add_contractor_work(object_id: int, contractor_id: int, body: ContractorWork
 
 @router.patch("/contractors/{contractor_id}/works/{work_id}")
 def set_contractor_work_responsible(object_id: int, contractor_id: int, work_id: int, body: ResponsibleIn, user: sqlite3.Row = Depends(get_current_user)):
-    """Назначить ответственного за пару «подрядчик + вид работ» (null — снять)."""
+    """Назначить ответственного за пару «подрядчик + вид работ» (null — снять) и/или задать примечание (пусто — убрать)."""
+    given = body.model_fields_set
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
         begin_write(conn)
         old = _work_row(conn, object_id, contractor_id, work_id)
-        _check_individual(conn, body.responsible_id)
-        conn.execute("UPDATE headcount_contractor_works SET responsible_id = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?",
-                     (body.responsible_id, user["id"], work_id))
+        responsible_id = body.responsible_id if "responsible_id" in given else old["responsible_id"]
+        note = _clean_note(body.note) if "note" in given else old["note"]
+        _check_individual(conn, responsible_id)
+        conn.execute("UPDATE headcount_contractor_works SET responsible_id = ?, note = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ?",
+                     (responsible_id, note, user["id"], work_id))
         conn.commit()
         out = _work_out(_work_row(conn, object_id, contractor_id, work_id))
     finally:
         conn.close()
+    changed = [t for t, f in (("ответственный изменён", responsible_id != old["responsible_id"]), ("примечание изменено", note != old["note"])) if f]
     activity.log("headcount_contractor_works", user=user, entity_type="object", entity_id=object_id, new_value=f"{old['code']} {old['name']}",
-                 old_value=old["responsible_name"], details={"действие": "ответственный изменён", "подрядчик": contractor_id, "ответственный": out["responsible"]})
+                 old_value=old["responsible_name"], details={"действие": ", ".join(changed) or "без изменений", "подрядчик": contractor_id,
+                                                              "ответственный": out["responsible"], "примечание": out["note"]})
     return out
 
 

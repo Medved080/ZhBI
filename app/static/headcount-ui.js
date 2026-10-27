@@ -27,6 +27,7 @@ const fmtMoment = (s) => {
   return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 // «Рабочие», «ИТР» и «Механизаторы» — целые от 0 до 100 000, вместе не меньше 1 («Итого» = их сумма, на сервере не хранится)
+const NOTE_MAX = 20;   // длина примечания к виду работ подрядчика (как app/headcount.py: NOTE_MAX)
 const HC_MAX = 100000;
 const isCount = (v) => /^\d+$/.test(String(v).trim()) && Number(v) <= HC_MAX;
 const pairProblem = (w, i, m) => (!isCount(w) || !isCount(i) || !isCount(m) ? `Рабочие, ИТР и механизаторы — целые числа от 0 до ${HC_MAX.toLocaleString("ru-RU")}`
@@ -370,10 +371,11 @@ export function mountHeadcount(el, ctx) {
   // =====================================================================  ПОДРЯДЧИКИ
   // Подрядчик объекта — ссылка на контрагента ЕДИНОГО справочника (2026-10-26): его добавляют поиском по общему справочнику (ИНН или
   // название), нового контрагента заводят отсюда же (право на «Справочник контрагентов» проверяет сервер). Название и ИНН подрядчика
-  // берутся из справочника и правятся только в нём — в этом экране их изменить нельзя.
+  // берутся из справочника и правятся только в нём: кнопка «Редактировать» открывает карточку контрагента (ctx.openCounterparty — её
+  // даёт оболочка V1/V2; после сохранения V1 шлёт событие «zhbi:counterparty-saved», и список подрядчиков перечитывается).
   function paintContractors() {
     pane.innerHTML = `
-      <div class="hc-bar"><strong>Подрядчики объекта</strong><span class="hc-muted">выбираются из общего справочника контрагентов; название и ИНН меняются в справочнике</span>${ctx.canWrite && !st.ctrAdd ? `<button type="button" class="hc-btn primary" id="hc-c-new">Добавить подрядчика</button>` : ""}</div>
+      <div class="hc-bar"><strong>Подрядчики объекта</strong><span class="hc-muted">выбираются из общего справочника контрагентов; название и ИНН правятся там же — кнопкой «Редактировать»</span>${ctx.canWrite && !st.ctrAdd ? `<button type="button" class="hc-btn primary" id="hc-c-new">Добавить подрядчика</button>` : ""}</div>
       <div id="hc-ca"></div>
       <p id="hc-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>ИНН</th><th>Справочник контрагентов</th><th>Виды работ</th><th class="num">Записей</th><th></th></tr></thead><tbody>${
@@ -381,12 +383,13 @@ export function mountHeadcount(el, ctx) {
           <td>${esc(c.inn || "—")} ${c.inn_note ? `<span class="hc-badge warn" title="В ИНН не 10 и не 12 цифр">${esc(c.inn_note)}</span>` : ""}</td>
           <td>${c.counterparty_id ? "в справочнике" : `<span class="hc-badge warn">не связан</span> <span class="hc-muted">выберите контрагента</span>`}</td>
           <td class="nw"><button type="button" class="hc-btn mini" data-works="${c.id}" aria-expanded="${st.openWorks.has(c.id)}" title="Перечень видов работ подрядчика и ответственные">${st.openWorks.has(c.id) ? "▾" : "▸"} Виды работ: ${(c.works || []).length}${(c.works || []).some((w) => !w.responsible_id) ? ` <span class="hc-badge warn" title="Есть виды работ без ответственного">!</span>` : ""}</button></td><td class="num">${c.records}</td>
-          <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-replace="${c.id}" title="Привязать подрядчика к другому контрагенту справочника">${c.counterparty_id ? "Заменить контрагента" : "Выбрать контрагента"}</button> <button type="button" class="hc-btn danger mini" data-del="${c.id}">Удалить</button>` : ""}</td></tr>${st.openWorks.has(c.id) ? worksRow(c) : ""}`).join("")
+          <td class="nw">${ctx.canWrite ? `${c.counterparty_id ? `<button type="button" class="hc-btn mini" data-edit-cp="${c.counterparty_id}" ${ctx.openCounterparty && ctx.canEditCounterparty ? "" : "disabled"} title="${ctx.openCounterparty && ctx.canEditCounterparty ? "Открыть карточку контрагента в общем справочнике: название, ИНН и реквизиты" : "Название и ИНН правятся в «Справочнике контрагентов» — для этого нужно право на этот раздел"}">Редактировать</button> ` : ""}<button type="button" class="hc-btn mini" data-replace="${c.id}" title="Привязать подрядчика к другому контрагенту справочника">${c.counterparty_id ? "Заменить контрагента" : "Выбрать контрагента"}</button> <button type="button" class="hc-btn danger mini" data-del="${c.id}">Удалить</button>` : ""}</td></tr>${st.openWorks.has(c.id) ? worksRow(c) : ""}`).join("")
         : `<tr><td colspan="6" class="hc-muted">Подрядчиков нет. Добавьте из справочника контрагентов или загрузите историю численности.</td></tr>`}</tbody></table></div>`;
     wireWorks();
     pane.querySelector("#hc-c-new")?.addEventListener("click", () => { openCtrAdd(null); });
     pane.querySelectorAll("[data-replace]").forEach((b) => b.addEventListener("click", () => openCtrAdd(Number(b.dataset.replace))));
     pane.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => delContractor(Number(b.dataset.del))));
+    pane.querySelectorAll("[data-edit-cp]").forEach((b) => b.addEventListener("click", () => ctx.openCounterparty?.(Number(b.dataset.editCp))));
     if (st.ctrAdd) paintCtrAdd();
   }
 
@@ -403,11 +406,12 @@ export function mountHeadcount(el, ctx) {
     const works = c.works || [];
     return `<tr class="hc-works-row"><td colspan="6">
       <div class="hc-works">
-        <table class="hc-tbl"><thead><tr><th>Вид работ</th><th>Ответственный (физлицо из справочника)</th><th></th></tr></thead><tbody>${works.length ? works.map((w) => `<tr>
+        <table class="hc-tbl"><thead><tr><th>Вид работ</th><th>Ответственный (физлицо из справочника)</th><th>Примечание</th><th></th></tr></thead><tbody>${works.length ? works.map((w) => `<tr>
           <td><span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}${w.retired ? ' <span class="hc-badge warn">выведен из действия</span>' : ""}</td>
           <td>${ctx.canWrite ? `<select data-resp="${c.id}:${w.id}" aria-label="Ответственный: ${esc(w.name)}">${respOptions(w.responsible_id)}</select>` : esc(w.responsible || "— не назначен —")}</td>
+          <td>${ctx.canWrite ? `<input type="text" class="hc-note" data-note="${c.id}:${w.id}" value="${esc(w.note || "")}" maxlength="${NOTE_MAX}" placeholder="до ${NOTE_MAX} символов" autocomplete="off" aria-label="Примечание: ${esc(w.name)}" title="Бот eXpress добавит примечание в скобках к названию вида работ">` : esc(w.note || "")}</td>
           <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn danger mini" data-work-del="${c.id}:${w.id}" title="Убрать вид работ у подрядчика" aria-label="Убрать вид работ">✕</button>` : ""}</td></tr>`).join("")
-          : `<tr><td colspan="3" class="hc-muted">Видов работ пока нет.${ctx.canWrite ? " Добавьте их и назначьте ответственных — бот спросит каждого только по его строкам." : ""}</td></tr>`}</tbody></table>
+          : `<tr><td colspan="4" class="hc-muted">Видов работ пока нет.${ctx.canWrite ? " Добавьте их и назначьте ответственных — бот спросит каждого только по его строкам." : ""}</td></tr>`}</tbody></table>
         ${ctx.canWrite ? `<div class="hc-bar"><button type="button" class="hc-btn" data-work-add="${c.id}">Добавить вид работ</button>
           <label class="hc-check-inline">ответственный для нового: <select data-resp-default="${c.id}">${respOptions(st.defaultResp[c.id] ?? null)}</select></label></div>` : ""}
       </div></td></tr>`;
@@ -426,6 +430,14 @@ export function mountHeadcount(el, ctx) {
       } catch (e) { setMsg(errText(e), "bad"); }
       await reloadContractors();
     }));
+    pane.querySelectorAll("[data-note]").forEach((inp) => inp.addEventListener("change", async () => {
+      const [cid, wid] = inp.dataset.note.split(":").map(Number);
+      try {
+        await api.patch(`/objects/${ctx.objectId}/headcount/contractors/${cid}/works/${wid}`, { note: inp.value.trim() || null });
+        setMsg(inp.value.trim() ? "Примечание сохранено." : "Примечание убрано.", "ok");
+      } catch (e) { setMsg(errText(e), "bad"); }
+      await reloadContractors();
+    }));
     pane.querySelectorAll("[data-resp-default]").forEach((sel) => sel.addEventListener("change", () => { st.defaultResp[Number(sel.dataset.respDefault)] = sel.value ? Number(sel.value) : null; }));
     pane.querySelectorAll("[data-work-del]").forEach((b) => b.addEventListener("click", async () => {
       const [cid, wid] = b.dataset.workDel.split(":").map(Number);
@@ -437,7 +449,7 @@ export function mountHeadcount(el, ctx) {
     pane.querySelectorAll("[data-work-add]").forEach((b) => b.addEventListener("click", () => {
       const cid = Number(b.dataset.workAdd), have = new Set((st.contractors.find((c) => c.id === cid)?.works || []).map((w) => w.codifier_id));
       openPickDialog({
-        ...WORK_CFG, items: st.works.filter((w) => !have.has(w.id) && !w.retired_at), selectedId: null,
+        ...WORK_CFG_L1, items: st.works.filter((w) => w.level === 1 && !have.has(w.id) && !w.retired_at).map((w) => ({ ...w, parent_id: null, has_children: false })), selectedId: null,
         onPick: async (item) => {
           try {
             await api.post(`/objects/${ctx.objectId}/headcount/contractors/${cid}/works`, { codifier_id: item.id, responsible_id: st.defaultResp[cid] ?? null });
@@ -890,10 +902,12 @@ export function mountHeadcount(el, ctx) {
     });
   }
 
+  const onCounterpartySaved = () => { if (!dead && st.contractors !== null) reloadContractors(); };
+  document.addEventListener("zhbi:counterparty-saved", onCounterpartySaved);
   loadRefs();
   return {
     hasUnsavedChanges: () => hasChanges(),
-    destroy() { dead = true; st.expressView?.destroy(); el.innerHTML = ""; el.classList.remove("hc-root"); },
+    destroy() { dead = true; document.removeEventListener("zhbi:counterparty-saved", onCounterpartySaved); st.expressView?.destroy(); el.innerHTML = ""; el.classList.remove("hc-root"); },
   };
 }
 
@@ -1046,6 +1060,8 @@ const WORK_CFG = {
     { key: "unit", title: "Ед.", cls: "nw", text: (w) => w.unit || "", html: (w) => esc(w.unit || "") },
   ],
 };
+// Подрядчику назначаются только виды работ ПЕРВОГО уровня (разделы кодификатора, решение 2026-10-27): ветвей нет, список плоский
+const WORK_CFG_L1 = { ...WORK_CFG, title: "Выбор вида работ (первый уровень)", hint: "Подрядчику назначаются виды работ первого уровня кодификатора (разделы). Поиск — по названию и по коду отдельно." };
 const CTR_CFG = {
   placeholder: "Подрядчик не выбран", title: "Выбор подрядчика", hint: "Подрядчики объекта — контрагенты общего справочника. Поиск — в полях под заголовками колонок (название, ИНН). Щёлкните строку, чтобы выбрать.",
   label: (c) => c.display,

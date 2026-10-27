@@ -783,6 +783,15 @@ def _migrate_express_bind(conn: sqlite3.Connection, changes: list) -> None:
             changes.append(f"express_contacts: добавлена колонка {name}")
 
 
+def _migrate_headcount_cwork_note(conn: sqlite3.Connection, changes: list) -> None:
+    """Виды работ подрядчика: «Примечание» до 20 символов (2026-10-27) — бот eXpress добавляет его в скобках к названию вида работ.
+    Колонка добавляется, если таблица создана прежней схемой. Идемпотентно; у существующих строк примечание пустое."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(headcount_contractor_works)")}
+    if cols and "note" not in cols:
+        conn.execute("ALTER TABLE headcount_contractor_works ADD COLUMN note TEXT")
+        changes.append("headcount_contractor_works: добавлена колонка note")
+
+
 def _migrate_headcount_mech(conn: sqlite3.Connection, changes: list) -> None:
     """«Численность»: третья категория «Механизаторы» рядом с «Рабочие» и «ИТР» (2026-10-26).
 
@@ -2792,6 +2801,7 @@ def init_db() -> list:
         _migrate_headcount_itr(conn, changes)   # после executescript(schema.sql): таблицы численности уже есть
         _migrate_headcount_mech(conn, changes)  # строго ПОСЛЕ ИТР: пересборка берёт колонки с itr
         _migrate_express_bind(conn, changes)
+        _migrate_headcount_cwork_note(conn, changes)
         _migrate_contracts_structure(conn)
         _migrate_contracts_hierarchy(conn)
         _migrate_contracts_theme(conn)

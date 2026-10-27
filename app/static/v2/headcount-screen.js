@@ -8,7 +8,7 @@ import { saveBlob } from "./exchange-common.js";
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export function mountHeadcountScreen(el, { screen, objectId, api, rights, groupTitle }) {
+export function mountHeadcountScreen(el, { screen, objectId, api, rights, groupTitle, go }) {
   // НЕ «v2-app»: это класс экранов-приложений с внутренней прокруткой (overflow: hidden), длинная страница в нём обрезалась без полосы прокрутки
   el.className = "v2-page";
   const admin = !!rights?.system_admin;
@@ -26,6 +26,12 @@ export function mountHeadcountScreen(el, { screen, objectId, api, rights, groupT
     api, upload: (path, form) => api.upload(path, form), objectId, startTab: screen.startTab,
     express: { read: admin || ["read", "write"].includes(rights?.features?.express_bot), write: admin || rights?.features?.express_bot === "write", admin: admin || rights?.features?.express_admin === "write" },
     download: async (url, filename) => saveBlob(await api.download(url, undefined, { method: "GET" }), filename || "Численность.xlsx"), canWrite, canAdmin: admin,
+    // «Редактировать» у подрядчика: переход в раздел «Контрагенты» сразу на карточку (разовая ссылка, как из «Контрактов»); раздел открыт только при праве «write»
+    canEditCounterparty: admin || rights?.features?.counterparties === "write",
+    openCounterparty: go ? (id) => {
+      try { sessionStorage.setItem("v2.cp.deeplink", JSON.stringify({ cp: id, contract: null, newSpec: null })); } catch (e) { /* без ссылки откроется список контрагентов */ }
+      go("counterparties");
+    } : null,
     confirm: (text, { danger = false } = {}) => showConfirmDialog(text, { confirmLabel: danger ? "Да, продолжить" : "Продолжить", danger, multiline: true }),
   });
   return {

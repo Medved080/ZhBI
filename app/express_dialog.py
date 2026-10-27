@@ -119,7 +119,10 @@ def _own_rows(conn, req) -> list:
 
 def _row_label(r, limit: int = MAX_LABEL) -> str:
     who = r["ctr_name"] or (f"ИНН {r['ctr_inn']}" if r["ctr_inn"] else f"Подрядчик №{r['contractor_id']}")
-    return _short(f"{who} · {r['code']} {r['work_name']}", limit)
+    # Примечание подрядчика к виду работ (до 20 символов) идёт в скобках и не обрезается: при нехватке места сокращается название
+    note = f" ({r['note']})" if r["note"] else ""
+    head = f"{who} · {r['code']} "
+    return _short(head + _short(r["work_name"], max(10, limit - len(head) - len(note))) + note, max(limit, len(head) + len(note) + 10))
 
 
 def _entered(conn, req) -> dict:

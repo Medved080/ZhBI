@@ -1776,6 +1776,7 @@ CREATE TABLE IF NOT EXISTS headcount_contractor_works (
     contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE CASCADE,
     codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
     responsible_id INTEGER REFERENCES individuals (id) ON DELETE SET NULL,   -- физлицо из справочника; NULL — ответственный не назначен
+    note TEXT,                          -- примечание до 20 символов (2026-10-27): бот добавляет его в скобках к названию вида работ
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,

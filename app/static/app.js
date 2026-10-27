@@ -19106,6 +19106,7 @@ document.getElementById("counterparty-edit-save").addEventListener("click", asyn
       const created = await api("/counterparties", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       editingCounterpartyId = created.id;
     }
+    document.dispatchEvent(new Event("zhbi:counterparty-saved"));   // окно «Численность персонала» перечитает подрядчиков
     await renderCounterpartiesList();
     // Договоры доступны только после сохранения — перерисовываем форму,
     // не закрываем её, чтобы сразу можно было добавить первый договор.
@@ -33862,6 +33863,12 @@ async function openHeadcount(startTab) {
     startTab,
     canWrite: can("headcount", "write"),
     canAdmin: systemAdmin(),
+    // «Редактировать» у подрядчика: карточка контрагента общего справочника (название, ИНН, реквизиты) поверх окна численности
+    canEditCounterparty: can("counterparties", "write"),
+    openCounterparty: async (id) => {
+      const cp = (await api("/counterparties")).find((x) => x.id === id);
+      if (cp) await openCounterpartyEdit(cp); else showToast("Контрагент не найден в справочнике", "warning");
+    },
     express: { read: can("express_bot", "read"), write: can("express_bot", "write"), admin: can("express_admin", "write") || systemAdmin() },
     confirm: async (text) => confirm(text),
   });

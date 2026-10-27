@@ -127,10 +127,11 @@ export function homeCards(mode, registryGroups, items, layout = null, all = fals
   const byId = new Map(items.map((s) => [s.id, s]));
   const cards = (layout ? layout.cards : defaultLayout(registryGroups, items)).map((c) => {
     const list = c.items.map((id) => byId.get(id)).filter(Boolean);
-    // Подписи видов — только в исходной раскладке и только если в карточке их несколько: после ручной перестановки вид
-    // уже ничего не значит, а у карточки из одного вида подпись повторяла бы её название.
+    // Подписи видов («Отчёты», «Обмен данными», …) — и в исходной, и в сохранённой раскладке: первое же сохранение в режиме «Настройка»
+    // раньше превращало карточки в плоские списки (2026-10-27). Подпись ставится там, где вид меняется по ходу списка; у карточки
+    // из одного вида её нет — она повторяла бы название карточки.
     const labels = new Map();
-    if (!layout?.custom && new Set(list.map(kindRank)).size > 1) {
+    if (new Set(list.map(kindRank)).size > 1) {
       list.forEach((s, i) => { if (!i || kindRank(s) !== kindRank(list[i - 1])) labels.set(i, KIND_LABEL[kindRank(s)]); });
     }
     return { id: c.id, title: c.title, items: list, labels, total: c.items.length };

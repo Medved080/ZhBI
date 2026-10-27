@@ -901,7 +901,7 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         const mountMfr = await MFR_SCREENS[target.impl]();
         activeModule = mountMfr(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
+          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group), go: (k) => openSection(k),
         });
       } else if (target.impl === "element-catalog") {
         // «Элементы»: справочник изделий с отбором по колонкам и карточкой изделия (та же, что на схеме — element-ops.js)
