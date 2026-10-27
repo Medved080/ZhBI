@@ -77,8 +77,12 @@ function openModal({ title, width = 520, mount }) {
 }
 
 export function createElementOps(ctx) {
-  const { api, send, getScene, getObjectId, statusLabel, statusColor, repaint, reloadDetail, isDead, getDetail, groupOps = true, ctrlAdds = true } = ctx;
+  const { api, send, getScene, getObjectId, statusLabel, statusColor, repaint: repaintPanel, reloadDetail, isDead, getDetail, groupOps = true, ctrlAdds = true } = ctx;
   const sc = () => getScene();
+  // Окно групповой операции (кнопки панели над схемой) показывает те же формы и то же состояние G, что вкладка «Свойства»: любая перерисовка панели
+  // перерисовывает и его (пока оно открыто — `gdlg`, см. «Окна групповых операций»)
+  let gdlg = null;
+  function repaint() { repaintPanel(); gdlg?.redraw(); }
   const sw = (k) => statusColor(k);
 
   // ------------------------------------------------------------ права (по объекту, как в V1: раздел + порог «запись»)
@@ -98,7 +102,10 @@ export function createElementOps(ctx) {
     hs: { busy: false, error: "", done: "" }, ef: { done: "" }, at: attachState(), mm: { loaded: false, loading: false, error: "", data: null } }); return forms.get(id); };
   // Итог групповой операции показывается вверху панели и переживает перечитывание схемы (оно снимает выделение вместе с формой)
   const banner = { kind: "", text: "" };
-  const setBanner = (kind, text) => { banner.kind = kind; banner.text = text; };
+  const setBanner = (kind, text) => {
+    banner.kind = kind; banner.text = text;
+    if (kind && gdlg) { const d = gdlg; gdlg = null; d.close(); }      // итог (успех, конфликт, неизвестный исход) — окно закрывается, баннер остаётся
+  };
   const bannerHtml = () => banner.text ? `<div class="eo-banner eo-banner-${banner.kind}" role="${banner.kind === "err" ? "alert" : "status"}"><span>${esc(banner.text)}</span><button type="button" class="eo-x" data-eo="banner-x" aria-label="Скрыть сообщение">✕</button></div>` : "";
   const G = { st: { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }, pd: { date: "", onlyEmpty: true, busy: false, error: "", done: "" } };
   function reset() { forms.clear(); Object.assign(G.st, { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }); Object.assign(G.pd, { date: "", onlyEmpty: true, busy: false, error: "", done: "" }); setBanner("", ""); contracts.byObject = null; }
@@ -1011,6 +1018,57 @@ export function createElementOps(ctx) {
     repaint();
   }
 
+  // ================================================================ ОКНА ГРУППОВЫХ ОПЕРАЦИЙ (панель кнопок над схемой, как в V1)
+  // Панель «Выделено: N · Изменить статус · Плановая дата поставки · ✕» над схемой; кнопки открывают окна с теми же формами, что на вкладке «Свойства»
+  // (предпросмотр → применение, режим «По строкам»). Состояние форм общее (G), записи — те же маршруты и шлюз, что у вкладки.
+  const groupAvail = () => {
+    const s = sc();
+    if (!groupOps || !s?.loaded || !(s.multi?.count > 1)) return null;
+    if (!R.loaded) return { why: "Права ещё загружаются" };
+    if (!R.status && !R.plannedDate) return { why: "Нет права изменять статусы и плановые даты на этом объекте" };
+    if (!s.multiItems) return { why: "Выбрано больше 3000 изделий — групповые операции недоступны. Уменьшите выбор" };
+    if (s.multiItems.length > MAX_BATCH) return { why: `Групповая операция принимает не больше ${nf(MAX_BATCH)} изделий за раз (выбрано ${nf(s.multiItems.length)}). Уменьшите выбор` };
+    return { ok: true };
+  };
+  // withBanner — показать итог последней операции и здесь (правая панель свёрнута или открыта не на «Свойствах»)
+  function multiBarHtml({ withBanner = false } = {}) {
+    const a = groupAvail();
+    if (!a) return "";
+    const n = sc().multi.count;
+    const btn = (k, text, can) => `<button type="button" class="v2-btn ${k === "status" ? "v2-primary" : ""}" data-eo-bar="${k}" ${a.ok && can ? "" : "disabled"} ${a.ok ? (can ? "" : 'title="Нет права на эту операцию"') : `title="${esc(a.why)}"`}>${text}</button>`;
+    return `<div class="eo-bar-row"><span class="eo-bar-n">Выделено: <b>${nf(n)}</b></span>${btn("status", "Изменить статус", R.status)}${btn("planned", "Плановая дата поставки", R.plannedDate)}
+      <button type="button" class="v2-btn eo-bar-x" data-eo-bar="clear" title="Снять выбор" aria-label="Снять выбор">✕</button></div>${withBanner ? bannerHtml() : ""}`;
+  }
+  function bindMultiBar(root) {
+    root.querySelectorAll("[data-eo-bar]").forEach((b) => b.addEventListener("click", () => {
+      const k = b.dataset.eoBar;
+      if (k === "clear") send("clearSelection");
+      else openGroupDialog(k);
+    }));
+    root.querySelectorAll('[data-eo="banner-x"]').forEach((b) => b.addEventListener("click", () => { setBanner("", ""); repaint(); }));
+  }
+  async function openGroupDialog(kind) {
+    if (gdlg || !groupAvail()?.ok || !(kind === "status" ? R.status : R.plannedDate)) return;
+    await openModal({ title: kind === "status" ? "Групповая смена статуса" : "Плановая дата поставки", width: 560, mount(body, m) {
+      const draw = () => {
+        const a = groupAvail();
+        if (!a?.ok) { gdlg = null; m.close(undefined); return; }      // выделение сняли или изменили — форма больше не про него
+        const restore = captureFocus(body);
+        const items = sc().multiItems;
+        body.classList.add("eo-gdlg");
+        body.innerHTML = `<p class="v2-muted eo-hint">Выбрано элементов: <b>${nf(items.length)}</b></p>${kind === "status"
+          ? `${groupStatusHtml(items)}${R.status ? `<p class="ws-actions"><button type="button" class="v2-btn" data-eo="rows-status">По строкам: статус со своим контрактом у каждого изделия…</button></p>` : ""}`
+          : `${groupPlannedHtml(items)}<p class="ws-actions"><button type="button" class="v2-btn" data-eo="rows-planned">По строкам: своя дата у каждого изделия…</button></p>`}`;
+        bindGroup(body);
+        m.setBusy(!!(G.st.busy || G.pd.busy));
+        restore();
+      };
+      gdlg = { redraw: draw, close: () => m.close(undefined) };
+      draw();
+    } });
+    gdlg = null;
+  }
+
   // ================================================================ привязка обработчиков
   function bind(body) {
     const s = sc();
@@ -1053,7 +1111,12 @@ export function createElementOps(ctx) {
     on('[data-eo="h-del"]', "click", (ev) => { if (id != null) deleteHistory(id, Number(ev.currentTarget.dataset.id)); });
     on('[data-eo="ef-open"]', "click", () => { if (id != null) openElementForm(id); });
     on('[data-eo="banner-x"]', "click", () => { setBanner("", ""); repaint(); });
-    // --- группа
+    bindGroup(body);
+  }
+
+  // Привязка форм групповой смены статуса и плановой даты (вкладка «Свойства» и окна групповых операций)
+  function bindGroup(body) {
+    const on = (sel, ev, fn) => body.querySelectorAll(sel).forEach((n) => n.addEventListener(ev, fn));
     const gf = body.querySelector("#eo-gform");
     if (gf) {
       const g = G.st;
@@ -1104,5 +1167,5 @@ export function createElementOps(ctx) {
   }
   const canStatus = () => (R.loaded ? R.status : null);
 
-  return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, bannerHtml, bind, captureFocus, hasUnsaved, guardLeave, canStatus, rights: R };
+  return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, bannerHtml, multiBarHtml, bindMultiBar, bind, captureFocus, hasUnsaved, guardLeave, canStatus, rights: R };
 }

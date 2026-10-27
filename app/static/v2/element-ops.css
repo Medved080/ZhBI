@@ -54,3 +54,12 @@
 /* «Распределение по марке» в смене статуса по строкам (перенос V1 bulk-fill-marks) */
 .eo-bymark { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 6px 0 10px; }
 .eo-bmrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 0.8125rem; }
+/* Панель группового выделения над схемой (кнопки открывают окна) и окна групповых операций (с 2026-10-27) */
+.ws-multibar { position: absolute; top: 10px; left: 54px; right: 10px; width: fit-content; margin: 0 auto; z-index: 4; display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 2px 10px rgb(0 0 0 / .15); }
+.ws-multibar[hidden] { display: none; }
+.eo-bar-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px 8px; }
+.eo-bar-n { font-size: 0.8125rem; white-space: nowrap; }
+.eo-bar-row .v2-btn { padding: 4px 12px; font-size: 0.8125rem; }
+.eo-bar-row .eo-bar-x { padding: 4px 9px; }
+.ws-multibar .eo-banner { margin: 0; }
+.eo-gdlg h4 { display: none; }

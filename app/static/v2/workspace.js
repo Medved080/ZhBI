@@ -114,6 +114,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
           <button type="button" data-tool="out" title="Отдалить" aria-label="Отдалить">－</button>
           <button type="button" data-tool="clear" title="Снять выбор" aria-label="Снять выбор">✕</button>
         </div>
+        <div class="ws-multibar" id="ws-multibar" hidden></div>
         <div class="ws-overlay" id="ws-overlay" role="status" aria-live="polite"></div>
       </div>
       <div class="ws-resize" id="ws-resize" role="separator" aria-orientation="vertical" aria-label="Ширина правой панели" tabindex="0"></div>
@@ -386,6 +387,21 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     restoreFocus();
     const left = $("#ws-left-body");
     if (left && filtersLeft()) { const ks = left.scrollTop; left.innerHTML = sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml()); left.scrollTop = ks; bindPanel(left); }
+    paintMultiBar();
+  }
+
+  // Панель группового выделения над схемой (как в V1): «Выделено: N · Изменить статус · Плановая дата поставки · ✕»; кнопки открывают окна (element-ops.js).
+  // У комплектовщика и МФР её нет: там выделение служит распределению / другим операциям. Итог операции дублируется здесь, если правая панель его не покажет.
+  let multiBarHtml = "";
+  function paintMultiBar() {
+    const bar = $("#ws-multibar");
+    if (!bar) return;
+    const html = picker || mfr ? "" : ops.multiBarHtml({ withBanner: panelHidden || tab !== "props" });
+    if (html === multiBarHtml) return;
+    multiBarHtml = html;
+    bar.hidden = !html;
+    bar.innerHTML = html;
+    if (html) ops.bindMultiBar(bar);
   }
 
   // Переключатель стороны панели «Фильтры» (только «Модель» и МФР)
@@ -1029,6 +1045,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   $("#ws-panel-toggle").addEventListener("click", () => {
     panelHidden = !panelHidden;
     panel.hidden = panelHidden; $("#ws-resize").hidden = panelHidden;
+    paintMultiBar();
     $("#ws-panel-toggle").setAttribute("aria-pressed", String(!panelHidden));
     setTimeout(() => window.dispatchEvent(new Event("resize")), 30);
   });
