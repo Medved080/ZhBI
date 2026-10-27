@@ -5374,6 +5374,9 @@
                 <button id="menu-dict-individuals" data-feature="dict_individuals" data-feature-kind="read">Физлица</button>
                 <!-- Кодификатор видов работ учёта численности (2026-10-12): общий справочник, один на все объекты; открывает окно
                      «Численность персонала» сразу на вкладке «Виды работ» (там же — загрузка из Excel для администратора). -->
+                <!-- Универсальный классификатор видов работ (2026-10-27): один на все объекты; объект набирает из него
+                     позиции в структуру работ («Учёт по блокам → Виды работ»), к позициям привязаны категории элементов. -->
+                <button id="menu-work-classifier" data-feature="dict_work_classifier" data-feature-kind="read">Классификатор видов работ</button>
                 <button id="menu-work-codifier" data-feature="headcount" data-feature-kind="read">Виды работ (численность)</button>
                 <button id="menu-project-card" data-feature="project_card" data-feature-kind="write">Карточка объекта</button>
                 <button id="menu-report-notes" data-feature="report_notes" data-feature-kind="write">События, задачи, вопросы</button>
@@ -9161,6 +9164,12 @@
     </div>
 
     <div id="blk-tab-worktypes" class="blk-panel" style="display:none">
+      <!-- Классификатор видов работ (2026-10-27): набор позиций из общего справочника и соответствие категорий
+           классификатора категориям модели объекта (по ним элементы модели окрашиваются состоянием работ). -->
+      <div class="bulk-edit-controls" style="margin-bottom:10px">
+        <button class="btn btn-primary" id="wt-pick-classifier">Набрать из классификатора…</button>
+        <button class="btn btn-secondary" id="wt-category-map">Категории модели…</button>
+      </div>
       <p class="hint-text">Справочник видов работ (WBS), перезагружаемый xlsx-файлом: на листе
         «WBS» — колонки «Уровень WBS», «Идентификатор операции», «Название операции»,
         «Единицы измерения», «Кодификатор», необязательные «Примечание» и «Трек планирования»

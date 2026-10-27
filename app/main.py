@@ -94,6 +94,7 @@ from app.counterparties import router as counterparties_router
 from app.dict_delete import router as dict_delete_router
 from app.marks import router as marks_router
 from app.reference_catalogs import router as reference_catalogs_router
+from app.work_classifier_api import router as work_classifier_router
 from app import zone_recalc
 from app.crane_zone_versions import has_versioning as has_crane_zone_versioning
 from app.crane_zone_versions import period_version as crane_zone_period_version
@@ -521,6 +522,7 @@ app.include_router(schedule_calc_router)
 app.include_router(counterparties_router)
 app.include_router(marks_router)
 app.include_router(reference_catalogs_router)
+app.include_router(work_classifier_router)
 app.include_router(dict_delete_router)
 app.include_router(settings_router)
 app.include_router(attachments_router)

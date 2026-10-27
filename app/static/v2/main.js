@@ -884,6 +884,11 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         const { mountServerExchangeScreen } = await import("./server-exchange-screen.js");
         activeModule = mountServerExchangeScreen(content, { screen: target, api, rights, groupTitle: groupTitle(target.group) });
+      } else if (target.impl === "work-classifier") {
+        // Классификатор видов работ: общий с V1 модуль app/static/work-classifier.js (work-classifier-screen.js — рамка V2)
+        document.title = `${target.title} — ЖБИ`;
+        const { mountWorkClassifierScreen } = await import("./work-classifier-screen.js");
+        activeModule = mountWorkClassifierScreen(content, { screen: target, api, rights, groupTitle: groupTitle(target.group) });
       } else if (target.impl === "calc-embed") {
         // Калькулятор: страница подсистемы /calc/ кадром внутри оболочки (calc-embed.js)
         document.title = `${target.title} — ЖБИ`;

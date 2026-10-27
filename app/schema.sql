@@ -1421,6 +1421,62 @@ CREATE TABLE IF NOT EXISTS planning_tracks (
     UNIQUE (object_id, code)
 );
 
+-- Универсальный классификатор видов работ (2026-10-27, живой запрос): ОДИН на
+-- все объекты, без object_id. Тот же формат дерева, что у work_types (узел /
+-- оп / веха, ключ записи — путь по дереву), но из него объект НАБИРАЕТ
+-- конкретные позиции в свою структуру работ (work_types.classifier_id,
+-- app/work_classifier.py). Пропавшая при повторной загрузке строка не
+-- удаляется, а помечается retired_at — на неё уже могли сослаться объекты.
+CREATE TABLE IF NOT EXISTS work_classifier (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES work_classifier (id) ON DELETE CASCADE,
+    path TEXT NOT NULL UNIQUE,
+    row_kind TEXT NOT NULL,
+    code TEXT,
+    name TEXT NOT NULL,
+    unit TEXT,
+    note TEXT,
+    planning_track_code TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    retired_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Расшифровка кодов «Трек планирования» классификатора (лист PlanningTrack
+-- загруженного файла): код -> название. Переустанавливается целиком.
+CREATE TABLE IF NOT EXISTS work_classifier_tracks (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    note TEXT
+);
+
+-- Категории элементов классификатора («Монолит стены», «СПК окна ПВХ») —
+-- СВОИ имена, не категории Revit/PDF-модели: с категориями модели конкретного
+-- объекта их связывает object_category_map.
+CREATE TABLE IF NOT EXISTS work_element_categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Какие категории элементов относятся к виду работ: любое число категорий на
+-- вид работ и любое число видов работ на категорию.
+CREATE TABLE IF NOT EXISTS work_classifier_categories (
+    classifier_id INTEGER NOT NULL REFERENCES work_classifier (id) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES work_element_categories (id) ON DELETE CASCADE,
+    PRIMARY KEY (classifier_id, category_id)
+);
+
+-- Ручное сопоставление категорий классификатора с категориями модели
+-- ОБЪЕКТА (revit_elements.category): по нему элемент находит свой вид работ и
+-- получает прозрачность/зелёные рёбра по состоянию работы в блоке.
+CREATE TABLE IF NOT EXISTS object_category_map (
+    object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES work_element_categories (id) ON DELETE CASCADE,
+    model_category TEXT NOT NULL,
+    PRIMARY KEY (object_id, category_id, model_category)
+);
+
 -- Статус вида работ на привязке. Отсутствие строки = «План»
 -- (block-accounting.md §3) — держать по строке на каждую пару вид
 -- работ/блок со значением по умолчанию означало бы тысячи пустых строк.

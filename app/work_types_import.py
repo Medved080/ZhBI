@@ -65,6 +65,10 @@ COL_TRACK = "Трек планирования"
 # а расшифровки треков просто не будет (колонки «Трек планирования» у них
 # тоже нет).
 SHEET_WBS = "WBS"
+# В файле классификатора («261021_WBS.xlsx», 2026-10-27) данные лежат на листе
+# «Works», а первым в книге идёт служебный «HIDE» — без этого имени разбор взял
+# бы первый лист и не нашёл колонок.
+SHEET_WBS_ALIASES = (SHEET_WBS, "Works")
 SHEET_PLANNING_TRACK = "PlanningTrack"
 
 TRACK_HEADERS = ("Код", "Наименование")
@@ -192,7 +196,7 @@ def parse_xlsx(data: bytes) -> tuple:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as e:
         raise WorkTypesError(422, "Файл не открылся как xlsx: %s" % e)
-    sheet = wb[SHEET_WBS] if SHEET_WBS in wb.sheetnames else wb.worksheets[0]
+    sheet = next((wb[n] for n in SHEET_WBS_ALIASES if n in wb.sheetnames), wb.worksheets[0])
 
     tracks, warnings = ([], [])
     if SHEET_PLANNING_TRACK in wb.sheetnames:

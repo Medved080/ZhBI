@@ -284,7 +284,11 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
     if (dead || my !== seq || tab !== "types") return;
     const q = st.search.trim().toLowerCase();
     const rows = st.workTypes.filter((o) => !q || `${o.code} ${o.name} ${o.path}`.toLowerCase().includes(q));
-    body.innerHTML = `${canWrite ? `<div class="v2-card" style="margin-bottom:10px">
+    // Классификатор видов работ (2026-10-27): набор позиций из общего каталога и соответствие категорий модели объекта.
+    body.innerHTML = `<div class="v2-bar" style="margin-bottom:10px">
+        <button type="button" class="v2-btn v2-primary" id="wt-pick-classifier">Набрать из классификатора…</button>
+        <button type="button" class="v2-btn" id="wt-category-map">Категории модели…</button></div>
+      ${canWrite ? `<div class="v2-card" style="margin-bottom:10px">
         <p class="v2-muted mfr-hint">Справочник видов работ (WBS), перезагружаемый xlsx-файлом целиком: лист «WBS» (уровень, идентификатор, название, единицы, кодификатор; необязательные «Примечание» и «Трек планирования»), расшифровка треков — лист «PlanningTrack». Ключ строки — путь по дереву: повторная загрузка обновляет совпавшее и не трогает уже проставленные статусы.</p>
         <div class="v2-bar"><input type="file" id="wt-file" accept=".xlsx" aria-label="Файл справочника видов работ">
           <button type="button" class="v2-btn v2-primary" id="wt-analyze-btn">Разобрать</button></div>
@@ -294,6 +298,15 @@ export function mountBlocksScreen(el, { screen, structure, objectId, api, rights
       <div class="mfr-scroll"><table class="v2-read-tbl"><thead><tr><th>Код</th><th>Название</th><th>Трек</th><th>Путь в WBS</th></tr></thead><tbody>${rows.slice(0, 500).map((o) => `<tr><td>${esc(o.code || "")}</td><td>${esc(o.name)}</td><td>${esc(o.planning_track_code || "")}</td><td>${esc(o.path)}</td></tr>`).join("")}</tbody></table></div>
       ${rows.length > 500 ? `<p class="v2-muted">Показаны первые 500 — уточните поиск.</p>` : ""}`;
     $("#ty-q").addEventListener("input", (e) => { st.search = e.target.value; const pos = e.target.selectionStart; paintTypesTab(body).then(() => { const n = $("#ty-q"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }); });
+    const afterClassifier = async () => { st.workTypes = null; await loadBase(); };
+    $("#wt-pick-classifier").addEventListener("click", async () => {
+      const m = await import("./work-classifier-screen.js");
+      m.openObjectPicker({ api, objectId, rights, onSaved: afterClassifier });
+    });
+    $("#wt-category-map").addEventListener("click", async () => {
+      const m = await import("./work-classifier-screen.js");
+      m.openObjectCategoryMap({ api, objectId, rights });
+    });
     $("#wt-analyze-btn")?.addEventListener("click", () => { const f = $("#wt-file").files[0]; if (!f) { wtStatus("Выберите файл"); return; } wtAnalyze(f); });
     paintWtControls();
   }

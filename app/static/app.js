@@ -504,7 +504,24 @@ async function api(path, opts) {
     err.detail = body && body.detail;
     throw err;
   }
+  noteMfrWorkChange(path, opts);
   return res.status === 204 ? null : res.json();
+}
+
+// Окраска элементов «Модели МФР» зависит от факта и состава работ блока: любая успешная запись
+// по ним перечитывает элементы (с задержкой — запись часто идёт пачкой). Читает не всегда: только
+// если модель этого объекта уже открыта и в ней есть что перекрасить.
+const MFR_WORK_WRITE_RE = /\/(fact-reports|work-types-settings|block-works|work-progress|work-structure|category-map|work-fact)/;
+let mfrWorkRefreshTimer = null;
+function noteMfrWorkChange(path, opts) {
+  const метод = String((opts && opts.method) || "GET").toUpperCase();
+  if (метод === "GET" || !MFR_WORK_WRITE_RE.test(String(path))) return;
+  if (mfrWorkRefreshTimer) clearTimeout(mfrWorkRefreshTimer);
+  mfrWorkRefreshTimer = setTimeout(() => {
+    mfrWorkRefreshTimer = null;
+    if (!revitPlanState || !revitPlanState.data || revitPlanState.objectId !== state.objectId) return;
+    loadRevitPlanElements().catch(() => {});
+  }, 400);
 }
 
 // ==================== СТРОКА СОСТОЯНИЯ ПОД СХЕМОЙ ====================
@@ -12214,6 +12231,33 @@ document.getElementById("menu-dict-smu").addEventListener("click", () => openSim
 document.getElementById("menu-dict-individuals").addEventListener("click", () => openSimpleCatalog({
   title: "Справочник физлиц", path: "/individuals", dictKind: "individual",
 }));
+
+// ---------- классификатор видов работ (2026-10-27, app/static/work-classifier.js) ----------
+// Три окна одного ES-модуля, общие с V2: справочник целиком (с загрузкой xlsx), набор позиций в
+// структуру работ объекта и соответствие категорий классификатора категориям модели объекта.
+let workClassifierModule = null;
+async function ensureWorkClassifier() {
+  if (!workClassifierModule) workClassifierModule = await import("/static/work-classifier.js");
+  return workClassifierModule;
+}
+document.getElementById("menu-work-classifier").addEventListener("click", async () => {
+  const mod = await ensureWorkClassifier();
+  mod.openWorkClassifier({ api, canWrite: can("dict_work_classifier", "write") });
+});
+document.getElementById("wt-pick-classifier").addEventListener("click", async () => {
+  const mod = await ensureWorkClassifier();
+  mod.openWorkStructurePicker({
+    api, objectId: state.objectId, canWrite: can("work_progress", "write"),
+    onSaved: async () => { await loadWorkTypesTree(); revitPlanState.data = null; },
+  });
+});
+document.getElementById("wt-category-map").addEventListener("click", async () => {
+  const mod = await ensureWorkClassifier();
+  mod.openCategoryMap({
+    api, objectId: state.objectId, canWrite: can("work_progress", "write"),
+    onSaved: async () => { revitPlanState.data = null; },
+  });
+});
 
 // ---------- справочники типа элемента: подтипы и марки ----------
 const subtypesBackdrop = document.getElementById("subtypes-backdrop");
@@ -31482,6 +31526,20 @@ function revitOpacity(имя) {
   return Math.max(0.05, 1 - Math.min(95, Math.max(0, процент)) / 100);
 }
 
+// Состояние работы в блоке у элемента (классификатор видов работ, поле «раб»
+// ответа /revit-plan/elements): 1 — работа не начата, 2 — идёт; без поля —
+// готово или работы нет, элемент рисуется как обычно (Docs/TZ.md, «Классификатор
+// видов работ»). Не начато — прозрачность 75% (непрозрачность 0.25); идёт —
+// прозрачность 25% (0.75) и флуоресцентно-зелёные рёбра.
+const REVIT_WORK_NOT_STARTED = 1;
+const REVIT_WORK_IN_PROGRESS = 2;
+const REVIT_WORK_EDGE = "#39ff14";
+function revitWorkOpacity(базовая, раб) {
+  if (раб === REVIT_WORK_NOT_STARTED) return 0.25;
+  if (раб === REVIT_WORK_IN_PROGRESS) return Math.min(базовая, 0.75);
+  return базовая;
+}
+
 // Обводка на плане — та же заливка, притемнённая: считать её отдельным
 // набором пришлось бы дважды при каждой правке цвета, а светлый контур на
 // светлой заливке не читается вовсе.
@@ -32306,9 +32364,11 @@ function drawRevitPlan(data) {
     const color = revitFill((data.categories || [])[el["кат"]]);
     const обводка = darken(color);
     const имяКат = (data.categories || [])[el["кат"]];
+    const раб = el["раб"];
+    const зелёные = раб === REVIT_WORK_IN_PROGRESS;
     return `<path d="${d}" data-id="${el.id}" fill="${color}"
-      fill-opacity="${(0.55 * revitOpacity(имяКат)).toFixed(2)}"
-      stroke="${обводка}" stroke-width="${Math.max(w / 900, 20)}"
+      fill-opacity="${(0.55 * revitWorkOpacity(revitOpacity(имяКат), раб)).toFixed(2)}"
+      stroke="${зелёные ? REVIT_WORK_EDGE : обводка}" stroke-width="${Math.max(w / 900, 20) * (зелёные ? 1.8 : 1)}"
       ${el["приб"] ? 'stroke-dasharray="' + Math.max(w / 300, 60) + '"' : ""}/>`;
   }) : [];
 
@@ -34597,7 +34657,7 @@ document.getElementById("mfr-dynamics-to").addEventListener("change", (e) => {
 // меш на элемент — это десятки тысяч объектов сцены, а BufferGeometryUtils
 // в вендоренном наборе нет, и вендорить новое без спроса нельзя.
 
-const mfr3d = { scene: null, camera: null, renderer: null, controls: null,
+const mfr3d = { greenEdges: null, scene: null, camera: null, renderer: null, controls: null,
                 loop: null, key: null, objectId: null, поколение: 0, home: null, homeDistance: null };
 
 // Персональный ракурс (initial3DAngles — «Действия → Внешний вид →
@@ -34967,8 +35027,12 @@ async function buildMfr3D() {
   // чтобы отличить смену ГЕОМЕТРИИ (фильтр) от простого показа/скрытия уже
   // построенного (слои «Вид»): см. сохранение ракурса камеры ниже.
   const filterKey = JSON.stringify(REVIT_GROUPS.map((g) => [...revitPlanState[g]].sort()));
+  // Состояние работ тоже часть ключа: поменялся факт — сцена обязана
+  // перекраситься, хотя отбор и слои те же.
+  const работыКлюч = [0, 0, 0];
+  for (const e of data.elements) работыКлюч[e["раб"] || 0]++;
   const viewKey = JSON.stringify([mfrShowElements(), mfrShowBlocks(), mfrShowAxes(), mfrShowFacades(),
-                                   mfrShowPlans()]);
+                                   mfrShowPlans(), работыКлюч]);
   const ключ = filterKey + "|" + viewKey;
   if (mfr3d.key === ключ && mfr3d.renderer) { onMfr3DResize(); return; }
 
@@ -35028,6 +35092,11 @@ async function buildMfr3D() {
   const рёбраНужны = data.elements.length <= EDGES_LIMIT;
   const рёбра = [];
   let рёберТочек = 0;
+  // Рёбра элементов с работой «в работе» — отдельным буфером и толстой
+  // зелёной линией; строятся ВСЕГДА, даже сверх EDGES_LIMIT: таких мало, а
+  // зелёный контур и есть признак.
+  const рёбраЗелёные = [];
+  let зелёныхТочек = 0;
 
   // Элементы — только если включён слой «Элементы»: снятая галочка не
   // должна тратить время на выдавливание того, что тут же скрыть.
@@ -35049,17 +35118,25 @@ async function buildMfr3D() {
     // Рёбра считаются ДО удаления геометрии: EdgesGeometry берёт только
     // резкие грани, поэтому цилиндры и скругления не превращаются в
     // проволочный клубок, а коробки получают ровно свои двенадцать линий.
-    if (рёбраНужны) {
+    const раб = el["раб"] || 0;
+    if (рёбраНужны || раб === REVIT_WORK_IN_PROGRESS) {
       const e = new THREE.EdgesGeometry(g, 25);
-      рёбра.push(e.attributes.position.array);
-      рёберТочек += e.attributes.position.count;
+      if (раб === REVIT_WORK_IN_PROGRESS) {
+        рёбраЗелёные.push(e.attributes.position.array);
+        зелёныхТочек += e.attributes.position.count;
+      } else {
+        рёбра.push(e.attributes.position.array);
+        рёберТочек += e.attributes.position.count;
+      }
       e.dispose();
     }
     const g2 = g.toNonIndexed();
     g.dispose();
-    if (!поКатегориям.has(el["кат"])) поКатегориям.set(el["кат"], { геом: [], ids: [] });
-    поКатегориям.get(el["кат"]).геом.push(g2);
-    поКатегориям.get(el["кат"]).ids.push(el.id);
+    // Меши общие на категорию И состояние работы: у каждого своя прозрачность.
+    const группа = el["кат"] + "|" + раб;
+    if (!поКатегориям.has(группа)) поКатегориям.set(группа, { кат: el["кат"], раб, геом: [], ids: [] });
+    поКатегориям.get(группа).геом.push(g2);
+    поКатегориям.get(группа).ids.push(el.id);
   }
 
   const scene = new THREE.Scene();
@@ -35078,11 +35155,11 @@ async function buildMfr3D() {
   scene.add(подсветка);
 
   let верх = 0;
-  for (const [кат, набор] of поКатегориям) {
-    const имяКат = (data.categories || [])[кат];
+  for (const набор of поКатегориям.values()) {
+    const имяКат = (data.categories || [])[набор.кат];
     const диапазоны = [];
     const geometry = mergePositions(набор.геом, набор.ids, диапазоны);
-    const непрозрачность = revitOpacity(имяКат);
+    const непрозрачность = revitWorkOpacity(revitOpacity(имяКат), набор.раб);
     const базовый = new THREE.Color(revitFill(имяКат));
     const свечение = revitGlow(имяКат);
     const material = new THREE.MeshLambertMaterial({
@@ -35433,6 +35510,22 @@ async function buildMfr3D() {
     линии.renderOrder = 2;
     scene.add(линии);
   }
+  // Зелёные рёбра «в работе»: LineBasicMaterial толщины не держит, поэтому
+  // вендоренные Line2 (как рёбра силуэта ЖБИ); resolution обновляет onMfr3DResize.
+  mfr3d.greenEdges = null;
+  if (рёбраЗелёные.length) {
+    const массив = new Float32Array(зелёныхТочек * 3);
+    let сдвиг = 0;
+    for (const кусок of рёбраЗелёные) { массив.set(кусок, сдвиг); сдвиг += кусок.length; }
+    const геомЗ = new LineSegmentsGeometry();
+    геомЗ.setPositions(массив);
+    const материалЗ = new LineMaterial({ color: new THREE.Color(REVIT_WORK_EDGE).getHex(), linewidth: 2.5,
+      resolution: new THREE.Vector2(box.clientWidth || 1, box.clientHeight || 1), depthWrite: false });
+    const зелёные = new LineSegments2(геомЗ, материалЗ);
+    зелёные.renderOrder = 3;
+    scene.add(зелёные);
+    mfr3d.greenEdges = материалЗ;
+  }
 
   const container = box;
   const camera = new THREE.PerspectiveCamera(
@@ -35582,6 +35675,7 @@ function onMfr3DResize() {
   mfr3d.camera.aspect = box.clientWidth / Math.max(box.clientHeight, 1);
   mfr3d.camera.updateProjectionMatrix();
   mfr3d.renderer.setSize(box.clientWidth, box.clientHeight);
+  if (mfr3d.greenEdges) mfr3d.greenEdges.resolution.set(box.clientWidth, box.clientHeight);
 }
 window.addEventListener("resize", onMfr3DResize);
 

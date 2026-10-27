@@ -1380,6 +1380,15 @@ RELEASE_TASKS = [
         "kind": KIND_DATA,
         "run": _link_headcount_contractors,
     },
+    {
+        "name": "2026-10-27-grant-dict-work-classifier-read",
+        "version": "0.118",
+        "date": "2026-10-27",
+        "title": "Открыть справочник «Классификатор видов работ» существующим ролям",
+        "why": "новый раздел прав не выдан никому по умолчанию — тот же случай, что и с «СМУ» и «Физлицами»",
+        "kind": KIND_DATA,
+        "run": lambda conn: _grant_feature_to_all_roles(conn, "dict_work_classifier"),
+    },
 ]
 
 

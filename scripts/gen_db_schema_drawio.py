@@ -105,6 +105,9 @@ COLUMNS = [
     ["blocks", "block_boxes", "work_types", "block_works", "block_work_forecasts",
      "work_progress", "work_fact_reports", "work_fact_items", "work_fact_item_history",
      "planning_tracks", "chess_flat_batches",
+     # Универсальный классификатор видов работ (2026-10-27) и сопоставление его категорий с моделью объекта.
+     "work_classifier", "work_classifier_tracks", "work_element_categories",
+     "work_classifier_categories", "object_category_map",
      # План и факт работ на уровне ОБЪЕКТА (вне блоков, 2026-09-25) — рядом с блочными аналогами.
      "object_works", "object_fact_reports", "object_fact_items"],
     # Пользователи, доступ, журнал действий, обучение. В середине схемы: на

@@ -321,6 +321,14 @@ export const POLICY = [
   { id: "block.recalc", screen: "blocks", action: "«Обновить принадлежность»: пересчитать секцию/этаж элементов модели по геометрии блоков", method: "POST", path: re(`/objects/\\d+/blocks/recalc-membership`), check: noBodyProblem, risk: "данные модели (секция/этаж элементов)", allowed: true, proof: "браузер и HTTP: счётчики в ответе = SQL до/после, 403" },
   { id: "block.boxes", screen: "blocks", action: "Геометрия блока: набор прямоугольников — перетаскиванием мышью (угол/ребро/тело) или числовыми полями, полный набор разом, с предпросмотром на плане", method: "PUT", path: re(`/objects/\\d+/blocks/\\d+/boxes`), onlyKeys: ["boxes"], check: blockBoxesProblem, risk: "геометрия объекта, влияет на автоматическое определение секции элементов", allowed: true, proof: "браузер и HTTP: запись мышью и числом → SQL (block_boxes), предупреждение о пересечении не блокирует сохранение, 403" },
   { id: "worktypes.analyze", screen: "blocks", action: "Справочник видов работ: сверка загруженного xlsx с базой (ничего не пишет)", method: "POST", path: re(`/objects/\\d+/work-types/analyze`), check: uploadCheck({ ext: ["xlsx"] }), risk: "чтение (сверка)", allowed: true, proof: "браузер и HTTP: сверка на копии, БД до/после не изменилась, 403" },
+  // ---- классификатор видов работ (2026-10-27): справочник общий, набор позиций и соответствие категорий — на объекте ----
+  { id: "wcl.analyze", screen: "work-classifier", action: "Классификатор видов работ: сверка загруженного xlsx с базой (ничего не пишет)", method: "POST", path: re(`/work-classifier/analyze`), check: uploadCheck({ ext: ["xlsx"] }), risk: "чтение (сверка)", allowed: true, proof: "браузер на копии обезличенной БД: сверка образца, БД до/после не изменилась" },
+  { id: "wcl.apply", screen: "work-classifier", action: "Классификатор видов работ: применить показанную сверку по токену (добавить позиции, вернуть списанные, привязать категории)", method: "POST", path: re(`/work-classifier/apply`), onlyKeys: ["token"], check: tokenOnlyProblem, risk: "общий классификатор (списание мягкое, привязки категорий только добавляются)", allowed: true, proof: "браузер на копии обезличенной БД: применение по токену → SQL" },
+  { id: "wcl.categories", screen: "work-classifier", action: "Классификатор видов работ: задать категории элементов операции", method: "PUT", path: re(`/work-classifier/\\d+/categories`), onlyKeys: ["names"], check: wclCategoriesProblem, risk: "категории элементов одной позиции классификатора", allowed: true, proof: "браузер на копии обезличенной БД: правка → SQL, журнал" },
+  { id: "wcl.category-delete", screen: "work-classifier", action: "Классификатор видов работ: удалить категорию элементов (снимается с видов работ и из соответствий объектов)", method: "DELETE", path: re(`/work-classifier/categories/\\d+`), risk: "категория классификатора и её привязки", allowed: true, proof: "браузер на копии обезличенной БД: удаление → SQL, журнал" },
+  { id: "wcl.structure.preview", screen: "blocks", action: "Структура работ объекта: сводка набора из классификатора (ничего не пишет)", method: "POST", path: re(`/objects/\\d+/work-structure/preview`), onlyKeys: ["ids"], check: wclIdsProblem, risk: "чтение (сводка)", allowed: true, proof: "браузер на копии обезличенной БД" },
+  { id: "wcl.structure.save", screen: "blocks", action: "Структура работ объекта: набрать позиции из классификатора (убранные списываются мягко, проценты и сроки сохраняются)", method: "PUT", path: re(`/objects/\\d+/work-structure`), onlyKeys: ["ids"], check: wclIdsProblem, risk: "справочник видов работ объекта", allowed: true, proof: "браузер на копии обезличенной БД: набор → SQL, журнал" },
+  { id: "wcl.catmap.save", screen: "blocks", action: "Категории модели объекта: сопоставить с категориями классификатора", method: "PUT", path: re(`/objects/\\d+/category-map`), onlyKeys: ["map"], check: wclCategoryMapProblem, risk: "соответствие категорий объекта (окраска элементов модели)", allowed: true, proof: "браузер на копии обезличенной БД: сохранение → SQL, окраска элементов" },
   { id: "worktypes.apply", screen: "blocks", action: "Справочник видов работ: применить показанную сверку по токену (добавить/вернуть списанные/списать пропавшие из файла)", method: "POST", path: re(`/objects/\\d+/work-types/apply`), onlyKeys: ["token"], check: tokenOnlyProblem, risk: "справочник видов работ объекта (списание — мягкое, история сохраняется)", allowed: true, proof: "браузер и HTTP: применение по токену → SQL, повтор токена — отказ, 403" },
   { id: "work-progress.cell", screen: "report-block-status", action: "Отчёт «Учёт по блокам: статусы»: клик по ячейке «сек»/«компл» — План → В работе → Выполнено → План", method: "PUT", path: re(`/objects/\\d+/work-progress/cell`), onlyKeys: ["work_type_id", "block_id", "section_id", "status"], check: workProgressCellProblem, risk: "данные учёта по блокам", allowed: true, proof: "браузер и HTTP: клик → SQL, 403" },
   { id: "block-progress-cell", screen: "report-block-status", action: "Отчёт «Учёт по блокам: статусы»: правка процента в ячейке «эт/сек» на дату отчёта (тот же документ факта, что «Факт» в панели блока)", method: "PUT", path: re(`/objects/\\d+/blocks/\\d+/work-progress-cell`), onlyKeys: ["work_type_id", "percent", "report_date"], check: blockPercentCellProblem, risk: "данные факта (документ на дату)", allowed: true, proof: "браузер и HTTP: правка → SQL (work_fact_reports/items), 403" },
@@ -640,6 +648,27 @@ function inputImportProblem(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "тело не объект";
   if (Object.keys(body).some((k) => k !== "object_id")) return "лишние поля";
   if (!Number.isInteger(body.object_id) || body.object_id <= 0) return "не указан объект";
+  return null;
+}
+
+// Классификатор видов работ: категории операции — список названий до 120 символов.
+function wclCategoriesProblem(body) {
+  if (!isObj(body) || !Array.isArray(body.names) || body.names.length > 200) return "не список категорий";
+  if (!body.names.every((n) => typeof n === "string" && n.length <= 120)) return "название категории не строка или длиннее 120 символов";
+  return null;
+}
+// Набор позиций объекта: непустой список целых идентификаторов без повторов.
+function wclIdsProblem(body) {
+  if (!isObj(body) || !Array.isArray(body.ids) || body.ids.length > 5000) return "не список позиций";
+  if (!body.ids.every((x) => Number.isInteger(x) && x > 0) || new Set(body.ids).size !== body.ids.length) return "идентификаторы позиций некорректны или повторяются";
+  return null;
+}
+// Соответствие категорий: {идентификатор категории: [категории модели]}.
+function wclCategoryMapProblem(body) {
+  if (!isObj(body) || !isObj(body.map)) return "нет соответствия";
+  for (const [k, v] of Object.entries(body.map)) {
+    if (!/^[1-9][0-9]{0,9}$/.test(k) || !Array.isArray(v) || v.length > 200 || !v.every((n) => typeof n === "string" && n.length > 0 && n.length <= 200)) return "соответствие некорректно";
+  }
   return null;
 }
 

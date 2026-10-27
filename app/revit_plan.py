@@ -16,7 +16,7 @@
 import json
 import re
 
-from app import block_geometry, revit_sections
+from app import block_geometry, revit_sections, work_classifier
 
 # Шаблонное имя этажа (Revit — «Этаж 9», `blocks.create_level` по умолчанию
 # — «Этаж 9», ручное «9 этаж»): такое в списке заменяется словами по номеру
@@ -182,7 +182,7 @@ def elements(conn, object_id: int, level_ids=None, section_ids=None,
     # один `uid` это 45 символов, а рисовать по нему нечего.
     rows = conn.execute(
         "SELECT id, category, outline_json, outline_approx, "
-        "       elevation_mm, height_mm "
+        "       elevation_mm, height_mm, level_id, section_id "
         "FROM revit_elements WHERE " + " AND ".join(where) +
         " ORDER BY id LIMIT ?", (*params, limit + 1)
     ).fetchall()
@@ -223,6 +223,10 @@ def elements(conn, object_id: int, level_ids=None, section_ids=None,
 
     # Категория — ИНДЕКСОМ в списке, а не строкой: «Обобщенные модели» это
     # 18 символов на каждом из тысяч элементов, а цвет по ней один.
+    # Состояние работы в блоке элемента (классификатор видов работ): только у
+    # объектов с ручным сопоставлением категорий, у остальных словарь пуст и
+    # ответ не меняется.
+    состояния = work_classifier.element_states(conn, object_id)
     names = []
     index = {}
     out = []
@@ -231,6 +235,7 @@ def elements(conn, object_id: int, level_ids=None, section_ids=None,
         if name not in index:
             index[name] = len(names)
             names.append(name)
+        работа = состояния.get((row["section_id"], row["level_id"]), {}).get(name) if состояния else None
         out.append({
             "id": row["id"],
             "кат": index[name],
@@ -243,6 +248,10 @@ def elements(conn, object_id: int, level_ids=None, section_ids=None,
             "контур": [[int(round(p[0] - origin_x)), int(round(p[1] - origin_y))]
                        for p in outline],
         })
+        if работа:
+            # 1 — работа в блоке не начата, 2 — идёт; «готово» и «работы нет»
+            # ключа не имеют (элемент рисуется как обычно).
+            out[-1]["раб"] = работа
 
     return {
         "elements": out,
