@@ -121,16 +121,16 @@ def _own_rows(conn, req) -> list:
 
 def _row_label(r, limit: int = MAX_LABEL) -> str:
     who = r["ctr_name"] or (f"ИНН {r['ctr_inn']}" if r["ctr_inn"] else f"Подрядчик №{r['contractor_id']}")
-    # Примечание подрядчика к виду работ (до 20 символов) идёт в скобках и не обрезается: при нехватке места сокращается название
+    # Примечание подрядчика к виду работ (до 10 символов) идёт в скобках и не обрезается: при нехватке места сокращается название
     note = f" ({r['note']})" if r["note"] else ""
     head = f"{who} · {r['code']} "
     return _short(head + _short(r["work_name"], max(10, limit - len(head) - len(note))) + note, max(limit, len(head) + len(note) + 10))
 
 
 def _row_btn(r) -> str:
-    """Короткая подпись кнопки выбора строки: подрядчик · код (название вида работ — в тексте над кнопками)."""
+    """Короткая подпись кнопки выбора строки: подрядчик · код · примечание (название вида работ — в тексте над кнопками)."""
     who = r["ctr_name"] or (f"ИНН {r['ctr_inn']}" if r["ctr_inn"] else f"№{r['contractor_id']}")
-    return f"{_short(who, BTN_LABEL)} · {r['code']}"
+    return " · ".join(x for x in (_short(who, BTN_LABEL), r["code"], _short(r["note"], headcount.NOTE_MAX) if r["note"] else "") if x)
 
 
 def _entered(conn, req) -> dict:
@@ -179,11 +179,11 @@ def _menu(conn, req, page: int = 0):
     pages = (len(rows) + PAGE - 1) // PAGE
     page = max(0, min(page, pages - 1))
     # Полные подписи строк — в тексте нумерованным списком (кнопка в eXpress обрезает длинное название, 2026-10-28);
-    # на кнопке — только номер, подрядчик и код
+    # на кнопке — подрядчик, код и примечание
     shown = list(enumerate(rows[page * PAGE:(page + 1) * PAGE], start=page * PAGE + 1))
     marks = {r["id"]: "✓ " if (r["contractor_id"], r["codifier_id"]) in entered else "" for _, r in shown}
     head += "\n\n" + "\n".join(f"{n}. {marks[r['id']]}{_row_label(r, FULL_LABEL)}" for n, r in shown)
-    bubble = [[button(f"{marks[r['id']]}{n} · {_row_btn(r)}", {"a": "row", "r": req["id"], "i": r["id"]})] for n, r in shown]
+    bubble = [[button(f"{marks[r['id']]}{_row_btn(r)}", {"a": "row", "r": req["id"], "i": r["id"]})] for n, r in shown]
     nav = []
     if page > 0:
         nav.append(button("‹ Назад", {"a": "menu", "r": req["id"], "p": page - 1}))

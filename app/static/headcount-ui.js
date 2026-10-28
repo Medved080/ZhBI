@@ -27,7 +27,7 @@ const fmtMoment = (s) => {
   return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 // «Рабочие», «ИТР» и «Механизаторы» — целые от 0 до 100 000, вместе не меньше 1 («Итого» = их сумма, на сервере не хранится)
-const NOTE_MAX = 20;   // длина примечания к виду работ подрядчика (как app/headcount.py: NOTE_MAX)
+const NOTE_MAX = 10;   // длина примечания к виду работ подрядчика (как app/headcount.py: NOTE_MAX)
 const HC_MAX = 100000;
 const isCount = (v) => /^\d+$/.test(String(v).trim()) && Number(v) <= HC_MAX;
 const pairProblem = (w, i, m) => (!isCount(w) || !isCount(i) || !isCount(m) ? `Рабочие, ИТР и механизаторы — целые числа от 0 до ${HC_MAX.toLocaleString("ru-RU")}`
