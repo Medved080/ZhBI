@@ -156,7 +156,7 @@ export function mountHeadcount(el, ctx) {
       <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Рабочие</th><th class="num">ИТР</th><th class="num">Механизаторы</th><th class="num">Итого</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
         <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total-w"></td><td class="num" id="hc-total-i"></td><td class="num" id="hc-total-m"></td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
       ${ctx.canWrite && !future ? `<div class="hc-add" id="hc-add"></div>
-        <div class="hc-bar"><button type="button" class="hc-btn primary" id="hc-save">Сохранить</button><button type="button" class="hc-btn" id="hc-copy" title="Добавить в карточку строки предыдущего дня, которых за этот день ещё нет">Заполнить как за предыдущий день</button><span class="hc-muted" id="hc-dirty"></span></div>` : (ctx.canWrite ? "" : `<p class="hc-muted">Только просмотр: у вас нет права вносить численность на этом объекте.</p>`)}
+        <div class="hc-bar"><button type="button" class="hc-btn primary" id="hc-save">Сохранить</button><button type="button" class="hc-btn" id="hc-copy" title="Добавить в карточку строки выбранного дня, которых за этот день ещё нет">Заполнить как на</button><input type="date" id="hc-copy-date" value="${esc(st.copyFrom || addDays(st.date, -1))}" max="${esc(todayIso())}" aria-label="День, по которому заполнить"><span class="hc-muted" id="hc-dirty"></span></div>` : (ctx.canWrite ? "" : `<p class="hc-muted">Только просмотр: у вас нет права вносить численность на этом объекте.</p>`)}
       <div id="hc-history"></div>`;
     pane.querySelector("#hc-prev").addEventListener("click", () => gotoDay(addDays(st.date, -1)));
     pane.querySelector("#hc-next").addEventListener("click", () => gotoDay(addDays(st.date, 1)));
@@ -166,7 +166,8 @@ export function mountHeadcount(el, ctx) {
     if (ctx.canWrite && !future) {
       paintAdd();
       pane.querySelector("#hc-save").addEventListener("click", save);
-      pane.querySelector("#hc-copy").addEventListener("click", copyPrevious);
+      pane.querySelector("#hc-copy-date").addEventListener("change", (e) => { st.copyFrom = e.target.value; });
+      pane.querySelector("#hc-copy").addEventListener("click", copyFromDay);
       paintDirty();
     }
     paintHistory();
@@ -174,7 +175,7 @@ export function mountHeadcount(el, ctx) {
 
   async function gotoDay(iso) {
     if (hasChanges() && !(await ctx.confirm("Есть несохранённые строки. Перейти на другой день без сохранения?", { danger: true }))) { paintInput(); return; }
-    st.date = iso; st.day = null; st.added = []; st.changed = new Map(); st.history = null; setMsg("");
+    st.date = iso; st.copyFrom = null; st.day = null; st.added = []; st.changed = new Map(); st.history = null; setMsg("");
     paint();
   }
 
@@ -290,7 +291,7 @@ export function mountHeadcount(el, ctx) {
       <label>Механизаторы<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-m" class="hc-num"></label>
       <label>Итого<input type="text" id="hc-a-sum" class="hc-num hc-total-in" value="0" readonly tabindex="-1" aria-label="Итого: рабочие плюс ИТР плюс механизаторы"></label>
       <button type="button" class="hc-btn" id="hc-a-go">Добавить в карточку</button></div><p class="hc-msg bad" id="hc-a-err" role="alert"></p>`;
-    const picker = workPicker(box.querySelector("#hc-a-work"), st.works);
+    const picker = workPickerL1(box.querySelector("#hc-a-work"), st.works);
     const ctrPicker = contractorPicker(box.querySelector("#hc-a-ctr"), st.contractors);
     // подрядчик, с которым вносили последнюю строку, остаётся выбранным (за день вносят по несколько видов работ одного подрядчика)
     if (st.lastCtr && st.contractors.some((c) => c.id === st.lastCtr)) ctrPicker.set(st.lastCtr); else if (st.contractors.length === 1) ctrPicker.set(st.contractors[0].id);
@@ -345,14 +346,18 @@ export function mountHeadcount(el, ctx) {
     catch (e) { setMsg(errText(e), "bad"); }
   }
 
-  async function copyPrevious() {
+  // Заполнить как на выбранный день (по умолчанию — вчера, то есть день перед открытым): добавляет строки, которых за этот день ещё нет
+  async function copyFromDay() {
+    const from = pane.querySelector("#hc-copy-date")?.value || addDays(st.date, -1);
+    if (from === st.date) { setMsg("Выберите другой день: этот день заполняется самим собой.", "bad"); return; }
     try {
-      const prev = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${addDays(st.date, -1)}`);
+      const prev = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${from}`);
       const have = new Set([...(st.day?.rows || []).map((r) => `${r.contractor_id}:${r.codifier_id}`), ...st.added.map((a) => `${a.contractor_id}:${a.codifier_id}`)]);
       const fresh = (prev.rows || []).filter((r) => !have.has(`${r.contractor_id}:${r.codifier_id}`));
       fresh.forEach((r) => st.added.push({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: r.workers, itr: r.itr ?? 0, mech: r.mech ?? 0 }));
       paintRows(); paintDirty();
-      setMsg(fresh.length ? `Добавлено строк из предыдущего дня: ${fresh.length}. Проверьте числа и сохраните.` : "За предыдущий день нечего добавить.", fresh.length ? "ok" : "");
+      const when = from.split("-").reverse().join(".");
+      setMsg(fresh.length ? `Добавлено строк из ${when}: ${fresh.length}. Проверьте числа и сохраните.` : `За ${when} нечего добавить: данных нет или все строки уже есть.`, fresh.length ? "ok" : "");
     } catch (e) { setMsg(errText(e), "bad"); }
   }
 
@@ -1071,4 +1076,6 @@ const CTR_CFG = {
   ],
 };
 const workPicker = (box, works) => pickField(box, works, WORK_CFG);
+// Как на вкладке «Подрядчики»: плоский список видов работ первого уровня (2026-10-28)
+const workPickerL1 = (box, works) => pickField(box, works.filter((w) => w.level === 1 && !w.retired_at).map((w) => ({ ...w, parent_id: null, has_children: false })), WORK_CFG_L1);
 const contractorPicker = (box, contractors) => pickField(box, contractors, CTR_CFG);

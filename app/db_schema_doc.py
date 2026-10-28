@@ -1153,7 +1153,7 @@ TABLES = [
     ("at", "TEXT", "", "когда (UTC)"),
     ("direction", "TEXT", "", "out — отправлено боту eXpress, in — получено от eXpress, sys — служебное"),
     ("contact_id", "INTEGER", "FK", "контакт → express_contacts.id (SET NULL)"),
-    ("request_id", "INTEGER", "FK", "запрос → express_requests.id (SET NULL)"),
+    ("request_id", "INTEGER", "FK", "запрос → express_requests.id (SET NULL); по нему запись относится к объекту и дню. У входящих сообщений заполняется с 2026-10-28 (кнопка несёт номер запроса, текст — текущий открытый запрос); у служебных записей пусто"),
     ("kind", "TEXT", "", "request, reminder, summary, reply, command, system, test"),
     ("text", "TEXT", "", "текст сообщения, обрезанный"),
     ("ok", "INTEGER", "", "0 — отправка не удалась или входящее отклонено"),

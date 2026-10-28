@@ -184,19 +184,40 @@ def test_connection(user: sqlite3.Row = Depends(require_service_feature("express
     return result
 
 
+_LOG_SELECT = ("SELECT l.id, l.at, l.direction, l.kind, l.text, l.ok, l.error, l.contact_id, l.request_id, c.name AS contact_name, "
+               "q.object_id, q.work_date, o.name AS object_name FROM express_log l "
+               "LEFT JOIN express_contacts c ON c.id = l.contact_id LEFT JOIN express_requests q ON q.id = l.request_id "
+               "LEFT JOIN objects o ON o.id = q.object_id")
+
+
 @router.get("/log")
 def get_log(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), only_errors: bool = False,
+            contact_id: Optional[int] = None, object_id: Optional[int] = None,
             user: sqlite3.Row = Depends(require_service_feature("express_admin", "read"))):
+    """Весь журнал обмена в разрезе людей и объектов (администратор). Объект записи — объект её запроса; у служебных записей
+    (проверка связи, чужие отправители) объекта нет. `facets` — кого и по каким объектам можно отобрать."""
     conn = get_connection()
     try:
-        where = "WHERE l.ok = 0" if only_errors else ""
-        rows = conn.execute(
-            f"SELECT l.*, c.name AS contact_name FROM express_log l LEFT JOIN express_contacts c ON c.id = l.contact_id {where} "
-            "ORDER BY l.id DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-        total = conn.execute(f"SELECT COUNT(*) FROM express_log l {where}").fetchone()[0]
+        cond, args = [], []
+        if only_errors:
+            cond.append("l.ok = 0")
+        if contact_id is not None:
+            cond.append("l.contact_id = ?"); args.append(contact_id)
+        if object_id is not None:
+            cond.append("q.object_id = ?"); args.append(object_id)
+        where = ("WHERE " + " AND ".join(cond)) if cond else ""
+        rows = conn.execute(f"{_LOG_SELECT} {where} ORDER BY l.id DESC LIMIT ? OFFSET ?", (*args, limit, offset)).fetchall()
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM express_log l LEFT JOIN express_requests q ON q.id = l.request_id {where}", args).fetchone()[0]
+        facets = {
+            "contacts": [dict(r) for r in conn.execute(
+                "SELECT DISTINCT c.id, c.name FROM express_log l JOIN express_contacts c ON c.id = l.contact_id ORDER BY c.name")],
+            "objects": [dict(r) for r in conn.execute(
+                "SELECT DISTINCT o.id, o.name FROM express_log l JOIN express_requests q ON q.id = l.request_id JOIN objects o ON o.id = q.object_id ORDER BY o.name")],
+        }
     finally:
         conn.close()
-    return {"total": total, "items": [dict(r) for r in rows]}
+    return {"total": total, "items": [dict(r) for r in rows], "facets": facets}
 
 
 # ------------------------------------------------------------------ контакты
@@ -528,6 +549,25 @@ def list_requests(object_id: int, days: int = Query(14, ge=1, le=90), user: sqli
     finally:
         conn.close()
     return out
+
+
+@object_router.get("/log")
+def object_log(object_id: int, days: int = Query(14, ge=1, le=90), contact_id: Optional[int] = None, limit: int = Query(300, ge=1, le=1000),
+               user: sqlite3.Row = Depends(get_current_user)):
+    """Переписка бота ТОЛЬКО по этому объекту: записи журнала, чей запрос относится к объекту. Служебное и чужие объекты сюда не попадают."""
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "express_bot", "read")
+        since = (headcount.now_msk().date() - timedelta(days=days)).isoformat()
+        cond, args = ["q.object_id = ?", "q.work_date >= ?"], [object_id, since]
+        if contact_id is not None:
+            cond.append("l.contact_id = ?"); args.append(contact_id)
+        rows = conn.execute(f"{_LOG_SELECT} WHERE {' AND '.join(cond)} ORDER BY l.id DESC LIMIT ?", (*args, limit)).fetchall()
+        contacts = [dict(r) for r in conn.execute(
+            "SELECT DISTINCT c.id, c.name FROM express_requests q JOIN express_contacts c ON c.id = q.contact_id WHERE q.object_id = ? ORDER BY c.name", (object_id,))]
+    finally:
+        conn.close()
+    return {"items": [dict(r) for r in rows], "contacts": contacts}
 
 
 @object_router.post("/send-now")

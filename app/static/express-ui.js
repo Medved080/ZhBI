@@ -27,7 +27,7 @@ const daysText = (days) => {
   return DAYS.filter(([n]) => days.includes(n)).map(([, t]) => t).join(", ");
 };
 const STATUS = { pending: ["ожидает отправки", "warn"], sent: ["отправлен, ждём ответ", ""], answered: ["внесено, запрос открыт", "ok"], closed: ["закрыт", "ok"], failed: ["не доставлен", "bad"] };
-const SUBS = [["schedules", "Расписания"], ["requests", "Запросы и ответы"], ["contacts", "Контакты"]];
+const SUBS = [["schedules", "Расписания"], ["requests", "Запросы и ответы"], ["chat", "Переписка"], ["contacts", "Контакты"]];
 const SUBS_ADMIN = [["connection", "Подключение"], ["log", "Журнал обмена"]];
 
 function ensureCss() {
@@ -47,13 +47,13 @@ export function mountExpress(el, ctx) {
   if (adminMode) { ensureCss(); if (!el.closest(".hc-root")) el.classList.add("hc-root"); }
   const st = {
     sub: subs.some(([k]) => k === ctx.sub) ? ctx.sub : subs[0][0], status: null, schedules: null, requests: null, contacts: null, individuals: null,
-    form: null, contactForm: null, sendForm: null, config: null, log: null, logErrors: false, msg: "", msgKind: "", busy: false,
+    form: null, contactForm: null, sendForm: null, config: null, log: null, logErrors: false, logContact: "", logObject: "", chat: null, chatContact: "", msg: "", msgKind: "", busy: false,
   };
   el.innerHTML = `<div class="ex-tabs" role="tablist" aria-label="Разделы бота eXpress">${subs.map(([k, t]) => `<button type="button" role="tab" class="ex-tab" data-sub="${k}">${esc(t)}</button>`).join("")}</div><div id="ex-pane"></div>`;
   const pane = el.querySelector("#ex-pane");
   // При переходе между подвкладками данные запрашиваются заново: пока вкладка была закрыта, контакт мог привязаться, ответить боту, расписание — сработать
   el.querySelectorAll("[data-sub]").forEach((b) => b.addEventListener("click", () => {
-    if (b.dataset.sub !== st.sub) { st.contacts = st.requests = st.schedules = st.status = st.log = null; }
+    if (b.dataset.sub !== st.sub) { st.contacts = st.requests = st.schedules = st.status = st.log = st.chat = null; }
     st.sub = b.dataset.sub; st.msg = ""; ctx.onSub?.(st.sub); paint();
   }));
   const setMsg = (t, kind = "") => { st.msg = t; st.msgKind = kind; const n = pane.querySelector("#ex-msg"); if (n) { n.textContent = t; n.className = `hc-msg ${kind}`; } };
@@ -77,7 +77,8 @@ export function mountExpress(el, ctx) {
       if (what === "contacts" || what === "all") st.contacts = await api.get("/express/contacts");
       if (what === "individuals") st.individuals = await api.get("/individuals");
       if (what === "config") st.config = await api.get("/express/config");
-      if (what === "log") st.log = await api.get(`/express/log?limit=100${st.logErrors ? "&only_errors=true" : ""}`);
+      if (what === "log") st.log = await api.get(`/express/log?limit=200${st.logErrors ? "&only_errors=true" : ""}${st.logContact ? `&contact_id=${st.logContact}` : ""}${st.logObject ? `&object_id=${st.logObject}` : ""}`);
+      if (what === "chat") st.chat = await api.get(`/objects/${ctx.objectId}/express/log?days=14${st.chatContact ? `&contact_id=${st.chatContact}` : ""}`);
     } catch (e) { if (!dead) { pane.innerHTML = `<div class="hc-callout bad" role="alert">${esc(errText(e))}</div>`; } return false; }
     return !dead;
   }
@@ -85,10 +86,10 @@ export function mountExpress(el, ctx) {
   function paint() {
     if (dead) return;
     el.querySelectorAll("[data-sub]").forEach((b) => { const on = b.dataset.sub === st.sub; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
-    const need = { schedules: ["status", "schedules", "contacts"], requests: ["requests"], contacts: ["status", "contacts"], connection: ["config"], log: ["log"] }[st.sub];
+    const need = { schedules: ["status", "schedules", "contacts"], requests: ["requests"], chat: ["chat"], contacts: ["status", "contacts"], connection: ["config"], log: ["log"] }[st.sub];
     const missing = need.find((k) => st[k] === null);
     if (missing) { pane.innerHTML = `<p class="hc-muted" role="status">Загрузка…</p>`; load(missing).then((ok) => ok && paint()); return; }
-    ({ schedules: paintSchedules, requests: paintRequests, contacts: paintContacts, connection: paintConnection, log: paintLog })[st.sub]();
+    ({ schedules: paintSchedules, requests: paintRequests, chat: paintChat, contacts: paintContacts, connection: paintConnection, log: paintLog })[st.sub]();
   }
 
   const botCallout = () => {
@@ -357,18 +358,43 @@ export function mountExpress(el, ctx) {
     });
   }
 
+  // =====================================================================  ПЕРЕПИСКА ПО ОБЪЕКТУ
+  // Только записи запросов ЭТОГО объекта: что бот отправил контактам и что они ответили. Служебное и другие объекты сюда не попадают.
+  const dayText = (iso) => (iso ? iso.split("-").reverse().join(".") : "");
+  const dirMark = (d) => (d === "out" ? "→ бот" : d === "in" ? "← контакт" : "·");
+  const resultCell = (r) => (r.ok ? '<span class="hc-badge ok">ок</span>' : `<span class="hc-badge bad" title="${esc(r.error || "")}">ошибка</span> <span class="hc-muted">${esc(r.error || "")}</span>`);
+  function paintChat() {
+    const C = st.chat;
+    pane.innerHTML = `<div class="hc-bar ex-filters"><strong>Переписка бота по этому объекту</strong><span class="hc-muted">за 14 дней, ${C.items.length} записей</span>
+      ${field("Контакт", `<select id="ex-c-contact"><option value="">все контакты</option>${C.contacts.map((c) => `<option value="${c.id}" ${String(st.chatContact) === String(c.id) ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`)}
+      <button type="button" class="hc-btn" id="ex-c-refresh">Обновить</button></div>${msgLine()}
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Когда</th><th>За день</th><th>Контакт</th><th>Кто</th><th>Текст</th><th>Результат</th></tr></thead><tbody>${
+        C.items.length ? C.items.map((r) => `<tr><td class="hc-num">${esc(fmtMoment(r.at))}</td><td class="hc-num">${esc(dayText(r.work_date))}</td><td>${esc(r.contact_name || "—")}</td><td>${dirMark(r.direction)}</td>
+          <td style="white-space:pre-wrap">${esc(r.text || "")}</td><td>${resultCell(r)}</td></tr>`).join("")
+        : `<tr><td colspan="6" class="hc-muted">Переписки по этому объекту нет.</td></tr>`}</tbody></table></div>
+      <p class="ex-hint">Здесь только обмен по запросам этого объекта. Весь обмен по людям и объектам — у администратора, «Администрирование → Бот eXpress → Журнал обмена».</p>`;
+    pane.querySelector("#ex-c-refresh").addEventListener("click", () => { st.chat = null; paint(); });
+    pane.querySelector("#ex-c-contact").addEventListener("change", (e) => { st.chatContact = e.target.value; st.chat = null; paint(); });
+  }
+
   // =====================================================================  ЖУРНАЛ ОБМЕНА (администратор)
+  // Весь обмен в разрезе людей и объектов: отбор по контакту и по объекту; объект записи — объект её запроса
   function paintLog() {
-    const L = st.log;
-    pane.innerHTML = `<div class="hc-bar"><strong>Журнал обмена с eXpress</strong><span class="hc-muted">последние ${L.items.length} из ${L.total}</span>
+    const L = st.log, F = L.facets || { contacts: [], objects: [] };
+    const opts = (items, sel, all) => `<option value="">${all}</option>${items.map((x) => `<option value="${x.id}" ${String(sel) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}`;
+    pane.innerHTML = `<div class="hc-bar ex-filters"><strong>Журнал обмена с eXpress</strong><span class="hc-muted">последние ${L.items.length} из ${L.total}</span>
+      ${field("Человек", `<select id="ex-l-contact">${opts(F.contacts, st.logContact, "все люди")}</select>`)}
+      ${field("Объект", `<select id="ex-l-object">${opts(F.objects, st.logObject, "все объекты")}</select>`)}
       ${check("ex-l-err", "только ошибки", st.logErrors)}<button type="button" class="hc-btn" id="ex-l-refresh">Обновить</button></div>${msgLine()}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Когда</th><th></th><th>Что</th><th>Контакт</th><th>Текст</th><th>Результат</th></tr></thead><tbody>${
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Когда</th><th></th><th>Что</th><th>Человек</th><th>Объект</th><th>За день</th><th>Текст</th><th>Результат</th></tr></thead><tbody>${
         L.items.length ? L.items.map((r) => `<tr><td class="hc-num">${esc(fmtMoment(r.at))}</td><td>${r.direction === "out" ? "→" : r.direction === "in" ? "←" : "·"}</td><td>${esc(r.kind || "")}</td>
-          <td>${esc(r.contact_name || "—")}</td><td>${esc(r.text || "")}</td><td>${r.ok ? '<span class="hc-badge ok">ок</span>' : `<span class="hc-badge bad" title="${esc(r.error || "")}">ошибка</span> <span class="hc-muted">${esc(r.error || "")}</span>`}</td></tr>`).join("")
-        : `<tr><td colspan="6" class="hc-muted">Записей нет.</td></tr>`}</tbody></table></div>
-      <p class="ex-hint">Записи старше 90 дней удаляются автоматически. Незнакомые отправители бота видны здесь строкой «отправитель не в списке контактов» — по их логину можно завести контакт.</p>`;
+          <td>${esc(r.contact_name || "—")}</td><td>${esc(r.object_name || "—")}</td><td class="hc-num">${esc(dayText(r.work_date))}</td><td style="white-space:pre-wrap">${esc(r.text || "")}</td><td>${resultCell(r)}</td></tr>`).join("")
+        : `<tr><td colspan="8" class="hc-muted">Записей нет.</td></tr>`}</tbody></table></div>
+      <p class="ex-hint">Записи старше 90 дней удаляются автоматически. Незнакомые отправители бота видны здесь строкой «отправитель не в списке контактов» — по их логину можно завести контакт. Служебные записи (проверка связи, чужие отправители) и записи, сделанные до 2026-10-28 у входящих сообщений, объекта не имеют.</p>`;
     pane.querySelector("#ex-l-refresh").addEventListener("click", () => { st.log = null; paint(); });
     pane.querySelector("#ex-l-err").addEventListener("change", (e) => { st.logErrors = e.target.checked; st.log = null; paint(); });
+    pane.querySelector("#ex-l-contact").addEventListener("change", (e) => { st.logContact = e.target.value; st.log = null; paint(); });
+    pane.querySelector("#ex-l-object").addEventListener("change", (e) => { st.logObject = e.target.value; st.log = null; paint(); });
   }
 
   paint();

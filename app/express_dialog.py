@@ -28,6 +28,8 @@ from app.express_bot import BotxError, button, log_event
 
 PAGE = 8
 MAX_LABEL = 52
+FULL_LABEL = 400   # подпись строки в тексте сообщения: название и примечание целиком
+BTN_LABEL = 34
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 OPEN_STATUSES = ("sent", "answered")
 HELP_TEXT = ("Я спрашиваю численность по объектам и записываю ответ в систему.\n"
@@ -125,6 +127,12 @@ def _row_label(r, limit: int = MAX_LABEL) -> str:
     return _short(head + _short(r["work_name"], max(10, limit - len(head) - len(note))) + note, max(limit, len(head) + len(note) + 10))
 
 
+def _row_btn(r) -> str:
+    """Короткая подпись кнопки выбора строки: подрядчик · код (название вида работ — в тексте над кнопками)."""
+    who = r["ctr_name"] or (f"ИНН {r['ctr_inn']}" if r["ctr_inn"] else f"№{r['contractor_id']}")
+    return f"{_short(who, BTN_LABEL)} · {r['code']}"
+
+
 def _entered(conn, req) -> dict:
     return {(r["contractor_id"], r["codifier_id"]): r for r in conn.execute(
         "SELECT contractor_id, codifier_id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ?", (req["object_id"], req["work_date"]))}
@@ -140,7 +148,7 @@ def own_lines(conn, req, rows):
             continue
         done += 1
         workers, itr, mech = workers + e["workers"], itr + e["itr"], mech + e["mech"]
-        lines.append(f"• {_row_label(r, 60)}: рабочие {e['workers']}, ИТР {e['itr']}, механизаторы {e['mech']}")
+        lines.append(f"• {_row_label(r, FULL_LABEL)}: рабочие {e['workers']}, ИТР {e['itr']}, механизаторы {e['mech']}")
     return lines, workers, itr, mech, done
 
 
@@ -170,8 +178,12 @@ def _menu(conn, req, page: int = 0):
     entered = _entered(conn, req)
     pages = (len(rows) + PAGE - 1) // PAGE
     page = max(0, min(page, pages - 1))
-    bubble = [[button(("✓ " if (r["contractor_id"], r["codifier_id"]) in entered else "") + _row_label(r, MAX_LABEL - 2), {"a": "row", "r": req["id"], "i": r["id"]})]
-              for r in rows[page * PAGE:(page + 1) * PAGE]]
+    # Полные подписи строк — в тексте нумерованным списком (кнопка в eXpress обрезает длинное название, 2026-10-28);
+    # на кнопке — только номер, подрядчик и код
+    shown = list(enumerate(rows[page * PAGE:(page + 1) * PAGE], start=page * PAGE + 1))
+    marks = {r["id"]: "✓ " if (r["contractor_id"], r["codifier_id"]) in entered else "" for _, r in shown}
+    head += "\n\n" + "\n".join(f"{n}. {marks[r['id']]}{_row_label(r, FULL_LABEL)}" for n, r in shown)
+    bubble = [[button(f"{marks[r['id']]}{n} · {_row_btn(r)}", {"a": "row", "r": req["id"], "i": r["id"]})] for n, r in shown]
     nav = []
     if page > 0:
         nav.append(button("‹ Назад", {"a": "menu", "r": req["id"], "p": page - 1}))
@@ -375,7 +387,8 @@ def _handle(payload: dict) -> None:
             return                                   # групповые чаты бот не обслуживает: численность запрашивается лично
         was_bound = bool(contact["chat_id"])
         contact = bind(conn, contact, sender)
-        log_event("in", "command", body[:200] if not data else f"{body[:80]} {json.dumps(data, ensure_ascii=False)[:120]}", contact_id=contact["id"])
+        log_event("in", "command", body[:200] if not data else f"{body[:80]} {json.dumps(data, ensure_ascii=False)[:120]}", contact_id=contact["id"],
+                  request_id=_log_request_id(conn, contact, data))
         if body.startswith("system:"):
             if body == "system:chat_created" and not was_bound:
                 _after_bind(conn, contact)
@@ -411,6 +424,13 @@ def _show_menu(conn, contact, req, page: int = 0) -> None:
     conn.commit()
     text, bubble = _menu(conn, req, page)
     _say(contact, req["id"], text, bubble)
+
+
+def _log_request_id(conn, contact, data: dict) -> Optional[int]:
+    """К какому запросу (а значит и объекту) относится входящее: кнопка несёт номер запроса, свободный текст — текущий открытый запрос
+    контакта. Без этого входящие в журнале не привязать к объекту (2026-10-28)."""
+    req = _own_open_request(conn, contact, data) if data.get("r") is not None else current_request(conn, contact["id"])
+    return req["id"] if req is not None else None
 
 
 def _own_open_request(conn, contact, data: dict):
