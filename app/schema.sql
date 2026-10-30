@@ -1817,6 +1817,7 @@ CREATE TABLE IF NOT EXISTS headcount_contractors (
     counterparty_id INTEGER REFERENCES counterparties (id) ON DELETE SET NULL,
     name_raw TEXT,
     inn_raw TEXT,
+    is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     CHECK (inn_raw IS NOT NULL OR name_raw IS NOT NULL)
@@ -1914,6 +1915,7 @@ CREATE TABLE IF NOT EXISTS express_contacts (
     bound_at TEXT,
     bind_code_hash TEXT,                                 -- sha256 одноразового кода привязки (сам код хранится только у того, кому его выдали)
     bind_code_expires TEXT,                              -- до какого момента (UTC) код действует
+    menu_dialog TEXT,                                    -- JSON: главное меню, выбор даты/объекта, активный запрос контакта
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),

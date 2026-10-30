@@ -129,6 +129,8 @@ def ensure_wal(conn: sqlite3.Connection) -> str:
 # доступ к новым полям (или падали бы на INSERT/SELECT) после обновления,
 # пока не удалят data/zhbi.db вручную.
 _COLUMN_MIGRATIONS = [
+    ("headcount_contractors", "is_archived", "INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))"),
+    ("express_contacts", "menu_dialog", "TEXT"),  # самостоятельный ввод, выбор даты и активного запроса бота
     ("status_history", "changed_by_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
     ("elements", "contract_id", "INTEGER REFERENCES contracts(id) ON DELETE SET NULL"),
     ("status_history", "contract_id", "INTEGER REFERENCES contracts(id) ON DELETE SET NULL"),

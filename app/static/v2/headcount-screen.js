@@ -28,6 +28,7 @@ export function mountHeadcountScreen(el, { screen, objectId, api, rights, groupT
     download: async (url, filename) => saveBlob(await api.download(url, undefined, { method: "GET" }), filename || "Численность.xlsx"), canWrite, canAdmin: admin,
     // «Редактировать» у подрядчика: переход в раздел «Контрагенты» сразу на карточку (разовая ссылка, как из «Контрактов»); раздел открыт только при праве «write»
     canEditCounterparty: admin || rights?.features?.counterparties === "write",
+    canCreateIndividual: admin || rights?.features?.dict_individuals === "write",
     openCounterparty: go ? (id) => {
       try { sessionStorage.setItem("v2.cp.deeplink", JSON.stringify({ cp: id, contract: null, newSpec: null })); } catch (e) { /* без ссылки откроется список контрагентов */ }
       go("counterparties");

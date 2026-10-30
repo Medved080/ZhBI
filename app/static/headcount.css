@@ -23,6 +23,13 @@
 .hc-tab.on { color: var(--hc-ink); border-bottom-color: var(--hc-accent); font-weight: 600; }
 .hc-tab:focus-visible, .hc-btn:focus-visible, .hc-link:focus-visible, .hc-tog:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
 .hc-bar { display: flex; align-items: center; gap: 0.625rem; margin: 0.5rem 0; flex-wrap: wrap; }
+.hc-responsible { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.hc-responsible select { min-width: 12rem; flex: 1; }
+.hc-archive-cell { text-align: center; }
+.hc-root .hc-archive-cell input { width: 1.125rem; height: 1.125rem; cursor: pointer; }
+.hc-person-form label { display: flex; flex-direction: column; gap: 0.375rem; }
+.hc-root.hc-root .hc-person-form input { width: 100% !important; }
+.hc-person-form [data-person-matches] .hc-btn { display: block; margin-bottom: 0.5rem; }
 .hc-bar label { display: flex; flex-direction: column; font-size: 0.75rem; color: var(--hc-muted); gap: 2px; }
 .hc-root input[type="text"], .hc-root input[type="number"], .hc-root input[type="date"], .hc-root select {
   font: inherit; color: var(--hc-ink); background: var(--hc-bg); border: 1px solid var(--hc-btn-line); border-radius: 0.375rem; padding: 0.3125rem 0.5rem; min-height: 2rem; max-width: 100%;

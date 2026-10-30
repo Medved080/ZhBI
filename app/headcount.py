@@ -190,7 +190,7 @@ def _contractor_out(row: sqlite3.Row) -> dict:
         "counterparty_id": row["counterparty_id"], "counterparty_name": name if linked else None, "linked": linked,
         "display": contractor_display(name, inn), "inn_status": status,
         "inn_note": "ИНН не проверен" if status == "unverified" else None,
-        "records": row["records"],
+        "records": row["records"], "is_archived": bool(row["is_archived"]),
     }
 
 
@@ -264,6 +264,30 @@ def list_contractors(object_id: int, user: sqlite3.Row = Depends(get_current_use
         conn.close()
 
 
+class ContractorArchiveIn(BaseModel):
+    is_archived: bool
+
+
+@router.patch("/contractors/{contractor_id}/archive")
+def archive_contractor(object_id: int, contractor_id: int, body: ContractorArchiveIn,
+                       user: sqlite3.Row = Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, FEATURE_KEY, "write")
+        begin_write(conn)
+        old = _contractor_row(conn, object_id, contractor_id)
+        conn.execute("UPDATE headcount_contractors SET is_archived = ?, updated_at = datetime('now') WHERE id = ?",
+                     (int(body.is_archived), contractor_id))
+        out = _contractor_out(_contractor_row(conn, object_id, contractor_id))
+        conn.commit()
+    finally:
+        conn.close()
+    if bool(old["is_archived"]) != body.is_archived:
+        activity.log("headcount_contractor", user=user, entity_type="object", entity_id=object_id, new_value=out["display"],
+                     details={"действие": "переведён в архив" if body.is_archived else "возвращён в активные", "подрядчик": contractor_id})
+    return out
+
+
 # ------------------------------------------------------------------ виды работ подрядчика и ответственные (2026-10-26)
 
 NOTE_MAX = 10     # длина примечания к виду работ подрядчика: бот добавляет его в скобках к названию вида работ
@@ -320,7 +344,7 @@ def responsible_rows(conn, object_id: int, individual_id: Optional[int]) -> list
         f"SELECT cw.id, cw.contractor_id, cw.codifier_id, cw.note, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, w.code, w.name AS work_name "
         "FROM headcount_contractor_works cw JOIN headcount_contractors c ON c.id = cw.contractor_id JOIN work_codifier w ON w.id = cw.codifier_id "
         "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
-        f"WHERE c.object_id = ? AND cw.responsible_id = ? AND w.retired_at IS NULL ORDER BY {CTR_NAME}, w.sort_order, w.code",
+        f"WHERE c.object_id = ? AND cw.responsible_id = ? AND w.retired_at IS NULL AND c.is_archived = 0 ORDER BY {CTR_NAME}, w.sort_order, w.code",
         (object_id, individual_id)).fetchall()
 
 

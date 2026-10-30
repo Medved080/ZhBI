@@ -1,7 +1,8 @@
 """Диалог бота eXpress с контактом: запрос численности по объекту (2026-10-23, Docs/express-bot.md).
 
-Как выглядит разговор. Бот присылает сообщение «Объект …, нужна численность за такой-то день» с кнопкой «Внести численность».
-Дальше кнопки: подрядчик объекта → вид работ (недавние по этому подрядчику или поиск по названию/коду) → число рабочих → число
+Как выглядит разговор. Главное меню всегда предлагает внести численность, уточнить данные или получить сводку.
+Ввод и уточнение доступны за сегодня или выбранную дату без ожидания расписания. По расписанию бот также присылает запрос.
+Дальше кнопки: закреплённая строка «подрядчик + вид работ» → число рабочих → число
 ИТР → число механизаторов (на каждом шаге кнопка «0» — «не было»). КАЖДАЯ строка пишется в `headcount_records` сразу (источник `bot`), а не пакетом в конце: если человек бросил диалог на
 середине, внесённое не пропадает. «Готово» закрывает запрос. Повторный ввод того же подрядчика и вида работ заменяет число — как в
 форме, прежнее остаётся в истории.
@@ -9,8 +10,8 @@
 Состояние диалога — JSON в `express_requests.dialog` (шаг и выбранное), поэтому переживает перезапуск сервера. Кнопки несут номер
 запроса: нажатие на кнопку закрытого или чужого запроса отклоняется, а не пишет в чужой день.
 
-Права. Прав в системе у контакта нет и быть не должно: он может вносить численность ТОЛЬКО по объекту и за день своего запроса —
-это записано в самом запросе, а не берётся из слов контакта.
+Права. Контакт может вносить численность только по назначенным ему строкам активных подрядчиков.
+Выбранные объект и дата проверяются сервером и сохраняются в запросе; сводка охватывает только строки контакта.
 """
 
 import hashlib
@@ -19,7 +20,7 @@ import re
 import secrets
 import sqlite3
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app import express_bot, headcount
@@ -32,9 +33,13 @@ FULL_LABEL = 400   # подпись строки в тексте сообщен�
 BTN_LABEL = 34
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 OPEN_STATUSES = ("sent", "answered")
-HELP_TEXT = ("Я спрашиваю численность по объектам и записываю ответ в систему.\n"
-             "Когда придёт запрос, нажмите «Внести численность» и выбирайте кнопками: подрядчик → вид работ → рабочие → ИТР → механизаторы.\n"
-             "Команды: /start — начать или показать текущий запрос, /help — эта справка.")
+MAIN_ACTIONS = {"entry": "Внести численность", "edit": "Уточнить данные", "summary": "Получить сводку"}
+HELP_TEXT = ("Выберите действие кнопками:\n"
+             "• Внести численность — за сегодня или на дату.\n"
+             "• Уточнить данные — за сегодня или на дату; прежние значения сохраняются в истории.\n"
+             "• Получить сводку — сегодня, неделя или месяц. За неделю и месяц показывается среднее по дням с данными.\n"
+             "Доступны только закреплённые за вами строки. Ввод: строка → рабочие → ИТР → механизаторы.\n"
+             "Команды: /start — главное меню, /help — эта справка.")
 
 
 # ------------------------------------------------------------------ вспомогательное
@@ -79,6 +84,10 @@ def _deliver(contact, request_id: Optional[int], text: str, bubble: Optional[lis
         log_event("out", kind, text, contact_id=contact["id"], request_id=request_id, ok=False, error=err)
         raise BotxError(err, retryable=True, reason="chat_not_found")
     try:
+        # Основные действия доступны на каждом шаге, в том числе после закрытия запроса.
+        bubble = list(bubble or [])
+        shown = {b.get("data", {}).get("a") for row in bubble for b in row}
+        bubble += [[button(label, {"a": action})] for action, label in MAIN_ACTIONS.items() if action not in shown]
         express_bot.send_message(contact["chat_id"], text, bubble)
     except BotxError as exc:
         log_event("out", kind, text, contact_id=contact["id"], request_id=request_id, ok=False, error=str(exc))
@@ -176,6 +185,13 @@ def _menu(conn, req, page: int = 0):
     if lines:
         head += "\n" + "\n".join(lines) + f"\nИтого по вашим строкам: рабочие {workers}, ИТР {itr}, механизаторы {mech}."
     entered = _entered(conn, req)
+    mode = _load_dialog(req).get("mode")
+    if mode in ("entry", "edit"):
+        rows = [r for r in rows if ((r["contractor_id"], r["codifier_id"]) in entered) == (mode == "edit")]
+        head += "\n" + MAIN_ACTIONS[mode] + "."
+        if not rows:
+            message = "Все ваши строки за этот день уже внесены. Для изменения выберите «Уточнить данные»." if mode == "entry" else "За этот день по вашим строкам ничего не внесено. Выберите «Внести численность»."
+            return head + "\n\n" + message, [[button("Готово", {"a": "close", "r": req["id"]})]]
     pages = (len(rows) + PAGE - 1) // PAGE
     page = max(0, min(page, pages - 1))
     # Полные подписи строк — в тексте нумерованным списком (кнопка в eXpress обрезает длинное название, 2026-10-28);
@@ -197,6 +213,144 @@ def _menu(conn, req, page: int = 0):
 
 def _assigned_row(conn, req, cw_id: int):
     return next((r for r in _own_rows(conn, req) if r["id"] == cw_id), None)
+
+
+# ------------------------------------------------------------------ главное меню и самостоятельный ввод
+
+def _session(conn, contact) -> dict:
+    return _load_dialog({"dialog": _contact(conn, contact["id"])["menu_dialog"]})
+
+
+def _set_session(conn, contact, dialog: dict) -> None:
+    conn.execute("UPDATE express_contacts SET menu_dialog = ? WHERE id = ?",
+                 (json.dumps(dialog, ensure_ascii=False), contact["id"]))
+    conn.commit()
+
+
+def _home(conn, contact) -> None:
+    _set_session(conn, contact, {"step": "home"})
+    _say(contact, None, "Сбор численности. Выберите действие.")
+
+
+def _available_objects(conn, contact, *, summary: bool = False):
+    # Права бота определяются назначением ответственного, а не наличием расписания.
+    return conn.execute(
+        "SELECT DISTINCT o.id, o.name FROM objects o JOIN headcount_contractors c ON c.object_id = o.id "
+        "JOIN headcount_contractor_works cw ON cw.contractor_id = c.id JOIN work_codifier w ON w.id = cw.codifier_id "
+        "WHERE cw.responsible_id = ? " + ("" if summary else "AND w.retired_at IS NULL AND c.is_archived = 0 ") + "ORDER BY o.name, o.id",
+        (contact["individual_id"],)).fetchall()
+
+
+def _choose_object(conn, contact, session: dict, page: int = 0) -> None:
+    objects = _available_objects(conn, contact, summary=session.get("mode") == "summary")
+    if not objects:
+        _set_session(conn, contact, {"step": "home"})
+        _say(contact, None, "За вами не закреплены строки активных подрядчиков. Руководитель назначает ответственных в «Численность → Подрядчики».")
+        return
+    _set_session(conn, contact, session)
+    if len(objects) == 1:
+        _select_object(conn, contact, session, objects[0])
+        return
+    page = max(0, min(page, (len(objects) - 1) // PAGE))
+    bubble = [[button(_short(o["name"]), {"a": "self_object", "o": o["id"]})] for o in objects[page * PAGE:(page + 1) * PAGE]]
+    nav = []
+    if page:
+        nav.append(button("‹ Назад", {"a": "self_objects", "p": page - 1}))
+    if (page + 1) * PAGE < len(objects):
+        nav.append(button("Далее ›", {"a": "self_objects", "p": page + 1}))
+    if nav:
+        bubble.append(nav)
+    _say(contact, None, "Выберите объект:", bubble)
+
+
+def _select_object(conn, contact, session: dict, obj) -> None:
+    if session.get("mode") == "summary":
+        _self_summary(conn, contact, obj, session["period"])
+        return
+    work_date = session.get("date")
+    if not work_date or date.fromisoformat(work_date) > headcount.now_msk().date():
+        _home(conn, contact)
+        return
+    # Закрытые запросы остаются закрытыми. Новый сеанс уточнения использует новую запись,
+    # открытый запрос за тот же день переиспользуется без повторной рассылки.
+    req = conn.execute("SELECT id FROM express_requests WHERE contact_id = ? AND object_id = ? AND work_date = ? "
+                       "AND status IN ('sent', 'answered') ORDER BY id DESC LIMIT 1",
+                       (contact["id"], obj["id"], work_date)).fetchone()
+    if req is None:
+        rid = conn.execute("INSERT INTO express_requests (object_id, contact_id, work_date, status, sent_at) "
+                           "VALUES (?, ?, ?, 'sent', datetime('now'))", (obj["id"], contact["id"], work_date)).lastrowid
+    else:
+        rid = req["id"]
+    req = _request(conn, rid)
+    _store_dialog(conn, rid, {"step": "menu", "mode": session["mode"]})
+    _set_session(conn, contact, {"step": "request", "r": rid})
+    _show_menu(conn, contact, _request(conn, rid))
+
+
+def _self_summary(conn, contact, obj, period: str) -> None:
+    today = headcount.now_msk().date()
+    start = today - timedelta(days=6) if period == "week" else today.replace(day=1) if period == "month" else today
+    rows = conn.execute(
+        "SELECT r.work_date, SUM(r.workers) AS workers, SUM(r.itr) AS itr, SUM(r.mech) AS mech "
+        "FROM headcount_records r JOIN headcount_contractors c ON c.id = r.contractor_id "
+        "JOIN headcount_contractor_works cw ON cw.contractor_id = r.contractor_id AND cw.codifier_id = r.codifier_id "
+        "JOIN work_codifier w ON w.id = cw.codifier_id "
+        "WHERE r.object_id = ? AND cw.responsible_id = ? "
+        "AND r.work_date BETWEEN ? AND ? GROUP BY r.work_date",
+        (obj["id"], contact["individual_id"], start.isoformat(), today.isoformat())).fetchall()
+    title = {"today": "Сегодня", "week": "Неделя", "month": "Месяц"}[period]
+    text = f"Сводка по вашим строкам. Объект «{obj['name']}».\n{title}: {start:%d.%m.%Y} — {today:%d.%m.%Y}."
+    if not rows:
+        text += "\nЗа этот период данных нет."
+    else:
+        divisor = len(rows) if period != "today" else 1
+        values = {k: sum(r[k] for r in rows) / divisor for k in ("workers", "itr", "mech")}
+        fmt = lambda n: f"{n:.3f}".rstrip("0").rstrip(".").replace(".", ",")
+        prefix = "Итого" if period == "today" else "Среднее за день"
+        text += (f"\n{prefix}: рабочие {fmt(values['workers'])}, ИТР {fmt(values['itr'])}, "
+                 f"механизаторы {fmt(values['mech'])}; всего {fmt(sum(values.values()))}.")
+        if period != "today":
+            text += f"\nДней с данными: {len(rows)} из {(today - start).days + 1}. Дни без данных в среднее не включены."
+    _set_session(conn, contact, {"step": "home"})
+    _say(contact, None, text)
+
+
+def _main_button(conn, contact, data: dict) -> bool:
+    action = data.get("a")
+    if action in MAIN_ACTIONS:
+        _set_session(conn, contact, {"step": "period" if action == "summary" else "day", "mode": action})
+        if action == "summary":
+            bubble = [[button(label, {"a": "self_period", "v": value})] for value, label in
+                      (("today", "Сегодня"), ("week", "Неделя"), ("month", "Месяц"))]
+            _say(contact, None, "За какой период получить сводку?", bubble)
+        else:
+            _say(contact, None, f"{MAIN_ACTIONS[action]}. Выберите дату:",
+                 [[button("За сегодня", {"a": "self_today"}), button("На дату", {"a": "self_date"})]])
+        return True
+    if action not in ("home", "self_today", "self_date", "self_period", "self_object", "self_objects"):
+        return False
+    session = _session(conn, contact)
+    if action == "home":
+        _home(conn, contact)
+    elif action in ("self_today", "self_date") and session.get("mode") in ("entry", "edit") and session.get("step") in ("day", "date"):
+        if action == "self_date":
+            _set_session(conn, contact, {"step": "date", "mode": session["mode"]})
+            _say(contact, None, "Введите дату в формате ДД.ММ.ГГГГ (например, 23.10.2026).")
+        else:
+            _choose_object(conn, contact, {"step": "object", "mode": session["mode"], "date": headcount.now_msk().date().isoformat()})
+    elif action == "self_period" and session.get("mode") == "summary" and session.get("step") == "period" and data.get("v") in ("today", "week", "month"):
+        _choose_object(conn, contact, {"step": "object", "mode": "summary", "period": data["v"]})
+    elif action == "self_objects" and session.get("step") == "object":
+        _choose_object(conn, contact, session, int(data.get("p") or 0))
+    elif action == "self_object" and session.get("step") == "object":
+        obj = next((o for o in _available_objects(conn, contact, summary=session.get("mode") == "summary") if o["id"] == data.get("o")), None)
+        if obj is None:
+            _say(contact, None, "Этот объект недоступен. Выберите действие заново.")
+        else:
+            _select_object(conn, contact, session, obj)
+    else:
+        _say(contact, None, "Этот шаг уже завершён. Выберите действие заново.")
+    return True
 
 
 def _existing_text(conn, req, contractor_id: int, codifier_id: int) -> str:
@@ -248,6 +402,11 @@ def bind(conn, contact, sender: dict) -> sqlite3.Row:
 
 def current_request(conn, contact_id: int):
     """Запрос, к которому относится свободный текст: открытый запрос с самым свежим диалогом."""
+    contact = _contact(conn, contact_id)
+    session = _session(conn, contact)
+    if session:
+        req = _own_open_request(conn, contact, session) if session.get("step") == "request" else None
+        return req if req is not None and req["status"] in OPEN_STATUSES else None
     rows = conn.execute(
         "SELECT r.*, o.name AS object_name FROM express_requests r JOIN objects o ON o.id = r.object_id "
         "WHERE r.contact_id = ? AND r.status IN ('sent', 'answered') AND r.work_date >= date('now', '-4 day') ORDER BY r.id DESC",
@@ -338,6 +497,7 @@ def _try_code(conn, sender: dict, body: str, known) -> bool:
         _after_bind(conn, contact)
         if was_waiting is not None:
             _show_menu(conn, contact, was_waiting)
+        _home(conn, contact)
         return True
     log_event("in", "command", f"код привязки не принят ({who})", ok=False, error=reason)
     if known is not None and known["active"] and reason in ("invalid", "throttled"):
@@ -392,17 +552,16 @@ def _handle(payload: dict) -> None:
         if body.startswith("system:"):
             if body == "system:chat_created" and not was_bound:
                 _after_bind(conn, contact)
+                _home(conn, contact)
             return
         if data.get("a"):
             _button(conn, contact, data)
+        elif body.lower() in ("/entry", "/edit", "/summary"):
+            _main_button(conn, contact, {"a": body.lower()[1:]})
         elif body.lower().startswith("/start"):
             if not was_bound:
                 _after_bind(conn, contact)
-            req = current_request(conn, contact["id"])
-            if req is None:
-                _say(contact, None, "Здравствуйте! Сейчас запросов нет — я напишу по расписанию.\n" + HELP_TEXT)
-            else:
-                _show_menu(conn, contact, req)
+            _home(conn, contact)
         elif body.lower().startswith("/help"):
             _say(contact, None, HELP_TEXT)
         else:
@@ -445,14 +604,17 @@ def _own_open_request(conn, contact, data: dict):
 
 
 def _button(conn, contact, data: dict) -> None:
+    if _main_button(conn, contact, data):
+        return
     req = _own_open_request(conn, contact, data)
     if req is None:
         _say(contact, None, "Этот запрос не найден.")
         return
     if req["status"] not in OPEN_STATUSES:
-        _say(contact, req["id"], "Этот запрос уже закрыт. Новый придёт по расписанию.")
+        _say(contact, req["id"], "Этот запрос уже закрыт. Для изменения численности выберите «Уточнить данные».")
         return
     action = data.get("a")
+    _set_session(conn, contact, {"step": "request", "r": req["id"]})
     dialog = _load_dialog(req)
     if action == "menu":
         _show_menu(conn, contact, req, int(data.get("p") or 0))
@@ -462,6 +624,10 @@ def _button(conn, contact, data: dict) -> None:
         row = _assigned_row(conn, req, int(data.get("i") or 0))
         if row is None:
             _say(contact, req["id"], "Эта строка за вами не закреплена (руководитель мог переназначить ответственного). Вот ваш актуальный список.")
+            _show_menu(conn, contact, req)
+            return
+        exists = (row["contractor_id"], row["codifier_id"]) in _entered(conn, req)
+        if dialog.get("mode") in ("entry", "edit") and exists != (dialog["mode"] == "edit"):
             _show_menu(conn, contact, req)
             return
         dialog.update({"step": "workers", "contractor_id": row["contractor_id"], "codifier_id": row["codifier_id"]})
@@ -477,17 +643,35 @@ def _button(conn, contact, data: dict) -> None:
         # кнопки прежней версии диалога (выбор подрядчика и поиск вида работ отменён): показываем актуальный список строк
         _show_menu(conn, contact, req)
     elif action == "itr":
-        _after_itr(conn, contact, req, dialog, int(data.get("v") or 0))
+        if dialog.get("step") == "itr":
+            _after_itr(conn, contact, req, dialog, int(data.get("v") or 0))
+        else:
+            _show_menu(conn, contact, req)
     elif action == "mech":
-        _save_row(conn, contact, req, dialog, mech=int(data.get("v") or 0))
+        if dialog.get("step") == "mech":
+            _save_row(conn, contact, req, dialog, mech=int(data.get("v") or 0))
+        else:
+            _show_menu(conn, contact, req)
     else:
         _say(contact, req["id"], "Не понял команду. Нажмите кнопку или отправьте /help.")
 
 
 def _text(conn, contact, body: str) -> None:
+    session = _session(conn, contact)
+    if session.get("step") == "date":
+        try:
+            day = datetime.strptime(body, "%d.%m.%Y").date()
+        except ValueError:
+            _say(contact, None, "Нужна существующая дата в формате ДД.ММ.ГГГГ. Попробуйте ещё раз.")
+            return
+        if day > headcount.now_msk().date():
+            _say(contact, None, "Численность за будущую дату внести нельзя. Введите сегодня или прошедшую дату.")
+            return
+        _choose_object(conn, contact, {"step": "object", "mode": session["mode"], "date": day.isoformat()})
+        return
     req = current_request(conn, contact["id"])
     if req is None:
-        _say(contact, None, "Сейчас нет открытых запросов численности. Я напишу по расписанию.\n" + HELP_TEXT)
+        _say(contact, None, "Выберите действие кнопками.\n" + HELP_TEXT)
         return
     dialog = _load_dialog(req)
     step = dialog.get("step")
@@ -577,25 +761,31 @@ def _close(conn, contact, req) -> None:
 
 # ------------------------------------------------------------------ сообщения планировщика
 
-def send_intro(request_id: int) -> None:
+def send_intro(request_id: int) -> bool:
     """Отправить контакту первое сообщение запроса. Бросает BotxError — планировщик помечает неудачу и повторяет."""
     conn = get_connection()
     try:
         req = _request(conn, request_id)
         contact = _contact(conn, req["contact_id"])
+        if not _own_rows(conn, req):
+            return False
         text, bubble = intro(conn, request_id)
         _deliver(contact, request_id, text, bubble, "request")
+        return True
     finally:
         conn.close()
 
 
-def send_reminder(request_id: int) -> None:
+def send_reminder(request_id: int) -> bool:
     conn = get_connection()
     try:
         req = _request(conn, request_id)
         contact = _contact(conn, req["contact_id"])
+        if not _own_rows(conn, req):
+            return False
         text = f"Напоминание: по объекту «{req['object_name']}» ещё нет численности за {_fmt_date(req['work_date'])}."
         _deliver(contact, request_id, text, [[button("Внести численность", {"a": "menu", "r": request_id})]], "reminder")
+        return True
     finally:
         conn.close()
 

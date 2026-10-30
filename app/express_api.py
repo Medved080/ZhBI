@@ -35,7 +35,10 @@ object_router = APIRouter(prefix="/objects/{object_id}/express", tags=["express"
 _worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="express-dialog")
 
 STATUS_COMMANDS = [
-    {"description": "Начать работу и показать текущий запрос численности", "body": "/start", "name": "/start", "elements": []},
+    {"description": "Внести численность, уточнить данные или получить сводку", "body": "/start", "name": "/start", "elements": []},
+    {"description": "Внести численность за сегодня или на дату", "body": "/entry", "name": "Внести численность", "elements": []},
+    {"description": "Уточнить данные за сегодня или на дату", "body": "/edit", "name": "Уточнить данные", "elements": []},
+    {"description": "Получить сводку за сегодня, неделю или месяц", "body": "/summary", "name": "Получить сводку", "elements": []},
     {"description": "Как со мной работать", "body": "/help", "name": "/help", "elements": []},
 ]
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")

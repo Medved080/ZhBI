@@ -33925,6 +33925,7 @@ async function openHeadcount(startTab) {
     canAdmin: systemAdmin(),
     // «Редактировать» у подрядчика: карточка контрагента общего справочника (название, ИНН, реквизиты) поверх окна численности
     canEditCounterparty: can("counterparties", "write"),
+    canCreateIndividual: can("dict_individuals", "write"),
     openCounterparty: async (id) => {
       const cp = (await api("/counterparties")).find((x) => x.id === id);
       if (cp) await openCounterpartyEdit(cp); else showToast("Контрагент не найден в справочнике", "warning");

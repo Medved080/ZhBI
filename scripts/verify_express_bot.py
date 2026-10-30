@@ -182,10 +182,10 @@ ok(not say("/start", chat="55555555-5555-5555-5555-555555555555", chat_type="gro
 ok("Строк, за которые вы ответственны: 2" in out[0][1], "приглашение называет число строк контакта")
 menu = press("Внести", out[0])[0]
 btns = str(buttons(menu))
-ok("внесено 0 из 2" in menu[1] and "Арматура" in btns and "Бетон" in btns and "Земляные" not in btns,
+ok("внесено 0 из 2" in menu[1] and "130-03" in btns and "130-01-01" in btns and "340-03-02" not in btns,
    "меню: только строки, где контакт назначен ответственным (чужая строка «Альфа + Земляные» не показана)")
 ok("Альфа" in btns and "Бета" in btns, "кнопка строки называет подрядчика и вид работ")
-out = press("Арматура")
+out = press("130-03")
 ok("РАБОЧИХ" in out[-1][1] and "Альфа" in out[-1][1], "выбрана строка → сразу вопрос про рабочих (выбора подрядчика и поиска вида работ больше нет)")
 ok("число" in say("много")[-1][1], "нечисловой ввод отклоняется с подсказкой")
 ok("число" in say("-5")[-1][1] and "число" in say("100001")[-1][1], "отрицательное и слишком большое отклоняются")
@@ -207,11 +207,11 @@ ok(q["status"] == "answered" and q["answered_at"], "запрос перешёл 
 ok("внесено 1 из 2" in out[-1][1] and "✓" in str(buttons(out[-1])) and "Итого по вашим строкам: рабочие 12" in out[-1][1], "после записи меню отмечает внесённую строку ✓ и показывает итог по строкам контакта")
 
 # вторая строка: кнопка «0» у ИТР и механизаторов
-out = press("Бетон", out[-1]); out = say("7")
+out = press("130-01-01", out[-1]); out = say("7")
 out = press("0", out[-1]); out = press("0", out[-1])
 c = db.get_connection(); r2 = c.execute("SELECT workers, itr, mech FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000002"], W["130-01-01"])).fetchone(); c.close()
 ok(r2 and r2["workers"] == 7 and r2["itr"] == 0 and r2["mech"] == 0, "кнопка «0» у ИТР и у механизаторов: запись 7/0/0")
-out = press("Арматура", out[-1])
+out = press("130-03", out[-1])
 ok("Сейчас внесено: рабочие 12, ИТР 3, механизаторы 2" in out[-1][1], "при повторном вводе показано текущее значение")
 out = say("20"); out = say("4"); out = say("1")
 ok(any("Заменено" in m[1] for m in out), "повторный ввод заменяет число")
@@ -221,7 +221,7 @@ hist = c.execute("SELECT old_workers, new_workers, old_itr, new_itr, old_mech, n
 ok(rec["workers"] == 20 and rec["itr"] == 4 and len(hist) == 2 and (hist[1]["old_workers"], hist[1]["new_workers"], hist[1]["old_itr"], hist[1]["new_itr"], hist[1]["old_mech"], hist[1]["new_mech"]) == (12, 20, 3, 4, 2, 1), "история: было 12/3/2 → стало 20/4/1")
 
 # запрет «0 и 0 и 0»
-out = press("Бетон", out[-1]); out = say("0"); out = say("0"); out = say("0")
+out = press("130-01-01", out[-1]); out = say("0"); out = say("0"); out = say("0")
 ok(any("не меньше 1" in m[1] for m in out), "0 рабочих, 0 ИТР и 0 механизаторов не записываются, бот объясняет почему")
 c = db.get_connection(); ok(c.execute("SELECT workers FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000002"], W["130-01-01"])).fetchone()["workers"] == 7, "прежняя запись при отказе не изменилась"); c.close()
 
@@ -234,7 +234,7 @@ out = say("/hc", {"a": "menu", "r": RID})
 ok("из 2" in out[-1][1] and "Выведен" not in str(buttons(out[-1])), "выведенный из действия вид работ контакту не предлагается")
 out = say("/hc", {"a": "con", "r": RID, "c": CON["7701000001"]})
 ok("Ваши строки" in out[-1][1], "кнопки прежней версии диалога (выбор подрядчика) показывают актуальный список строк")
-out = press("Арматура", out[-1])
+out = press("130-03", out[-1])
 hc.set_contractor_work_responsible(OBJ, CON["7701000001"], CW[("7701000001", "130-03")], hc.ResponsibleIn(responsible_id=OTHER_IND), user=admin)
 out = say("30"); out = say("0"); out = say("0")
 c = db.get_connection(); w30 = c.execute("SELECT workers FROM headcount_records WHERE contractor_id = ? AND codifier_id = ?", (CON["7701000001"], W["130-03"])).fetchone()["workers"]; c.close()
@@ -274,7 +274,7 @@ out = say("/hc", {"a": "close", "r": RID})
 ok(any("закрыт" in m[1] and "рабочие 27" in m[1] for m in out), "«Готово»: запрос закрыт, итог в ответе")
 ok("уже закрыт" in say("/hc", {"a": "menu", "r": RID})[-1][1], "после закрытия кнопки не работают")
 c = db.get_connection(); c.execute("UPDATE express_requests SET status='closed' WHERE contact_id = ? AND status IN ('sent', 'answered')", (IVAN,)); c.commit(); c.close()
-ok("нет открытых запросов" in say("привет")[-1][1], "свободный текст без открытого запроса — подсказка")
+ok("Выберите действие" in say("привет")[-1][1], "свободный текст без открытого запроса — главное меню и подсказка")
 
 # ------------------------------------------------------------------ расписание: правка и догон
 c = db.get_connection()

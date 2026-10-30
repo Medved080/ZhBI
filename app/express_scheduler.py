@@ -68,7 +68,11 @@ def _attempt_send(conn, request_id: int, now: Optional[datetime] = None) -> bool
     conn.execute("UPDATE express_requests SET attempts = attempts + 1, last_attempt_at = ? WHERE id = ?", (stamp, request_id))
     conn.commit()
     try:
-        express_dialog.send_intro(request_id)
+        if not express_dialog.send_intro(request_id):
+            conn.execute("UPDATE express_requests SET status = 'closed', closed_at = datetime('now'), "
+                         "last_error = 'Нет закреплённых строк активных подрядчиков' WHERE id = ? AND status IN ('pending', 'failed')", (request_id,))
+            conn.commit()
+            return False
     except BotxError as exc:
         conn.execute("UPDATE express_requests SET status = 'failed', last_error = ? WHERE id = ? AND status IN ('pending', 'failed')",
                      (str(exc)[:500], request_id))
@@ -168,8 +172,8 @@ def _reminders(conn, now: datetime, stats: dict) -> None:
         if not claimed.rowcount:
             continue
         try:
-            express_dialog.send_reminder(r["id"])
-            stats["reminded"] += 1
+            if express_dialog.send_reminder(r["id"]):
+                stats["reminded"] += 1
         except BotxError:
             pass                                             # причина уже в журнале обмена; напоминание не повторяем
 
