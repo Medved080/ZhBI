@@ -995,6 +995,97 @@ def _rename_pdf_categories_to_classifier(conn: sqlite3.Connection) -> str:
     return f"элементов переименовано: {n}; соответствий классификатора перенесено: {moved}"
 
 
+def _pdf_legacy_exterior_rows(conn, include_corrected=False):
+    from app import pdf_rooms
+    materials = (pdf_rooms.EXTERIOR_MASONRY_MATERIAL, pdf_rooms.FACADE_MATERIAL) if include_corrected else (pdf_rooms.EXTERIOR_MASONRY_MATERIAL,)
+    return conn.execute(
+        "SELECT * FROM revit_elements WHERE section_code='PDF' AND is_current=1 "
+        f"AND uid LIKE 'pdf:%' AND type_name IN ({','.join('?' for _ in materials)}) "
+        "AND category IN ('Стены','Стены блоки','Кладка наружная','Фасад')", materials).fetchall()
+
+
+def _correct_pdf_facade_materials(conn):
+    """Исправить материал фасадных полос; геометрию и идентификаторы не менять."""
+    import json
+    import re
+    from app import pdf_rooms
+    from shapely.geometry import Polygon
+    changed = skipped = 0
+    for row in _pdf_legacy_exterior_rows(conn):
+        try:
+            poly = Polygon(json.loads(row['outline_json']))
+            x0,y0,x1,y1 = poly.bounds
+            width,height = x1-x0,y1-y0
+            if not poly.is_valid or poly.is_empty or poly.area <= 0 or min(width,height) <= 0:
+                skipped += 1
+                continue
+            params = json.loads(row['params_json'] or '{}')
+            if not isinstance(params, dict):
+                skipped += 1
+                continue
+        except (ValueError,TypeError,KeyError):
+            skipped += 1
+            continue
+        index = re.match(r'^pdf:стена:.*:(\d+)$',row['uid'])
+        window_band = ('|кладка' in row['uid'] or
+                       (index and int(index.group(1)) >= pdf_rooms.INFILL_INDEX_BASE))
+        base = abs(min(width,height)-200) <= 10 and poly.area >= .95*width*height
+        if base and not window_band:
+            continue
+        params['материал'] = pdf_rooms.FACADE_MATERIAL
+        params['основание'] = 'Определяется отдельно по слою материала стены, не по фасадному контуру'
+        conn.execute("UPDATE revit_elements SET category=?,type_name=?,params_json=?,updated_at=datetime('now') WHERE id=?",
+                     (pdf_rooms.CAT_FACADE,pdf_rooms.FACADE_MATERIAL,json.dumps(params,ensure_ascii=False),row['id']))
+        changed += 1
+    return f'Фасадных полос переклассифицировано: {changed}; некорректных контуров пропущено: {skipped}'
+
+
+def _retire_pdf_facade_duplicates(conn):
+    """Только по кнопке администратора: снять белые дубли цветного ЖБ, без удаления строк."""
+    import json
+    from collections import defaultdict
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    from app import pdf_rooms
+    structural = defaultdict(list)
+    for row in conn.execute("SELECT * FROM revit_elements WHERE section_code='PDF' AND is_current=1 AND type_name=? AND uid LIKE 'pdf:%'",
+                            (pdf_rooms.MONOLITH_MATERIAL,)):
+        structural[(row['object_id'],row['level_id'],row['level_name'])].append(row)
+    count = 0
+    coverage = {}
+    for row in _pdf_legacy_exterior_rows(conn, include_corrected=True):
+        if row['elevation_mm'] is None or not row['height_mm'] or row['height_mm'] <= 0:
+            continue
+        group = (row['object_id'],row['level_id'],row['level_name'])
+        key = (*group,row['elevation_mm'],row['height_mm'])
+        if key not in coverage:
+            solids = []
+            for base in structural.get(group,[]):
+                if base['elevation_mm'] is None or not base['height_mm']:
+                    continue
+                if base['elevation_mm'] > row['elevation_mm']+1 or base['elevation_mm']+base['height_mm'] < row['elevation_mm']+row['height_mm']-1:
+                    continue
+                try:
+                    poly = Polygon(json.loads(base['outline_json']))
+                    if poly.is_valid and poly.area > 0:
+                        solids.append(poly)
+                except (ValueError,TypeError):
+                    continue
+            coverage[key] = unary_union(solids)
+        if coverage[key].is_empty:
+            continue
+        try:
+            poly = Polygon(json.loads(row['outline_json']))
+            if not poly.is_valid or poly.area <= 0:
+                continue
+        except (ValueError,TypeError):
+            continue
+        if poly.difference(coverage[key]).area <= max(1,poly.area*.005):
+            conn.execute("UPDATE revit_elements SET is_current=0,updated_at=datetime('now') WHERE id=?",(row['id'],))
+            count += 1
+    return f'Белых дублей монолита снято с показа: {count}; строки и геометрия сохранены'
+
+
 RELEASE_TASKS = [
     {"name": "2026-10-30-express-independent-summaries", "version": "0.122", "date": "2026-10-30",
      "title": "Разделить расписания опроса и рассылки сводок", "why": "сохранить прежние рассылки в независимых расписаниях", "kind": KIND_DATA, "run": _split_express_summaries},
@@ -1461,6 +1552,20 @@ RELEASE_TASKS = [
                "«Кладка наружная»…); уже загруженные элементы переименовываются по материалу без повторной загрузки PDF",
         "kind": KIND_DATA,
         "run": _rename_pdf_categories_to_classifier,
+    },
+    {
+        "name": "2026-10-30-pdf-facade-materials",
+        "version": "0.122", "date": "2026-10-30",
+        "title": "Отделить фасадное утепление и облицовку от кладки",
+        "why": "наружные полосы 150 мм и заполнения у окон были ошибочно названы ячеистыми блоками; материал основания читается отдельно",
+        "kind": KIND_DATA, "run": _correct_pdf_facade_materials,
+    },
+    {
+        "name": "2026-10-30-pdf-facade-duplicates",
+        "version": "0.122", "date": "2026-10-30",
+        "title": "Снять с показа белые дубли монолита PDF-модели",
+        "why": "белая подложка наружного слоя была повторно учтена как блоки в том же месте и на той же высоте, что цветной железобетон",
+        "kind": KIND_CLEANUP, "run": _retire_pdf_facade_duplicates,
     },
 ]
 

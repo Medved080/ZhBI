@@ -230,6 +230,7 @@ def _level_name(floor_label: str) -> str:
 # зависеть от того, монолит это или кладка (иначе повторная загрузка
 # задвоила бы стены, а не обновила их категорию).
 _WALL_UID_PREFIX = {pdf_rooms.CAT_WALL_MONOLITH: "стена", pdf_rooms.CAT_WALL_BLOCKS: "стена",
+                    pdf_rooms.CAT_FACADE: "стена",
                     pdf_rooms.CAT_WALL_BRICK: "стена",
                     "Перегородки": "перегородка", "Окна": "окно", "Двери": "дверь"}
 
@@ -411,7 +412,8 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
         on_progress("Снимаю картинки планов", None, 0, len(pdf_rooms.FLOOR_PLANS))
     plan_images = pdf_plan_images.render_floor_images(doc, rooms, walls, axis_grid)
 
-    # Кладка под подоконником и над перемычкой каждого окна. После картинок
+    # Фасадные полосы под подоконником и над перемычкой окна. Материал
+    # основания по окну не угадываем. После картинок
     # планов: те рисуются по настоящим сегментам листа.
     infill = []
     for w in walls:

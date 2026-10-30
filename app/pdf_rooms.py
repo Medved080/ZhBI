@@ -72,7 +72,7 @@ from typing import Optional
 
 import fitz
 from shapely.geometry import Point, Polygon, box
-from shapely.ops import unary_union
+from shapely.ops import unary_union, triangulate
 from shapely.validation import make_valid
 
 ROOM_LAYER = "оо_ПЛОЩАДИ_помещений.оо"
@@ -142,6 +142,8 @@ from app.wall_classes import CAT_WALL_MONOLITH, CAT_WALL_BLOCKS, CAT_WALL_BRICK
 # категория «Стены» у уже загруженных данных (`app/release_tasks.py`).
 MONOLITH_MATERIAL = "Монолитный железобетон"
 BRICK_MATERIAL = "Кирпич"
+CAT_FACADE = "Фасад"
+FACADE_MATERIAL = "Утепление и облицовка фасада"
 
 _WALL_LAYERS = {
     "]]]_СТ_вн_Бетон": (CAT_WALL_MONOLITH, MONOLITH_MATERIAL),
@@ -327,16 +329,15 @@ _INFILL_MIN_MM = 50
 
 
 def window_infill(win: "WallSegment", floor_height_mm: float) -> list:
-    """Кладка ПОД подоконником и НАД перемычкой одного окна (2026-10-21,
-    запрос пользователя: стена вокруг окна должна быть, а не сквозной проём
-    на всю высоту этажа). Контур — как у окна, материал — наружная кладка
-    простенков (`_EXTERIOR_INFILL_MATERIAL`), на этой же отметке она стоит
-    рядом. Подоконник и высота окна — те, что записаны у самого окна
-    (`z_offset_mm`/`z_height_mm`; сейчас типовые, не измеренные), поэтому
-    когда они уточнятся по листу фасада — кладка пересчитается сама."""
+    """Приближённые фасадные полосы ниже и выше остекления.
+
+    Материал основания по оконному проёму не определяется: по составу
+    стены оно бывает железобетонным либо блочным. Не создаём кладку
+    только по наличию окна. Отметки и контур сохраняют прежний способ
+    построения; конструктив читается отдельно со слоёв материала."""
     if win.z_offset_mm is None or win.z_height_mm is None:
         return []
-    category, material = _EXTERIOR_INFILL_MATERIAL
+    category, material = CAT_FACADE, FACADE_MATERIAL
     sill = float(win.z_offset_mm)
     top = sill + float(win.z_height_mm)
     base = INFILL_INDEX_BASE + 2 * win.index
@@ -1061,14 +1062,11 @@ def _wall_segments_raw(page, scale: int, shift_x: float, shift_y: float) -> list
     return out
 
 
-# Слой фасадной штриховки — по умолчанию декоративный мусор (тысячи
-# обрывков кирпичной/панельной текстуры), но у экструзионного стыка между
-# двумя монолитными участками (на плане — прямоугольниками поперёк фасада)
-# на нём же лежит НАСТОЯЩАЯ кладка простенка и переплёт окна между ними,
-# без которых простенок остаётся дырой (2026-08-31, найдено по указанию
-# пользователя на конкретном узле между осями 14с2/16с2, лист 13). Слой не
-# добавлен в `_WALL_LAYERS` — фигуры там нельзя брать все подряд, нужен
-# отдельный отбор, см. `_exterior_infill_segments`.
+# Слой наружной стены содержит фасадное утепление, основания простенков,
+# белые подложки цветного ЖБ и фигуры остекления. Имя слоя и белая заливка
+# не определяют материал. Состав типов 3/4 (листы 6, 10, 19): фасад 150 мм,
+# основание 200 мм из ЖБ либо ячеистого бетона. Подложки конструктивных
+# слоёв вычитаются, остальные части разделяет `_exterior_wall_parts`.
 _EXTERIOR_FACADE_LAYER = "]]]_СТЕНЫ_наружные.]"
 _EXTERIOR_INFILL_MATERIAL = (CAT_WALL_BLOCKS, "Ячеистый бетон (наружная кладка)")
 # Материал наружной кладки — признак «Кладка наружная» в классификаторе
@@ -1582,30 +1580,73 @@ def _gap_windows(rest: list, markers: Optional[list], windows: list, near=None,
     return out
 
 
+def _polygon_parts_without_holes(shape):
+    """Контуры модели не поддерживают отверстия; разложить их без заливки дыр."""
+    if shape.is_empty:
+        return []
+    if shape.geom_type == "Polygon":
+        if not shape.interiors:
+            return [shape]
+        return [part for triangle in triangulate(shape)
+                for part in _polygon_parts_without_holes(triangle.intersection(shape))]
+    return [part for geometry in getattr(shape, "geoms", [])
+            for part in _polygon_parts_without_holes(geometry)]
+
+
+def _exterior_wall_parts(candidates, structural_polys):
+    """Состав стены типов 3/4: фасад 150 мм, основание 200 мм.
+
+    Белая подложка того же контура, что цветной конструктив, — не второй
+    материал. Вычитаем уже прочитанные стены, сохраняя непересекающиеся
+    остатки. Для белого прямого основания 200 мм без цветного ЖБ чтение
+    как ячеистого бетона согласуется с составом стены и штриховкой плана.
+    Наружные полосы 150 мм — утепление, а не блоки. Состав сложных фигур
+    по одному габариту не угадывается: они остаются фасадным слоем.
+    """
+    structural = unary_union([make_valid(Polygon(p)) for p in structural_polys if len(p) >= 3])
+    out = []
+    for c in candidates:
+        original = make_valid(Polygon(c["poly"]))
+        remaining = original.difference(structural) if not structural.is_empty else original
+        base = (abs(min(c["w"], c["h"]) - 200) <= 10
+                and original.area >= .95 * c["w"] * c["h"])
+        category, material = _EXTERIOR_INFILL_MATERIAL if base else (CAT_FACADE, FACADE_MATERIAL)
+        parts = sorted(_polygon_parts_without_holes(remaining), key=lambda p: (*p.bounds, p.area))
+        for part in parts:
+            if part.area < 1:  # только численный шум после вычитания; настоящие обрезки не теряем
+                continue
+            out.append({"category": category, "material": material,
+                        "polygon_mm": list(part.exterior.coords)[:-1],
+                        "thickness_mm": round(min(c["w"], c["h"]), 1)})
+    return out
+
+
 def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
                               envelope, margin: int = _AXIS_ENVELOPE_MARGIN_MM,
                               side_polys: Optional[list] = None,
                               room_polys: Optional[list] = None) -> tuple:
-    """Кладка простенков наружного фасада И оконные проёмы между ними
-    (`_EXTERIOR_FACADE_LAYER`) — на одном слое, одним способом (заливка,
-    не штриховка), различить по слою/цвету нельзя — оба белые. Надёжный
-    признак — окно всегда собрано из НЕСКОЛЬКИХ одинаковых по размеру
-    повторяющихся фигур (переплёт/импосты), кладка — из фигур РАЗНОГО
-    размера (нерегулярные куски простенка).
+    """Части наружной стены и оконные проёмы (`_EXTERIOR_FACADE_LAYER`).
+    Фасад, основание и остекление нарисованы белыми заливками: по цвету
+    материал не определяется. После поиска окон белые подложки конструктива
+    вычитаются, а слой делится по составу стены (`_exterior_wall_parts`).
+    Для поиска остекления используется
+    повторение одинаковых фигур переплёта/импостов с проверкой маркеров.
+    Фигуры другого размера ещё не определяют материал: это может быть
+    фасадное утепление, основание либо белая подложка железобетона.
 
     Прежде чем сравнивать размеры, фигуры делятся на ПРОСТРАНСТВЕННЫЕ
     кластеры (`_EXTERIOR_CLUSTER_GAP_MM`) — иначе два РАЗНЫХ окна одного
     типоразмера в разных местах фасада слились бы в один прямоугольник
     через всю стену между ними. Внутри кластера фигура, совпадающая по
-    (ширине, высоте) ещё с двумя и более в пределах 10мм, — окно; иначе —
-    кладка.
+    (ширине, высоте) ещё с двумя и более в пределах 10мм, — кандидат в
+    остекление; оставшиеся фигуры проходят разбор состава стены.
 
     Ограничено сеткой осей листа (`envelope`, см. `_axis_envelope`) — тот
     же слой несёт фасадную штриховку по всему листу, не только у стен.
     Запас по умолчанию — общий `_AXIS_ENVELOPE_MARGIN_MM`; листу
     закруглённого угла (`_ROUNDED_CORNER_PAGE`) вызывающий код передаёт
     более широкий `_EXTERIOR_INFILL_ENVELOPE_MARGIN_MM` — см. её докстроку,
-    почему НЕ общий для всех листов. Возвращает (кладка, окна) — оба
+    почему НЕ общий для всех листов. Возвращает (основания/фасад, окна) — оба
     списка словарей вида `_wall_segments_raw`, окна дополнительно несут
     `z_offset_mm`/`z_height_mm` (`_WINDOW_SILL_MM`/`_WINDOW_HEIGHT_MM`)."""
     if envelope is None:
@@ -1625,7 +1666,7 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
         if d.get("layer") != _EXTERIOR_FACADE_LAYER or d["type"] != "f":
             continue
         fill = d.get("fill")
-        if not fill or sum(fill[:3]) < 2.9:   # только белые фигуры (кладка/окно) — серые (вентфасад) не наш случай
+        if not fill or sum(fill[:3]) < 2.9:  # серые детали облицовки не экструзируем как стены на всю высоту этажа
             continue
         rect = d["rect"]
         w_mm = (rect[2] - rect[0]) * PT_TO_MM * scale
@@ -1661,7 +1702,6 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
     # по РАЗМЕРУ (одинаковый переплёт), и только одинаковые по размеру
     # фигуры кластеризуем пространственно — так простенок между двумя
     # разными окнами одного типоразмера их не склеивает.
-    wall_category, wall_material = _EXTERIOR_INFILL_MATERIAL
     win_category, win_material = _WINDOW_CATEGORY
     walls_out, windows_out = [], []
     by_size = {}
@@ -1745,12 +1785,7 @@ def _exterior_infill_segments(page, scale: int, shift_x: float, shift_y: float,
     for win in windows_out:
         win.pop("_ids", None)
 
-    for c in candidates:
-        if id(c) in claimed:
-            continue
-        walls_out.append({"category": wall_category, "material": wall_material,
-                          "polygon_mm": c["poly"],
-                          "thickness_mm": round(min(c["w"], c["h"]), 1)})
+    walls_out = _exterior_wall_parts([c for c in candidates if id(c) not in claimed], side_polys or [])
     return walls_out, _merge_overlapping_windows(windows_out)
 
 
@@ -2140,7 +2175,7 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
         # большой заливкой (5,5×7,8м), и это настоящая кладка.
         if plan.page != _ROUNDED_CORNER_PAGE:
             fat = [s for s in floor_segments
-                   if s.get("material") == _EXTERIOR_INFILL_MATERIAL[1]
+                   if s.get("material") in (_EXTERIOR_INFILL_MATERIAL[1], FACADE_MATERIAL)
                    and s["thickness_mm"] > _MAX_INFILL_THICKNESS_MM]
             if fat:
                 warnings.append(
