@@ -1,15 +1,14 @@
 """
-Оркестрация загрузки помещений из PDF — веб-обвязка над `app/pdf_rooms.py`
+Оркестрация загрузки элементов из PDF — веб-обвязка над `app/pdf_rooms.py`
 (разбор) и справочниками объекта (`app/blocks.py`).
 
 Двухфазно, как импорт Revit (решение И3, `app/revit_import.py`): `analyze`
 разбирает файл и считает сводку, ничего не пишет; `apply` применяет уже
 посчитанное по токену.
 
-Помещения пишутся в `revit_elements` — ту же таблицу, что и элементы
-Revit, категорией `"Помещение"` и СВОИМ разделом `section_code = "PDF"`:
-рабочее место «Модель МФР» рисует любую строку `revit_elements` с контуром
-и высотой одинаково, отдельного рендера заводить не пришлось. Раздел
+Стены, фасады, проёмы и перекрытия пишутся в `revit_elements` своим
+разделом `section_code = "PDF"`. Контуры помещений нужны только для
+разбора геометрии и справочников; элементы «Помещение» не создаются. Раздел
 `"PDF"` — своя область списания (см. `app/revit_elements.py`, докстрока):
 если у объекта позже появится настоящая выгрузка Revit (КР/АР), она не
 тронет и не задвоит то, что загружено отсюда.
@@ -28,8 +27,8 @@ Revit, категорией `"Помещение"` и СВОИМ раздело�
 и «Блоки» не рисуются в 3D (`app/block_geometry.py` возвращал бы «у
 секции не заданы оси» — до этой версии так и было).
 
-Каждое помещение несёт источник в `params_json` — имя PDF-файла и номер
-листа (`build_rows`, докстрока): у элемента из PDF нет `revit_id`,
+Каждый элемент несёт источник в `params_json` — имя PDF-файла и номер
+листа (`_source_params`): у элемента из PDF нет `revit_id`,
 по которому можно найти исходник в чертеже.
 
 Стены, перегородки и плиты перекрытия (`app/pdf_rooms.parse_walls_document`,
@@ -327,52 +326,6 @@ def build_slab_rows(slabs: list, floors: dict, filename: str = None) -> list:
     return rows
 
 
-def build_rows(rooms: list, floors: dict, section_ids: dict, filename: str = None) -> list:
-    """Помещения pdf_rooms.Room -> строки для revit_elements.
-
-    Секция берётся из `room.section` — на этажах с единственной возможной
-    секцией это она (проставлено в `pdf_rooms.parse_document`), на общих
-    этажах (1-8) — определена по границе подписей осей «…с1»/«…с2»
-    (Docs/TZ.md §3а). `None` бывает только если на листе не нашлось подписей
-    обеих секций сразу — тогда честно остаётся неопределённой, не гадаем.
-
-    `params_json` несёт источник — имя PDF-файла и номер листа: у элемента
-    из PDF нет `revit_id`, по которому можно найти исходник, а лист даже у
-    одного и того же файла меняется от комплекта к комплекту."""
-    rows = []
-    for room in rooms:
-        z0, z1 = _floor_elevation(room.floor)
-        level_id, _section_id_list = floors[room.floor]
-        if room.section:
-            section_id, section_source = section_ids[room.section], "параметр"
-        else:
-            section_id, section_source = None, None
-        outline = [[round(x, 1), round(y, 1)] for x, y in room.polygon_mm]
-        rows.append({
-            "section_code": "PDF",
-            "uid": "pdf:%s:%d" % (room.floor, room.index),
-            "revit_id": None,
-            "category": "Помещение",
-            "family": None,
-            "type_name": None,
-            "mark": None,
-            "level_id": level_id,
-            "level_name": _level_name(room.floor),
-            "section_id": section_id,
-            "section_source": section_source,
-            "elevation_mm": z0,
-            "height_mm": z1 - z0,
-            "x": None, "y": None, "z": None,
-            "outline_json": json.dumps(outline, ensure_ascii=False),
-            "outline_approx": 0,
-            "volume": None,
-            "area": room.area_m2,
-            "workset": None,
-            "params_json": _source_params(filename, room.page),
-        })
-    return rows
-
-
 def analyze(conn, object_id: int, data: bytes, filename: str = None,
             on_progress=None) -> dict:
     """Фаза 1: разбор файла и сверка. В БД не пишет ничего — даже
@@ -430,8 +383,9 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
             "SELECT uid FROM revit_elements WHERE object_id = ? "
             "AND section_code = 'PDF' AND is_current = 1", (object_id,))
     }
-    seen = {"pdf:%s:%d" % (room.floor, room.index) for room in rooms}
-    seen |= {"pdf:%s:%s:%d" % (_WALL_UID_PREFIX[w.category], w.floor, w.index) for w in walls}
+    # Помещения остаются входом геометрического разбора, но не элементами модели.
+    # Прежние строки помещений попадут в обычное списание при повторном импорте.
+    seen = {"pdf:%s:%s:%d" % (_WALL_UID_PREFIX[w.category], w.floor, w.index) for w in walls}
     seen |= {"pdf:плита:%s" % s.floor for s in slabs}
     retired_uids = sorted(existing - seen)
     new_count = len(seen - existing)
@@ -621,7 +575,7 @@ def _apply_axis_grid(conn, object_id: int, rooms: list, axis_grid: dict, section
 
 
 def apply(conn, object_id: int, analysis: dict) -> dict:
-    """Фаза 2: заводит секции/этажи/блоки, пишет помещения, оси и привязку
+    """Фаза 2: заводит секции/этажи/блоки, пишет элементы, оси и привязку
     секций к ним, списывает пропавшие.
 
     `revit_sections.fill_missing` (доопределение секции геометрией по
@@ -633,8 +587,7 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     slabs = analysis.get("_slabs") or []
     filename = analysis.get("filename")
     floors, section_ids = _ensure_catalog(conn, object_id)
-    rows = build_rows(rooms, floors, section_ids, filename)
-    rows += build_wall_rows(walls, floors, section_ids, filename)
+    rows = build_wall_rows(walls, floors, section_ids, filename)
     rows += build_slab_rows(slabs, floors, filename)
     for r in rows:
         r["object_id"] = object_id
@@ -674,7 +627,8 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     windows_count = sum(1 for w in walls if w.category == "Окна")
     doors_count = sum(1 for w in walls if w.category == "Двери")
     return {
-        "rooms_written": len(rooms),
+        "rooms_written": 0,  # Совместимость API: помещения больше не загружаются.
+        "elements_written": len(rows),
         "doors_written": doors_count,
         "walls_written": len(walls) - windows_count - doors_count
                          - sum(1 for w in walls if w.index >= pdf_rooms.INFILL_INDEX_BASE),

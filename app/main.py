@@ -6588,7 +6588,7 @@ def apply_pdf(body: PdfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         conn.close()
 
     backup_before_import(
-        "помещения из PDF → %s" % analysis["object_name"],
+        "элементы из PDF → %s" % analysis["object_name"],
         audit_display_name(user), user["id"])
 
     операция = activity.new_request_id()
@@ -6605,9 +6605,9 @@ def apply_pdf(body: PdfApplyIn, user: sqlite3.Row = Depends(get_current_user)):
         request_id=операция,
         entity_type="object",
         entity_id=object_id,
-        new_value=str(analysis["total_rooms"]),
+        new_value=str(result["elements_written"]),
         details={
-            "помещений": result["rooms_written"],
+            "элементов": result["elements_written"],
             "стен_и_перегородок": result["walls_written"],
             "окон": result["windows_written"],
             "плит": result["slabs_written"],

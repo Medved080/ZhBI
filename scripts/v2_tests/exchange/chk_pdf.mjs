@@ -43,20 +43,21 @@ await b.waitFor(`document.querySelector('#pf-progress').style.display !== 'none'
 chk(true, "полоса прогресса показана во время фонового разбора");
 await b.waitFor(`document.querySelector('#pf-review').innerText.length > 0`, 40000);
 const rev1 = await text(b, "#pf-review");
-chk(/Помещени/i.test(rev1) && /Новых помещений/i.test(rev1), "сводка показана: " + rev1.replace(/\n/g, " ").slice(0, 200));
+chk(/Контуров/i.test(rev1) && /Новых элементов/i.test(rev1), "сводка показана: " + rev1.replace(/\n/g, " ").slice(0, 200));
 chk(await b.eval(`!!document.querySelector('#pf-apply')`), "кнопка «Применить» есть");
 
 const j0 = maxid();
 await clk(b, "#pf-apply");
 await b.waitFor(`document.querySelector('.v2-dialog')`, 5000);
 const dlg1 = await dialog();
-chk(/Применить помещения/i.test(dlg1), "диалог подтверждения называет последствия: " + dlg1.slice(0, 160));
+chk(/Применить элементы/i.test(dlg1), "диалог подтверждения называет последствия: " + dlg1.slice(0, 160));
 await b.shot(SP + "/exchange_work/s_pdf_confirm.png");
 await clk(b, '[data-choice="confirm"]');
 await b.waitFor(`document.querySelector('#pf-status').className.includes('ok')`, 20000);
-chk((await st()).includes("помещений"), "применение: результат показан — " + (await st()));
+chk((await st()).includes("стен/перегородок"), "применение: результат показан — " + (await st()));
 await b.shot(SP + "/exchange_work/s_pdf_result.png");
-chk(sql(`select count(*) n from revit_elements where object_id=${OBJ} and section_code='PDF' and category='Помещение' and is_current=1`)[0].n > 0, "в БД появились текущие помещения раздела PDF");
+chk(sql(`select count(*) n from revit_elements where object_id=${OBJ} and section_code='PDF' and category='Помещение' and is_current=1`)[0].n === 0, "помещения не загружаются в модель PDF");
+chk(sql(`select count(*) n from revit_elements where object_id=${OBJ} and section_code='PDF' and is_current=1`)[0].n > 0, "остальные элементы PDF загружены");
 const ev1 = journal("import_pdf", j0);
 chk(ev1.length === 1, `в журнале одно событие import_pdf (найдено ${ev1.length})`);
 

@@ -7,7 +7,7 @@ import {
   esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, factsHtml, listHtml, objectOptions,
 } from "./exchange-common.js";
 
-const MFR_KIND = "mfr"; // помещения/блоки из PDF пишутся в revit_elements объекта МФР (та же модель, что у Revit-выгрузки)
+const MFR_KIND = "mfr"; // элементы/блоки из PDF пишутся в revit_elements объекта МФР (та же модель, что у Revit-выгрузки)
 
 export function mountPdfImport(el, ctx) {
   const { screen, groupTitle, api, objects, objectId, rights } = ctx;
@@ -17,10 +17,10 @@ export function mountPdfImport(el, ctx) {
   el.className = "v2-page";
   el.innerHTML = pageFrame({
     screen, groupTitle,
-    summary: "Комплект чертежей жёстко привязан к одному объекту (имена слоёв и разбивка листов на этажи — соглашение конкретного архитектора). Даёт контуры и площади помещений; стен с толщиной, проёмов и номеров квартир — не даёт.",
+    summary: "Комплект чертежей жёстко привязан к одному объекту (имена слоёв и разбивка листов на этажи — соглашение конкретного архитектора). Загружает стены, фасады, проёмы и перекрытия. Контуры помещений используются только для разбора и в модель не загружаются.",
     body: `<form id="pf-form" autocomplete="off" novalidate>
         <fieldset class="v2-fieldset"><legend>Что разобрать</legend>
-          <label class="v2-wire-check"><input type="radio" name="pf-mode" value="full" checked> Полный разбор — помещения, стены, окна</label>
+          <label class="v2-wire-check"><input type="radio" name="pf-mode" value="full" checked> Полный разбор — стены, фасады, проёмы, перекрытия</label>
           <label class="v2-wire-check"><input type="radio" name="pf-mode" value="facade"> Только фасады — макет блоков без начинки</label>
           <p class="v2-muted v2-ex-hint">Только фасады: блок «этаж×секция» строится по ступенчатому силуэту на фасадных чертежах (высота + ширина/глубина), без разбора помещений/стен — быстрее, но внутри блока ничего не будет, кроме габарита.</p>
         </fieldset>
@@ -35,7 +35,7 @@ export function mountPdfImport(el, ctx) {
       <details class="v2-collapsible" id="pf-clear-details" style="margin-top:14px">
         <summary>Очистить справочники объекта перед загрузкой (отладка)</summary>
         <div class="v2-callout v2-callout-bad" role="note">Стирает отмеченное СРАЗУ, без сводки для проверки. Перед стиранием сервер снимает резервную копию.</div>
-        <label class="v2-wire-check"><input type="checkbox" id="pf-clear-elements"> Помещения из PDF на этом объекте</label>
+        <label class="v2-wire-check"><input type="checkbox" id="pf-clear-elements"> Элементы из PDF на этом объекте</label>
         <label class="v2-wire-check"><input type="checkbox" id="pf-clear-structure"> Секции и этажи объекта</label>
         <p class="v2-muted v2-ex-hint">Общие с «Учётом по блокам»: удаление каскадом сотрёт и блоки, и проставленные по ним статусы работ.</p>
         <label class="v2-wire-check"><input type="checkbox" id="pf-clear-work"> Виды работ и статусы блоков</label>
@@ -71,12 +71,12 @@ export function mountPdfImport(el, ctx) {
     const floors = Object.keys(data.by_floor || {});
     const rows = floors.map((f) => `<tr><td>${esc(f)}</td><td>${data.by_floor[f]["помещений"]}</td><td>${data.by_floor[f]["с площадью"]}</td></tr>`).join("");
     return `${factsHtml([
-        ["Объект", data.object_name], ["Помещений в файле", data.total_rooms], ["Стен/перегородок", data.total_walls], ["Дверей", data.total_doors ?? 0],
+        ["Объект", data.object_name], ["Стен/перегородок", data.total_walls], ["Дверей", data.total_doors ?? 0],
         ["Окон", data.total_windows], ["Плит перекрытия", data.total_slabs],
       ])}
       ${listHtml("Предупреждения", data.warnings)}
-      <h4>Что изменится</h4>${factsHtml([["Новых помещений", data.new], ["Без изменений", data.unchanged], ["Исчезло из чертежа (будет списано)", data.retiring || 0]])}
-      <h4>По этажам</h4><div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Этаж</th><th>Помещений</th><th>С площадью</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <h4>Что изменится</h4>${factsHtml([["Новых элементов", data.new], ["Без изменений", data.unchanged], ["Не загружается (будет списано)", data.retiring || 0]])}
+      <h4>По этажам</h4><div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Этаж</th><th>Контуров для разбора</th><th>С площадью</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   function renderFacadeReview(data) {
     const floors = Object.keys(data.by_floor || {});
@@ -145,7 +145,7 @@ export function mountPdfImport(el, ctx) {
     try {
       const msg = facade
         ? `Применить макет блоков (${pending.total_blocks} блоков на ${pending.total_floors} этажах) в объект «${pending.object_name}»?\n\nПеред применением сервер сохранит копию базы.`
-        : `Применить помещения из PDF (новых ${pending.new}, без изменений ${pending.unchanged}${pending.retiring ? `, будет списано ${pending.retiring}` : ""}) в объект «${pending.object_name}»?\n\nПеред применением сервер сохранит копию базы.`;
+        : `Применить элементы из PDF (новых ${pending.new}, без изменений ${pending.unchanged}${pending.retiring ? `, будет списано ${pending.retiring}` : ""}) в объект «${pending.object_name}»?\n\nПеред применением сервер сохранит копию базы.`;
       const ok = await showConfirmDialog(msg, { confirmLabel: "Применить", multiline: true });
       if (!ok || dead) { if (!dead) { status.set("Применение отменено — ничего не изменено.", ""); el.querySelectorAll("#pf-review button").forEach((b) => (b.disabled = false)); } return; }
       status.set("Применяем…", "busy");
@@ -154,17 +154,17 @@ export function mountPdfImport(el, ctx) {
       if (dead) return;
       const text = facade
         ? `Готово: блоков ${res.blocks_written} на ${res.floors} этажах, секций ${res.sections}.`
-        : `Готово: помещений ${res.rooms_written}, стен/перегородок ${res.walls_written}, окон ${res.windows_written}, плит ${res.slabs_written}, списано ${res.retired}.`;
+        : `Готово: стен/перегородок ${res.walls_written}, окон ${res.windows_written}, плит ${res.slabs_written}, списано ${res.retired}.`;
       status.set(text, "ok");
       $("#pf-review").innerHTML = facade
         ? factsHtml([["Блоков", res.blocks_written], ["Этажей", res.floors], ["Секций", res.sections]])
-        : factsHtml([["Помещений", res.rooms_written], ["Стен/перегородок", res.walls_written], ["Окон", res.windows_written], ["Дверей", res.doors_written ?? 0], ["Плит", res.slabs_written], ["Списано", res.retired]]);
+        : factsHtml([["Стен/перегородок", res.walls_written], ["Окон", res.windows_written], ["Дверей", res.doors_written ?? 0], ["Плит", res.slabs_written], ["Списано", res.retired]]);
       pending = null; setProgress(null);
     } catch (err) {
       if (dead) return;
       if (err.blockedByPolicy) { status.set(errText(err), "bad"); return; }
       if (isUnknownOutcome(err)) {
-        status.html(unknownOutcomeHtml(facade ? "применение блоков из PDF" : "применение помещений из PDF"), "bad");
+        status.html(unknownOutcomeHtml(facade ? "применение блоков из PDF" : "применение элементов из PDF"), "bad");
         const box = $("#pf-status");
         box.querySelector("[data-verify]")?.addEventListener("click", () => verifyOutcome(api, box, { action: facade ? "import_pdf_facade" : "import_pdf", entityId: currentObjectId, sinceMs: sentAt || Date.now(), what: "применение из PDF" }));
       } else status.set(`Не удалось применить: ${errText(err)}`, "bad");
@@ -176,7 +176,7 @@ export function mountPdfImport(el, ctx) {
     if (!oid) { $("#pf-clear-status").textContent = "Сначала выберите объект."; return; }
     const body = { source: "pdf", elements: $("#pf-clear-elements").checked, structure: $("#pf-clear-structure").checked, work: $("#pf-clear-work").checked };
     if (!(body.elements || body.structure || body.work)) { $("#pf-clear-status").textContent = "Отметьте хотя бы одну группу для очистки."; return; }
-    const what = [body.elements && "помещения из PDF", body.structure && "секции и этажи", body.work && "виды работ и статусы блоков"].filter(Boolean).join(", ");
+    const what = [body.elements && "элементы из PDF", body.structure && "секции и этажи", body.work && "виды работ и статусы блоков"].filter(Boolean).join(", ");
     const ok = await showConfirmDialog(`Очистить у объекта: ${what}?\n\nЭто необратимо через интерфейс (кроме восстановления из резервной копии, которую сервер снимет перед очисткой). Сводки «что изменится» здесь нет — стирается сразу.`, { confirmLabel: "Очистить", danger: true, multiline: true });
     if (!ok) return;
     const btn = $("#pf-clear-go"); btn.disabled = true;

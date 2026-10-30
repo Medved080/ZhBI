@@ -31189,7 +31189,7 @@ async function runClearImportData(source, objectId, flags, statusEl, btn) {
     return;
   }
   const части = [];
-  if (flags.elements) части.push(source === "pdf" ? "помещения из PDF" : "элементы Revit");
+  if (flags.elements) части.push(source === "pdf" ? "элементы из PDF" : "элементы Revit");
   if (flags.structure) части.push("секции и этажи (а с ними — блоки и статусы работ по ним)");
   if (flags.work) части.push("виды работ и статусы блоков");
   if (!confirm(`Стереть безвозвратно: ${части.join(", ")}?\n\n`
@@ -38546,8 +38546,7 @@ function renderPdfFacadeReview(data) {
 
 function renderPdfReview(data) {
   document.getElementById("pdf-review-head").textContent =
-    `Объект «${data.object_name}» · помещений в файле ${data.total_rooms}`
-    + `, стен/перегородок ${data.total_walls}, окон ${data.total_windows}, дверей ${data.total_doors ?? 0}`
+    `Объект «${data.object_name}» · стен/перегородок ${data.total_walls}, окон ${data.total_windows}, дверей ${data.total_doors ?? 0}`
     + `, плит перекрытия ${data.total_slabs}`;
 
   const floors = Object.keys(data.by_floor || {});
@@ -38565,14 +38564,14 @@ function renderPdfReview(data) {
   document.getElementById("pdf-review-body").innerHTML = `
     ${warnings}
     <h3>Что изменится</h3>
-    <div><b>${data.new}</b> — новых помещений</div>
+    <div><b>${data.new}</b> — новых элементов</div>
     <div><b>${data.unchanged}</b> — без изменений</div>
     ${data.retiring
-      ? `<div style="color:var(--color-danger)"><b>${data.retiring}</b> — исчезло из чертежа, будет списано</div>`
+      ? `<div style="color:var(--color-danger)"><b>${data.retiring}</b> — не загружается, будет списано</div>`
       : ""}
     <h3>По этажам</h3>
     <table class="bulk-edit-table">
-      <thead><tr><th>Этаж</th><th style="text-align:right">Помещений</th>
+      <thead><tr><th>Этаж</th><th style="text-align:right">Контуров для разбора</th>
         <th style="text-align:right">С площадью</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -38603,7 +38602,7 @@ document.getElementById("pdf-review-apply").addEventListener("click", async () =
       текст = `Готово: блоков ${body.blocks_written} на ${body.floors} `
         + `этажах, секций ${body.sections}.`;
     } else {
-      текст = `Готово: помещений ${body.rooms_written}, стен/перегородок `
+      текст = `Готово: стен/перегородок `
         + `${body.walls_written}, окон ${body.windows_written}, дверей ${body.doors_written ?? 0}, плит `
         + `${body.slabs_written}, списано ${body.retired}.`;
       // Секция считается по границе подписей осей «…с1»/«…с2» на листе —

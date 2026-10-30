@@ -6589,13 +6589,13 @@
     <h2>Загрузка из PDF</h2>
     <div class="hint-text">Комплект чертежей жёстко привязан к одному объекту
       (имена слоёв и разбивка листов на этажи — соглашение конкретного
-      архитектора). Даёт контуры и площади помещений; стен с толщиной,
-      проёмов и номеров квартир — не даёт, источник этого не позволяет.</div>
+      архитектора). Загружает стены, фасады, проёмы и перекрытия. Контуры помещений
+      используются только для разбора и в модель не загружаются.</div>
 
     <div class="bulk-edit-block" style="margin-top:14px">
       <div class="bulk-edit-block-title">Что разобрать</div>
       <label class="toggle"><input type="radio" name="pdf-import-mode" id="pdf-import-mode-full" checked/>
-        Полный разбор — помещения, стены, окна</label>
+        Полный разбор — стены, фасады, проёмы, перекрытия</label>
       <label class="toggle"><input type="radio" name="pdf-import-mode" id="pdf-import-mode-facade"/>
         Только фасады — макет блоков без начинки</label>
       <div class="hint-text" style="margin:4px 0 0 22px">Только фасады: блок
@@ -6642,7 +6642,7 @@
       <div class="hint-text" style="margin:6px 0">Стирает отмеченное сразу, без сводки.
         Перед стиранием снимается резервная копия.</div>
       <label class="toggle"><input type="checkbox" id="pdf-clear-elements"/>
-        Помещения из PDF на этом объекте</label>
+        Элементы из PDF на этом объекте</label>
       <label class="toggle"><input type="checkbox" id="pdf-clear-structure"/>
         Секции и этажи объекта</label>
       <div class="warning-text" style="margin:2px 0 6px 22px">Общие с «Учётом по блокам»:
