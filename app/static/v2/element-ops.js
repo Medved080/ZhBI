@@ -1,3 +1,4 @@
+import { mountInstallationDate } from "../planned-installation.js";
 // Операции над изделиями на схеме (модель ЖБИ, АРМ прораба): карточка выбранного изделия и панель группового выделения.
 //
 // Что здесь: смена статуса (одного и пачки, с предпросмотром последствий), плановая дата (одного и пачки), контракт изделия, комментарий,
@@ -173,7 +174,7 @@ export function createElementOps(ctx) {
 
   // ------------------------------------------------------------ применение подтверждённого сервером к схеме
   const delta = (u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
-    planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null,
+    planned_installation_date: u.planned_installation_date ?? null, planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null,
     project_smr_start_date: u.project_smr_start_date ?? null });
   function applyToScene(list) {
     const items = (list || []).filter((u) => u && Number.isInteger(u.id));
@@ -290,8 +291,8 @@ export function createElementOps(ctx) {
       <h4>Контрактация</h4><dl class="ws-dl">${contractBlock}</dl>
       ${canContract ? `<div class="ws-actions"><button type="button" class="v2-btn" data-eo="ct-pick" ${f.ct.busy ? "disabled" : ""}>${e.contract_id ? "Изменить контракт…" : "Назначить контракт…"}</button></div>` : ""}
       ${f.ct.error ? `<p class="ws-err" role="alert">${esc(f.ct.error)}</p>` : ""}${f.ct.done ? `<p class="ws-ok" role="status">${esc(f.ct.done)}</p>` : ""}
-      <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР (директивное)", fmtDate(e.project_smr_start_date))}${row("Начало СМР (актуализация)", fcText(detail, detailError, "forecast_start", "deviation_start"))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР (директивное)", fmtDate(e.project_delivery_date))}${row("Завершение СМР (актуализация)", fcText(detail, detailError, "forecast_end", "deviation_end"))}</dl>
-      ${plannedHtml(e, f)}
+      <h4>Даты</h4><dl class="ws-dl">${row("Начало СМР (директивное)", fmtDate(e.project_smr_start_date))}${row("Начало СМР (актуализация)", fcText(detail, detailError, "forecast_start", "deviation_start"))}${row("Плановая поставка", fmtDate(e.planned_delivery_date))}${row("Плановая дата монтажа", fmtDate(e.planned_installation_date))}${row("Фактическая поставка", fmtDate(e.actual_delivery_date))}${row("Завершение СМР (директивное)", fmtDate(e.project_delivery_date))}${row("Завершение СМР (актуализация)", fcText(detail, detailError, "forecast_end", "deviation_end"))}</dl>
+      ${plannedHtml(e, f)}${R.plannedDate && e.current_status === "ready_for_installation" ? '<div data-install-date></div>' : ""}
       <h4>Комментарий</h4>${commentHtml(e, f)}
       <h4>Вложения</h4>${attachmentsHtml(f.at, { canUpload: R.attachments, canDelete: R.attachmentsDelete })}
       <h4>История статусов</h4>${detailError ? `<p class="v2-muted">${esc(detailError)}</p>` : !detail ? `<p class="v2-muted">Загрузка…</p>` : hist.length ? `<ul class="ws-hist eo-hist">${histRows}</ul>` : `<p class="v2-muted">Изменений статуса нет.</p>`}
@@ -644,6 +645,7 @@ export function createElementOps(ctx) {
     return `<div class="ws-pad">${head}${R.status ? groupStatusHtml(items) : ""}
       ${R.status ? `<p class="ws-actions"><button type="button" class="v2-btn" data-eo="rows-status">По строкам: статус со своим контрактом у каждого изделия…</button></p>` : ""}
       ${R.plannedDate ? groupPlannedHtml(items) : ""}
+      ${R.plannedDate && items.every((e) => e.current_status === "ready_for_installation") ? '<div data-install-date></div>' : ""}
       ${R.plannedDate ? `<p class="ws-actions"><button type="button" class="v2-btn" data-eo="rows-planned">По строкам: своя дата у каждого изделия…</button></p>` : ""}</div>`;
   }
   const sigOf = (items, extra) => items.map((i) => `${i.id}:${i.current_status}:${i.contract_id ?? ""}`).join(",") + "|" + extra;
@@ -1073,6 +1075,13 @@ export function createElementOps(ctx) {
   function bind(body) {
     const s = sc();
     const id = s?.selected?.id;
+    body.querySelectorAll("[data-install-date]").forEach((host) => {
+      const group = s?.multiItems?.length > 1 ? s.multiItems : [s?.selected].filter(Boolean);
+      if (!group.length || !group.every((e) => e.current_status === "ready_for_installation")) return;
+      mountInstallationDate(host, { ids: group.map((e) => e.id), value: group.length === 1 ? group[0].planned_installation_date : null,
+        request: (path, payload) => api.patch(path, payload), onSaved: (items) => { applyToScene(items); items.forEach((e) => refreshDetailIfSelected(e.id)); } });
+    });
+
     const on = (sel, ev, fn) => body.querySelectorAll(sel).forEach((n) => n.addEventListener(ev, fn));
     // --- вложения (список читает любой, кому видна карточка; загрузка/удаление — по правам). Идемпотентно: st.loaded/st.loading гасят повтор.
     if (id != null) {

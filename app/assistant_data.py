@@ -250,11 +250,11 @@ class Snapshot:
                 params += selected
             rows = conn.execute("""SELECT e.id, e.object_id, e.element_type, e.mark, e.floor, e.current_status,
                 """ + last_run_day_sql(("installed", "accepted")) + """ AS montage_day,
-                """ + last_run_day_sql(("delivered", "installed", "accepted")) + """ AS delivery_day
+                """ + last_run_day_sql(("delivered", "ready_for_installation", "installed", "accepted")) + """ AS delivery_day
                 FROM elements e WHERE e.object_id=? AND e.is_current=1""" + selected_clause, params).fetchall()
             for row in rows:
                 facts, undated = [], []
-                for key, statuses in [("montage_day", ("installed", "accepted")), ("delivery_day", ("delivered", "installed", "accepted"))]:
+                for key, statuses in [("montage_day", ("installed", "accepted")), ("delivery_day", ("delivered", "ready_for_installation", "installed", "accepted"))]:
                     eligible = row["current_status"] in statuses
                     day = row[key]
                     before = int(eligible and (day is None or day <= self.start.isoformat()))

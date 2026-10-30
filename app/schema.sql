@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS elements (
     offset_x_mm REAL,
     offset_y_mm REAL,
     current_status TEXT NOT NULL DEFAULT 'planned',
+    planned_installation_date TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (source_file, dxf_handle)
@@ -113,6 +114,7 @@ INSERT OR IGNORE INTO status_colors (status, color) VALUES
     ('in_production', '#f4a300'),
     ('shipped', '#3b82f6'),
     ('delivered', '#8b5cf6'),
+    ('ready_for_installation', '#06b6d4'),
     ('installed', '#22c55e'),
     ('accepted', '#0f766e');
 
@@ -1846,6 +1848,7 @@ CREATE TABLE IF NOT EXISTS headcount_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     work_date TEXT NOT NULL,           -- YYYY-MM-DD
+    shift TEXT NOT NULL DEFAULT 'day' CHECK (shift IN ('day', 'night')),
     contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE RESTRICT,
     codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
     workers INTEGER NOT NULL DEFAULT 0 CHECK (workers BETWEEN 0 AND 100000),   -- «Рабочие» (исторически — всё «количество»)
@@ -1857,7 +1860,7 @@ CREATE TABLE IF NOT EXISTS headcount_records (
     entered_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
-    UNIQUE (object_id, work_date, contractor_id, codifier_id),
+    UNIQUE (object_id, work_date, contractor_id, codifier_id, shift),
     CHECK (workers + itr + mech >= 1)
 );
 CREATE INDEX IF NOT EXISTS idx_hc_records_date ON headcount_records (work_date, object_id);
@@ -1870,6 +1873,7 @@ CREATE TABLE IF NOT EXISTS headcount_history (
     record_id INTEGER REFERENCES headcount_records (id) ON DELETE SET NULL,
     object_id INTEGER NOT NULL REFERENCES objects (id) ON DELETE CASCADE,
     work_date TEXT NOT NULL,
+    shift TEXT NOT NULL DEFAULT 'day' CHECK (shift IN ('day', 'night')),
     contractor_id INTEGER NOT NULL REFERENCES headcount_contractors (id) ON DELETE CASCADE,
     codifier_id INTEGER NOT NULL REFERENCES work_codifier (id) ON DELETE RESTRICT,
     old_workers INTEGER,
@@ -1982,6 +1986,33 @@ CREATE TABLE IF NOT EXISTS express_log (
     text TEXT,
     ok INTEGER NOT NULL DEFAULT 1,
     error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS express_summary_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5',
+    send_time TEXT NOT NULL DEFAULT '12:30',
+    day_offset INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    note TEXT,
+    effective_from TEXT NOT NULL DEFAULT (datetime('now')),
+    legacy_schedule_id INTEGER UNIQUE REFERENCES express_schedules(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS express_summary_recipients (
+    schedule_id INTEGER NOT NULL REFERENCES express_summary_schedules(id) ON DELETE CASCADE,
+    contact_id INTEGER NOT NULL REFERENCES express_contacts(id) ON DELETE CASCADE,
+    PRIMARY KEY(schedule_id, contact_id)
+);
+CREATE TABLE IF NOT EXISTS express_summary_deliveries (
+    schedule_id INTEGER NOT NULL REFERENCES express_summary_schedules(id) ON DELETE CASCADE,
+    contact_id INTEGER NOT NULL REFERENCES express_contacts(id) ON DELETE CASCADE,
+    run_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sending','sent')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT,
+    last_error TEXT,
+    PRIMARY KEY(schedule_id,contact_id,run_date)
 );
 CREATE INDEX IF NOT EXISTS idx_express_log_at ON express_log (at);
 

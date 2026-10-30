@@ -37,7 +37,7 @@ MAIN_ACTIONS = {"entry": "Внести численность", "edit": "Уто�
 HELP_TEXT = ("Выберите действие кнопками:\n"
              "• Внести численность — за сегодня или на дату.\n"
              "• Уточнить данные — за сегодня или на дату; прежние значения сохраняются в истории.\n"
-             "• Получить сводку — сегодня, неделя или месяц. За неделю и месяц показывается среднее по дням с данными.\n"
+             "• Получить сводку — сегодня, неделя или месяц. Среднее за текущую неделю и месяц учитывает все прошедшие календарные дни.\n"
              "Доступны только закреплённые за вами строки. Ввод: строка → рабочие → ИТР → механизаторы.\n"
              "Команды: /start — главное меню, /help — эта справка.")
 
@@ -110,14 +110,17 @@ def _say(contact, request_id: Optional[int], text: str, bubble: Optional[list] =
 def day_lines(conn, object_id: int, work_date: str, limit: int = 12):
     """Что за день уже внесено по объекту: (строки текста, рабочих, ИТР, механизаторов)."""
     rows = conn.execute(
-        f"SELECT {headcount.CTR_NAME} AS ctr_name, {headcount.CTR_INN} AS ctr_inn, c.id AS cid, w.code, w.name AS wname, r.workers, r.itr, r.mech "
-        "FROM headcount_records r JOIN headcount_contractors c ON c.id = r.contractor_id JOIN work_codifier w ON w.id = r.codifier_id "
-        f"LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE r.object_id = ? AND r.work_date = ? ORDER BY {headcount.CTR_NAME}, w.code",
+        f"SELECT {headcount.CTR_NAME} AS ctr_name, {headcount.CTR_INN} AS ctr_inn, c.id AS cid, COALESCE(cw.note, '') AS note, "
+        "SUM(r.workers) AS workers, SUM(r.itr) AS itr, SUM(r.mech) AS mech "
+        "FROM headcount_records r JOIN headcount_contractors c ON c.id=r.contractor_id "
+        "LEFT JOIN counterparties cp ON cp.id=c.counterparty_id "
+        "LEFT JOIN headcount_contractor_works cw ON cw.contractor_id=r.contractor_id AND cw.codifier_id=r.codifier_id "
+        f"WHERE r.object_id=? AND r.work_date=? GROUP BY c.id, COALESCE(cw.note, '') ORDER BY {headcount.CTR_NAME}, note",
         (object_id, work_date)).fetchall()
     lines = []
     for r in rows[:limit]:
         who = r["ctr_name"] or (f"ИНН {r['ctr_inn']}" if r["ctr_inn"] else f"№{r['cid']}")
-        lines.append(f"• {_short(who, 36)} · {_short(r['code'] + ' ' + r['wname'], 40)}: рабочие {r['workers']}, ИТР {r['itr']}, механизаторы {r['mech']}")
+        lines.append(f"• {who} / {r['note'] or '—'} / {r['workers']} / {r['itr']} / {r['mech']}")
     if len(rows) > limit:
         lines.append(f"… и ещё {len(rows) - limit}")
     return lines, sum(r["workers"] for r in rows), sum(r["itr"] for r in rows), sum(r["mech"] for r in rows)
@@ -146,7 +149,7 @@ def _row_btn(r) -> str:
 
 def _entered(conn, req) -> dict:
     return {(r["contractor_id"], r["codifier_id"]): r for r in conn.execute(
-        "SELECT contractor_id, codifier_id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ?", (req["object_id"], req["work_date"]))}
+        "SELECT contractor_id, codifier_id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND shift = ?", (req["object_id"], req["work_date"], _load_dialog(req).get("shift", "day")))}
 
 
 def own_lines(conn, req, rows):
@@ -175,10 +178,17 @@ def intro(conn, request_id: int):
     return text, bubble
 
 
+def _shift_buttons(req):
+    return [[button("Дневная смена", {"a": "shift", "r": req["id"], "v": "day"}),
+             button("Ночная смена", {"a": "shift", "r": req["id"], "v": "night"})]]
+
+
 def _menu(conn, req, page: int = 0):
     rows = _own_rows(conn, req)
     lines, workers, itr, mech, done = own_lines(conn, req, rows)
     head = f"Объект «{req['object_name']}», {_fmt_date(req['work_date'])}."
+    shift = _load_dialog(req).get("shift", "day")
+    head += "\n" + ("Дневная смена" if shift == "day" else "Ночная смена (дата начала)")
     if not rows:
         text = (head + "\n\nЗа вами не закреплено ни одной строки (подрядчик + вид работ) по этому объекту. "
                 "Руководитель назначает ответственных в «Численность → Подрядчики».")
@@ -193,7 +203,7 @@ def _menu(conn, req, page: int = 0):
         head += "\n" + MAIN_ACTIONS[mode] + "."
         if not rows:
             message = "Все ваши строки за этот день уже внесены. Для изменения выберите «Уточнить данные»." if mode == "entry" else "За этот день по вашим строкам ничего не внесено. Выберите «Внести численность»."
-            return head + "\n\n" + message, [[button("Готово", {"a": "close", "r": req["id"]})]]
+            return head + "\n\n" + message, _shift_buttons(req) + [[button("Готово", {"a": "close", "r": req["id"]})]]
     pages = (len(rows) + PAGE - 1) // PAGE
     page = max(0, min(page, pages - 1))
     # Полные подписи строк — в тексте нумерованным списком (кнопка в eXpress обрезает длинное название, 2026-10-28);
@@ -209,6 +219,7 @@ def _menu(conn, req, page: int = 0):
         nav.append(button("Далее ›", {"a": "menu", "r": req["id"], "p": page + 1}))
     if nav:
         bubble.append(nav)
+    bubble += _shift_buttons(req)
     bubble.append([button("Готово", {"a": "close", "r": req["id"]})])
     return head + ("\n\nВыберите строку" + (f" (стр. {page + 1} из {pages})" if pages > 1 else "") + ":"), bubble
 
@@ -292,7 +303,7 @@ def _select_object(conn, contact, session: dict, obj) -> None:
 
 def _self_summary(conn, contact, obj, period: str) -> None:
     today = headcount.now_msk().date()
-    start = today - timedelta(days=6) if period == "week" else today.replace(day=1) if period == "month" else today
+    start = today - timedelta(days=today.weekday()) if period == "week" else today.replace(day=1) if period == "month" else today
     rows = conn.execute(
         "SELECT r.work_date, SUM(r.workers) AS workers, SUM(r.itr) AS itr, SUM(r.mech) AS mech "
         "FROM headcount_records r JOIN headcount_contractors c ON c.id = r.contractor_id "
@@ -306,14 +317,14 @@ def _self_summary(conn, contact, obj, period: str) -> None:
     if not rows:
         text += "\nЗа этот период данных нет."
     else:
-        divisor = len(rows) if period != "today" else 1
+        divisor = (today - start).days + 1
         values = {k: sum(r[k] for r in rows) / divisor for k in ("workers", "itr", "mech")}
         fmt = lambda n: f"{n:.3f}".rstrip("0").rstrip(".").replace(".", ",")
         prefix = "Итого" if period == "today" else "Среднее за день"
         text += (f"\n{prefix}: рабочие {fmt(values['workers'])}, ИТР {fmt(values['itr'])}, "
                  f"механизаторы {fmt(values['mech'])}; всего {fmt(sum(values.values()))}.")
         if period != "today":
-            text += f"\nДней с данными: {len(rows)} из {(today - start).days + 1}. Дни без данных в среднее не включены."
+            text += f"\nДней с данными: {len(rows)} из {(today - start).days + 1}. Среднее рассчитано по всем календарным дням периода, включая дни без работы."
     _set_session(conn, contact, {"step": "home"})
     _say(contact, None, text)
 
@@ -357,8 +368,8 @@ def _main_button(conn, contact, data: dict) -> bool:
 
 
 def _existing_text(conn, req, contractor_id: int, codifier_id: int) -> str:
-    cur = conn.execute("SELECT workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
-                       (req["object_id"], req["work_date"], contractor_id, codifier_id)).fetchone()
+    cur = conn.execute("SELECT workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ? AND shift = ?",
+                       (req["object_id"], req["work_date"], contractor_id, codifier_id, _load_dialog(req).get("shift", "day"))).fetchone()
     return f"\nСейчас внесено: рабочие {cur['workers']}, ИТР {cur['itr']}, механизаторы {cur['mech']}. Новое значение заменит прежнее." if cur else ""
 
 
@@ -621,6 +632,10 @@ def _button(conn, contact, data: dict) -> None:
     dialog = _load_dialog(req)
     if action == "menu":
         _show_menu(conn, contact, req, int(data.get("p") or 0))
+    elif action == "shift" and data.get("v") in ("day", "night"):
+        _store_dialog(conn, req["id"], {"step": "menu", "mode": dialog.get("mode"), "shift": data["v"]})
+        conn.commit()
+        _show_menu(conn, contact, _request(conn, req["id"]))
     elif action == "close":
         _close(conn, contact, req)
     elif action == "row":
@@ -730,7 +745,7 @@ def _save_row(conn, contact, req, dialog: dict, *, mech: int) -> None:
         return
     try:
         result = headcount.save_row_from_bot(req["object_id"], date.fromisoformat(req["work_date"]), contractor_id, codifier_id,
-                                            workers, itr, mech, contact_name=contact["name"])
+                                            workers, itr, mech, contact_name=contact["name"], shift=dialog.get("shift", "day"))
     except ValueError as exc:
         dialog.update({"step": "workers"})
         dialog.pop("workers", None)

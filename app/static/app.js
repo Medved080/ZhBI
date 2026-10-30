@@ -7513,7 +7513,7 @@ let pollInFlight = false;
 // меняются только переимпортом чертежа и точечно не применяются.
 const DELTA_FIELDS = [
   "current_status", "contract_id", "counterparty_code",
-  "planned_delivery_date", "actual_delivery_date",
+  "planned_delivery_date", "planned_installation_date", "actual_delivery_date",
   "project_delivery_date", "project_smr_start_date",
 ];
 
@@ -8584,7 +8584,7 @@ function cardSkeletonHtml(canEdit) {
     </div>
     <div class="card-block" id="card-contract-block"></div>
     <div class="card-block"><h4>Даты поставки</h4>
-      <div id="card-dates"></div>
+      <div id="card-dates"></div><div id="card-installation-date"></div>
     </div>
     <div id="card-zones-slot"></div>
     <div class="card-block"><h4>Комментарий</h4>
@@ -8739,6 +8739,18 @@ async function showCard(element) {
   const блокДат = document.getElementById("card-dates");
   const отпуститьДаты = holdCardBoxHeight(блокДат);
   блокДат.innerHTML = deliveryDatesHtml(element);
+  const installHost = document.getElementById("card-installation-date");
+  installHost.textContent = element.planned_installation_date ? `Плановая дата монтажа: ${element.planned_installation_date}` : "";
+  if (element.current_status === "ready_for_installation" && can("planned_date", "write")) {
+    import("/static/planned-installation.js").then(({ mountInstallationDate }) => {
+      if (cardElement?.id !== element.id || !installHost.isConnected) return;
+      const ids = [...new Set([element.id, ...state.multiSelectedIds])];
+      mountInstallationDate(installHost, { ids, value: element.planned_installation_date,
+        request: (path, body) => api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+        onSaved: (items) => { items.forEach(applyElementDelta); if (cardElement) showCard(state.byId.get(cardElement.id) || cardElement); } });
+    });
+  }
+
 
   // У элементов старого стандарта имён слоёв зон нет вовсе — блок не
   // показывается (гнездо остаётся пустым, каркас от этого не меняется).

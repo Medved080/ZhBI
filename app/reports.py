@@ -570,7 +570,7 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
         return [{"d": d, "n": n} for d, n in sorted(by_day.items())]
 
     fact_montage = fact_rows(("installed", "accepted"))
-    fact_delivery = fact_rows(("delivered", "installed", "accepted"))
+    fact_delivery = fact_rows(("delivered", "ready_for_installation", "installed", "accepted"))
 
     # Прогноз — последняя актуализация графика объекта (2026-08-14, живой
     # запрос: «от линии факта должна идти штрихпунктирная линия прогноза»).

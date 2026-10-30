@@ -31,6 +31,7 @@ class Status(str, Enum):
     IN_PRODUCTION = "in_production"  # в производстве
     SHIPPED = "shipped"  # отгружен
     DELIVERED = "delivered"  # доставлен на площадку
+    READY_FOR_INSTALLATION = "ready_for_installation"
     INSTALLED = "installed"  # смонтирован
     ACCEPTED = "accepted"  # принят
 
@@ -45,6 +46,7 @@ STATUS_ORDER = [
     Status.IN_PRODUCTION,
     Status.SHIPPED,
     Status.DELIVERED,
+    Status.READY_FOR_INSTALLATION,
     Status.INSTALLED,
     Status.ACCEPTED,
 ]
@@ -55,12 +57,14 @@ STATUS_LABELS_RU = {
     Status.IN_PRODUCTION: "В производстве",
     Status.SHIPPED: "Отгружен",
     Status.DELIVERED: "Доставлен",
+    Status.READY_FOR_INSTALLATION: "Готов к монтажу",
     Status.INSTALLED: "Смонтирован",
     Status.ACCEPTED: "Принят",
 }
 
 
 class ElementOut(BaseModel):
+    planned_installation_date: Optional[str] = None
     # Поля, правленные РУКАМИ в справочнике элементов (этап 3, решение Э4).
     # Объявлены в модели явно: без этого pydantic срезал их из ответа, и
     # интерфейс не мог показать, что значение здесь «своё», а не из чертежа

@@ -1,0 +1,4 @@
+.install-date-form { display:flex; flex-wrap:wrap; align-items:flex-end; gap:.5rem; margin:.75rem 0; }
+.install-date-form label { display:flex; flex-direction:column; gap:.25rem; }
+.install-date-form input,.install-date-form button { font:inherit; color:inherit; background:transparent; border:1px solid currentColor; border-radius:.375rem; padding:.375rem .625rem; min-height:2.25rem; }
+.install-date-form p { flex-basis:100%; margin:.25rem 0; }

@@ -16,6 +16,34 @@ from app import activity
 from app.contracts import enrich_element_row
 
 
+def set_planned_installation_dates(conn, element_ids, value, user=None):
+    """Атомарная правка даты только для готовых к монтажу изделий. Транзакцией владеет вызывающий код."""
+    from datetime import date
+    from fastapi import HTTPException
+    if value is not None:
+        try:
+            value = date.fromisoformat(value).isoformat()
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Плановая дата монтажа: ожидается существующая дата ГГГГ-ММ-ДД")
+    ids = list(dict.fromkeys(element_ids))
+    rows = [conn.execute("SELECT * FROM elements WHERE id = ?", (i,)).fetchone() for i in ids]
+    if any(r is None for r in rows):
+        raise HTTPException(status_code=404, detail="Одно или несколько изделий не найдены")
+    if any(r["current_status"] != "ready_for_installation" for r in rows):
+        raise HTTPException(status_code=409, detail="Плановую дату монтажа можно менять только у изделий в статусе «Готов к монтажу». Выберите только такие изделия")
+    updated = []
+    for r in rows:
+        conn.execute("UPDATE elements SET planned_installation_date = ?, updated_at = datetime('now') WHERE id = ?", (value, r["id"]))
+        if r["planned_installation_date"] != value:
+            activity.log("planned_installation_date", user=user, entity_type="element", entity_id=r["id"],
+                         element_type=r["element_type"], subtype=r["subtype"], mark=r["mark"],
+                         old_value=r["planned_installation_date"], new_value=value)
+        item = dict(conn.execute("SELECT * FROM elements WHERE id = ?", (r["id"],)).fetchone())
+        enrich_element_row(conn, item)
+        updated.append(item)
+    return updated
+
+
 def set_planned_delivery_date(conn, element_id: int, planned_delivery_date: Optional[str],
                               user: Optional[sqlite3.Row] = None) -> Optional[dict]:
     """user — кто правит. Нужен только журналу (app/activity.py) и потому

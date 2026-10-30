@@ -27,11 +27,20 @@ conn.commit()
 w = {r["code"]: r["id"] for r in conn.execute("SELECT id, code FROM work_codifier")}
 conn.close()
 
+def assign_fixture(ctr):
+    conn = db.get_connection()
+    conn.executemany("INSERT OR IGNORE INTO headcount_contractor_works (contractor_id,codifier_id) VALUES (?,?)", [(ctr, wid) for wid in w.values()])
+    conn.commit();conn.close()
+
+
 class R:
     def __init__(self, code, data): self.status_code, self._d = code, data
     def json(self): return self._d
 def call(fn, **kw):
-    try: return R(200, fn(**kw, user=admin))
+    try:
+        result=fn(**kw,user=admin)
+        if fn is hc.create_contractor: assign_fixture(result["id"])
+        return R(200,result)
     except HTTPException as e: return R(e.status_code, {"detail": e.detail})
 class C:
     def post(self, url, json): return call(hc.create_contractor, object_id=int(url.split("/")[2]), body=hc.ContractorIn(**json))
@@ -105,7 +114,7 @@ r = c.delete(f"/objects/{obj}/headcount/contractors/{b}"); ok(r.status_code==409
 # ---- отчёт
 conn = db.get_connection()
 conn.execute("UPDATE objects SET smu_id = (SELECT id FROM smu_catalog LIMIT 1) WHERE id IN (?,?)", (obj, obj2)); conn.commit(); conn.close()
-r = hc.create_contractor(object_id=obj2, body=hc.ContractorIn(counterparty_id=cp_a), user=admin); a2 = r["id"]
+r = hc.create_contractor(object_id=obj2, body=hc.ContractorIn(counterparty_id=cp_a), user=admin); a2 = r["id"]; assign_fixture(a2)
 base = date(2026, 9, 1)
 def put(o, ctr, code, d, n):
     hc.save_records(object_id=o, body=hc.SaveIn(date=d.isoformat(), rows=[hc.RowIn(contractor_id=ctr, codifier_id=w[code], workers=n)]), user=admin)
@@ -119,16 +128,16 @@ def rep(**kw):
 j = rep()
 by = {x["object"]["key"]: x for x in j["rows"]}
 ok(by[str(obj)]["fact_day"] == 13 and by[str(obj2)]["fact_day"] == 4, "отчёт: факт за опорный день")
-ok(j["week_days"] == 7 and j["month_days"] == 7, "делитель: 7 дней с данными")
-ok(abs(by[str(obj)]["week_avg"] - (70 + 3) / 7) < 0.06, "среднее за неделю по объекту")
-ok(abs(j["total"]["week_avg"] - (98 + 3) / 7) < 0.15 and j["total"]["fact_day"] == 17, "итог = сумма по объектам")
+ok(j["week_days"] == 1 and j["month_days"] == 7, "понедельник: неделя /1, месяц /7")
+ok(abs(by[str(obj)]["week_avg"] - 13) < 0.06, "среднее за неделю по объекту")
+ok(abs(j["total"]["week_avg"] - 17) < 0.15 and j["total"]["fact_day"] == 17, "итог = сумма по объектам")
 j2 = rep(levels="section,work")
 ok(abs(sum(x["week_avg"] for x in j2["rows"]) - j["total"]["week_avg"]) < 0.2, "аддитивность при другой группировке")
 j3 = rep(levels="contractor")
 ok(len(j3["rows"]) == 1 and j3["rows"][0]["fact_day"] == 17, "подрядчик с одним ИНН на двух объектах сведён в одну строку")
 ok("Альфа" in j3["rows"][0]["contractor"]["label"] and "7745000111" in j3["rows"][0]["contractor"]["label"], "подпись «Название (ИНН …)»")
 j4 = rep(work_code="130")
-ok(j4["total"]["fact_day"] == 14 and j4["week_days"] == 7, "отбор по началу кода 130")
+ok(j4["total"]["fact_day"] == 14 and j4["week_days"] == 1, "отбор по началу кода 130")
 j5 = rep(date_from="2026-09-01", date_to="2026-09-03")
 ok(j5["total"]["period_sum"] == 3*14 and j5["period_days"] == 3 and abs(j5["total"]["period_avg"] - 14) < 0.1, "период: сумма и среднее")
 ok(len(j["months"]) == 1 and j["months"][0]["month"] == "2026-09", "помесячная серия")
@@ -184,10 +193,10 @@ ok(hc.list_records(object_ids=None, date_from=None, date_to=None, contractor_q=N
    "записи: без грантов — пусто")
 print("ПРОСМОТР ПРОШЁЛ")
 
-# ---- умолчания: отчёт на последний день с данными, подсказки при пустом объекте
+# ---- умолчания: текущая дата, подсказки при пустом объекте
 jd = rep(as_of=None)
 last_d = db.get_connection().execute("SELECT MAX(work_date) FROM headcount_records WHERE object_id IN (?,?) AND work_date <= ?", (obj, obj2, hc.now_msk().date().isoformat())).fetchone()[0]
-ok(jd["as_of"] == last_d and jd["total"]["fact_day"] > 0, "отчёт без даты — на последний день с данными в выборке, а не «вчера»")
+ok(jd["as_of"] == hc.now_msk().date().isoformat(), "отчёт без даты — на сегодня, текущая календарная неделя и месяц")
 ok(hc.get_day(object_id=obj, day="2020-01-01", user=admin)["last_date"] == last_d or hc.get_day(object_id=obj, day="2020-01-01", user=admin)["last_date"] is not None, "день: подсказка «последний день с данными»")
 empty_obj = [r["id"] for r in db.get_connection().execute("SELECT id FROM objects WHERE id NOT IN (?, ?) ORDER BY id LIMIT 1", (obj, obj2))][0]
 re_ = hc.list_records(object_ids=str(empty_obj), date_from=None, date_to=None, contractor_q=None, work_code=None, source=None, late=False, limit=10, offset=0, user=admin)
@@ -248,8 +257,8 @@ from io import BytesIO
 from openpyxl import load_workbook
 wb = load_workbook(BytesIO(x.body)); wsx = wb.active
 heads = [c.value for c in wsx[1]]
-ok(heads[7:11] == ["Рабочие", "ИТР", "Механизаторы", "Итого"], "Excel записей: колонки Рабочие / ИТР / Механизаторы / Итого")
-ok(sorted(r[10] for r in wsx.iter_rows(min_row=2, values_only=True)) == [5, 11], "Excel записей: «Итого» по строкам 5 и 11")
+ok(heads[8:12] == ["Рабочие", "ИТР", "Механизаторы", "Итого"], "Excel записей: колонки Рабочие / ИТР / Механизаторы / Итого")
+ok(sorted(r[11] for r in wsx.iter_rows(min_row=2, values_only=True)) == [5, 11], "Excel записей: «Итого» по строкам 5 и 11")
 xr = hc.report_xlsx(levels="object", as_of=itr_day.isoformat(), date_from=None, date_to=None, object_ids=str(obj), smu_id=None, section=None, work_code=None,
                     contractor_inn=None, staff="itr", user=admin)
 ok("ИТР" in [c.value for c in load_workbook(BytesIO(xr.body)).active[1]][1], "Excel отчёта по ИТР: показатель назван в шапке")
@@ -283,6 +292,7 @@ print("ИЕРАРХИЯ ПРОШЛА")
 # ---- смена подрядчика / вида работ у внесённой строки (re-key), в том числе обмен ключами
 mv_c1 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-1 ООО", inn="7701111111", create_counterparty=True), user=admin)["id"]
 mv_c2 = hc.create_contractor(object_id=obj, body=hc.ContractorIn(name="Переезд-2 ООО", inn="7702222222", create_counterparty=True), user=admin)["id"]
+assign_fixture(mv_c1); assign_fixture(mv_c2)
 D = "2026-02-02"
 def save(rows): return hc.save_records(object_id=obj, body=hc.SaveIn(date=D, rows=rows), user=admin)
 r0 = save([hc.RowIn(contractor_id=mv_c1, codifier_id=w["130-01-01"], workers=10, itr=1), hc.RowIn(contractor_id=mv_c2, codifier_id=w["130-03"], workers=5, itr=0)])
@@ -332,8 +342,8 @@ lr = hc.list_records(object_ids=str(obj), date_from=mday.isoformat(), date_to=md
 ok((lr["sum_workers"], lr["sum_itr"], lr["sum_mech"], lr["sum_total"]) == (11, 2, 4, 17), "«Все данные»: итоги по трём категориям")
 x = hc.records_xlsx(object_ids=str(obj), date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_q=None, work_code=None, source=None, late=False, user=admin)
 wsx = load_workbook(BytesIO(x.body)).active
-ok([c.value for c in wsx[1]][7:11] == ["Рабочие", "ИТР", "Механизаторы", "Итого"], "Excel записей: колонка «Механизаторы» рядом с ИТР")
-ok(sorted(r_[10] for r_ in wsx.iter_rows(min_row=2, values_only=True)) == [4, 13], "Excel записей: «Итого» учитывает механизаторов")
+ok([c.value for c in wsx[1]][8:12] == ["Рабочие", "ИТР", "Механизаторы", "Итого"], "Excel записей: колонка «Механизаторы» рядом с ИТР")
+ok(sorted(r_[11] for r_ in wsx.iter_rows(min_row=2, values_only=True)) == [4, 13], "Excel записей: «Итого» учитывает механизаторов")
 xh = hc.history_log_xlsx(object_ids=str(obj), date_from=mday.isoformat(), date_to=mday.isoformat(), contractor_q=None, work_code=None, source=None, user=admin)
 ok("Механизаторы было" in [c.value for c in load_workbook(BytesIO(xh.body)).active[1]], "Excel журнала: колонки «Механизаторы было / стало»")
 xr = hc.report_xlsx(levels="object", as_of=mday.isoformat(), date_from=None, date_to=None, object_ids=str(obj), smu_id=None, section=None, work_code=None,

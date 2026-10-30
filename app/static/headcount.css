@@ -23,6 +23,12 @@
 .hc-tab.on { color: var(--hc-ink); border-bottom-color: var(--hc-accent); font-weight: 600; }
 .hc-tab:focus-visible, .hc-btn:focus-visible, .hc-link:focus-visible, .hc-tog:focus-visible { outline: 2px solid var(--hc-accent); outline-offset: 2px; }
 .hc-bar { display: flex; align-items: center; gap: 0.625rem; margin: 0.5rem 0; flex-wrap: wrap; }
+.hc-chart-daily { overflow-x: auto; }
+.hc-chart-daily .hc-col { flex: 0 0 5.5rem; }
+.hc-root.hc-root input[type="number"] { min-height: 2.25rem; }
+.hc-bar label.hc-shift-field { flex-direction: row; align-items: center; gap: .5rem; }
+.ex-summary-dialog.ex-card { width: min(64rem, 94vw); max-width: 94vw; max-height: 90vh; margin: auto; overflow: auto; border: 1px solid var(--hc-line); border-radius: .625rem; background: var(--hc-bg); color: var(--hc-ink); padding: 1rem; }
+.ex-summary-dialog::backdrop { background: #0007; }
 .hc-responsible { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .hc-responsible select { min-width: 12rem; flex: 1; }
 .hc-archive-cell { text-align: center; }

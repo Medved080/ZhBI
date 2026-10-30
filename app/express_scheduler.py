@@ -205,6 +205,8 @@ def tick(now: Optional[datetime] = None) -> dict:
         _retry_failed(conn, now, stats)
         _reminders(conn, now, stats)
         _summaries(conn, now, stats)
+        from app.express_summaries import dispatch
+        dispatch(conn, now, stats)
     finally:
         conn.close()
     return stats

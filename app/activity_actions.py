@@ -244,6 +244,7 @@ ACTIONS = {
     "smu_create": ("СМУ добавлено", _ST),
     "smu_rename": ("СМУ переименовано", _ST),
     "smu_archive": ("Подразделение переведено в архивные или возвращено", _ST),
+    "planned_installation_date": ("Плановая дата монтажа изделия изменена", _D),
     "individual_create": ("Физлицо добавлено", _ST),
     "individual_rename": ("Физлицо переименовано", _ST),
     "mark_prefix_set": ("Префикс марки задан", _ST),

@@ -934,7 +934,25 @@ def _link_headcount_contractors(conn) -> str:
     return note
 
 
+def _split_express_summaries(conn):
+    count = 0
+    for old in conn.execute("SELECT * FROM express_schedules WHERE summary_time IS NOT NULL AND summary_contact_id IS NOT NULL").fetchall():
+        conn.execute("INSERT OR IGNORE INTO express_summary_schedules (object_id,weekdays,send_time,day_offset,active,note,effective_from,legacy_schedule_id) VALUES (?,?,?,?,?,?,?,?)",
+                     (old["object_id"],old["weekdays"],old["summary_time"],old["day_offset"],old["active"],old["note"],old["effective_from"],old["id"]))
+        sid=conn.execute("SELECT id FROM express_summary_schedules WHERE legacy_schedule_id=?", (old["id"],)).fetchone()[0]
+        conn.execute("INSERT OR IGNORE INTO express_summary_recipients (schedule_id,contact_id) VALUES (?,?)",(sid,old["summary_contact_id"]))
+        # Уже обработанные рассылки не повторяются после обновления в окне догона.
+        conn.execute("INSERT OR IGNORE INTO express_summary_deliveries (schedule_id,contact_id,run_date,status,attempts,last_attempt_at) "
+                     "SELECT ?,?,date(work_date,?),'sent',1,summary_at FROM express_requests WHERE schedule_id=? AND summary_at IS NOT NULL",
+                     (sid, old["summary_contact_id"], f'{-old["day_offset"]} day', old["id"]))
+        conn.execute("UPDATE express_schedules SET summary_time=NULL,summary_contact_id=NULL WHERE id=?",(old["id"],))
+        count += 1
+    return f"Сводок перенесено в независимые расписания: {count}"
+
+
 RELEASE_TASKS = [
+    {"name": "2026-10-30-express-independent-summaries", "version": "0.122", "date": "2026-10-30",
+     "title": "Разделить расписания опроса и рассылки сводок", "why": "сохранить прежние рассылки в независимых расписаниях", "kind": KIND_DATA, "run": _split_express_summaries},
     {
         "name": "2026-08-04-element-uid-backfill",
         "version": "0.36",

@@ -77,7 +77,7 @@ def plan_day_counts(conn, where: str, params: list, object_id: Optional[int], so
     return pack(montage), pack(delivery)
 
 
-DELIVERED_UP = ("delivered", "installed", "accepted")
+DELIVERED_UP = ("delivered", "ready_for_installation", "installed", "accepted")
 DELIVERY_LEAD_DAYS = 14   # запас изделий для обеспечения монтажа
 INSTALLED_UP = ("installed", "accepted")
 TEMPO_WINDOW_DAYS = 7

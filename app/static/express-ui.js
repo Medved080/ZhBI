@@ -106,24 +106,63 @@ export function mountExpress(el, ctx) {
     const contactOptions = (sel, emptyLabel) => `${emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : ""}${activeContacts.map((c) => `<option value="${c.id}" ${String(sel) === String(c.id) ? "selected" : ""}>${esc(c.name)}</option>`).join("")}`;
     pane.innerHTML = `${botCallout()}
       <div class="hc-bar"><strong>Расписания опроса</strong><span class="hc-muted">кого и когда бот спрашивает о численности по этому объекту</span>
-        ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-new">Добавить расписание</button><button type="button" class="hc-btn" id="ex-send-open">Спросить сейчас</button>` : ""}</div>
+        ${ctx.canWrite ? `<button type="button" class="hc-btn primary" id="ex-new">Добавить расписание</button><button type="button" class="hc-btn" id="ex-send-open">Спросить сейчас</button>` : ""}<button type="button" class="hc-btn" id="ex-summaries-open">Рассылка сводок…</button></div>
       ${sf ? `<form class="ex-card" id="ex-send-form"><h4>Спросить сейчас</h4><div class="ex-row">
           ${field("Кого спросить", `<select id="ex-s-contact">${contactOptions(sf.contact_id, "— выберите —")}</select>`)}
           ${field("За какой день", `<input type="date" id="ex-s-date" value="${esc(sf.date)}" max="${esc(todayIso())}">`)}</div>
         <div class="ex-actions"><button type="submit" class="hc-btn primary">Отправить</button><button type="button" class="hc-btn" id="ex-s-cancel">Отмена</button></div></form>` : ""}
       ${f ? scheduleForm(f, contactOptions) : ""}
       ${msgLine()}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>Дни</th><th>Отправка</th><th>Спрашиваем за</th><th>Напоминание</th><th>Сводка</th><th>Следующий запуск</th><th></th></tr></thead><tbody>${
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Контакт</th><th>Дни</th><th>Отправка</th><th>Спрашиваем за</th><th>Напоминание</th><th>Следующий запуск</th><th></th></tr></thead><tbody>${
         st.schedules.length ? st.schedules.map((s) => `<tr${s.active ? "" : ' class="hc-muted"'}>
           <td>${esc(s.contact_name)}${s.contact_bound ? "" : ` <span class="hc-badge warn" title="Контакт ещё не писал боту: пока он не отправит боту /start, писать ему некуда">не писал боту</span>`}</td>
           <td style="white-space:nowrap">${daysText(s.weekdays)}</td><td class="hc-num">${esc(s.send_time)}</td>
           <td>${s.day_offset === 0 ? "сегодня" : "вчера"}</td><td class="hc-num">${esc(s.remind_time || "—")}</td>
-          <td>${s.summary_time ? `${esc(s.summary_time)} → ${esc(s.summary_contact_name || "—")}` : "—"}</td>
           <td>${s.active ? esc(fmtMoment(s.next_run) || "—") : '<span class="hc-badge">приостановлено</span>'}</td>
           <td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-edit="${s.id}">Изменить</button> <button type="button" class="hc-btn danger mini" data-del="${s.id}">Удалить</button>` : ""}</td></tr>`).join("")
-        : `<tr><td colspan="8" class="hc-muted">Расписаний нет. Добавьте контакт на вкладке «Контакты» и заведите расписание.</td></tr>`}</tbody></table></div>
+        : `<tr><td colspan="7" class="hc-muted">Расписаний нет. Добавьте контакт на вкладке «Контакты» и заведите расписание.</td></tr>`}</tbody></table></div>
       <p class="ex-hint">Время — московское. Срок внесения численности по приказу — до 11:00. Ответ контакта попадает в «Ввод численности» с источником «бот».</p>`;
     wireSchedules();
+    pane.querySelector("#ex-summaries-open")?.addEventListener("click", openSummaryWindow);
+  }
+
+  let summaryDialog = null;
+  async function openSummaryWindow() {
+    summaryDialog?.remove();
+    const dialog = document.createElement("dialog"); summaryDialog = dialog;
+    dialog.className = "hc-root ex-card ex-summary-dialog";
+    dialog.setAttribute("aria-label", "Рассылка сводок по объекту");
+    document.body.appendChild(dialog); dialog.showModal();
+    const base = `/objects/${ctx.objectId}/express/summary-schedules`;
+    let rows = [], editing = null, error = "", busy = false;
+    const fresh = () => ({contact_ids:[],weekdays:[1,2,3,4,5],send_time:"12:30",day_offset:0,active:true,note:""});
+    let form = fresh();
+    const loadRows = async () => { rows = await api.get(base); };
+    const render = () => {
+      dialog.innerHTML = `<div class="hc-bar"><h3>Рассылка сводок по объекту</h3><button type="button" class="hc-btn" data-close>Закрыть</button></div>
+        <p>Обе смены. Подрядчик / Примечание / Рабочие / ИТР / Механизаторы. Расписание независимо от опроса ответственных.</p>
+        <p class="hc-msg bad" role="alert">${esc(error)}</p>
+        <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Получатели</th><th>Дни</th><th>Время МСК</th><th>За день</th><th></th></tr></thead><tbody>${rows.map((s) => `<tr><td>${esc(s.contact_names.join(", "))}${s.active ? "" : " (приостановлено)"}</td><td>${daysText(s.weekdays)}</td><td>${esc(s.send_time)}</td><td>${s.day_offset ? "вчера" : "сегодня"}</td><td>${ctx.canWrite ? `<button type="button" class="hc-btn mini" data-summary-edit="${s.id}">Изменить</button> <button type="button" class="hc-btn mini danger" data-summary-del="${s.id}">Удалить</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="5">Рассылок пока нет.</td></tr>'}</tbody></table></div>
+        ${ctx.canWrite ? `<form><h4>${editing ? "Изменить рассылку" : "Добавить рассылку"}</h4>
+        <fieldset><legend>Получатели (можно несколько)</legend><div class="ex-row">${st.contacts.filter((c) => c.active).map((c) => `<label class="ex-check"><input type="checkbox" data-summary-contact="${c.id}" ${form.contact_ids.includes(c.id) ? "checked" : ""}>${esc(c.name)}</label>`).join("")}</div></fieldset>
+        <div class="ex-row">${field("Время МСК", `<input type="time" name="time" value="${esc(form.send_time)}" required>`)}${field("За день", `<select name="offset"><option value="0" ${form.day_offset === 0 ? "selected" : ""}>Сегодня</option><option value="-1" ${form.day_offset === -1 ? "selected" : ""}>Вчера</option></select>`)}</div>
+        <div class="ex-days">${DAYS.map(([d,t]) => `<label class="ex-day"><input type="checkbox" data-summary-day="${d}" ${form.weekdays.includes(d) ? "checked" : ""}>${t}</label>`).join("")}</div>
+        <label class="ex-check"><input type="checkbox" name="active" ${form.active ? "checked" : ""}>Рассылка включена</label>
+        <div class="ex-actions"><button type="submit" class="hc-btn primary" ${busy ? "disabled" : ""}>Сохранить рассылку</button><button type="button" class="hc-btn" data-new>Новая рассылка</button></div></form>` : ""}`;
+      dialog.querySelector("[data-close]").onclick = () => {dialog.close();dialog.remove();summaryDialog=null;};
+      if (ctx.canWrite) dialog.querySelector("[data-new]").onclick = () => {editing=null;form=fresh();error="";render();};
+      dialog.querySelectorAll("[data-summary-edit]").forEach((b) => {b.onclick=()=>{const row=rows.find((s)=>s.id===Number(b.dataset.summaryEdit));editing=row.id;form={...row,contact_ids:[...row.contact_ids],weekdays:[...row.weekdays]};error="";render();};});
+      dialog.querySelectorAll("[data-summary-del]").forEach((b) => {b.onclick=async()=>{if(busy || !(await ctx.confirm("Удалить расписание рассылки сводки?")))return;busy=true;try{await api.delete(`${base}/${b.dataset.summaryDel}`);await loadRows();}catch(e){error=errText(e);}finally{busy=false;render();}};});
+      if (ctx.canWrite) dialog.querySelector("form").onsubmit=async(e)=>{
+        e.preventDefault();if(busy)return;
+        const node=e.currentTarget;
+        form={contact_ids:[...node.querySelectorAll("[data-summary-contact]:checked")].map((n)=>Number(n.dataset.summaryContact)),weekdays:[...node.querySelectorAll("[data-summary-day]:checked")].map((n)=>Number(n.dataset.summaryDay)),send_time:node.elements.time.value,day_offset:Number(node.elements.offset.value),active:node.elements.active.checked,note:form.note || null};
+        busy=true;render();
+        try{if(editing)await api.patch(`${base}/${editing}`,form);else await api.post(base,form);await loadRows();editing=null;form=fresh();error="";}catch(err){error=errText(err);}finally{busy=false;render();}
+      };
+    };
+    dialog.addEventListener("close",()=>{dialog.remove();if(summaryDialog===dialog)summaryDialog=null;});
+    try{await loadRows();}catch(e){error=errText(e);}render();
   }
 
   function scheduleForm(f, contactOptions) {
@@ -136,12 +175,10 @@ export function mountExpress(el, ctx) {
       <div class="ex-sec"><div class="ex-cap">Дни недели, когда бот пишет</div>
         <div class="ex-days">${DAYS.map(([n, t]) => `<label class="ex-day"><input type="checkbox" data-wd="${n}" ${f.weekdays.includes(n) ? "checked" : ""}> ${t}</label>`).join("")}
           <button type="button" class="hc-link" data-days="1,2,3,4,5">Пн–Пт</button><button type="button" class="hc-link" data-days="1,2,3,4,5,6,7">Ежедневно</button></div></div>
-      <div class="ex-sec"><div class="ex-cap">Напоминание и сводка</div>
+      <div class="ex-sec"><div class="ex-cap">Напоминание ответственному</div>
         <div class="ex-opt">${check("ex-f-remind-on", "Напомнить, если не ответил, в", !!f.remind_time)}
           <input type="time" id="ex-f-remind" value="${esc(f.remind_time || "11:30")}" aria-label="Время напоминания"></div>
-        <div class="ex-opt">${check("ex-f-sum-on", "Отправить сводку в", !!f.summary_time)}
-          <input type="time" id="ex-f-sum" value="${esc(f.summary_time || "12:30")}" aria-label="Время сводки">
-          <label class="ex-field">кому <select id="ex-f-sum-contact">${contactOptions(f.summary_contact_id, "— выберите —")}</select></label></div></div>
+        </div>
       <div class="ex-sec"><div class="ex-row">${field("Примечание", `<input type="text" id="ex-f-note" maxlength="300" value="${esc(f.note || "")}">`, "wide")}
         <div class="ex-opt">${check("ex-f-active", "Расписание действует", f.active)}</div></div></div>
       <div class="ex-actions"><button type="submit" class="hc-btn primary">${f.id ? "Сохранить" : "Добавить"}</button><button type="button" class="hc-btn" id="ex-f-cancel">Отмена</button></div>
@@ -164,13 +201,12 @@ export function mountExpress(el, ctx) {
       await guard(async () => { await api.delete(`/objects/${ctx.objectId}/express/schedules/${s.id}`); await load("schedules"); paintSchedules(); }, "Расписание удалено.");
     }));
     pane.querySelector("#ex-f-cancel")?.addEventListener("click", () => { st.form = null; paintSchedules(); });
-    // время напоминания и сводки доступно, только когда включён соответствующий флажок
+    // Время напоминания доступно, когда включён соответствующий флажок.
     const bindToggle = (flag, ...controls) => {
       const sync = () => controls.forEach((c) => { const n = pane.querySelector(c); if (n) n.disabled = !pane.querySelector(flag).checked; });
       pane.querySelector(flag)?.addEventListener("change", sync); if (pane.querySelector(flag)) sync();
     };
     bindToggle("#ex-f-remind-on", "#ex-f-remind");
-    bindToggle("#ex-f-sum-on", "#ex-f-sum", "#ex-f-sum-contact");
     pane.querySelectorAll("[data-days]").forEach((b) => b.addEventListener("click", () => {
       const set = b.dataset.days.split(",").map(Number);
       pane.querySelectorAll("[data-wd]").forEach((c) => { c.checked = set.includes(Number(c.dataset.wd)); });
@@ -182,8 +218,6 @@ export function mountExpress(el, ctx) {
         contact_id: Number(pane.querySelector("#ex-f-contact").value), send_time: pane.querySelector("#ex-f-time").value, day_offset: Number(pane.querySelector("#ex-f-offset").value),
         weekdays: [...pane.querySelectorAll("[data-wd]")].filter((c) => c.checked).map((c) => Number(c.dataset.wd)),
         remind_time: pane.querySelector("#ex-f-remind-on").checked ? pane.querySelector("#ex-f-remind").value : null,
-        summary_time: pane.querySelector("#ex-f-sum-on").checked ? pane.querySelector("#ex-f-sum").value : null,
-        summary_contact_id: pane.querySelector("#ex-f-sum-on").checked && pane.querySelector("#ex-f-sum-contact").value ? Number(pane.querySelector("#ex-f-sum-contact").value) : null,
         active: pane.querySelector("#ex-f-active").checked, note: pane.querySelector("#ex-f-note").value || null,
       };
       if (!body.contact_id) { f.msg = "Выберите контакт"; f.kind = "bad"; note.textContent = f.msg; note.className = "hc-msg bad"; return; }
@@ -398,5 +432,5 @@ export function mountExpress(el, ctx) {
   }
 
   paint();
-  return { destroy() { dead = true; el.innerHTML = ""; } };
+  return { destroy() { summaryDialog?.remove(); dead = true; el.innerHTML = ""; } };
 }

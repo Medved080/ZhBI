@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -129,6 +130,8 @@ def ensure_wal(conn: sqlite3.Connection) -> str:
 # доступ к новым полям (или падали бы на INSERT/SELECT) после обновления,
 # пока не удалят data/zhbi.db вручную.
 _COLUMN_MIGRATIONS = [
+    ("elements", "planned_installation_date", "TEXT"),
+    ("headcount_history", "shift", "TEXT NOT NULL DEFAULT 'day' CHECK (shift IN ('day', 'night'))"),
     ("headcount_contractors", "is_archived", "INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))"),
     ("express_contacts", "menu_dialog", "TEXT"),  # самостоятельный ввод, выбор даты и активного запроса бота
     ("status_history", "changed_by_user_id", "INTEGER REFERENCES users(id) ON DELETE SET NULL"),
@@ -775,6 +778,39 @@ def _migrate_headcount_itr(conn: sqlite3.Connection, changes: list) -> None:
         raise
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _migrate_headcount_shift(conn: sqlite3.Connection, changes: list) -> None:
+    """Сохраняет id, историю и даты; прежние записи становятся дневной сменой."""
+    columns = [r["name"] for r in conn.execute("PRAGMA table_info(headcount_records)")]
+    if "shift" in columns:
+        return
+    indexes = [r[0] for r in conn.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='headcount_records' AND sql IS NOT NULL")]
+    sequence = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='headcount_records'").fetchone()
+    triggers = [r[0] for r in conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name='headcount_records' AND sql IS NOT NULL")]
+    ddl = re.search(r"CREATE TABLE IF NOT EXISTS headcount_records \(.*?\n\);", SCHEMA_PATH.read_text(encoding="utf-8"), re.S).group(0)
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(ddl.replace("IF NOT EXISTS headcount_records", "headcount_records_shift_new"))
+        names = ", ".join(columns)
+        conn.execute(f"INSERT INTO headcount_records_shift_new ({names}) SELECT {names} FROM headcount_records")
+        conn.execute("DROP TABLE headcount_records")
+        conn.execute("ALTER TABLE headcount_records_shift_new RENAME TO headcount_records")
+        for sql in indexes:
+            conn.execute(sql)
+        for sql in triggers:
+            conn.execute(sql)
+        if sequence is not None:
+            conn.execute("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='headcount_records'", (sequence[0],))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    changes.append("Численность: дневная и ночная смены; прежние записи сохранены как дневные")
 
 
 def _migrate_express_bind(conn: sqlite3.Connection, changes: list) -> None:
@@ -2806,6 +2842,7 @@ def init_db() -> list:
         _migrate_crane_zone_conversion_constraints(conn, changes)
         _migrate_headcount_itr(conn, changes)   # после executescript(schema.sql): таблицы численности уже есть
         _migrate_headcount_mech(conn, changes)  # строго ПОСЛЕ ИТР: пересборка берёт колонки с itr
+        _migrate_headcount_shift(conn, changes)
         _migrate_express_bind(conn, changes)
         _migrate_headcount_cwork_note(conn, changes)
         _migrate_contracts_structure(conn)

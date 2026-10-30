@@ -498,6 +498,8 @@ app.include_router(release_tasks_router)
 app.include_router(express_api.webhook_router)
 app.include_router(express_api.router)
 app.include_router(express_api.object_router)
+from app.express_summaries import router as express_summary_router
+app.include_router(express_summary_router)
 app.include_router(users_router)
 app.include_router(sessions_router)
 app.include_router(ldap_router)
@@ -1534,6 +1536,25 @@ def update_element_comment(
     activity.log("element_comment", user=user, entity_type="element", entity_id=element_id,
                  new_value=(текст or "")[:200])
     return {"id": element_id, "comment": текст}
+
+
+class InstallationDateIn(BaseModel):
+    element_ids: list[int] = Field(min_length=1, max_length=500)
+    planned_installation_date: Optional[str]
+
+
+@app.patch("/elements/bulk-planned-installation-date")
+def update_installation_date(body: InstallationDateIn, user: sqlite3.Row = Depends(get_current_user)):
+    from app.element_dates import set_planned_installation_dates
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        _guard_elements(conn, user, body.element_ids, "planned_date", "write")
+        result = set_planned_installation_dates(conn, body.element_ids, body.planned_installation_date, user)
+        conn.commit()
+        return {"updated": result}
+    finally:
+        conn.close()
 
 
 @app.patch("/elements/{element_id}/planned-delivery-date", response_model=ElementPlannedDateUpdateResult)
@@ -3140,7 +3161,7 @@ def get_changes(
         # совпадении значений не считает элемент изменённым (и не показывает
         # уведомление). Терять правки ради экономии одного повтора нельзя.
         rows = conn.execute(
-            "SELECT id, current_status, contract_id, planned_delivery_date, "
+            "SELECT id, current_status, contract_id, planned_delivery_date, planned_installation_date, "
             "actual_delivery_date, project_delivery_date, project_smr_start_date, updated_at "
             f"FROM elements WHERE source_file = ? AND updated_at >= ? "
             f"AND {visible_elements_clause()} ORDER BY updated_at",

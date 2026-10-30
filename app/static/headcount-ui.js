@@ -45,11 +45,10 @@ function ensureCss() {
 
 // Готовые срезы отчёта: порядок уровней вложенности (сервер: smu, object, section, work, contractor).
 const PRESETS = [
-  { key: "objects", title: "По объектам", levels: ["object", "section", "work"] },
-  { key: "contractors", title: "По подрядчикам", levels: ["contractor", "object", "work"] },
-  { key: "works", title: "По работам", levels: ["section", "work", "contractor"] },
+  { key: "contractors", title: "По подрядчикам", levels: ["contractor", "section", "note"] },
+  { key: "works", title: "По работам", levels: ["note", "contractor"] },
 ];
-const LEVEL_TITLES = { smu: "Подразделение", object: "Объект", section: "Раздел", work: "Вид работ", contractor: "Подрядчик" };
+const LEVEL_TITLES = { note: "Примечание", smu: "Подразделение", object: "Объект", section: "Раздел", work: "Вид работ", contractor: "Подрядчик" };
 
 export function mountHeadcount(el, ctx) {
   ensureCss();
@@ -57,9 +56,9 @@ export function mountHeadcount(el, ctx) {
   let dead = false;
   const st = {
     tab: ctx.startTab || "input", works: null, contractors: null, loadError: "", cod: null, codErr: "", codQ: "", codSec: "",
-    date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
+    shift: "day", date: todayIso(), day: null, dayError: "", added: [], changed: new Map(), saving: false, msg: "", msgKind: "", history: null,
     ctrAdd: null, facets: null, openWorks: new Set(), individuals: null, defaultResp: {}, contractorFilter: "active",
-    rep: { preset: "objects", obj: null, staff: "total", bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
+    rep: { preset: "contractors", obj: null, staff: "total", bySmu: false, asOf: "", asOfUser: false, from: "", to: "", data: null, loading: false, error: "", toggled: new Set() },
     data: { mode: "records", obj: null, from: "", to: "", contractor: "", workId: null, source: "", late: false, offset: 0, limit: 100, res: null, loading: false, error: "" },
     adm: { codResult: "", analysis: null, mapping: {}, result: "", busy: false, error: "" },
   };
@@ -131,7 +130,7 @@ export function mountHeadcount(el, ctx) {
   // =====================================================================  ВВОД
   async function loadDay() {
     st.dayError = "";
-    try { st.day = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${st.date}`); }
+    try { st.day = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${st.date}&shift=${st.shift}`); }
     catch (e) { st.day = null; st.dayError = errText(e); }
     if (!dead && st.tab === "input") paint();
   }
@@ -147,14 +146,14 @@ export function mountHeadcount(el, ctx) {
         <button type="button" class="hc-btn" id="hc-prev" aria-label="Предыдущий день">◀</button>
         <input type="date" id="hc-date" value="${esc(st.date)}" max="${esc(todayIso())}" aria-label="День">
         <button type="button" class="hc-btn" id="hc-next" aria-label="Следующий день" ${st.date >= todayIso() ? "disabled" : ""}>▶</button>
-        <span class="hc-muted">${esc(weekday(st.date))}</span>
+        <label class="hc-shift-field">Смена<select id="hc-shift"><option value="day" ${st.shift === "day" ? "selected" : ""}>Дневная</option><option value="night" ${st.shift === "night" ? "selected" : ""}>Ночная (дата начала)</option></select></label><span class="hc-muted">${esc(weekday(st.date))}</span>
         ${d ? `<span class="hc-deadline ${d.overdue_now ? "over" : ""}">Срок внесения: до ${esc(dueText)} (МСК)${d.overdue_now ? " — прошёл, запись будет отмечена как просроченная" : ""}</span>` : ""}
       </div>
       ${st.dayError ? `<div class="hc-callout bad" role="alert">${esc(st.dayError)}</div>` : ""}
       <p id="hc-msg" class="hc-msg ${esc(st.msgKind)}" role="status" aria-live="polite">${esc(st.msg)}</p>
       ${d && !d.rows.length && d.last_date && d.last_date !== st.date ? `<div class="hc-callout">За этот день данных нет. Последний день с данными по объекту — <button type="button" class="hc-link" id="hc-lastday">${esc(fmtDate(d.last_date))}</button>.</div>` : ""}
-      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Вид работ</th><th class="num">Рабочие</th><th class="num">ИТР</th><th class="num">Механизаторы</th><th class="num">Итого</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
-        <tfoot><tr><td colspan="2">Всего за день</td><td class="num" id="hc-total-w"></td><td class="num" id="hc-total-i"></td><td class="num" id="hc-total-m"></td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
+      <div class="hc-scroll"><table class="hc-tbl"><thead><tr><th>Подрядчик</th><th>Примечание</th><th>Вид работ</th><th class="num">Рабочие</th><th class="num">ИТР</th><th class="num">Механизаторы</th><th class="num">Итого</th><th>Внесено</th><th></th></tr></thead><tbody id="hc-rows"></tbody>
+        <tfoot><tr><td colspan="3">Всего за смену</td><td class="num" id="hc-total-w"></td><td class="num" id="hc-total-i"></td><td class="num" id="hc-total-m"></td><td class="num" id="hc-total"></td><td colspan="2"></td></tr></tfoot></table></div>
       ${ctx.canWrite && !future ? `<div class="hc-add" id="hc-add"></div>
         <div class="hc-bar"><button type="button" class="hc-btn primary" id="hc-save">Сохранить</button><button type="button" class="hc-btn" id="hc-copy" title="Добавить в карточку строки выбранного дня, которых за этот день ещё нет">Заполнить как на</button><input type="date" id="hc-copy-date" value="${esc(st.copyFrom || addDays(st.date, -1))}" max="${esc(todayIso())}" aria-label="День, по которому заполнить"><span class="hc-muted" id="hc-dirty"></span></div>` : (ctx.canWrite ? "" : `<p class="hc-muted">Только просмотр: у вас нет права вносить численность на этом объекте.</p>`)}
       <div id="hc-history"></div>`;
@@ -162,6 +161,10 @@ export function mountHeadcount(el, ctx) {
     pane.querySelector("#hc-next").addEventListener("click", () => gotoDay(addDays(st.date, 1)));
     pane.querySelector("#hc-date").addEventListener("change", (e) => e.target.value && gotoDay(e.target.value));
     pane.querySelector("#hc-lastday")?.addEventListener("click", () => gotoDay(d.last_date));
+    pane.querySelector("#hc-shift").addEventListener("change", async (e) => {
+      if (hasChanges() && !(await ctx.confirm("Сменить смену без сохранения введённых данных?", { danger: true }))) { paintInput(); return; }
+      st.shift = e.target.value; st.day = null; st.added = []; st.changed = new Map(); st.history = null; paint();
+    });
     paintRows();
     if (ctx.canWrite && !future) {
       paintAdd();
@@ -180,6 +183,12 @@ export function mountHeadcount(el, ctx) {
   }
 
   const contractorLabel = (id) => st.contractors.find((c) => c.id === id)?.display || "—";
+  const contractorNote = (cid, wid) => (st.contractors.find((c) => c.id === cid)?.works || []).find((w) => w.codifier_id === wid)?.note || "—";
+  const contractorWorks = (cid) => {
+    const assigned = new Map((st.contractors.find((c) => c.id === cid)?.works || []).filter((w) => !w.retired).map((w) => [w.codifier_id, w]));
+    return st.works.filter((w) => assigned.has(w.id) && !w.retired_at).map((w) => ({ ...w, note: assigned.get(w.id).note, parent_id: null, has_children: false }));
+  };
+  const assignedWorkConfig = () => ({ ...WORK_CFG, tree: false, title: "Виды работ подрядчика", hint: "Виды работ и примечания из вкладки «Подрядчики».", columns: [...WORK_CFG.columns, { key: "note", title: "Примечание", filter: true, text: (w) => w.note || "", html: (w) => esc(w.note || "—") }] });
   const workLabel = (id) => { const w = st.works.find((x) => x.id === id); return w ? `${w.code} ${w.name}` : "—"; };
 
   // Значения строки на экране: введённое человеком (до сохранения) или то, что в БД
@@ -207,13 +216,13 @@ export function mountHeadcount(el, ctx) {
       ? `<button type="button" class="hc-cell-pick" data-pick="${type}" data-kind="${kind}" data-ref="${ref}" title="Изменить: выбрать из справочника">${inner}<span class="hc-cell-ed" aria-hidden="true">✎</span></button>` : inner;
     const workHtml = (id) => { const w = st.works.find((x) => x.id === id); return w ? `<span class="hc-code">${esc(w.code)}</span> ${esc(w.name)}` : "—"; };
     body.innerHTML = rows.length || st.added.length ? [
-      ...rows.map((r) => { const v = rowVals(r), e = effIds(r); return `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${cellPick("saved", r.id, "ctr", esc(contractorLabel(e.ctr)))}</td><td>${cellPick("saved", r.id, "work", workHtml(e.work))}</td>
+      ...rows.map((r) => { const v = rowVals(r), e = effIds(r); return `<tr data-id="${r.id}" class="${st.changed.has(r.id) ? "dirty" : ""}"><td>${cellPick("saved", r.id, "ctr", esc(contractorLabel(e.ctr)))}</td><td>${esc(contractorNote(e.ctr, e.work))}</td><td>${cellPick("saved", r.id, "work", workHtml(e.work))}</td>
         <td class="num">${field(r, "workers", v.w)}</td><td class="num">${field(r, "itr", v.i)}</td><td class="num">${field(r, "mech", v.m)}</td><td class="num"><strong data-rowtotal="${r.id}">${numOf(v.w) + numOf(v.i) + numOf(v.m)}</strong></td>
         <td class="hc-small">${esc(fmtMoment(r.entered_at))}${r.entered_by ? " · " + esc(r.entered_by) : ""} ${flags(r)}${r.changes ? ` <button type="button" class="hc-link" data-hist="${r.id}">правок: ${r.changes}</button>` : ` <button type="button" class="hc-link" data-hist="${r.id}">история</button>`}</td>
         <td class="nw">${ctx.canWrite ? `<button type="button" class="hc-btn danger mini" data-del="${r.id}" title="Удалить строку" aria-label="Удалить строку">✕</button>` : ""}</td></tr>`; }),
-      ...st.added.map((a, i) => `<tr class="added"><td>${cellPick("added", i, "ctr", esc(contractorLabel(a.contractor_id)))}</td><td>${cellPick("added", i, "work", workHtml(a.codifier_id))}</td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="workers" value="${esc(a.workers)}" aria-label="Рабочие (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="itr" value="${esc(a.itr)}" aria-label="ИТР (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="mech" value="${esc(a.mech ?? 0)}" aria-label="Механизаторы (строка ещё не сохранена)"></td><td class="num"><strong data-add-total="${i}">${a.workers + a.itr + (a.mech ?? 0)}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
+      ...st.added.map((a, i) => `<tr class="added"><td>${cellPick("added", i, "ctr", esc(contractorLabel(a.contractor_id)))}</td><td>${esc(contractorNote(a.contractor_id, a.codifier_id))}</td><td>${cellPick("added", i, "work", workHtml(a.codifier_id))}</td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="workers" value="${esc(a.workers)}" aria-label="Рабочие (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="itr" value="${esc(a.itr)}" aria-label="ИТР (строка ещё не сохранена)"></td><td class="num"><input type="number" min="0" max="${HC_MAX}" step="1" class="hc-num" data-add-edit="${i}" data-f="mech" value="${esc(a.mech ?? 0)}" aria-label="Механизаторы (строка ещё не сохранена)"></td><td class="num"><strong data-add-total="${i}">${a.workers + a.itr + (a.mech ?? 0)}</strong></td><td class="hc-small"><span class="hc-badge">не сохранено</span></td>
         <td class="nw"><button type="button" class="hc-btn mini" data-unadd="${i}" title="Убрать строку из карточки" aria-label="Убрать строку из карточки">✕</button></td></tr>`),
-    ].join("") : `<tr><td colspan="8" class="hc-muted">За этот день численность не внесена.</td></tr>`;
+    ].join("") : `<tr><td colspan="9" class="hc-muted">За этот день численность не внесена.</td></tr>`;
     paintTotals();
     body.querySelectorAll("[data-edit]").forEach((i) => i.addEventListener("input", () => {
       const id = Number(i.dataset.edit), row = rows.find((r) => r.id === id), tr = i.closest("tr");
@@ -244,11 +253,8 @@ export function mountHeadcount(el, ctx) {
     const saved = kind === "saved", row = saved ? st.day.rows.find((r) => r.id === ref) : st.added[ref];
     if (!row) return;
     const cur = saved ? effIds(row) : { ctr: row.contractor_id, work: row.codifier_id };
-    openPickDialog({
-      ...(type === "ctr" ? CTR_CFG : WORK_CFG), items: type === "ctr" ? st.contractors.filter((c) => !c.is_archived || c.id === cur.ctr) : st.works, selectedId: type === "ctr" ? cur.ctr : cur.work,
-      onPick: (item) => {
-        const ctr = type === "ctr" ? item.id : cur.ctr, work = type === "work" ? item.id : cur.work;
-        if (pairTaken(ctr, work, { kind, ref })) { setMsg("За этот день такая строка (подрядчик + вид работ) уже есть — выберите другую пару или правьте числа в имеющейся.", "bad"); return; }
+    const applyPair = (ctr, work) => {
+      if (pairTaken(ctr, work, { kind, ref })) { setMsg("За этот день такая строка (подрядчик + вид работ) уже есть — выберите другую пару или правьте числа в имеющейся.", "bad"); return; }
         if (saved) {
           const prev = st.changed.get(row.id) || { workers: String(row.workers), itr: String(row.itr ?? 0), mech: String(row.mech ?? 0) }, next = { ...prev };
           if (ctr === row.contractor_id) delete next.contractor_id; else next.contractor_id = ctr;
@@ -258,6 +264,17 @@ export function mountHeadcount(el, ctx) {
         } else { row.contractor_id = ctr; row.codifier_id = work; }
         setMsg("");
         paintRows(); paintDirty();
+    };
+    openPickDialog({
+      ...(type === "ctr" ? CTR_CFG : assignedWorkConfig()),
+      items: type === "ctr" ? st.contractors.filter((c) => !c.is_archived || c.id === cur.ctr) : contractorWorks(cur.ctr),
+      selectedId: type === "ctr" ? cur.ctr : cur.work,
+      onPick: (item) => {
+        if (type === "work") { applyPair(cur.ctr, item.id); return; }
+        const allowed = contractorWorks(item.id);
+        if (!allowed.length) { setMsg("У подрядчика нет назначенных видов работ. Добавьте их на вкладке «Подрядчики».", "bad"); return; }
+        if (allowed.some((w) => w.id === cur.work)) { applyPair(item.id, cur.work); return; }
+        openPickDialog({ ...assignedWorkConfig(), items: allowed, onPick: (w) => applyPair(item.id, w.id) });
       },
     });
   }
@@ -278,6 +295,9 @@ export function mountHeadcount(el, ctx) {
     n.textContent = problem || (hasChanges() ? `К сохранению: изменено ${st.changed.size}, добавлено ${st.added.length}` : "");
     n.className = `hc-muted ${problem ? "bad" : ""}`;
     const b = pane.querySelector("#hc-save"); if (b) b.disabled = st.saving || !!problem || !hasChanges();
+    pane.querySelectorAll("#hc-shift, #hc-date, #hc-prev, #hc-next").forEach((n) => {
+      n.disabled = st.saving || (n.id === "hc-next" && st.date >= todayIso());
+    });
   }
 
   // ---- строка добавления: подрядчик + вид работ + число ----
@@ -292,8 +312,9 @@ export function mountHeadcount(el, ctx) {
       <label>Механизаторы<input type="number" min="0" max="${HC_MAX}" step="1" id="hc-a-m" class="hc-num"></label>
       <label>Итого<input type="text" id="hc-a-sum" class="hc-num hc-total-in" value="0" readonly tabindex="-1" aria-label="Итого: рабочие плюс ИТР плюс механизаторы"></label>
       <button type="button" class="hc-btn" id="hc-a-go">Добавить в карточку</button></div><p class="hc-msg bad" id="hc-a-err" role="alert"></p>`;
-    const picker = workPickerL1(box.querySelector("#hc-a-work"), st.works);
+    const picker = pickField(box.querySelector("#hc-a-work"), () => contractorWorks(ctrPicker.value()), assignedWorkConfig());
     const ctrPicker = contractorPicker(box.querySelector("#hc-a-ctr"), active);
+    box.querySelector("#hc-a-ctr").addEventListener("change", () => picker.clear());
     // подрядчик, с которым вносили последнюю строку, остаётся выбранным (за день вносят по несколько видов работ одного подрядчика)
     if (st.lastCtr && active.some((c) => c.id === st.lastCtr)) ctrPicker.set(st.lastCtr); else if (active.length === 1) ctrPicker.set(active[0].id);
     const err = box.querySelector("#hc-a-err");
@@ -332,7 +353,7 @@ export function mountHeadcount(el, ctx) {
     ];
     st.saving = true; paintDirty(); setMsg("Сохранение…");
     try {
-      const res = await api.put(`/objects/${ctx.objectId}/headcount/records`, { date: st.date, rows });
+      const res = await api.put(`/objects/${ctx.objectId}/headcount/records`, { date: st.date, shift: st.shift, rows });
       st.day = res; st.added = []; st.changed = new Map(); st.history = null; st.facets = null;
       st.msg = `Сохранено: добавлено ${res.created}, изменено ${res.changed}${res.moved ? `, перенесено на другого подрядчика / вид работ ${res.moved}` : ""}${res.late ? ". Внесено позже срока — записи отмечены как просроченные." : "."}`; st.msgKind = res.late ? "warn" : "ok";
     } catch (e) { st.msg = errText(e); st.msgKind = "bad"; }   // введённое остаётся на месте
@@ -352,9 +373,9 @@ export function mountHeadcount(el, ctx) {
     const from = pane.querySelector("#hc-copy-date")?.value || addDays(st.date, -1);
     if (from === st.date) { setMsg("Выберите другой день: этот день заполняется самим собой.", "bad"); return; }
     try {
-      const prev = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${from}`);
+      const prev = await api.get(`/objects/${ctx.objectId}/headcount/day?date=${from}&shift=${st.shift}`);
       const have = new Set([...(st.day?.rows || []).map((r) => `${r.contractor_id}:${r.codifier_id}`), ...st.added.map((a) => `${a.contractor_id}:${a.codifier_id}`)]);
-      const fresh = (prev.rows || []).filter((r) => !have.has(`${r.contractor_id}:${r.codifier_id}`));
+      const fresh = (prev.rows || []).filter((r) => !have.has(`${r.contractor_id}:${r.codifier_id}`) && st.contractors.some((c) => c.id === r.contractor_id && !c.is_archived) && contractorWorks(r.contractor_id).some((w) => w.id === r.codifier_id));
       fresh.forEach((r) => st.added.push({ contractor_id: r.contractor_id, codifier_id: r.codifier_id, workers: r.workers, itr: r.itr ?? 0, mech: r.mech ?? 0 }));
       paintRows(); paintDirty();
       const when = from.split("-").reverse().join(".");
@@ -366,7 +387,7 @@ export function mountHeadcount(el, ctx) {
     const box = pane.querySelector("#hc-history");
     box.innerHTML = `<p class="hc-muted">Загрузка истории…</p>`;
     try {
-      const d = await api.get(`/objects/${ctx.objectId}/headcount/history?date_from=${row.date}&date_to=${row.date}&contractor_id=${row.contractor_id}&codifier_id=${row.codifier_id}`);
+      const d = await api.get(`/objects/${ctx.objectId}/headcount/history?date_from=${row.date}&date_to=${row.date}&contractor_id=${row.contractor_id}&codifier_id=${row.codifier_id}&shift=${st.shift}`);
       box.innerHTML = `<h4>История: ${esc(row.contractor)} · ${esc(row.work_code)} · ${esc(fmtDate(row.date))}</h4><table class="hc-tbl"><thead><tr><th>Когда</th><th>Кто</th><th class="num">Рабочие было</th><th class="num">Рабочие стало</th><th class="num">ИТР было</th><th class="num">ИТР стало</th><th class="num">Механизаторы было</th><th class="num">Механизаторы стало</th><th>Источник</th></tr></thead><tbody>${
         d.history.map((h) => `<tr><td>${esc(fmtMoment(h.changed_at))}</td><td>${esc(h.changed_by || "—")}</td><td class="num">${h.old ?? "—"}</td><td class="num">${h.new ?? "удалено"}</td><td class="num">${h.old_itr ?? "—"}</td><td class="num">${h.new_itr ?? (h.new == null ? "удалено" : "—")}</td><td class="num">${h.old_mech ?? "—"}</td><td class="num">${h.new_mech ?? (h.new == null ? "удалено" : "—")}</td><td>${h.source === "import" ? "загрузка из SharePoint" : h.source === "bot" ? "бот" : "форма"}</td></tr>`).join("")}</tbody></table>`;
       box.scrollIntoView({ block: "nearest" });
@@ -663,13 +684,13 @@ export function mountHeadcount(el, ctx) {
       <div class="hc-filters">
         <label class="hc-f-obj">Объект<select id="hc-r-obj">${objectOptions(r.obj)}</select></label>
         <label>Показатель<select id="hc-r-staff" title="Итого — рабочие, ИТР и механизаторы вместе"><option value="total" ${r.staff === "total" ? "selected" : ""}>Итого</option><option value="workers" ${r.staff === "workers" ? "selected" : ""}>Рабочие</option><option value="itr" ${r.staff === "itr" ? "selected" : ""}>ИТР</option><option value="mech" ${r.staff === "mech" ? "selected" : ""}>Механизаторы</option></select></label>
-        <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}" title="Пусто — последний день с данными"></label>
+        <label>На день<input type="date" id="hc-r-asof" value="${esc(r.asOf)}" title="Пусто — сегодня"></label>
         <label>Период с<input type="date" id="hc-r-from" value="${esc(r.from)}"></label>
         <label>по<input type="date" id="hc-r-to" value="${esc(r.to)}"></label>
         <button type="button" class="hc-btn primary" id="hc-r-go">Обновить</button>
         ${ctx.download ? `<button type="button" class="hc-btn" id="hc-r-xlsx" title="Выгрузить отчёт в Excel">В Excel</button>` : ""}
       </div>
-      <p class="hc-muted hc-small">Показатель «Итого» — рабочие, ИТР и механизаторы вместе; «Рабочие», «ИТР» и «Механизаторы» показывают одно слагаемое. Среднее — сумма человек-дней за окно, делённая на число дней окна, в которые в выборке есть данные. Плана и отклонений пока нет.</p>
+      <p class="hc-muted hc-small">Показатель «Итого» — рабочие, ИТР и механизаторы вместе; «Рабочие», «ИТР» и «Механизаторы» показывают одно слагаемое. Среднее за неделю — с понедельника по выбранный день, за месяц — с первого числа по выбранный день. Делим на все прошедшие календарные дни, включая дни без работы; за произвольный период — на все дни периода. Обе смены учитываются вместе. Плана и отклонений пока нет.</p>
       <div id="hc-r-body"></div>`;
     pane.querySelector("#hc-r-obj").addEventListener("change", (e) => { r.obj = e.target.value; loadReport(); });
     pane.querySelector("#hc-r-staff").addEventListener("change", (e) => { r.staff = e.target.value; loadReport(); });
@@ -737,10 +758,11 @@ export function mountHeadcount(el, ctx) {
       if (!leaf && open) walk(n);
     });
     walk(tree);
-    const max = Math.max(1, ...d.months.map((m) => m.avg));
+    const series = d.series || [];
+    const max = Math.max(1, ...series.map((m) => m.total));
     box.innerHTML = `<div class="hc-scroll"><table class="hc-tbl hc-rep"><thead><tr><th>${esc(d.levels.map((l) => LEVEL_TITLES[l]).join(" → "))}</th><th class="num">Факт на ${esc(fmtDate(d.as_of))}</th><th class="num">Среднее за неделю</th><th class="num">Среднее за месяц</th>${hasPeriod ? `<th class="num">Человек-дней за период</th><th class="num">Среднее за период</th>` : ""}</tr></thead>
       <tbody>${lines.join("")}</tbody><tfoot><tr><td>Итого${d.objects > 1 ? ` (объектов: ${d.objects})` : ""}</td><td class="num">${fmtNum(d.total.fact_day)}</td><td class="num">${fmtNum(d.total.week_avg)}</td><td class="num">${fmtNum(d.total.month_avg)}</td>${hasPeriod ? `<td class="num">${fmtNum(d.total.period_sum)}</td><td class="num">${fmtNum(d.total.period_avg)}</td>` : ""}</tr></tfoot></table></div>
-      ${d.months.length ? `<h4>Среднесуточная численность по месяцам</h4><div class="hc-chart" role="img" aria-label="Среднесуточная численность по месяцам">${d.months.map((m) => `<div class="hc-col" title="${esc(m.month)}: ${fmtNum(m.avg)} чел. (дней с данными: ${m.days})"><span class="hc-val">${fmtNum(m.avg)}</span><span class="hc-bar-v" style="height:${Math.max(2, Math.round(m.avg / max * 100))}%"></span><span class="hc-lab">${MONTHS[Number(m.month.slice(5)) - 1]}</span></div>`).join("")}</div>` : ""}`;
+      ${series.length ? `<h4>Численность по дням выбранного периода</h4><div class="hc-chart hc-chart-daily" role="img" aria-label="Численность по дням выбранного периода">${series.map((m) => `<div class="hc-col" title="${esc(fmtDate(m.date))}: ${fmtNum(m.total)} чел."><span class="hc-val">${fmtNum(m.total)}</span><span class="hc-bar-v" style="height:${Math.max(2, Math.round(m.total / max * 100))}%"></span><span class="hc-lab">${esc(fmtDate(m.date))}</span></div>`).join("")}</div>` : ""}`;
     box.querySelectorAll("[data-tog]").forEach((b) => b.addEventListener("click", () => {
       const p = b.dataset.tog;
       if (r.toggled.has(p)) r.toggled.delete(p); else r.toggled.add(p);
@@ -827,10 +849,10 @@ export function mountHeadcount(el, ctx) {
       ${d.mode === "records" ? `<span class="hc-muted">человек-дней в выборке: итого <strong>${(r.sum_total ?? r.sum_workers).toLocaleString("ru-RU")}</strong> (рабочие ${r.sum_workers.toLocaleString("ru-RU")}, ИТР ${(r.sum_itr ?? 0).toLocaleString("ru-RU")}, механизаторы ${(r.sum_mech ?? 0).toLocaleString("ru-RU")})</span>` : ""}
       <button type="button" class="hc-btn mini" id="hc-d-prev" ${r.offset <= 0 ? "disabled" : ""}>◀ Назад</button><button type="button" class="hc-btn mini" id="hc-d-next" ${to >= r.total ? "disabled" : ""}>Вперёд ▶</button></div>`;
     const objCol = (name) => (all ? `<td>${esc(name)}</td>` : "");
-    const rows = d.mode === "records" ? r.items.map((i) => `<tr><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
+    const rows = d.mode === "records" ? r.items.map((i) => `<tr><td class="nw">${esc(fmtDate(i.date))}<br><span class="hc-muted">${i.shift === "night" ? "Ночная" : "Дневная"}</span></td>${objCol(i.object)}<td>${esc(i.contractor)}${i.inn_status === "unverified" ? ` <span class="hc-badge warn">ИНН не проверен</span>` : ""}</td>
         <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.workers}</td><td class="num">${i.itr ?? 0}</td><td class="num">${i.mech ?? 0}</td><td class="num"><strong>${i.total ?? i.workers}</strong></td>
         <td class="hc-small"><span class="nw">${esc(fmtMoment(i.entered_at))}</span>${i.entered_by ? " · " + esc(i.entered_by) : ""}<br>${i.late ? `<span class="hc-badge bad">просрочено${i.overdue_minutes ? " на " + fmtOverdue(i.overdue_minutes) : ""}</span> ` : ""}<span class="hc-badge">${esc(sourceText(i.source))}</span>${i.changes ? ` <span class="hc-badge" title="Последняя правка: ${esc(fmtMoment(i.updated_at))}${i.updated_by ? " · " + esc(i.updated_by) : ""}">правок: ${i.changes}</span>` : ""}</td></tr>`).join("")
-      : r.items.map((i) => `<tr><td class="hc-small"><span class="nw">${esc(fmtMoment(i.changed_at))}</span><br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td class="nw">${esc(fmtDate(i.date))}</td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
+      : r.items.map((i) => `<tr><td class="hc-small"><span class="nw">${esc(fmtMoment(i.changed_at))}</span><br>${esc(i.changed_by || "—")} <span class="hc-badge">${esc(sourceText(i.source))}</span></td><td class="nw">${esc(fmtDate(i.date))}<br><span class="hc-muted">${i.shift === "night" ? "Ночная" : "Дневная"}</span></td>${objCol(i.object)}<td>${esc(i.contractor)}</td>
         <td><span class="hc-code">${esc(i.work_code)}</span> ${esc(i.work_name)}</td><td class="num">${i.old ?? "—"} → ${i.new ?? "удалено"}</td><td class="num">${i.old_itr ?? "—"} → ${i.new_itr ?? (i.new == null ? "удалено" : "—")}</td><td class="num">${i.old_mech ?? "—"} → ${i.new_mech ?? (i.new == null ? "удалено" : "—")}</td></tr>`).join("");
     const heads = d.mode === "records"
       ? ["День", ...(all ? ["Объект"] : []), "Подрядчик", "Вид работ", "Рабочие", "ИТР", "Механизаторы", "Итого", "Внесено (кто и когда)"]
@@ -1098,11 +1120,12 @@ function pickField(box, items, cfg) {
   box.innerHTML = `<div class="hc-pickbox"><div class="hc-pick-inwrap"><div class="hc-pick-in hc-pick-show" tabindex="0" role="button" aria-haspopup="dialog"><span class="hc-pick-ph">${esc(cfg.placeholder)}</span></div>
     <button type="button" class="hc-pick-x" title="Сбросить выбор" aria-label="Сбросить выбор" hidden>✕</button></div><button type="button" class="hc-btn hc-pick-open">Выбрать…</button></div>`;
   const input = box.querySelector(".hc-pick-show"), xBtn = box.querySelector(".hc-pick-x"), openBtn = box.querySelector(".hc-pick-open");
-  const find = (id) => items.find((x) => x.id === id);
+  const available = () => typeof items === "function" ? items() : items;
+  const find = (id) => available().find((x) => x.id === id);
   const paintValue = () => { const x = chosen && find(chosen); input.innerHTML = x ? esc(cfg.label(x)) : `<span class="hc-pick-ph">${esc(cfg.placeholder)}</span>`; xBtn.hidden = !chosen; };
   const emit = () => box.dispatchEvent(new Event("change", { bubbles: true }));
   const open = () => openPickDialog({
-    ...cfg, items, selectedId: chosen,
+    ...cfg, items: available(), selectedId: chosen,
     onPick: (item) => { chosen = item.id; paintValue(); emit(); },
     onClear: () => { chosen = null; paintValue(); emit(); },
   });

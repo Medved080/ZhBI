@@ -403,7 +403,7 @@ def apply_history(conn: sqlite3.Connection, file_bytes: bytes, mapping: dict, us
                     stamps.append(_utc_stamp(entered))
             cid, wid, iso = contractor(object_id, inn, name), codes[code], day.isoformat()
             current = conn.execute(
-                "SELECT id, workers, source FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
+                "SELECT id, workers, source FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ? AND shift = 'day'",
                 (object_id, iso, cid, wid)).fetchone()
             if current is None:
                 cur = conn.execute(

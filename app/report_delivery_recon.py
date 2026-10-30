@@ -39,7 +39,7 @@ TITLE = "Сверка поставки по договорам"
 XLSX_TITLE = "Сверка поставки по договору"
 
 # «Поставлено» — изделие доехало до площадки: статус «Доставлен» и все последующие (монтаж без поставки невозможен).
-DELIVERED_STATUSES = ("delivered", "installed", "accepted")
+DELIVERED_STATUSES = ("delivered", "ready_for_installation", "installed", "accepted")
 
 # Статусы позиций вкладки «План поставки» — порядок и есть порядок разделов.
 PLAN_OVERDUE = "Просрочено"

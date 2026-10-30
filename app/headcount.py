@@ -4,7 +4,7 @@
 разделено на «Рабочие» (`workers`; сюда относится всё, что исторически вносили как «количество») и «ИТР» (`itr`), с 2026-10-26 добавлены
 «Механизаторы» (`mech`); «Итого» = рабочие + ИТР + механизаторы, в БД не хранится — считается в запросах и в ответах API (`total`).
 Подрядчик объекта (с 2026-10-26) — ссылка на контрагента ЕДИНОГО справочника `counterparties`: название и ИНН показываются оттуда. Ключ записи — (объект, день,
-подрядчик, вид работ): повторный ввод по ключу заменяет число, прежнее остаётся в `headcount_history`. Вносит менеджер проекта
+подрядчик, вид работ, смена): повторный ввод по ключу заменяет число, прежнее остаётся в `headcount_history`. Вносит менеджер проекта
 (руководитель проекта) или начальник участка; право — раздел `headcount` (app/features.py).
 
 Срок по приказу П-ОД-38 (приложение 1): данные за рабочий день — до 11:00 того же дня, за субботу и воскресенье — до 11:00
@@ -12,16 +12,15 @@
 Праздничные дни не учитываются: календаря нерабочих дней в системе нет. Время — московское: сервис живёт по UTC, а срок задан
 местным временем.
 
-Отчёт (`/headcount/report`) устроен так, чтобы показатели можно было складывать вверх по иерархии: «среднее за неделю» и «среднее
-за месяц» — сумма человек-дней за окно, делённая на число дней окна, в которые в ВЫБОРКЕ есть хоть одна запись; делитель один на
-всю выборку, поэтому среднее у родителя равно сумме средних у детей. (Допущение, в макете Power BI формула не раскрыта — сверить с
-заказчиком.)
+Отчёт: текущая календарная неделя и месяц по выбранный день; делители — все прошедшие календарные дни,
+включая дни без работы. За произвольный период — все календарные дни включительно. В сумме участвуют обе смены.
+
 """
 
 import re
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
+from typing import Optional, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -665,6 +664,7 @@ class RowIn(BaseModel):
 
 
 class SaveIn(BaseModel):
+    shift: Literal["day", "night"] = "day"
     date: str
     rows: list[RowIn] = Field(min_length=1, max_length=MAX_ROWS_PER_SAVE)
 
@@ -675,12 +675,13 @@ def _user_name(row: sqlite3.Row, prefix: str) -> Optional[str]:
 
 
 _RECORD_SELECT = (
-    f"SELECT r.*, w.code AS work_code, w.name AS work_name, w.section_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
+    f"SELECT r.*, cw.note AS work_note, w.code AS work_code, w.name AS work_name, w.section_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
     "ue.last_name AS ue_last, ue.first_name AS ue_first, uu.last_name AS uu_last, uu.first_name AS uu_first, "
     "(SELECT COUNT(*) FROM headcount_history h WHERE h.object_id = r.object_id AND h.work_date = r.work_date "
-    " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id) AS changes "
+    " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id AND h.shift = r.shift) AS changes "
     "FROM headcount_records r JOIN work_codifier w ON w.id = r.codifier_id "
     "JOIN headcount_contractors c ON c.id = r.contractor_id "
+    "LEFT JOIN headcount_contractor_works cw ON cw.contractor_id = r.contractor_id AND cw.codifier_id = r.codifier_id "
     "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
     "LEFT JOIN users ue ON ue.id = r.entered_by LEFT JOIN users uu ON uu.id = r.updated_by ")
 
@@ -693,9 +694,9 @@ def _record_out(row: sqlite3.Row) -> dict:
         overdue_minutes = max(1, int((entered - deadline_for(work_date)).total_seconds() // 60))
     contractor = _contractor_out_from_parts(row["ctr_name"], row["ctr_inn"])
     return {
-        "id": row["id"], "date": row["work_date"], "contractor_id": row["contractor_id"], "contractor": contractor["display"],
+        "id": row["id"], "shift": row["shift"], "date": row["work_date"], "contractor_id": row["contractor_id"], "contractor": contractor["display"],
         "inn_status": contractor["inn_status"], "codifier_id": row["codifier_id"], "work_code": row["work_code"],
-        "work_name": row["work_name"], "section": row["section_name"], "workers": row["workers"], "itr": row["itr"], "mech": row["mech"],
+        "work_name": row["work_name"], "note": row["work_note"], "section": row["section_name"], "workers": row["workers"], "itr": row["itr"], "mech": row["mech"],
         "total": row["workers"] + row["itr"] + row["mech"], "late": bool(row["late"]), "overdue_minutes": overdue_minutes, "source": row["source"],
         "entered_at": row["entered_at"], "entered_by": _user_name(row, "ue"),
         "updated_at": row["updated_at"], "updated_by": _user_name(row, "uu"),
@@ -708,16 +709,16 @@ def _contractor_out_from_parts(name, inn) -> dict:
     return {"display": contractor_display(name, inn), "inn_status": inn_status(inn)}
 
 
-def _day_payload(conn, object_id: int, work_date: date) -> dict:
+def _day_payload(conn, object_id: int, work_date: date, shift: str = "day") -> dict:
     rows = conn.execute(
-        _RECORD_SELECT + f"WHERE r.object_id = ? AND r.work_date = ? ORDER BY {CTR_NAME}, {CTR_INN}, w.code",
-        (object_id, work_date.isoformat())).fetchall()
+        _RECORD_SELECT + f"WHERE r.object_id = ? AND r.work_date = ? AND r.shift = ? ORDER BY {CTR_NAME}, {CTR_INN}, w.code",
+        (object_id, work_date.isoformat(), shift)).fetchall()
     items = [_record_out(r) for r in rows]
     due = deadline_for(work_date)
-    last = conn.execute("SELECT MAX(work_date) FROM headcount_records WHERE object_id = ? AND work_date <= ?",
-                        (object_id, now_msk().date().isoformat())).fetchone()[0]
+    last = conn.execute("SELECT MAX(work_date) FROM headcount_records WHERE object_id = ? AND work_date <= ? AND shift = ?",
+                        (object_id, now_msk().date().isoformat(), shift)).fetchone()[0]
     return {
-        "date": work_date.isoformat(), "last_date": last, "deadline": due.isoformat(), "overdue_now": now_msk() > due,
+        "shift": shift, "date": work_date.isoformat(), "last_date": last, "deadline": due.isoformat(), "overdue_now": now_msk() > due,
         "rows": items, "total": sum(i["total"] for i in items),
         "total_workers": sum(i["workers"] for i in items), "total_itr": sum(i["itr"] for i in items),
         "total_mech": sum(i["mech"] for i in items),
@@ -726,12 +727,12 @@ def _day_payload(conn, object_id: int, work_date: date) -> dict:
 
 @router.get("/day")
 def get_day(object_id: int, day: str = Query(..., alias="date", description="День, ГГГГ-ММ-ДД"),
-            user: sqlite3.Row = Depends(get_current_user)):
+            user: sqlite3.Row = Depends(get_current_user), shift: Literal["day", "night"] = "day"):
     work_date = _parse_date(day)
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "read")
-        return _day_payload(conn, object_id, work_date)
+        return _day_payload(conn, object_id, work_date, shift)
     finally:
         conn.close()
 
@@ -766,7 +767,7 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         for row in body.rows:
             if row.move_from is None:
                 continue
-            rec = conn.execute("SELECT * FROM headcount_records WHERE id = ? AND object_id = ? AND work_date = ?", (row.move_from, object_id, iso)).fetchone()
+            rec = conn.execute("SELECT * FROM headcount_records WHERE id = ? AND object_id = ? AND work_date = ? AND shift = ?", (row.move_from, object_id, iso, body.shift)).fetchone()
             if rec is None:
                 raise HTTPException(status_code=404, detail="Исправляемая запись не найдена (возможно, её уже удалили) — обновите страницу")
             if (rec["contractor_id"], rec["codifier_id"]) == (row.contractor_id, row.codifier_id):
@@ -775,7 +776,7 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
         stamp = _db_now()
         for rec in moved_meta.values():
             _history(conn, rec["id"], object_id, iso, rec["contractor_id"], rec["codifier_id"], rec["workers"], None, "form", stamp, user["id"],
-                     old_itr=rec["itr"], new_itr=None, old_mech=rec["mech"], new_mech=None)
+                     old_itr=rec["itr"], new_itr=None, old_mech=rec["mech"], new_mech=None, shift=body.shift)
             conn.execute("DELETE FROM headcount_records WHERE id = ?", (rec["id"],))
         contractors = {r["id"] for r in conn.execute(
             "SELECT id FROM headcount_contractors WHERE object_id = ?", (object_id,))}
@@ -786,8 +787,8 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
             if row.codifier_id not in works:
                 raise HTTPException(status_code=400, detail="Вид работ не найден в кодификаторе")
             current = conn.execute(
-                "SELECT id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
-                (object_id, iso, row.contractor_id, row.codifier_id)).fetchone()
+                "SELECT id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ? AND shift = ?",
+                (object_id, iso, row.contractor_id, row.codifier_id, body.shift)).fetchone()
             meta = moved_meta.get((row.contractor_id, row.codifier_id))
             if meta is not None and current is not None:
                 raise HTTPException(status_code=409, detail="После смены подрядчика или вида работ такая строка за день уже есть — выберите другую пару")
@@ -796,16 +797,21 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
             if row.workers + new_itr + new_mech < 1:
                 raise HTTPException(status_code=400, detail="Рабочие, ИТР и механизаторы вместе — не меньше 1: пустую строку не вносят (чтобы убрать запись, удалите её)")
             if current is None:
+                assigned = conn.execute("SELECT 1 FROM headcount_contractor_works cw JOIN headcount_contractors c ON c.id = cw.contractor_id "
+                                        "WHERE cw.contractor_id = ? AND cw.codifier_id = ? AND c.is_archived = 0",
+                                        (row.contractor_id, row.codifier_id)).fetchone()
+                if assigned is None:
+                    raise HTTPException(status_code=400, detail="Выберите вид работ, назначенный активному подрядчику на вкладке «Подрядчики»")
                 if works[row.codifier_id]:
                     raise HTTPException(status_code=400, detail="Вид работ выведен из действия: новую численность по нему не вносят")
                 cur = conn.execute(
-                    "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, mech, late, source, "
-                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, mech, late, shift, source, "
+                    "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (object_id, iso, row.contractor_id, row.codifier_id, row.workers, new_itr, new_mech,
-                     meta["late"] if meta is not None else late, "form" if meta is None else meta["source"],
+                     meta["late"] if meta is not None else late, body.shift, "form" if meta is None else meta["source"],
                      meta["entered_at"] if meta is not None else stamp, meta["entered_by"] if meta is not None else user["id"], stamp, user["id"]))
                 _history(conn, cur.lastrowid, object_id, iso, row.contractor_id, row.codifier_id, None, row.workers, "form", stamp, user["id"],
-                         old_itr=None, new_itr=new_itr, old_mech=None, new_mech=new_mech)
+                         old_itr=None, new_itr=new_itr, old_mech=None, new_mech=new_mech, shift=body.shift)
                 if meta is not None:
                     moved += 1
                 else:
@@ -816,10 +822,10 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
                 conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, mech = ?, updated_at = ?, updated_by = ?, source = 'form' WHERE id = ?",
                              (row.workers, new_itr, new_mech, stamp, user["id"], current["id"]))
                 _history(conn, current["id"], object_id, iso, row.contractor_id, row.codifier_id, current["workers"], row.workers, "form", stamp,
-                         user["id"], old_itr=current["itr"], new_itr=new_itr, old_mech=current["mech"], new_mech=new_mech)
+                         user["id"], old_itr=current["itr"], new_itr=new_itr, old_mech=current["mech"], new_mech=new_mech, shift=body.shift)
                 changed += 1
         conn.commit()
-        payload = _day_payload(conn, object_id, work_date)
+        payload = _day_payload(conn, object_id, work_date, body.shift)
     finally:
         conn.close()
     if created or changed or moved:
@@ -829,20 +835,22 @@ def save_records(object_id: int, body: SaveIn, user: sqlite3.Row = Depends(get_c
 
 
 def _history(conn, record_id, object_id, iso, contractor_id, codifier_id, old, new, source, stamp, user_id, *, old_itr=None, new_itr=None,
-             old_mech=None, new_mech=None) -> None:
+             old_mech=None, new_mech=None, shift="day") -> None:
     """Строка журнала: «Рабочие», «ИТР» и «Механизаторы» было/стало. NULL в паре — «было пусто» (создание) или «стало пусто» (удаление)."""
     conn.execute(
         "INSERT INTO headcount_history (record_id, object_id, work_date, contractor_id, codifier_id, old_workers, new_workers, "
-        "old_itr, new_itr, old_mech, new_mech, source, changed_at, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (record_id, object_id, iso, contractor_id, codifier_id, old, new, old_itr, new_itr, old_mech, new_mech, source, stamp, user_id))
+        "old_itr, new_itr, old_mech, new_mech, source, changed_at, changed_by, shift) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (record_id, object_id, iso, contractor_id, codifier_id, old, new, old_itr, new_itr, old_mech, new_mech, source, stamp, user_id, shift))
 
 
 def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codifier_id: int, workers: int, itr: int, mech: int = 0, *,
-                      contact_name: str) -> dict:
+                      contact_name: str, shift: Literal["day", "night"] = "day") -> dict:
     """Одна строка численности, пришедшая от бота eXpress (`app/express_dialog.py`). Те же правила, что у формы: ключ (объект, день,
     подрядчик, вид работ), замена числа с историей, просрочка по первому внесению, «вместе не меньше 1». Отличия: источник `bot`, а
     автора-пользователя нет (контакт бота не учётная запись) — в журнале действий он указан именем контакта. Ошибки правил — ValueError
     с русским текстом, который бот показывает человеку. Возвращает {"action": created|changed|unchanged, "late": …, "workers", "itr", "mech"}."""
+    if shift not in ("day", "night"):
+        raise ValueError("Смена: day или night")
     now = now_msk()
     if work_date > now.date():
         raise ValueError("Численность за будущую дату внести нельзя")
@@ -860,19 +868,19 @@ def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codif
         if work is None:
             raise ValueError("Вид работ не найден в кодификаторе")
         current = conn.execute(
-            "SELECT id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ?",
-            (object_id, iso, contractor_id, codifier_id)).fetchone()
+            "SELECT id, workers, itr, mech FROM headcount_records WHERE object_id = ? AND work_date = ? AND contractor_id = ? AND codifier_id = ? AND shift = ?",
+            (object_id, iso, contractor_id, codifier_id, shift)).fetchone()
         stamp = _db_now()
         late = 1 if is_late(work_date, now) else 0
         if current is None:
             if work["retired_at"]:
                 raise ValueError("Вид работ выведен из действия: новую численность по нему не вносят")
             cur = conn.execute(
-                "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, mech, late, source, "
-                "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'bot', ?, NULL, ?, NULL)",
-                (object_id, iso, contractor_id, codifier_id, workers, itr, mech, late, stamp, stamp))
+                "INSERT INTO headcount_records (object_id, work_date, contractor_id, codifier_id, workers, itr, mech, late, shift, source, "
+                "entered_at, entered_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'bot', ?, NULL, ?, NULL)",
+                (object_id, iso, contractor_id, codifier_id, workers, itr, mech, late, shift, stamp, stamp))
             _history(conn, cur.lastrowid, object_id, iso, contractor_id, codifier_id, None, workers, "bot", stamp, None, old_itr=None, new_itr=itr,
-                     old_mech=None, new_mech=mech)
+                     old_mech=None, new_mech=mech, shift=shift)
             action = "created"
         elif current["workers"] == workers and current["itr"] == itr and current["mech"] == mech:
             action = "unchanged"
@@ -880,7 +888,7 @@ def save_row_from_bot(object_id: int, work_date: date, contractor_id: int, codif
             conn.execute("UPDATE headcount_records SET workers = ?, itr = ?, mech = ?, updated_at = ?, updated_by = NULL, source = 'bot' WHERE id = ?",
                          (workers, itr, mech, stamp, current["id"]))
             _history(conn, current["id"], object_id, iso, contractor_id, codifier_id, current["workers"], workers, "bot", stamp, None,
-                     old_itr=current["itr"], new_itr=itr, old_mech=current["mech"], new_mech=mech)
+                     old_itr=current["itr"], new_itr=itr, old_mech=current["mech"], new_mech=mech, shift=shift)
             action = "changed"
         conn.commit()
     finally:
@@ -902,7 +910,7 @@ def delete_record(object_id: int, record_id: int, user: sqlite3.Row = Depends(ge
         if row is None:
             raise HTTPException(status_code=404, detail="Запись численности не найдена")
         _history(conn, record_id, object_id, row["work_date"], row["contractor_id"], row["codifier_id"], row["workers"], None, "form", _db_now(),
-                 user["id"], old_itr=row["itr"], new_itr=None, old_mech=row["mech"], new_mech=None)
+                 user["id"], old_itr=row["itr"], new_itr=None, old_mech=row["mech"], new_mech=None, shift=row["shift"])
         conn.execute("DELETE FROM headcount_records WHERE id = ?", (record_id,))
         conn.commit()
     finally:
@@ -915,7 +923,7 @@ def delete_record(object_id: int, record_id: int, user: sqlite3.Row = Depends(ge
 @router.get("/history")
 def get_history(object_id: int, date_from: Optional[str] = None, date_to: Optional[str] = None,
                 contractor_id: Optional[int] = None, codifier_id: Optional[int] = None,
-                limit: int = Query(200, ge=1, le=1000), user: sqlite3.Row = Depends(get_current_user)):
+                limit: int = Query(200, ge=1, le=1000), user: sqlite3.Row = Depends(get_current_user), shift: Optional[Literal["day", "night"]] = None):
     """Все значения по ключам, новые сверху: создание (было пусто), замены, удаления (стало пусто)."""
     where, params = ["h.object_id = ?"], [object_id]
     if date_from:
@@ -926,6 +934,8 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
         where.append("h.contractor_id = ?"); params.append(contractor_id)
     if codifier_id is not None:
         where.append("h.codifier_id = ?"); params.append(codifier_id)
+    if shift is not None:
+        where.append("h.shift = ?"); params.append(shift)
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, FEATURE_KEY, "read")
@@ -937,7 +947,7 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
             "LEFT JOIN users u ON u.id = h.changed_by WHERE " + " AND ".join(where) +
             " ORDER BY h.changed_at DESC, h.id DESC LIMIT ?", (*params, limit)).fetchall()
         return {"history": [{
-            "id": r["id"], "date": r["work_date"], "contractor": _contractor_out_from_parts(r["ctr_name"], r["ctr_inn"])["display"],
+            "id": r["id"], "shift": r["shift"], "date": r["work_date"], "contractor": _contractor_out_from_parts(r["ctr_name"], r["ctr_inn"])["display"],
             "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
             "old_itr": r["old_itr"], "new_itr": r["new_itr"], "old_mech": r["old_mech"], "new_mech": r["new_mech"],
             "old_total": None if r["old_workers"] is None else r["old_workers"] + (r["old_itr"] or 0) + (r["old_mech"] or 0),
@@ -955,6 +965,7 @@ def get_history(object_id: int, date_from: Optional[str] = None, date_to: Option
 STAFF_EXPR = {"total": "(r.workers + r.itr + r.mech)", "workers": "r.workers", "itr": "r.itr", "mech": "r.mech"}
 
 _LEVELS = {
+    "note": ("COALESCE(cw.note, '')", "COALESCE(NULLIF(cw.note, ''), 'Без примечания')"),
     "smu": ("COALESCE(CAST(o.smu_id AS TEXT), '')", "COALESCE(s.name, 'Без подразделения')"),
     "object": ("CAST(o.id AS TEXT)", "o.name"),
     "section": ("COALESCE(w.section_name, '')", "COALESCE(w.section_name, 'Без раздела')"),
@@ -977,8 +988,8 @@ def _readable_object_ids(conn, user, wanted: Optional[list]) -> list:
 
 
 @global_router.get("/report")
-def report(levels: str = Query("object", description="Уровни через запятую из: smu, object, section, work, contractor"),
-           as_of: Optional[str] = Query(None, description="Опорный день (по умолчанию — последний день с данными в выборке)"),
+def report(levels: str = Query("contractor,section,note", description="Уровни через запятую из: smu, object, section, work, contractor, note"),
+           as_of: Optional[str] = Query(None, description="Опорный день (по умолчанию — сегодня)"),
            date_from: Optional[str] = None, date_to: Optional[str] = None,
            object_ids: Optional[str] = Query(None, description="Объекты через запятую; по умолчанию все доступные"),
            smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = Query(
@@ -986,7 +997,7 @@ def report(levels: str = Query("object", description="Уровни через з
            contractor_inn: Optional[str] = None,
            staff: str = Query("total", description="Что считать: total — итого (рабочие + ИТР + механизаторы), workers — рабочие, itr — ИТР, mech — механизаторы"),
            user: sqlite3.Row = Depends(get_current_user)):
-    """Факт численности: за опорный день, среднее за неделю (7 дней по опорный включительно), среднее за месяц опорного дня и, если заданы
+    """Факт численности: за опорный день, среднее с понедельника и с первого числа по опорный день включительно и, если заданы
     `date_from`/`date_to`, сумма человек-дней и среднее за период. Плана и отклонений нет (первый этап, решение 2026-10-09).
     Показатели складываются вверх по иерархии — см. докстроку модуля."""
     if staff not in STAFF_EXPR:
@@ -994,8 +1005,8 @@ def report(levels: str = Query("object", description="Уровни через з
     amount = STAFF_EXPR[staff]
     level_list = [x.strip() for x in levels.split(",") if x.strip()]
     if not level_list or any(x not in _LEVELS for x in level_list) or len(set(level_list)) != len(level_list):
-        raise HTTPException(status_code=400, detail="levels: список без повторов из smu, object, section, work, contractor")
-    ref = _parse_date(as_of, "Опорный день") if as_of else None   # не задан — последний день с данными в выборке (ниже)
+        raise HTTPException(status_code=400, detail="levels: список без повторов из smu, object, section, work, contractor, note")
+    ref = _parse_date(as_of, "Опорный день") if as_of else None
     p_from = _parse_date(date_from, "Дата с") if date_from else None
     p_to = _parse_date(date_to, "Дата по") if date_to else None
     wanted = None
@@ -1008,7 +1019,7 @@ def report(levels: str = Query("object", description="Уровни через з
     try:
         ids = _readable_object_ids(conn, user, wanted)
         if not ids:
-            return _empty_report(level_list, ref or now_msk().date() - timedelta(days=1))
+            return _empty_report(level_list, ref or now_msk().date())
         where, params = [f"r.object_id IN ({','.join('?' * len(ids))})"], list(ids)
         if smu_id is not None:
             where.append("o.smu_id = ?"); params.append(smu_id)
@@ -1021,19 +1032,17 @@ def report(levels: str = Query("object", description="Уровни через з
             where.append(f"{CTR_INN} = ?"); params.append(clean_inn(contractor_inn))
         join = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id LEFT JOIN smu_catalog s ON s.id = o.smu_id "
                 "JOIN work_codifier w ON w.id = r.codifier_id JOIN headcount_contractors c ON c.id = r.contractor_id "
-                "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id WHERE " + " AND ".join(where))
+                "LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
+                "LEFT JOIN headcount_contractor_works cw ON cw.contractor_id = r.contractor_id AND cw.codifier_id = r.codifier_id WHERE " + " AND ".join(where))
 
         if ref is None:
-            last = conn.execute("SELECT MAX(r.work_date) " + join + " AND r.work_date <= ?", (*params, now_msk().date().isoformat())).fetchone()[0]
-            ref = date.fromisoformat(last) if last else now_msk().date() - timedelta(days=1)
-        week_from, month_from = ref - timedelta(days=6), ref.replace(day=1)
+            ref = now_msk().date()
+        week_from, month_from = ref - timedelta(days=ref.weekday()), ref.replace(day=1)
 
-        def days(start: date, end: date) -> int:
-            return conn.execute("SELECT COUNT(DISTINCT r.work_date) " + join + " AND r.work_date BETWEEN ? AND ?",
-                                (*params, start.isoformat(), end.isoformat())).fetchone()[0]
-
-        week_days, month_days = days(week_from, ref), days(month_from, ref)
-        period_days = days(p_from, p_to) if p_from and p_to else 0
+        week_days, month_days = ref.weekday() + 1, ref.day
+        period_days = (p_to - p_from).days + 1 if p_from and p_to else 0
+        if p_from and p_to and period_days < 1:
+            raise HTTPException(status_code=400, detail="Конец периода раньше начала")
         keys = ", ".join(f"{_LEVELS[x][0]} AS k_{x}, {_LEVELS[x][1]} AS l_{x}" for x in level_list)
         group = ", ".join(f"k_{x}" for x in level_list)
         extra = ""
@@ -1074,20 +1083,34 @@ def report(levels: str = Query("object", description="Уровни через з
             f"SELECT substr(r.work_date, 1, 7) AS m, SUM({amount}) AS s, COUNT(DISTINCT r.work_date) AS d " + join +
             " AND r.work_date >= ? AND r.work_date <= ? GROUP BY m ORDER BY m",
             (*params, year_from.isoformat(), (p_to or ref).isoformat())).fetchall()
-        months = [{"month": m["m"], "avg": round(m["s"] / m["d"], 3) if m["d"] else 0, "days": m["d"]} for m in month_rows]
+        months = []
+        for m in month_rows:
+            start = date.fromisoformat(m["m"] + "-01")
+            next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+            end = min(next_month - timedelta(days=1), p_to or ref)
+            days = (end - start).days + 1
+            months.append({"month": m["m"], "avg": round(m["s"] / days, 3), "days": days})
+        chart_from, chart_to = p_from or month_from, p_to or ref
+        daily = {r["work_date"]: r["amount"] for r in conn.execute(
+            f"SELECT r.work_date, SUM({amount}) AS amount " + join +
+            " AND r.work_date BETWEEN ? AND ? GROUP BY r.work_date",
+            (*params, chart_from.isoformat(), chart_to.isoformat()))}
+        series = [{"date": (chart_from + timedelta(days=n)).isoformat(),
+                   "total": daily.get((chart_from + timedelta(days=n)).isoformat(), 0)}
+                  for n in range(max(0, (chart_to - chart_from).days + 1))]
         return {"staff": staff, "levels": level_list, "as_of": ref.isoformat(), "week_from": week_from.isoformat(), "month_from": month_from.isoformat(),
                 "week_days": week_days, "month_days": month_days, "period_days": period_days, "rows": out_rows,
-                "total": total, "months": months,
+                "total": total, "months": months, "series": series,
                 "objects": conn.execute("SELECT COUNT(DISTINCT r.object_id) " + join + " AND r.work_date <= ?", (*params, ref.isoformat())).fetchone()[0]}
     finally:
         conn.close()
 
 
-LEVEL_TITLES = {"smu": "Подразделение", "object": "Объект", "section": "Раздел", "work": "Вид работ", "contractor": "Подрядчик"}
+LEVEL_TITLES = {"smu": "Подразделение", "object": "Объект", "section": "Раздел", "work": "Вид работ", "contractor": "Подрядчик", "note": "Примечание"}
 
 
 @global_router.get("/report.xlsx")
-def report_xlsx(levels: str = Query("object"), as_of: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
+def report_xlsx(levels: str = Query("contractor,section,note"), as_of: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None,
                 object_ids: Optional[str] = None, smu_id: Optional[int] = None, section: Optional[str] = None, work_code: Optional[str] = None,
                 contractor_inn: Optional[str] = None, staff: str = Query("total"), user: sqlite3.Row = Depends(get_current_user)):
     """Тот же отчёт, что `/headcount/report`, одним листом Excel: по строке на сочетание выбранных уровней, итог внизу. Права те же."""
@@ -1185,11 +1208,11 @@ def _data_filters(conn, user, *, alias: str, object_ids: Optional[str], date_fro
 _DATA_FROM = ("FROM headcount_records r JOIN objects o ON o.id = r.object_id JOIN work_codifier w ON w.id = r.codifier_id "
               "JOIN headcount_contractors c ON c.id = r.contractor_id LEFT JOIN counterparties cp ON cp.id = c.counterparty_id "
               "LEFT JOIN users ue ON ue.id = r.entered_by LEFT JOIN users uu ON uu.id = r.updated_by ")
-_DATA_COLS = ("SELECT r.id, r.object_id, o.name AS object_name, r.work_date, r.workers, r.itr, r.mech, r.late, r.source, r.entered_at, r.updated_at, "
+_DATA_COLS = ("SELECT r.id, r.shift, r.object_id, o.name AS object_name, r.work_date, r.workers, r.itr, r.mech, r.late, r.source, r.entered_at, r.updated_at, "
               f"w.code AS work_code, w.name AS work_name, w.section_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
               "ue.last_name AS ue_last, ue.first_name AS ue_first, uu.last_name AS uu_last, uu.first_name AS uu_first, "
               "(SELECT COUNT(*) FROM headcount_history h WHERE h.object_id = r.object_id AND h.work_date = r.work_date "
-              " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id) AS hist ")
+              " AND h.contractor_id = r.contractor_id AND h.codifier_id = r.codifier_id AND h.shift = r.shift) AS hist ")
 _DATA_ORDER = f"ORDER BY r.work_date DESC, o.name, {CTR_NAME}, {CTR_INN}, w.code "
 
 
@@ -1201,7 +1224,7 @@ def _data_item(r) -> dict:
         if entered:
             overdue = max(1, int((entered - deadline_for(date.fromisoformat(r["work_date"]))).total_seconds() // 60))
     return {
-        "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"], "contractor": parts["display"],
+        "id": r["id"], "shift": r["shift"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"], "contractor": parts["display"],
         "inn": r["ctr_inn"], "inn_status": parts["inn_status"], "section": r["section_name"], "work_code": r["work_code"],
         "work_name": r["work_name"], "workers": r["workers"], "itr": r["itr"], "mech": r["mech"],
         "total": r["workers"] + r["itr"] + r["mech"],
@@ -1278,12 +1301,12 @@ def list_history_log(object_ids: Optional[str] = None, date_from: Optional[str] 
                "LEFT JOIN users u ON u.id = h.changed_by ")
         total = conn.execute(f"SELECT COUNT(*) {frm} WHERE {where}", params).fetchone()[0]
         rows = conn.execute(
-            "SELECT h.id, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.old_itr, h.new_itr, h.old_mech, h.new_mech, "
+            "SELECT h.id, h.shift, h.object_id, o.name AS object_name, h.work_date, h.old_workers, h.new_workers, h.old_itr, h.new_itr, h.old_mech, h.new_mech, "
             f"h.source, h.changed_at, w.code AS work_code, w.name AS work_name, {CTR_NAME} AS ctr_name, {CTR_INN} AS ctr_inn, "
             f"u.last_name AS u_last, u.first_name AS u_first {frm} WHERE {where} ORDER BY h.changed_at DESC, h.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset)).fetchall()
         return {"items": [{
-            "id": r["id"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"],
+            "id": r["id"], "shift": r["shift"], "object_id": r["object_id"], "object": r["object_name"], "date": r["work_date"],
             "contractor": _contractor_out_from_parts(r["ctr_name"], r["ctr_inn"])["display"],
             "work_code": r["work_code"], "work_name": r["work_name"], "old": r["old_workers"], "new": r["new_workers"],
             "old_itr": r["old_itr"], "new_itr": r["new_itr"], "old_mech": r["old_mech"], "new_mech": r["new_mech"],
@@ -1337,12 +1360,12 @@ def records_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] = No
     finally:
         conn.close()
     items = [_data_item(r) for r in rows]
-    heads = ["Дата", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Рабочие", "ИТР", "Механизаторы", "Итого", "Просрочено",
+    heads = ["Дата", "Смена", "Объект", "Подрядчик", "ИНН", "Раздел", "Код вида работ", "Вид работ", "Рабочие", "ИТР", "Механизаторы", "Итого", "Просрочено",
              "Опоздание, мин", "Источник", "Внесено", "Кем внесено", "Изменено", "Кем изменено", "Правок"]
-    body = [[date.fromisoformat(i["date"]), i["object"], i["contractor"], i["inn"], i["section"], i["work_code"], i["work_name"], i["workers"],
+    body = [[date.fromisoformat(i["date"]), "Ночная" if i["shift"] == "night" else "Дневная", i["object"], i["contractor"], i["inn"], i["section"], i["work_code"], i["work_name"], i["workers"],
              i["itr"], i["mech"], i["total"], "да" if i["late"] else "", i["overdue_minutes"], SOURCE_TITLES.get(i["source"], i["source"]), _moment_xlsx(i["entered_at"]),
              i["entered_by"], _moment_xlsx(i["updated_at"]), i["updated_by"], i["changes"]] for i in items]
-    resp = _xlsx_response(heads, body, [12, 34, 38, 14, 34, 14, 50, 10, 8, 13, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
+    resp = _xlsx_response(heads, body, [12, 12, 34, 38, 14, 34, 14, 50, 10, 8, 13, 10, 11, 12, 22, 17, 24, 17, 24, 8], "Численность_записи.xlsx")
     return resp
 
 
@@ -1361,15 +1384,16 @@ def history_log_xlsx(object_ids: Optional[str] = None, date_from: Optional[str] 
             break
         items.extend(more)
         offset += 500
-    heads = ["Когда изменено", "Кто", "День численности", "Объект", "Подрядчик", "Код вида работ", "Вид работ", "Рабочие было", "Рабочие стало",
+    heads = ["Когда изменено", "Кто", "День численности", "Смена", "Объект", "Подрядчик", "Код вида работ", "Вид работ", "Рабочие было", "Рабочие стало",
              "ИТР было", "ИТР стало", "Механизаторы было", "Механизаторы стало", "Источник"]
-    body = [[_moment_xlsx(i["changed_at"]), i["changed_by"], date.fromisoformat(i["date"]), i["object"], i["contractor"], i["work_code"], i["work_name"],
+    body = [[_moment_xlsx(i["changed_at"]), i["changed_by"], date.fromisoformat(i["date"]), "Ночная" if i["shift"] == "night" else "Дневная", i["object"], i["contractor"], i["work_code"], i["work_name"],
              i["old"], i["new"] if i["new"] is not None else "удалено", i["old_itr"], i["new_itr"] if i["new_itr"] is not None else ("удалено" if i["new"] is None else None),
              i["old_mech"], i["new_mech"] if i["new_mech"] is not None else ("удалено" if i["new"] is None else None),
              SOURCE_TITLES.get(i["source"], i["source"])] for i in items]
-    return _xlsx_response(heads, body, [17, 24, 14, 34, 38, 14, 50, 12, 13, 10, 11, 14, 15, 22], "Численность_журнал_изменений.xlsx")
+    return _xlsx_response(heads, body, [17, 24, 14, 12, 34, 38, 14, 50, 12, 13, 10, 11, 14, 15, 22], "Численность_журнал_изменений.xlsx")
 
 
 def _empty_report(level_list: list, ref: date) -> dict:
     return {"staff": "total", "levels": level_list, "as_of": ref.isoformat(), "rows": [], "total": {"fact_day": 0, "week_avg": 0, "month_avg": 0},
-            "months": [], "objects": 0}
+            "months": [], "series": [], "objects": 0,
+            "week_days": ref.weekday() + 1, "month_days": ref.day}

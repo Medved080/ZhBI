@@ -139,9 +139,9 @@ with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_me
     open_action("Получить сводку"); press("Сегодня")
     ok("рабочие 30, ИТР 2, механизаторы 1; всего 33" in text() and "9999" not in text(), "Дневная сводка содержит только свои строки")
     open_action("Получить сводку"); press("Неделя")
-    ok("24.10.2026" in text() and "рабочие 30, ИТР 3, механизаторы 2; всего 35" in text() and "2 из 7" in text(), "Недельная сводка усредняет суммы дней, не строки, за последние 7 дней")
+    ok("26.10.2026" in text() and "рабочие 12, ИТР 1,2, механизаторы 0,8; всего 14" in text() and "2 из 5" in text(), "Текущая неделя: суммы обеих смен делятся на все прошедшие дни")
     open_action("Получить сводку"); press("Месяц")
-    ok("01.10.2026" in text() and "рабочие 36,667, ИТР 4, механизаторы 3; всего 43,667" in text() and "3 из 30" in text(), "Месячная сводка от начала месяца, дни без данных исключены")
+    ok("01.10.2026" in text() and "рабочие 3,667, ИТР 0,4, механизаторы 0,3; всего 4,367" in text() and "3 из 30" in text(), "Месячная сводка: делитель равен выбранному числу месяца")
     # Второй объект и подмена идентификатора в кнопке.
     c = db.get_connection()
     c.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id) VALUES (?, ?, ?)", (foreign_ctr, work, person["id"]))
@@ -165,7 +165,7 @@ with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_me
     current = c.execute("SELECT * FROM express_contacts WHERE id = ?", (contact,)).fetchone()
     ok(obj not in [o["id"] for o in ed._available_objects(c, current)], "Архивный объект не предлагается для нового ввода")
     ed._self_summary(c, current, {"id": obj, "name": "Тестовый объект"}, "month")
-    ok("всего 43,667" in text(), "Сводка сохраняет исторические данные архивного подрядчика")
+    ok("всего 4,367" in text(), "Сводка сохраняет исторические данные архивного подрядчика")
     c.close()
     hc.archive_contractor(obj, ctr, hc.ContractorArchiveIn(is_archived=False), user=admin)
     c = db.get_connection()
@@ -188,6 +188,18 @@ with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_me
         raise AssertionError("права справочника")
     except HTTPException as e:
         ok(e.status_code == 403, "Добавление физлица сохраняет проверку права общего справочника")
+
+with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_message", side_effect=lambda *a: sent.append(a)), patch.object(hc, "now_msk", return_value=fixed):
+    open_action("Внести численность"); press("За сегодня")
+    say(data={"a": "self_object", "o": obj})
+    press("Ночная смена"); press("MENU-TEST"); say("6"); say("1"); say("2")
+    ok("Записано" in text(), "Ночная смена доступна из меню бота и сохраняется")
+    c = db.get_connection()
+    values = {r["shift"]: r["workers"] for r in c.execute("SELECT shift,workers FROM headcount_records WHERE contractor_id=? AND codifier_id=? AND work_date='2026-10-30'", (ctr,work))}
+    ok(values == {"day": 10, "night": 6}, "Ночной ввод через кнопки не меняет дневную запись")
+    c.close()
+    press("Дневная смена")
+    ok("Дневная смена" in text(), "Переключение обратно в дневную смену работает после сохранения")
 
 ok(not db.init_db(), "Повторный запуск миграций ничего не меняет")
 print("Все проверки пройдены")
