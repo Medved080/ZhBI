@@ -269,7 +269,8 @@ export function mountShellNav(el, {
       </div>
       ${settingsMode ? `<div class="v2-shellnav-settings-note" role="status">Настройка меню: <b>★</b> — в избранное, <b>▲▼</b> — порядок пунктов в группе. Нажмите ⚙, чтобы закончить.</div>` : ""}
       <div class="v2-shellnav-scroll">
-        <button type="button" class="v2-shellnav-item v2-shellnav-home" data-section="home" aria-pressed="${currentKey === "home"}">${svgIcon("home", { size: 15 })}<span class="v2-shellnav-item-label">Начало</span></button>
+        <button type="button" class="v2-shellnav-item v2-shellnav-home" data-section="object-home" aria-pressed="${currentKey === "object-home"}">${svgIcon("home", { size: 15 })}<span class="v2-shellnav-item-label">Начало</span></button>
+        <button type="button" class="v2-shellnav-item v2-shellnav-home" data-section="home" aria-pressed="${currentKey === "home"}">${svgIcon("menu", { size: 15 })}<span class="v2-shellnav-item-label">Действия</span></button>
         ${favTopHtml}
         ${workVisible.length ? `<div class="v2-shellnav-static-head">Рабочие места</div><div class="v2-shellnav-work">${workVisible.map((s) => itemHtml(s, currentKey)).join("")}</div>` : ""}
         ${middleGroups.map(groupHtml).join("")}
@@ -282,7 +283,8 @@ export function mountShellNav(el, {
       <button type="button" class="v2-shellnav-icon-btn" id="v2-shellnav-menu" data-tooltip="Меню разделов" aria-label="Открыть меню разделов" aria-expanded="${mode() !== "collapsed"}">${svgIcon("menu")}</button>
       <button type="button" class="v2-shellnav-icon-btn" id="v2-shellnav-search-btn" data-tooltip="Найти раздел" aria-label="Найти раздел">${svgIcon("search")}</button>
       <div class="v2-shellnav-divider" role="separator"></div>
-      <button type="button" class="v2-shellnav-icon-btn" data-section="home" data-tooltip="Начало" aria-label="Начало" aria-pressed="${currentKey === "home"}">${svgIcon("home")}</button>
+      <button type="button" class="v2-shellnav-icon-btn" data-section="object-home" data-tooltip="Начало" aria-label="Начало" aria-pressed="${currentKey === "object-home"}">${svgIcon("home")}</button>
+      <button type="button" class="v2-shellnav-icon-btn" data-section="home" data-tooltip="Действия" aria-label="Действия" aria-pressed="${currentKey === "home"}">${svgIcon("menu")}</button>
       ${workItems.map((s) => `<button type="button" class="v2-shellnav-icon-btn" data-section="${esc(s.id)}" data-tooltip="${esc(s.title)}" aria-label="${esc(s.title)}" aria-pressed="${s.id === currentKey}">${svgIcon(workIconName(s))}</button>`).join("")}`;
 
     const m = mode();

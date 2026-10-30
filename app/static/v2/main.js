@@ -732,16 +732,16 @@ async function renderShell(user, permissions) {
       root.classList.toggle("v2-ws-mode", !!target && (target.impl === "workspace" || target.impl === "map-screen" || target.impl === "calc-embed" || target.impl === "module:object-home"));
       currentKey = key;
       switchCtx.ws = target?.ws && target.impl === "workspace" ? target.ws : null;
-      const wanted = key === "home" ? "#/" : `#/${key}`;
+      const wanted = key === "home" ? "#/actions" : `#/${key}`;
       if (location.hash !== wanted && !(key === "home" && (location.hash === "" || location.hash === "#"))) {
         history.pushState(null, "", wanted);
       }
       shellNav.render();
       // «Текущее рабочее место подписано в шапке» (п.2 задания) — видно и когда меню свёрнуто/спрятано.
       // Для рабочих мест (v2-ws-mode) дублировать незачем: своя подпись уже есть в ws-top (workspace.js).
-      headSection.textContent = key === "home" ? "" : (target ? target.title : "");
+      headSection.textContent = key === "home" ? "Действия" : (target ? target.title : "");
       if (key === "home") {
-        document.title = "ЖБИ — интерфейс V2";
+        document.title = "Действия — ЖБИ";
         // Скрытое делится на две причины: раздел не относится к типу текущего объекта (ЖБИ ↔ МФР) и нет прав. Администратору
         // «скрыто по правам» не бывает — у него остаётся только первая причина.
         const hiddenAll = registry.screens.filter((s) => !allowedScreen(s));
@@ -950,10 +950,15 @@ async function renderShell(user, permissions) {
   window.addEventListener(BLOCKED_EVENT, (e) => updateGateNote(currentKey && currentKey !== "home" ? screenOf(currentKey) : null, e.detail?.message));
   function restoreHash() {
     // Переход отклонён (несохранённое, идёт запись): адрес должен снова показывать открытый экран.
-    const wanted = currentKey === "home" || !currentKey ? "#/" : `#/${currentKey}`;
+    const wanted = currentKey === "home" ? "#/actions" : (currentKey ? `#/${currentKey}` : "#/");
     if (location.hash !== wanted) history.pushState(null, "", wanted);
   }
-  const routeFromHash = () => /^#\/([\w-]+)/.exec(location.hash)?.[1] || "home";
+  const routeFromHash = () => {
+    const route = /^#\/([\w-]+)/.exec(location.hash)?.[1];
+    if (route === "actions") return "home"; // внутренний ключ каталога действий сохранён
+    if (!route || route === "home") return objectId ? "object-home" : "home";
+    return route;
+  };
   window.addEventListener("hashchange", () => { const k = routeFromHash(); if (k !== currentKey) openSection(k, { fromHash: true }); });
   window.addEventListener("popstate", () => { const k = routeFromHash(); if (k !== currentKey) openSection(k, { fromHash: true }); });
 

@@ -2,9 +2,10 @@
 // app/pdf_facade_import.py): «Полный разбор» (фоновая задача с прогрессом — сама тяжёлая часть, ~30с на реальном комплекте, не
 // умещается в один запрос) и «Только фасады» (синхронно, секунды — макет блоков без начинки). Обе ветки — двухфазные: разбор
 // (в БД не пишет) → сводка → применение по токену. Плюс отладочный инструмент очистки справочников (тот же, что у Revit).
+import { pdfWarningsHtml } from "../pdf-diagnostics.js";
 import { showConfirmDialog } from "./dialogs.js";
 import {
-  esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, factsHtml, listHtml, objectOptions,
+  esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, factsHtml, objectOptions,
 } from "./exchange-common.js";
 
 const MFR_KIND = "mfr"; // элементы/блоки из PDF пишутся в revit_elements объекта МФР (та же модель, что у Revit-выгрузки)
@@ -59,9 +60,13 @@ export function mountPdfImport(el, ctx) {
       const body = await api.get(`/import-pdf/analyze/progress/${jobId}`);
       if (body.status === "done") return body.result;
       if (body.total) {
-        const stageBase = body.stage === "Разбираю стены и перекрытия" ? 0.5 : (body.stage === "Снимаю картинки планов" ? 1 : 0);
-        setProgress(stageBase + (body.total ? (body.page / body.total) * (body.stage === "Снимаю картинки планов" ? 0 : 0.5) : 0));
-        status.set(`${body.stage}: лист №${body.page_number ?? "?"} (${body.page} из ${body.total})…`, "busy");
+        const plans = body.stage === "Снимаю картинки планов";
+        const base = plans ? 0.8 : (body.stage === "Разбираю стены и перекрытия" ? 0.4 : 0);
+        setProgress(base + (body.page / body.total) * (plans ? 0.19 : 0.4));
+        const sheet = body.page_number == null ? "" : ` · лист №${body.page_number}`;
+        status.set(plans
+          ? `Готовлю планы этажей: обработано ${body.page} из ${body.total}${sheet}…`
+          : `${body.stage}${sheet} (${body.page} из ${body.total})…`, "busy");
       }
       await new Promise((r) => setTimeout(r, 700));
     }
@@ -74,7 +79,7 @@ export function mountPdfImport(el, ctx) {
         ["Объект", data.object_name], ["Стен/перегородок", data.total_walls], ["Дверей", data.total_doors ?? 0],
         ["Окон", data.total_windows], ["Плит перекрытия", data.total_slabs],
       ])}
-      ${listHtml("Предупреждения", data.warnings)}
+      ${pdfWarningsHtml(data)}
       <h4>Что изменится</h4>${factsHtml([["Новых элементов", data.new], ["Без изменений", data.unchanged], ["Не загружается (будет списано)", data.retiring || 0]])}
       <h4>По этажам</h4><div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Этаж</th><th>Контуров для разбора</th><th>С площадью</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }

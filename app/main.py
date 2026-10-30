@@ -6548,7 +6548,9 @@ def analyze_pdf_progress(job_id: str, user: sqlite3.Row = Depends(get_current_us
     быть больше `total` — это номер в самом файле, не счётчик), `page`/
     `total` — счётчик и общее число УЖЕ уникальных листов, которые
     участвуют в разборе (страниц в файле обычно больше — легенды, разрезы,
-    фасады в счётчик не входят, см. `pdf_rooms.parse_document`)."""
+    фасады в счётчик не входят, см. `pdf_rooms.parse_document`). На стадии
+    «Снимаю картинки планов» счётчик относится к этажам, а номер листа
+    остаётся номером исходной страницы (один лист может дать несколько планов)."""
     try:
         job = pdf_import.get_job(job_id)
     except pdf_import.PdfImportError as e:
@@ -6565,6 +6567,31 @@ def analyze_pdf_progress(job_id: str, user: sqlite3.Row = Depends(get_current_us
         "page": job["page"],
         "total": job["total"],
     }
+
+
+@app.get("/import-pdf/diagnostics/{token}/{index}")
+def pdf_warning_image(token: str, index: int, overview: bool = False,
+                      page: Optional[int] = Query(None, ge=1),
+                      user: sqlite3.Row = Depends(get_current_user)):
+    """Исходный лист с фигурами выбранного замечания; только до применения."""
+    from app import pdf_diagnostics
+
+    try:
+        analysis = pdf_import.get_pending(token)
+    except pdf_import.PdfImportError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, analysis["object_id"], "pdf_import", "write")
+    finally:
+        conn.close()
+    if not 0 <= index < len(analysis["warnings"]):
+        raise HTTPException(status_code=404, detail="Замечание не найдено")
+    try:
+        png = pdf_diagnostics.render(analysis, index, overview=overview, page_number=page)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 class PdfApplyIn(BaseModel):

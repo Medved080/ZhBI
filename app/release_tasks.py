@@ -1030,7 +1030,7 @@ def _correct_pdf_facade_materials(conn):
         window_band = ('|кладка' in row['uid'] or
                        (index and int(index.group(1)) >= pdf_rooms.INFILL_INDEX_BASE))
         base = abs(min(width,height)-200) <= 10 and poly.area >= .95*width*height
-        if base and not window_band:
+        if base or window_band:
             continue
         params['материал'] = pdf_rooms.FACADE_MATERIAL
         params['основание'] = 'Определяется отдельно по слою материала стены, не по фасадному контуру'
@@ -1038,6 +1038,37 @@ def _correct_pdf_facade_materials(conn):
                      (pdf_rooms.CAT_FACADE,pdf_rooms.FACADE_MATERIAL,json.dumps(params,ensure_ascii=False),row['id']))
         changed += 1
     return f'Фасадных полос переклассифицировано: {changed}; некорректных контуров пропущено: {skipped}'
+
+
+def _correct_pdf_window_bands(conn):
+    """Под/над окнами — наружная кладка из блоков, подтверждение 2026-10-31."""
+    import json
+    import re
+    from app import classifier_categories, pdf_rooms
+
+    changed = 0
+    for row in _pdf_legacy_exterior_rows(conn, include_corrected=True):
+        index = re.match(r'^pdf:стена:.*:(\d+)$', row['uid'])
+        if '|кладка' not in row['uid'] and not (index and int(index.group(1)) >= pdf_rooms.INFILL_INDEX_BASE):
+            continue
+        try:
+            params = json.loads(row['params_json'] or '{}')
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(params, dict):
+            continue
+        material = pdf_rooms.EXTERIOR_MASONRY_MATERIAL
+        if (row['category'] == classifier_categories.CLS_MASONRY_OUTER
+                and row['type_name'] == material and params.get('материал') == material):
+            continue
+        params['материал'] = material
+        if params.get('основание') == 'Определяется отдельно по слою материала стены, не по фасадному контуру':
+            params.pop('основание')
+        conn.execute("UPDATE revit_elements SET category=?,type_name=?,params_json=?,updated_at=datetime('now') WHERE id=?",
+                     (classifier_categories.CLS_MASONRY_OUTER, material,
+                      json.dumps(params, ensure_ascii=False), row['id']))
+        changed += 1
+    return f'Заполнений окон исправлено: {changed}'
 
 
 def _retire_pdf_facade_duplicates(conn):
@@ -1557,7 +1588,7 @@ RELEASE_TASKS = [
         "name": "2026-10-30-pdf-facade-materials",
         "version": "0.122", "date": "2026-10-30",
         "title": "Отделить фасадное утепление и облицовку от кладки",
-        "why": "наружные полосы 150 мм и заполнения у окон были ошибочно названы ячеистыми блоками; материал основания читается отдельно",
+        "why": "наружные фасадные полосы 150 мм были ошибочно названы ячеистыми блоками; материал основания читается отдельно",
         "kind": KIND_DATA, "run": _correct_pdf_facade_materials,
     },
     {
@@ -1566,6 +1597,13 @@ RELEASE_TASKS = [
         "title": "Снять с показа белые дубли монолита PDF-модели",
         "why": "белая подложка наружного слоя была повторно учтена как блоки в том же месте и на той же высоте, что цветной железобетон",
         "kind": KIND_CLEANUP, "run": _retire_pdf_facade_duplicates,
+    },
+    {
+        "name": "2026-10-31-pdf-window-bands-blocks",
+        "version": "0.122", "date": "2026-10-31",
+        "title": "Кладка из блоков под и над окнами",
+        "why": "пользователь подтвердил материал заполнений: наружные стены из блоков; фасад вокруг монолита сохраняется",
+        "kind": KIND_DATA, "run": _correct_pdf_window_bands,
     },
 ]
 

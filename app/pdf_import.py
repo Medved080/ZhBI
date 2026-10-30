@@ -49,6 +49,7 @@ import uuid
 from app import blocks as blocks_mod
 from app import classifier_categories
 from app import db as db_mod
+from app import pdf_diagnostics
 from app import pdf_plan_images
 from app import pdf_rooms
 from app.blocks import BlockError
@@ -361,12 +362,14 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
     # Картинки планов этажей по контуру плиты (2026-09-02, живой запрос
     # пользователя) — здесь, в фоновом разборе, а не в `apply()`: тут есть
     # открытый документ, а рендер 28 листов — секунды.
-    if on_progress:
-        on_progress("Снимаю картинки планов", None, 0, len(pdf_rooms.FLOOR_PLANS))
-    plan_images = pdf_plan_images.render_floor_images(doc, rooms, walls, axis_grid)
+    def _plans_progress(page_number, processed, total):
+        if on_progress:
+            on_progress("Снимаю картинки планов", page_number, processed, total)
 
-    # Фасадные полосы под подоконником и над перемычкой окна. Материал
-    # основания по окну не угадываем. После картинок
+    plan_images = pdf_plan_images.render_floor_images(
+        doc, rooms, walls, axis_grid, on_progress=_plans_progress)
+
+    # Подтверждённая пользователем кладка из блоков под и над окнами. После картинок
     # планов: те рисуются по настоящим сегментам листа.
     infill = []
     for w in walls:
@@ -415,6 +418,8 @@ def analyze(conn, object_id: int, data: bytes, filename: str = None,
         "retiring": len(retired_uids),
         "by_floor": by_floor,
         "warnings": parse_warnings,
+        "warning_details": pdf_diagnostics.describe(parse_warnings, len(doc)),
+        "_source_pdf": data,
         "_rooms": rooms,
         "_walls": walls,
         "_slabs": slabs,
@@ -705,6 +710,7 @@ def _run_analyze_job(job_id: str, object_id: int, data: bytes, filename: str) ->
         "retiring": analysis["retiring"],
         "by_floor": analysis["by_floor"],
         "warnings": analysis["warnings"],
+        "warning_details": analysis["warning_details"],
     }
 
 

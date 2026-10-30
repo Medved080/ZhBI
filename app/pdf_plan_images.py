@@ -73,11 +73,14 @@ def floor_contour(polys: list) -> list:
     return [q for q in _polygons(merged) if q.area > 0]
 
 
-def render_floor_images(doc, rooms: list, walls: list, canonical_grid: dict) -> list:
+def render_floor_images(doc, rooms: list, walls: list, canonical_grid: dict,
+                        on_progress=None) -> list:
     """[{floor, page, x0, x1, y0, y1, width, height, png}] — по одной записи
     на этаж из `pdf_rooms.FLOOR_PLANS`, у которого есть хоть одна фигура.
     x0..y1 — фактический охват картинки в мм общей сетки (обрезка
-    страницей учтена); маска — по `floor_contour` того же этажа."""
+    страницей учтена); маска — по `floor_contour` того же этажа.
+    Колбэк (лист, обработано этажей, всего этажей) вызывается перед каждым
+    этажом и после последнего; пропущенный пустой контур тоже обработан."""
     by_floor = {}
     for r in rooms:
         by_floor.setdefault(r.floor, []).append(r.polygon_mm)
@@ -86,7 +89,10 @@ def render_floor_images(doc, rooms: list, walls: list, canonical_grid: dict) -> 
 
     out = []
     page_cache = {}
-    for plan in pdf_rooms.FLOOR_PLANS:
+    plans = [p for p in pdf_rooms.FLOOR_PLANS if by_floor.get(p.floor)]
+    for processed, plan in enumerate(plans):
+        if on_progress:
+            on_progress(plan.page, processed, len(plans))
         contours = floor_contour(by_floor.get(plan.floor) or [])
         if not contours:
             continue
@@ -133,4 +139,6 @@ def render_floor_images(doc, rooms: list, walls: list, canonical_grid: dict) -> 
             "y0": (H - clip.y1) * k - sy, "y1": (H - clip.y0) * k - sy,
             "width": pix.width, "height": pix.height, "png": buf.getvalue(),
         })
+    if on_progress and plans:
+        on_progress(plans[-1].page, len(plans), len(plans))
     return out

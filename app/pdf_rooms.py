@@ -75,6 +75,8 @@ from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union, triangulate
 from shapely.validation import make_valid
 
+from app.pdf_diagnostics import PdfWarning
+
 ROOM_LAYER = "оо_ПЛОЩАДИ_помещений.оо"
 
 PT_TO_MM = 25.4 / 72.0
@@ -329,15 +331,13 @@ _INFILL_MIN_MM = 50
 
 
 def window_infill(win: "WallSegment", floor_height_mm: float) -> list:
-    """Приближённые фасадные полосы ниже и выше остекления.
+    """Кладка наружных стен из блоков под и над окнами.
 
-    Материал основания по оконному проёму не определяется: по составу
-    стены оно бывает железобетонным либо блочным. Не создаём кладку
-    только по наличию окна. Отметки и контур сохраняют прежний способ
-    построения; конструктив читается отдельно со слоёв материала."""
+    Материал подтверждён пользователем 2026-10-31. Отметки и контур
+    остаются приближением по проёму; фасад вокруг монолита — отдельно."""
     if win.z_offset_mm is None or win.z_height_mm is None:
         return []
-    category, material = CAT_FACADE, FACADE_MATERIAL
+    category, material = CAT_WALL_BLOCKS, EXTERIOR_MASONRY_MATERIAL
     sill = float(win.z_offset_mm)
     top = sill + float(win.z_height_mm)
     base = INFILL_INDEX_BASE + 2 * win.index
@@ -893,29 +893,44 @@ def parse_page(page, correction: tuple = (0.0, 0.0)) -> tuple:
     warnings = []
     if rooms and matched_area < len(rooms) * 0.5:
         warnings.append(
-            f"площадь найдена только у {matched_area} из {len(rooms)} "
-            "помещений — проверьте разбор этого листа отдельно")
+            PdfWarning(
+                f"площадь найдена только у {matched_area} из {len(rooms)} "
+                "помещений — проверьте разбор этого листа отдельно",
+                polygons_mm=[r.polygon_mm for r in rooms if r.area_m2 is None],
+            ))
     if rooms and boundary_pt is None:
         warnings.append(
-            "граница осей секций не определена (нет подписей «…с1»/«…с2» "
-            "обеих секций сразу) — секция помещений этого листа не проставлена")
+            PdfWarning(
+                "граница осей секций не определена (нет подписей «…с1»/«…с2» "
+                "обеих секций сразу) — секция помещений этого листа не проставлена",
+                polygons_mm=[r.polygon_mm for r in rooms],
+            ))
     if envelope is None:
         warnings.append(
-            "на листе не нашлось ни одной подписи оси — врезки (каталог "
-            "типов квартир, «Фрагмент плана» и т.п.), если они есть, не "
-            "отфильтрованы")
+            PdfWarning(
+                "на листе не нашлось ни одной подписи оси — врезки (каталог "
+                "типов квартир, «Фрагмент плана» и т.п.), если они есть, не "
+                "отфильтрованы",
+                polygons_mm=[r.polygon_mm for r in rooms],
+            ))
     if dropped:
         площади = ", ".join(
             (f"{r.area_m2}" if r.area_m2 is not None else "без площади") for r in dropped)
         warnings.append(
-            f"{len(dropped)} фигур(ы) слоя помещений отброшены как врезка "
-            f"(каталог типов квартир, «Фрагмент плана» и т.п. — вне сетки "
-            f"осей листа, не элементы схемы): {площади}")
+            PdfWarning(
+                f"{len(dropped)} фигур(ы) слоя помещений отброшены как врезка "
+                f"(каталог типов квартир, «Фрагмент плана» и т.п. — вне сетки "
+                f"осей листа, не элементы схемы): {площади}",
+                polygons_mm=[r.polygon_mm for r in dropped],
+            ))
     if oversized:
         warnings.append(
-            f"{len(oversized)} фигур(ы) слоя помещений отброшены как фоновая "
-            f"заливка на весь этаж (габарит почти во весь охват листа — не "
-            f"отдельное помещение), не элементы схемы")
+            PdfWarning(
+                f"{len(oversized)} фигур(ы) слоя помещений отброшены как фоновая "
+                f"заливка на весь этаж (габарит почти во весь охват листа — не "
+                f"отдельное помещение), не элементы схемы",
+                polygons_mm=[r.polygon_mm for r in oversized],
+            ))
     return rooms, warnings
 
 
@@ -954,7 +969,11 @@ def parse_document(doc, on_progress=None) -> tuple:
                 rooms, page_warnings = parse_page(page, correction)
                 boundary_mm = _page_section_boundary_mm(page, correction)
             except PdfRoomsError as e:
-                warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
+                warnings.append(PdfWarning(
+                                    f"Лист {plan.page} (этаж {plan.floor}): {e.message}",
+                                    page=plan.page,
+                                    floor=plan.floor,
+                                ))
                 rooms, page_warnings, boundary_mm = [], [], None
             page_cache[plan.page] = (rooms, page_warnings, boundary_mm)
             processed += 1
@@ -962,7 +981,7 @@ def parse_document(doc, on_progress=None) -> tuple:
                 on_progress(plan.page, processed, total_pages)
         rooms, page_warnings, boundary_mm = page_cache[plan.page]
         for w in page_warnings:
-            warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
+            warnings.append(PdfWarning.context(w, plan.page, plan.floor))
         # Этаж с ОДНОЙ возможной секцией — она известна из таблицы этажей
         # надёжнее любой геометрии; определение по осям только для этажей,
         # общих для нескольких секций (иначе шум на границе листа мог бы
@@ -980,9 +999,14 @@ def parse_document(doc, on_progress=None) -> tuple:
             excluded = [r for r in floor_rooms if _cx(r) < boundary_mm]
             if excluded:
                 warnings.append(
-                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
-                    "помещений(-ие) левее границы секций — секция 1 «для "
-                    "информации» на этом листе, у этажа её нет, отброшены")
+                    PdfWarning(
+                        f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                        "помещений(-ие) левее границы секций — секция 1 «для "
+                        "информации» на этом листе, у этажа её нет, отброшены",
+                        page=plan.page,
+                        floor=plan.floor,
+                        polygons_mm=[r.polygon_mm for r in excluded],
+                    ))
             floor_rooms = [r for r in floor_rooms if _cx(r) >= boundary_mm]
         # Зеркальный случай (2026-09-01, живая правка пользователя —
         # выше 8-го этажа у секции 1 ЕСТЬ собственные ярусы: техническое
@@ -996,9 +1020,14 @@ def parse_document(doc, on_progress=None) -> tuple:
             excluded = [r for r in floor_rooms if _cx(r) >= boundary_mm]
             if excluded:
                 warnings.append(
-                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
-                    "помещений(-ие) правее границы секций — секция 2 на "
-                    "этом листе относится к другому этажу, отброшены")
+                    PdfWarning(
+                        f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                        "помещений(-ие) правее границы секций — секция 2 на "
+                        "этом листе относится к другому этажу, отброшены",
+                        page=plan.page,
+                        floor=plan.floor,
+                        polygons_mm=[r.polygon_mm for r in excluded],
+                    ))
             floor_rooms = [r for r in floor_rooms if _cx(r) < boundary_mm]
         for i, r in enumerate(floor_rooms):
             all_rooms.append(Room(floor=plan.floor, index=i,
@@ -2078,8 +2107,10 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
     canonical_grid = extract_axis_grid(doc)
     window_levels = facade_window_levels(doc)
     if window_levels is None:
-        warnings.append("Отметки окон на листах фасада не найдены — окна построены "
-                        "по типовым подоконнику 900 мм и высоте 1500 мм")
+        warnings.append(PdfWarning(
+                            "Отметки окон на листах фасада не найдены — окна построены "
+                            "по типовым подоконнику 900 мм и высоте 1500 мм",
+                        ))
     total_pages = len({plan.page for plan in FLOOR_PLANS})
     processed = 0
     for plan in FLOOR_PLANS:
@@ -2090,14 +2121,18 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
                 page_cache[plan.page] = parse_walls_page(
                     page, rooms_by_page.get(plan.page) or [], correction)
             except PdfRoomsError as e:
-                warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {e.message}")
+                warnings.append(PdfWarning(
+                                    f"Лист {plan.page} (этаж {plan.floor}): {e.message}",
+                                    page=plan.page,
+                                    floor=plan.floor,
+                                ))
                 page_cache[plan.page] = ([], [])
             processed += 1
             if on_progress:
                 on_progress(plan.page, processed, total_pages)
         segments, page_warnings = page_cache[plan.page]
         for w in page_warnings:
-            warnings.append(f"Лист {plan.page} (этаж {plan.floor}): {w}")
+            warnings.append(PdfWarning.context(w, plan.page, plan.floor))
 
         known_section = plan.section_codes[0] if len(plan.section_codes) == 1 else None
         floor_segments = segments
@@ -2129,8 +2164,13 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
             excluded = [s for s in floor_segments if _чужой(s, чужая_сторона)]
             if excluded:
                 warnings.append(
-                    f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
-                    f"стен(-ы)/перегородок {пояснение}, отброшены")
+                    PdfWarning(
+                        f"Лист {plan.page} (этаж {plan.floor}): {len(excluded)} "
+                        f"стен(-ы)/перегородок {пояснение}, отброшены",
+                        page=plan.page,
+                        floor=plan.floor,
+                        polygons_mm=[s['polygon_mm'] for s in excluded],
+                    ))
             floor_segments = [s for s in floor_segments if not _чужой(s, чужая_сторона)]
 
         if known_section == "С02":
@@ -2150,9 +2190,14 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
             dropped = len(floor_segments) - len(kept)
             if dropped:
                 warnings.append(
-                    f"Лист {plan.page} (этаж {plan.floor}): {dropped} фигур(-ы) слоёв "
-                    "стен не монолит — периметр/парапет/кладка на этом ярусе не "
-                    "стены (только выделенная цветом конструкция), отброшены")
+                    PdfWarning(
+                        f"Лист {plan.page} (этаж {plan.floor}): {dropped} фигур(-ы) слоёв "
+                        "стен не монолит — периметр/парапет/кладка на этом ярусе не "
+                        "стены (только выделенная цветом конструкция), отброшены",
+                        page=plan.page,
+                        floor=plan.floor,
+                        polygons_mm=[s['polygon_mm'] for s in floor_segments if s.get('material') not in _STRUCTURE_MATERIALS],
+                    ))
             floor_segments = kept
         # Фигура тоньше самой тонкой стены легенды — линия, не стена (контур
         # кровли, край плиты — на слое монолита, 40мм): на «10 этаже
@@ -2164,8 +2209,13 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
         thin = [s for s in floor_segments if s["thickness_mm"] < _MIN_WALL_THICKNESS_MM]
         if thin:
             warnings.append(
-                f"Лист {plan.page} (этаж {plan.floor}): {len(thin)} фигур(-ы) слоёв стен "
-                f"тоньше {_MIN_WALL_THICKNESS_MM:.0f}мм — линии контура, не стены, отброшены")
+                PdfWarning(
+                    f"Лист {plan.page} (этаж {plan.floor}): {len(thin)} фигур(-ы) слоёв стен "
+                    f"тоньше {_MIN_WALL_THICKNESS_MM:.0f}мм — линии контура, не стены, отброшены",
+                    page=plan.page,
+                    floor=plan.floor,
+                    polygons_mm=[s['polygon_mm'] for s in thin],
+                ))
             floor_segments = [s for s in floor_segments if s["thickness_mm"] >= _MIN_WALL_THICKNESS_MM]
         # Простенок наружного фасада толще любой кладки — парапет/ограждение
         # террасы на слое фасада (2026-09-02, живой запрос пользователя со
@@ -2179,8 +2229,13 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
                    and s["thickness_mm"] > _MAX_INFILL_THICKNESS_MM]
             if fat:
                 warnings.append(
-                    f"Лист {plan.page} (этаж {plan.floor}): {len(fat)} фигур(-ы) фасада толще "
-                    f"{_MAX_INFILL_THICKNESS_MM:.0f}мм — парапет/ограждение, не кладка, отброшены")
+                    PdfWarning(
+                        f"Лист {plan.page} (этаж {plan.floor}): {len(fat)} фигур(-ы) фасада толще "
+                        f"{_MAX_INFILL_THICKNESS_MM:.0f}мм — парапет/ограждение, не кладка, отброшены",
+                        page=plan.page,
+                        floor=plan.floor,
+                        polygons_mm=[s['polygon_mm'] for s in fat],
+                    ))
                 floor_segments = [s for s in floor_segments if s not in fat]
         facade_levels = (window_levels if window_levels and plan.floor.isdigit()
                          and int(plan.floor) >= _FACADE_WINDOW_FIRST_FLOOR else None)
@@ -2205,8 +2260,13 @@ def parse_walls_document(doc, rooms: list, on_progress=None) -> tuple:
         if slab_poly:
             all_slabs.append(Slab(floor=plan.floor, polygon_mm=slab_poly, page=plan.page))
         elif room_polys:
-            warnings.append(f"Лист {plan.page} (этаж {plan.floor}): "
-                           "не удалось приблизить контур плиты перекрытия")
+            warnings.append(PdfWarning(
+                                f"Лист {plan.page} (этаж {plan.floor}): "
+                                "не удалось приблизить контур плиты перекрытия",
+                                page=plan.page,
+                                floor=plan.floor,
+                                polygons_mm=room_polys,
+                            ))
     return all_walls, all_slabs, warnings
 
 

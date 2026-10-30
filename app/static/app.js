@@ -37769,9 +37769,8 @@ function setPdfImportProgress(fraction) {
 
 // Опрос фоновой задачи разбора (см. app/pdf_import.start_analyze_job —
 // сам разбор ~30с на реальном комплекте, отдельный HTTP-запрос столько не
-// держат). Оба этапа (`parse_document`/`parse_walls_document`) идут по
-// одному и тому же набору уникальных листов — прогресс считаем как долю
-// пройденных «лист×этап» из двух этапов суммарно.
+// держат). Разбор помещений и стен занимает по 40% полосы, подготовка
+// планов этажей — оставшиеся 20%; 100% только после готовности сводки.
 async function pollPdfAnalyzeJob(jobId) {
   const res = await fetch(`/import-pdf/analyze/progress/${jobId}`);
   const body = await res.json().catch(() => null);
@@ -37782,17 +37781,13 @@ async function pollPdfAnalyzeJob(jobId) {
     return body.result;
   }
   if (body.total) {
-    // Пока идёт первый этап («Разбираю помещения») — доля 0..0.5, второй
-    // («Разбираю стены…») — 0.5..1: обе стадии перебирают один и тот же
-    // список уникальных листов, поэтому вклад каждой стадии одинаков.
-    // page_number (номер листа в PDF, может быть больше total — легенды/
-    // разрезы/фасады в разбор не входят) и page/total (счётчик уже
-    // разобранных уникальных листов) — числа разной природы, не «N из M»
-    // одного смысла (2026-08-31, запутало пользователя в первой версии).
-    const stageBase = body.stage === "Разбираю стены и перекрытия" ? 0.5 : 0;
-    setPdfImportProgress(stageBase + (body.page / body.total) * 0.5);
-    setPdfImportStatus(
-      `${body.stage}: лист №${body.page_number} (${body.page} из ${body.total})…`, false);
+    const plans = body.stage === "Снимаю картинки планов";
+    const base = plans ? 0.8 : (body.stage === "Разбираю стены и перекрытия" ? 0.4 : 0);
+    setPdfImportProgress(base + (body.page / body.total) * (plans ? 0.19 : 0.4));
+    const sheet = body.page_number == null ? "" : ` · лист №${body.page_number}`;
+    setPdfImportStatus(plans
+      ? `Готовлю планы этажей: обработано ${body.page} из ${body.total}${sheet}…`
+      : `${body.stage}${sheet} (${body.page} из ${body.total})…`, false);
   }
   await new Promise((r) => setTimeout(r, 700));
   return pollPdfAnalyzeJob(jobId);
@@ -38504,7 +38499,7 @@ document.getElementById("pdf-import-submit").addEventListener("click", async () 
     setPdfImportStatus("Разбор готов — проверьте сводку.", false);
     pdfImportPending = body;
     pdfImportPendingMode = "full";
-    renderPdfReview(body);
+    await renderPdfReview(body);
     pdfReviewBackdrop.classList.add("open");
   } catch (e) {
     setPdfImportStatus("Не удалось связаться с сервером: " + e.message, true);
@@ -38544,7 +38539,8 @@ function renderPdfFacadeReview(data) {
   `;
 }
 
-function renderPdfReview(data) {
+async function renderPdfReview(data) {
+  const { pdfWarningsHtml } = await import("/static/pdf-diagnostics.js");
   document.getElementById("pdf-review-head").textContent =
     `Объект «${data.object_name}» · стен/перегородок ${data.total_walls}, окон ${data.total_windows}, дверей ${data.total_doors ?? 0}`
     + `, плит перекрытия ${data.total_slabs}`;
@@ -38556,10 +38552,7 @@ function renderPdfReview(data) {
       <td class="num">${s["с площадью"]}</td></tr>`;
   }).join("");
 
-  const warnings = (data.warnings || []).length
-    ? `<div class="warning-text"><b>Предупреждения</b>${(data.warnings || []).map((w) =>
-        `<div>• ${escapeHtml(w)}</div>`).join("")}</div>`
-    : "";
+  const warnings = pdfWarningsHtml(data);
 
   document.getElementById("pdf-review-body").innerHTML = `
     ${warnings}
