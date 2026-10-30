@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>БД: Производственная программа — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html" class="on">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>БД: Производственная программа</h1><p>Таблицы домена с описанием каждого поля, ключей и связей.</p></section>
+
+
+<div class="sub"><a href="database.html">Обзор БД</a><a href="db-hier.html">Проекты, объекты, здания</a><a href="db-access.html">Пользователи, роли, доступ</a><a href="db-zhbi.html">Сборный ЖБИ: изделия и статусы</a><a href="db-zones.html">Зоны: захватки, краны, стоянки</a><a href="db-contract.html">Контрактация и поставка</a><a href="db-schedule.html">График СМР</a><a href="db-mfr.html">Монолит и общестрой (МФР)</a><a href="db-people.html">Численность и бот eXpress</a><a href="db-pp.html" class="on">Производственная программа</a><a href="db-ref.html">Справочники, настройки, журналы</a></div>
+<p class="lead">Загрузка программы, объекты, работы и сроки, деньги по работам, общие правки и группы объектов.</p>
+<p><span class="tag">7 таблиц</span><span class="tag">39 полей</span></p>
+<div class="btns"><button onclick="setAll(true)">Развернуть все таблицы</button><button onclick="setAll(false)">Свернуть все</button></div>
+<div class="toc"><a href="#pp_dataset">pp_dataset</a><a href="#pp_objects">pp_objects</a><a href="#pp_works">pp_works</a><a href="#pp_money">pp_money</a><a href="#pp_edits">pp_edits</a><a href="#pp_groups">pp_groups</a><a href="#pp_group_members">pp_group_members</a></div>
+<details class="t" id="pp_dataset"><summary><span class="tn">pp_dataset</span><span class="tl">Производственная программа: текущая загрузка</span>
+<span class="tc">5 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>loaded_by</code> → <code>users.id</code> <span class='fkref'>(обнуление ссылки)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>всегда 1: текущая загрузка одна</td></tr><tr><td class='mono'>source_file</td><td class='mono'>TEXT</td><td class='k'></td><td>имя загруженного файла выгрузки</td></tr><tr><td class='mono'>loaded_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда загружено</td></tr><tr><td class='mono'>loaded_by</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>кто загрузил → users.id (SET NULL)</td></tr><tr><td class='mono'>stats</td><td class='mono'>TEXT</td><td class='k'></td><td>JSON: счётчики загрузки (объектов, работ, строк денег, остаток)</td></tr></table></div></details><details class="t" id="pp_objects"><summary><span class="tn">pp_objects</span><span class="tl">Производственная программа: объекты</span> <span class="tag o">ключевая</span>
+<span class="tc">7 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(обнуление ссылки)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>pp_edits</code>, <code>pp_group_members</code>, <code>pp_money</code>, <code>pp_works</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор объекта ПП</td></tr><tr><td class='mono'>code</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>код проекта из источника («01-000325», «БП-000221»); ключ при повторной загрузке</td></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'></td><td>название объекта в источнике</td></tr><tr><td class='mono'>unit</td><td class='mono'>TEXT</td><td class='k'></td><td>подразделение — колонка «СМУ» источника (СМУ, дивизион, дирекция — вид подразделения)</td></tr><tr><td class='mono'>division</td><td class='mono'>TEXT</td><td class='k'></td><td>колонка «Дивизион» источника; в расчёте и показе не участвует</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект сервиса → objects.id (SET NULL); NULL — «не в сервисе»; находится по совпадению названия</td></tr><tr><td class='mono'>sort_order</td><td class='mono'>INTEGER</td><td class='k'></td><td>порядок объектов в источнике</td></tr></table></div></details><details class="t" id="pp_works"><summary><span class="tn">pp_works</span><span class="tl">Производственная программа: работы и сроки</span>
+<span class="tc">7 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>pp_object_id</code> → <code>pp_objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор работы</td></tr><tr><td class='mono'>pp_object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект ПП → pp_objects.id (CASCADE)</td></tr><tr><td class='mono'>work</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>наименование работы с номером («3.2.1. …»); уникально в объекте, по нему связываются деньги и правки</td></tr><tr><td class='mono'>start_date</td><td class='mono'>TEXT</td><td class='k'></td><td>начало по источнику, ГГГГ-ММ-ДД</td></tr><tr><td class='mono'>end_date</td><td class='mono'>TEXT</td><td class='k'></td><td>окончание по источнику, ГГГГ-ММ-ДД</td></tr><tr><td class='mono'>parent_name</td><td class='mono'>TEXT</td><td class='k'></td><td>наименование работы-родителя в том же объекте; NULL — работа верхнего уровня</td></tr><tr><td class='mono'>sort_order</td><td class='mono'>INTEGER</td><td class='k'></td><td>порядок строк в источнике</td></tr></table></div></details><details class="t" id="pp_money"><summary><span class="tn">pp_money</span><span class="tl">Производственная программа: деньги по работам</span>
+<span class="tc">7 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>pp_object_id</code> → <code>pp_objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор строки</td></tr><tr><td class='mono'>pp_object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект ПП → pp_objects.id (CASCADE)</td></tr><tr><td class='mono'>work</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>наименование работы по кодификатору; пара с объектом уникальна</td></tr><tr><td class='mono'>price</td><td class='mono'>REAL</td><td class='k'></td><td>договорная цена, ₽</td></tr><tr><td class='mono'>done</td><td class='mono'>REAL</td><td class='k'></td><td>выполнено, ₽</td></tr><tr><td class='mono'>rest</td><td class='mono'>REAL</td><td class='k'></td><td>остаток, ₽; отрицательный (перевыполнение) хранится как есть и в расчёте не участвует</td></tr><tr><td class='mono'>sort_order</td><td class='mono'>INTEGER</td><td class='k'></td><td>порядок строк</td></tr></table></div></details><details class="t" id="pp_edits"><summary><span class="tn">pp_edits</span><span class="tl">Производственная программа: общие правки сроков</span>
+<span class="tc">6 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>pp_object_id</code> → <code>pp_objects.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>edited_by</code> → <code>users.id</code> <span class='fkref'>(обнуление ссылки)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>pp_object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> <span class="key">FK</span> </td><td>объект ПП → pp_objects.id (CASCADE)</td></tr><tr><td class='mono'>work</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>наименование листовой работы; правка переживает перезагрузку выгрузки, пока работа с таким названием есть</td></tr><tr><td class='mono'>start_date</td><td class='mono'>TEXT</td><td class='k'></td><td>новое начало, ГГГГ-ММ-ДД</td></tr><tr><td class='mono'>end_date</td><td class='mono'>TEXT</td><td class='k'></td><td>новое окончание, ГГГГ-ММ-ДД</td></tr><tr><td class='mono'>edited_by</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>кто правил последним → users.id (SET NULL)</td></tr><tr><td class='mono'>edited_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда</td></tr></table></div></details><details class="t" id="pp_groups"><summary><span class="tn">pp_groups</span><span class="tl">Производственная программа: группы объектов</span>
+<span class="tc">5 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>created_by</code> → <code>users.id</code> <span class='fkref'>(обнуление ссылки)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>pp_group_members</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор группы</td></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>название группы; группы общие для всех, у кого есть раздел</td></tr><tr><td class='mono'>created_by</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>кто создал → users.id (SET NULL)</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>создана</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>состав или название менялись</td></tr></table></div></details><details class="t" id="pp_group_members"><summary><span class="tn">pp_group_members</span><span class="tl">Производственная программа: состав групп</span>
+<span class="tc">2 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>group_id</code> → <code>pp_groups.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>pp_object_id</code> → <code>pp_objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>group_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> <span class="key">FK</span> </td><td>группа → pp_groups.id (CASCADE)</td></tr><tr><td class='mono'>pp_object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> <span class="key">FK</span> </td><td>объект ПП → pp_objects.id (CASCADE)</td></tr></table></div></details>
+
+
+<div class="pager"><a href="db-people.html">← Численность и бот eXpress</a><a href="db-ref.html">Справочники, настройки, журналы →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

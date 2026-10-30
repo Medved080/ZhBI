@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Статус и развитие — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html">База данных</a><a href="status.html" class="on">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>Статус и развитие</h1><p>Что готово, что ждёт приёмки, какие есть ограничения и куда проект движется дальше.</p></section>
+
+
+<h2>Готовность по направлениям</h2>
+<p>Состояние на 28.10.2026. «Проверено на копии» означает проверку на обезличенной копии боевой базы и в браузере; перед выкладкой на рабочий сервер
+выполняется холостой прогон на копии базы именно этого сервера.</p>
+<div class="tbl-wrap"><table><tr><th>Направление</th><th>Состояние</th><th>Что осталось</th></tr><tr><td>Ядро сборного ЖБИ: DXF, схема, статусы, контрактация, график, отчёты</td><td><span class='tag g'>в эксплуатации</span></td><td>Развивается по обращениям пользователей</td></tr><tr><td>Версионность кранов и стоянок; зона крана как объединение стоянок</td><td><span class='tag g'>в эксплуатации</span></td><td>Пользовательская приёмка полного сценария</td></tr><tr><td>Интерфейс V2 со всеми экранами и рабочими местами</td><td><span class='tag '>ограниченный выпуск</span></td><td>Приёмка по матрице сценариев; V1 остаётся запасным</td></tr><tr><td>Учёт по блокам, модель МФР, классификатор видов работ</td><td><span class='tag '>реализовано, проверено на копии</span></td><td>Проверка миграции на копии рабочей базы перед выкладкой</td></tr><tr><td>Учёт численности персонала</td><td><span class='tag '>реализовано, проверено на копии</span></td><td>Загрузка на реальных объектах; план и отклонения ждут источника нормативов</td></tr><tr><td>Бот eXpress</td><td><span class='tag w'>проверено на макете</span></td><td>Проверка на настоящем сервере мессенджера</td></tr><tr><td>Производственная программа в деньгах</td><td><span class='tag '>реализовано, проверено на копии</span></td><td>Проверка на рабочих данных, выдача прав ролям, распределение денег с коэффициентами</td></tr><tr><td>Калькулятор изделий</td><td><span class='tag '>реализовано, проверено на полном объёме</span></td><td>Перенос на серверы отправкой пакета; чтение листов нейросетью — по мере улучшения качества</td></tr><tr><td>ИИ-помощник</td><td><span class='tag w'>реализовано</span></td><td>Выбор диалоговой модели, оценка качества на реальной модели; решение ИБ по облачному маршрутизатору</td></tr><tr><td>Обмен данными между серверами</td><td><span class='tag w'>проверено на двух временных серверах</span></td><td>Проверка на настоящих серверах</td></tr></table></div>
+
+<h2>Направления развития</h2>
+<div class="grid g2">
+<div class="card"><h3>Ближайшее</h3><ul><li>Приёмка и перенос в рабочий контур готовых блоков: МФР, численность, производственная программа, калькулятор</li><li>Отчёты о МФР для заказчиков</li><li>Загрузка производственной программы по выбранным объектам и ручная привязка объектов</li></ul></div><div class="card"><h3>Среднесрочное</h3><ul><li>План и отклонения по численности (нужен источник нормативов выработки)</li><li>Выгрузка для финансового контура</li><li>График выдачи рабочей документации и график контрактации по лотам</li></ul></div><div class="card"><h3>Стратегическое</h3><ul><li>Предиктивная аналитика по риску срыва поставки и монтажа</li><li>Расширение ИИ-помощника на сценарии рекомендаций</li><li>Единые роли проектной команды как основа рабочих мест</li></ul></div><div class="card"><h3>Платформа</h3><ul><li>Масштабирование хранилища при росте числа одновременных пользователей</li><li>Общая очередь заданий для нескольких процессов сервера</li><li>Автоматизированный набор регрессионных проверок</li></ul></div>
+</div>
+
+<h2>Ограничения и риски</h2>
+<div class="card"><ul><li><b>Хранилище.</b> SQLite в режиме WAL хорошо подходит для текущей нагрузки; рост числа пользователей и объектов потребует пересмотра (на сетевых файловых системах режим WAL может не включиться).</li><li><b>Форматы входных данных.</b> Разбор DXF зависит от принятого стандарта имён слоёв, разбор PDF-комплекта настроен под конкретный набор листов — для новых заказчиков потребуется адаптация.</li><li><b>Качество ИИ.</b> Выбор источников и полнота ответов помощника зависят от модели; результат всегда сопровождается проверяемыми источниками.</li><li><b>Внешние подключения.</b> Облачные модели и мессенджер требуют отдельного решения службы ИБ и сетевого доступа.</li><li><b>Проверка.</b> Автоматических тестов в привычном виде нет: качество обеспечивают сквозные проверки на реальных данных, стражи целостности и приёмка в браузере.</li><li><b>Данные классификатора адресов</b> приносятся человеком; без них адрес вводится строкой.</li></ul></div>
+
+<h2>Как проект ведётся</h2>
+<div class="grid g2">
+<div class="card"><h3>Документация как часть кода</h3><p>Живое техническое задание обновляется с каждым функциональным изменением; решения и их причины ведутся в журнале с датами.</p></div><div class="card"><h3>Безопасность разработки</h3><p>Отладка выполняется на обезличенной копии; боевые данные не попадают во внешние инструменты.</p></div><div class="card"><h3>Контроль качества</h3><p>Стражи в git-хуке и при старте; холостой прогон миграций; идемпотентные обработки; двойная проверка в обоих интерфейсах.</p></div><div class="card"><h3>История</h3><p>Разработка ведётся с 16 июля 2026 года, более 1 200 коммитов; журнал версий доступен пользователям по кнопке «Что нового».</p></div>
+</div>
+
+<div class="pager"><a href="database.html">← База данных</a><span></span></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

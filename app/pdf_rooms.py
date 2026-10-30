@@ -1071,6 +1071,9 @@ def _wall_segments_raw(page, scale: int, shift_x: float, shift_y: float) -> list
 # отдельный отбор, см. `_exterior_infill_segments`.
 _EXTERIOR_FACADE_LAYER = "]]]_СТЕНЫ_наружные.]"
 _EXTERIOR_INFILL_MATERIAL = (CAT_WALL_BLOCKS, "Ячеистый бетон (наружная кладка)")
+# Материал наружной кладки — признак «Кладка наружная» в классификаторе
+# (`app/classifier_categories.py`).
+EXTERIOR_MASONRY_MATERIAL = _EXTERIOR_INFILL_MATERIAL[1]
 # Минимальный габарит фигуры, чтобы считаться настоящим блоком кладки, а
 # не точечным обрывком декоративной штриховки (мелкие обрывки текстуры —
 # порядка 80×80мм и меньше, реальные простенки в проверенном случае от

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Бизнес-эффекты — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html" class="on">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>Бизнес-эффекты</h1><p>Какую пользу проект приносит как целое и каждая его функциональная область: по ролям, по блокам и в деньгах.</p></section>
+
+
+<h2>Чем проект ценен в целом</h2>
+<p class="lead">Строительная отрасль теряет деньги не на отдельных операциях, а на разрыве между чертежом, договором, графиком и фактом на
+площадке. Проект замыкает этот разрыв: все четыре источника связаны на уровне конкретного изделия.</p>
+<div class="grid g2">
+<div class="card"><h3>1. Прозрачность и единая правда</h3><ul><li>Один факт — одно место хранения: статус изделия, контракт, даты, автор</li><li>История без пробелов: любую смену можно проследить и проверить</li><li>Срез на любую дату — ответ на вопрос «как было»</li></ul></div><div class="card"><h3>2. Управляемость сроков и поставки</h3><ul><li>Базовый график и версии прогноза → видно отклонение по каждому изделию</li><li>Потребность считается по прогнозу, а не по «бумажной» дате</li><li>Аналитическая справка указывает критический путь поставки</li></ul></div><div class="card"><h3>3. Качество данных и меньше ошибок</h3><ul><li>Изделия берутся из чертежа, а не набираются вручную</li><li>Проверки при загрузке, сверка версий, страж целостности договоров</li><li>Замены и перепривязки — проводимые документы с откатом</li></ul></div><div class="card"><h3>4. Экономия труда и масштаб</h3><ul><li>Отчёты и выгрузки формируются без ручной сборки</li><li>Массовые операции и пакетный ввод сокращают время в разы</li><li>Рост числа объектов не требует пропорционального роста штата учёта</li></ul></div></div>
+
+<h2>Эффекты по ролям</h2>
+<div class="tbl-wrap"><table><tr><th>Роль</th><th>Что меняется в работе</th><th>Где в системе</th></tr><tr><td><b>Прораб, начальник участка</b></td><td>Не ведёт личные таблицы: факт вносится на схеме за секунды, массово рамкой; видит, что привезено и что ждёт монтажа. Численность — ответом на сообщение бота.</td><td class='mods'>«АРМ прораба», смена статуса, рабочая дата, бот eXpress</td></tr><tr><td><b>Комплектовщик, снабжение</b></td><td>Видит дефицит и избыток по маркам до срыва, закрывает потребность договорами, меняет поставщика одним документом, балансирует даты поставщика.</td><td class='mods'>«АРМ комплектовщика», контрактация, документы</td></tr><tr><td><b>ПТО, планирование</b></td><td>Чертёж превращается в модель автоматически; новая версия чертежа применяется через сверку; прогноз и отклонения считаются сразу.</td><td class='mods'>Импорт DXF, зоны, график СМР, Гант</td></tr><tr><td><b>Руководитель проекта</b></td><td>Единая картина по объекту на любую дату; аналитическая справка вместо ручного разбора; отчёты для совещания по кнопке.</td><td class='mods'>Отчёты, лента времени, карта проектов</td></tr><tr><td><b>ПЭО, финансы</b></td><td>Остаток денег по месяцам реагирует на сдвиг сроков; сверка поставки с договорами; стоимость изделий воспроизводима и версионируется.</td><td class='mods'>Производственная программа, сверка, калькулятор</td></tr><tr><td><b>Руководство компании</b></td><td>Портфельный взгляд на сотни объектов: статусы, регионы, ответственные, единые правила учёта и отчётности.</td><td class='mods'>Справочник объектов, карта, единые отчёты</td></tr><tr><td><b>ИТ и ИБ</b></td><td>Роли настраиваются без разработчика; каждое действие и ошибка в журнале; обновления без ручных скриптов; копии на каждом опасном шаге.</td><td class='mods'>Роли, журнал, обработки релиза, копии</td></tr></table></div>
+
+<h2>Ключевой эффект каждого функционального блока</h2>
+<div class="tbl-wrap"><table><tr><th>Блок</th><th>Главный эффект</th></tr><tr><td><a href='functions.html#hier'>Проекты, объекты и справочники</a></td><td>Одно место, где живёт «паспорт» объекта и его команды — исчезают разрозненные перечни в Excel</td></tr><tr><td><a href='functions.html#dxf'>Загрузка чертежей и цифровая модель ЖБИ</a></td><td>Исключается ручной перенос позиций из чертежа в таблицы — главный источник ошибок учёта</td></tr><tr><td><a href='functions.html#zones'>Зоны крановой логистики: захватки, краны, стоянки</a></td><td>Отчёты и графики говорят на языке стройплощадки: захватка, кран, стоянка</td></tr><tr><td><a href='functions.html#scheme'>Интерактивная схема 2D/3D и рабочие места</a></td><td>Состояние монтажа видно «одним взглядом» — не нужно собирать картину из таблиц</td></tr><tr><td><a href='functions.html#status'>Статусы поставки и монтажа</a></td><td>Единый источник правды о факте поставки и монтажа вместо личных таблиц</td></tr><tr><td><a href='functions.html#contract'>Контрактация и поставка</a></td><td>Дефицит и избыток по маркам видны до того, как они превращаются в простой монтажа</td></tr><tr><td><a href='functions.html#schedule'>График СМР и прогноз</a></td><td>Отставание видно по каждому изделию и по захватке, а не только по итогу проекта</td></tr><tr><td><a href='functions.html#reports'>Отчёты и аналитика</a></td><td>Отчёт для совещания формируется нажатием кнопки — исчезает ручная сборка и «досыпание» столбцов в Excel</td></tr><tr><td><a href='functions.html#mfr'>Модель МФР и учёт работ по блокам</a></td><td>Тот же принцип «один источник факта» распространён на монолит, где нет поштучных изделий</td></tr><tr><td><a href='functions.html#headcount'>Учёт численности персонала и бот eXpress</a></td><td>Перенос ввода из внутреннего сервиса в единую систему — численность рядом с поставкой и графиком</td></tr><tr><td><a href='functions.html#pp'>Производственная программа в деньгах</a></td><td>Видно, как сдвиг работы меняет потребность в деньгах по месяцам — решение принимается до, а не после</td></tr><tr><td><a href='functions.html#calc'>Калькулятор изделий</a></td><td>Стоимость изделия считается по единым правилам и воспроизводима — любая калькуляция имеет версию</td></tr><tr><td><a href='functions.html#ai'>ИИ-помощник</a></td><td>Быстрые ответы на разовые вопросы без заказа отчёта</td></tr><tr><td><a href='functions.html#security'>Доступ, безопасность и аудит</a></td><td>Каждый видит и меняет только своё — снижение риска случайных и несанкционированных правок</td></tr><tr><td><a href='functions.html#ops'>Эксплуатация и надёжность</a></td><td>Обновления без простоя команды сопровождения и без ручных скриптов</td></tr></table></div>
+
+<h2>Экономическая оценка</h2>
+<p>Оценка сделана на модели из трёх сценариев; расчёт прозрачен: каждая строка выводится из явных допущений.</p>
+
+<table>
+<tr><th>Показатель</th><th class="num">Консервативный</th><th class="num">Базовый</th><th class="num">Оптимистичный</th></tr>
+<tr><td>A. Ручной учёт, который не нужно организовывать (ФОТ), млн ₽/год</td><td class="num">60,0</td><td class="num">60,0</td><td class="num">60,0</td></tr>
+<tr><td>B. Меньше простоев и срывов поставки, млн ₽/год</td><td class="num">35,0</td><td class="num">140,0</td><td class="num">630,0</td></tr>
+<tr><td>C. Меньше ошибок учёта и переделок, млн ₽/год</td><td class="num">5,4</td><td class="num">29,0</td><td class="num">121,8</td></tr>
+<tr><td>D. Деньги и сроки (раннее выявление сдвигов в ПП), млн ₽/год</td><td class="num">0,05</td><td class="num">0,44</td><td class="num">2,2</td></tr>
+<tr><td><b>Итого эффект при полном освоении, млн ₽/год</b></td><td class="num"><b>100,5</b></td><td class="num"><b>229,4</b></td><td class="num"><b>814,0</b></td></tr>
+<tr><td>Эксплуатация (сопровождение, серверы, ИИ), млн ₽/год</td><td class="num">3,0</td><td class="num">3,0</td><td class="num">3,0</td></tr>
+<tr><td><b>Чистый эффект, млн ₽/год</b></td><td class="num"><b>97,5</b></td><td class="num"><b>226,4</b></td><td class="num"><b>811,0</b></td></tr>
+<tr><td>Доля эффекта в 1-й год (освоение)</td><td class="num">40%</td><td class="num">50%</td><td class="num">70%</td></tr>
+</table>
+<div class="note"><b>Как читать эти цифры.</b> Это расчётная модель, а не факт. Строка A опирается на альтернативу —
+ручной учёт силами сотрудников (один человек на три объекта при условном ФОТ 1,8 млн ₽/год) — и одинакова во всех сценариях.
+Строки B, C, D вероятностные: они зависят от доли событий, которые сервис предотвращает, и должны подтверждаться замерами
+на пилотных объектах. Масштаб принят равным 100 объектам (целевое значение); фактическая загрузка моделей изделий сегодня меньше,
+поэтому эффект растёт по мере подключения объектов. Параметры сценариев — гипотезы, их следует заменить корпоративными значениями.</div>
+
+<h3>Ключевые допущения</h3>
+<table>
+<tr><th>Параметр</th><th class="num">Консерв.</th><th class="num">База</th><th class="num">Оптим.</th></tr>
+<tr><td>Объектов под учётом</td><td class="num">100</td><td class="num">100</td><td class="num">100</td></tr>
+<tr><td>Стоимость дня простоя площадки, ₽ (оценка)</td><td class="num">7 млн</td><td class="num">7 млн</td><td class="num">7 млн</td></tr>
+<tr><td>Срывов поставки на объект в год без сервиса</td><td class="num">1</td><td class="num">2</td><td class="num">3</td></tr>
+<tr><td>Дней простоя на один срыв</td><td class="num">1</td><td class="num">1</td><td class="num">2</td></tr>
+<tr><td>Доля срывов, предотвращённых ранним видением</td><td class="num">5%</td><td class="num">10%</td><td class="num">15%</td></tr>
+<tr><td>Изделий на объект в год</td><td class="num">7 250</td><td class="num">7 250</td><td class="num">7 250</td></tr>
+<tr><td>Доля изделий с ошибкой учёта без сервиса</td><td class="num">0,5%</td><td class="num">1%</td><td class="num">2%</td></tr>
+<tr><td>Стоимость исправления одной ошибки, ₽</td><td class="num">5 000</td><td class="num">8 000</td><td class="num">12 000</td></tr>
+<tr><td>Доля ошибок, устраняемых сервисом</td><td class="num">30%</td><td class="num">50%</td><td class="num">70%</td></tr>
+</table>
+
+<h3>Безубыточность: самый устойчивый аргумент</h3>
+<p>Главное преимущество оценки — она не требует верить в точные проценты. Годовая эксплуатация (3 млн ₽) окупается
+предотвращением примерно <b>0,4 дня простоя площадки в год</b> при стоимости дня 7 млн ₽; разовые затраты на создание — менее
+<b>0,1 дня</b>. В базовом сценарии сервис предотвращает около 20 дней простоя в год на всём портфеле — более чем в 40 раз больше порога окупаемости.</p>
+
+
+<h2>Как подтвердить эффект на практике</h2>
+
+<table>
+<tr><th>Показатель</th><th>Что измеряет</th><th>Источник в системе</th></tr>
+<tr><td>Своевременность факта</td><td>Доля изделий, статус которых внесён в день события (разница «рабочая дата» и «дата ввода»)</td><td>История статусов</td></tr>
+<tr><td>Покрытие потребности договорами</td><td>Дельта «контракт − модель» по маркам и типам; число позиций с дефицитом</td><td>АРМ комплектовщика, «Статус комплектации»</td></tr>
+<tr><td>Соблюдение сроков поставки</td><td>Доля позиций с плановой датой не позже требуемой; среднее отклонение в днях</td><td>«Статус комплектации», проверка сроков</td></tr>
+<tr><td>Отставание от графика</td><td>Среднее и максимальное отклонение актуализации от базы, число отстающих изделий</td><td>График СМР, «Динамика»</td></tr>
+<tr><td>Простои по причине поставки</td><td>Дни простоя монтажа из-за отсутствия изделия на площадке</td><td>Срез на дату + оценка площадки (внешний учёт)</td></tr>
+<tr><td>Ошибки привязки и учёта</td><td>Число исправлений реквизитов, замен и откатов документов</td><td>Журнал действий</td></tr>
+<tr><td>Трудозатраты на отчётность</td><td>Время подготовки совещания и сводок до и после внедрения</td><td>Замеры на пилоте</td></tr>
+<tr><td>Дисциплина ввода численности</td><td>Доля объектов, сдавших численность до 11:00</td><td>Учёт численности, бот</td></tr>
+</table>
+<p>Предложение: зафиксировать значения показателей на 2–3 пилотных объектах «до» и «после», затем подставить измеренные
+доли в модель вместо гипотез.</p>
+
+
+<div class="pager"><a href="functions.html">← Функциональные блоки</a><a href="architecture.html">Архитектура →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

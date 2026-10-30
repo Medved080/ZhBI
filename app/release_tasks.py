@@ -934,6 +934,51 @@ def _link_headcount_contractors(conn) -> str:
     return note
 
 
+def _rename_pdf_categories_to_classifier(conn: sqlite3.Connection) -> str:
+    """Переименовать категории PDF-модели в категории классификатора видов
+    работ (`app/classifier_categories.py`, 2026-10-29): «Стены монолит» →
+    «Монолит стены», «Перекрытия» → «Монолит перекрытия», кладка из блоков и
+    кирпича → «Кладка наружная» (материал наружной кладки) или «Кладка
+    внутренняя». Раздел «PDF» — Revit-выгрузки не трогаем. Перезагружать PDF
+    не нужно: материал уже в `type_name`. Ручное соответствие
+    `object_category_map` переносится на новые имена, если на объекте не
+    осталось элементов со старыми. Идемпотентна: условие — прежние имена в
+    PDF-разделе."""
+    from app import classifier_categories as cc
+    from app import pdf_rooms
+    old_names = ("Стены монолит", "Перекрытия", "Стены блоки", "Стены кирпич")
+    marks = ", ".join("?" * len(old_names))
+    n = conn.execute(
+        "UPDATE revit_elements SET category = CASE "
+        "WHEN category = 'Стены монолит' THEN ? "
+        "WHEN category = 'Перекрытия' THEN ? "
+        "WHEN type_name = ? THEN ? ELSE ? END "
+        "WHERE section_code = 'PDF' AND category IN (%s)" % marks,
+        (cc.CLS_WALL_MONOLITH, cc.CLS_SLAB_MONOLITH, pdf_rooms.EXTERIOR_MASONRY_MATERIAL,
+         cc.CLS_MASONRY_OUTER, cc.CLS_MASONRY_INNER) + old_names).rowcount
+    renames = {"Стены монолит": (cc.CLS_WALL_MONOLITH,), "Перекрытия": (cc.CLS_SLAB_MONOLITH,),
+               "Стены блоки": (cc.CLS_MASONRY_OUTER, cc.CLS_MASONRY_INNER),
+               "Стены кирпич": (cc.CLS_MASONRY_OUTER, cc.CLS_MASONRY_INNER)}
+    moved = 0
+    for r in conn.execute("SELECT object_id, category_id, model_category FROM object_category_map "
+                          "WHERE model_category IN (%s)" % marks, old_names).fetchall():
+        left = conn.execute(
+            "SELECT 1 FROM revit_elements WHERE object_id = ? AND category = ? AND is_current = 1 LIMIT 1",
+            (r["object_id"], r["model_category"])).fetchone()
+        has_pdf = conn.execute(
+            "SELECT 1 FROM revit_elements WHERE object_id = ? AND section_code = 'PDF' LIMIT 1",
+            (r["object_id"],)).fetchone()
+        if left or not has_pdf:
+            continue
+        for new in renames[r["model_category"]]:
+            conn.execute("INSERT OR IGNORE INTO object_category_map (object_id, category_id, model_category) "
+                         "VALUES (?, ?, ?)", (r["object_id"], r["category_id"], new))
+        conn.execute("DELETE FROM object_category_map WHERE object_id = ? AND category_id = ? AND model_category = ?",
+                     (r["object_id"], r["category_id"], r["model_category"]))
+        moved += 1
+    return f"элементов переименовано: {n}; соответствий классификатора перенесено: {moved}"
+
+
 RELEASE_TASKS = [
     {
         "name": "2026-08-04-element-uid-backfill",
@@ -1388,6 +1433,16 @@ RELEASE_TASKS = [
         "why": "новый раздел прав не выдан никому по умолчанию — тот же случай, что и с «СМУ» и «Физлицами»",
         "kind": KIND_DATA,
         "run": lambda conn: _grant_feature_to_all_roles(conn, "dict_work_classifier"),
+    },
+    {
+        "name": "2026-10-29-pdf-categories-to-classifier",
+        "version": "0.122",
+        "date": "2026-10-29",
+        "title": "Категории PDF-модели — по классификатору видов работ",
+        "why": "категории стен и перекрытий модели МФР из PDF теперь совпадают с категориями классификатора («Монолит стены», "
+               "«Кладка наружная»…); уже загруженные элементы переименовываются по материалу без повторной загрузки PDF",
+        "kind": KIND_DATA,
+        "run": _rename_pdf_categories_to_classifier,
     },
 ]
 

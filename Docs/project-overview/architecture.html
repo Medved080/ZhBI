@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Архитектура — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html" class="on">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>Архитектура</h1><p>Как устроена система: слои, потоки данных, технологии, принципы и порядок развёртывания.</p></section>
+
+
+<h2>Слои системы</h2>
+<figure><svg viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Архитектура системы">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+<style>
+.bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.bb{fill:var(--brand-l);stroke:var(--brand);stroke-width:1.5}
+.bo{fill:var(--acc-l);stroke:var(--acc);stroke-width:1.5}
+.bg{fill:var(--ok-l);stroke:var(--ok);stroke-width:1.5}
+.tt{fill:var(--ink);font:600 14px -apple-system,Segoe UI,Arial,sans-serif}
+.ts{fill:var(--muted);font:12px -apple-system,Segoe UI,Arial,sans-serif}
+.th{fill:var(--brand);font:700 12px -apple-system,Segoe UI,Arial,sans-serif;letter-spacing:.8px}
+.ln{stroke:var(--muted);stroke-width:1.6;fill:none}
+</style>
+<text class="th" x="10" y="22">КЛИЕНТЫ — БРАУЗЕР (WINDOWS), БЕЗ УСТАНОВКИ</text>
+<rect class="bb" x="10" y="32" width="300" height="76" rx="10"/><text class="tt" x="26" y="58">Интерфейс V1</text>
+<text class="ts" x="26" y="78">JavaScript без сборщика · SVG 2D · Three.js 3D</text><text class="ts" x="26" y="95">схема, формы, отчёты, меню «Действия»</text>
+<rect class="bb" x="350" y="32" width="300" height="76" rx="10"/><text class="tt" x="366" y="58">Интерфейс V2</text>
+<text class="ts" x="366" y="78">ES-модули · 73 экрана · 7 цветовых гамм</text><text class="ts" x="366" y="95">оболочка + встроенная сцена движка V1</text>
+<rect class="bb" x="690" y="32" width="300" height="76" rx="10"/><text class="tt" x="706" y="58">Калькулятор изделий (/calc/)</text>
+<text class="ts" x="706" y="78">собственный интерфейс · 3D · ExcelJS</text><text class="ts" x="706" y="95">встраивается в V2, открывается из V1</text>
+<line class="ln" x1="500" y1="110" x2="500" y2="150" marker-end="url(#ar)"/>
+<text class="ts" x="512" y="136">HTTPS/HTTP · JSON · cookie-сессия</text>
+<text class="th" x="10" y="164">СЕРВЕР — PYTHON, FASTAPI / STARLETTE (DOCKER-КОНТЕЙНЕР)</text>
+<rect class="bx" x="10" y="174" width="980" height="170" rx="12"/>
+<rect class="bo" x="26" y="190" width="224" height="66" rx="8"/><text class="tt" x="40" y="214">Доступ и безопасность</text><text class="ts" x="40" y="234">сессии · роли · AD · журнал · CSP</text>
+<rect class="bo" x="266" y="190" width="224" height="66" rx="8"/><text class="tt" x="280" y="214">API (581 маршрут)</text><text class="ts" x="280" y="234">маршруты в пуле потоков</text>
+<rect class="bo" x="506" y="190" width="224" height="66" rx="8"/><text class="tt" x="520" y="214">Импортёры</text><text class="ts" x="520" y="234">DXF · PDF · Revit · Excel · FBX · 1С</text>
+<rect class="bo" x="746" y="190" width="228" height="66" rx="8"/><text class="tt" x="760" y="214">Обработки релиза</text><text class="ts" x="760" y="234">миграции · копия перед запуском</text>
+<rect class="bb" x="26" y="270" width="224" height="62" rx="8"/><text class="tt" x="40" y="294">Учёт ЖБИ и контрактация</text><text class="ts" x="40" y="314">изделия · зоны · договоры</text>
+<rect class="bb" x="266" y="270" width="224" height="62" rx="8"/><text class="tt" x="280" y="294">График и отчёты</text><text class="ts" x="280" y="314">СМР · Гант · аналитика · выгрузки</text>
+<rect class="bb" x="506" y="270" width="224" height="62" rx="8"/><text class="tt" x="520" y="294">МФР · численность · ПП</text><text class="ts" x="520" y="314">блоки · факт · люди · деньги</text>
+<rect class="bb" x="746" y="270" width="228" height="62" rx="8"/><text class="tt" x="760" y="294">ИИ-помощник · Калькулятор</text><text class="ts" x="760" y="314">чтение разрешённого снимка</text>
+<line class="ln" x1="500" y1="346" x2="500" y2="384" marker-end="url(#ar)"/>
+<text class="th" x="10" y="400">ХРАНИЛИЩЕ — ФАЙЛЫ В ТОМЕ data/ (ОТДЕЛЬНО ОТ КОДА)</text>
+<rect class="bg" x="10" y="410" width="190" height="62" rx="8"/><text class="tt" x="24" y="434">zhbi.db</text><text class="ts" x="24" y="454">SQLite WAL · 107 таблиц</text>
+<rect class="bg" x="212" y="410" width="190" height="62" rx="8"/><text class="tt" x="226" y="434">addr.db</text><text class="ts" x="226" y="454">классификатор КЛАДР</text>
+<rect class="bg" x="414" y="410" width="190" height="62" rx="8"/><text class="tt" x="428" y="434">calc/</text><text class="ts" x="428" y="454">база калькулятора</text>
+<rect class="bg" x="616" y="410" width="190" height="62" rx="8"/><text class="tt" x="630" y="434">uploads/</text><text class="ts" x="630" y="454">вложения, чертежи, FBX</text>
+<rect class="bg" x="818" y="410" width="172" height="62" rx="8"/><text class="tt" x="832" y="434">backups/ · map/</text><text class="ts" x="832" y="454">копии · офлайн-карта</text>
+<text class="th" x="10" y="500">ВНЕШНИЕ СИСТЕМЫ (НЕОБЯЗАТЕЛЬНЫЕ ПОДКЛЮЧЕНИЯ)</text>
+<rect class="bx" x="10" y="510" width="236" height="42" rx="8"/><text class="tt" x="22" y="535" style="font-size:13px">Active Directory (LDAP)</text>
+<rect class="bx" x="258" y="510" width="236" height="42" rx="8"/><text class="tt" x="270" y="535" style="font-size:13px">Мессенджер eXpress (бот)</text>
+<rect class="bx" x="506" y="510" width="236" height="42" rx="8"/><text class="tt" x="518" y="535" style="font-size:13px">Языковые модели (ИИ)</text>
+<rect class="bx" x="754" y="510" width="236" height="42" rx="8"/><text class="tt" x="766" y="535" style="font-size:13px">GitLab CI → реестр → Docker</text>
+</svg><figcaption>Серверное приложение работает в одном контейнере; состояние хранится в файлах тома данных. Внешние подключения необязательны.</figcaption></figure>
+
+<h2>Путь данных</h2>
+<div class="flow">
+<div class="st"><b>Источники</b>DXF · PDF · Revit · Excel · MS Project · выгрузки 1С/SharePoint</div>
+<div class="st"><b>Приём</b>проверка формата, лимиты размера, анализ без записи</div>
+<div class="st"><b>Сверка</b>сводка «добавлено / изменено / недоступно», подтверждение</div>
+<div class="st"><b>Запись</b>транзакция + копия базы + запись в журнал</div>
+<div class="st"><b>Использование</b>схема · отчёты · Excel/PDF · ИИ-помощник</div></div>
+
+<h2>Технологический стек</h2>
+<div class="tbl-wrap"><table><tr><th>Слой</th><th>Технологии</th><th>Примечание</th></tr>
+<tr><td>Сервер</td><td>Python 3.12, FastAPI, Starlette, Uvicorn, Pydantic</td><td>Синхронные маршруты в пуле потоков; внешних очередей и кэшей нет</td></tr>
+<tr><td>Хранилище</td><td>SQLite в режиме WAL</td><td>Один файл базы; отдельные файлы для КЛАДР и калькулятора</td></tr>
+<tr><td>Разбор чертежей</td><td>ezdxf, PyMuPDF, pypdfium2, Shapely, Pillow, NumPy, lxml</td><td>DXF, PDF-комплекты, растровые планы</td></tr>
+<tr><td>Выгрузки</td><td>openpyxl, ReportLab, svglib</td><td>Excel и PDF</td></tr>
+<tr><td>Авторизация</td><td>PBKDF2-HMAC-SHA256, ldap3</td><td>Пароль сервиса или учётная запись домена</td></tr>
+<tr><td>Клиент</td><td>JavaScript (без сборщика), SVG, Three.js, MapLibre GL, PMTiles</td><td>Библиотеки вендорены локально</td></tr>
+<tr><td>Развёртывание</td><td>Docker, Docker Compose, GitLab CI/CD, реестр образов</td><td>Ubuntu Server; клиенты — Windows</td></tr></table></div>
+
+<h2>Принципы проектирования</h2>
+<div class="grid g2"><div class="card"><h3>Данные и код живут отдельно</h3><p>Код — внутри Docker-образа и заменяется при обновлении; данные — обычные папки тома, пересборка образа их не касается.</p></div><div class="card"><h3>Загрузка в два шага</h3><p>Любой импорт сначала анализирует файл и показывает сводку расхождений, и только после подтверждения применяется. Перед записью делается копия.</p></div><div class="card"><h3>Релиз только добавляет</h3><p>Обработки данных новой версии — записи реестра: идемпотентны, выполняются сами при старте после копии базы, упавшая не роняет запуск и повторяется кнопкой.</p></div><div class="card"><h3>Права — данные, а не код</h3><p>Разрешения ролей хранятся в базе, перечень разделов — в одном реестре. Интерфейс прав не выводит, а спрашивает сервер.</p></div><div class="card"><h3>Тип учёта — применимость, не право</h3><p>Объект ЖБИ или МФР определяет, какие разделы вообще имеют смысл; это действует и на администратора.</p></div><div class="card"><h3>Одно место для каждого определения</h3><p>Реестр разделов прав, реестр событий журнала, описание схемы БД — единые; экран, выгрузка и генератор читают один источник.</p></div><div class="card"><h3>Офлайн по умолчанию</h3><p>Все сторонние библиотеки вендорены; карта работает на локальной подложке; облачные подключения — только по отдельному решению.</p></div><div class="card"><h3>Разработка на обезличенных данных</h3><p>Для отладки используется обезличенная копия базы; боевые данные не покидают корпоративный контур.</p></div></div>
+
+<h2>Безопасность</h2>
+<div class="card"><ul><li>Вход обязателен для любого действия, включая просмотр; сессия хранится на сервере (httponly-cookie).</li><li>Пароли хранятся только как солёные хэши PBKDF2; доменный вход проверяется контроллером домена.</li><li>Права проверяются на сервере по разделу и объекту; роли независимы, разрешения складываются.</li><li>Все значимые действия и ошибки (сервера и браузера) пишутся в журнал с категориями.</li><li>Политика безопасности контента (CSP), лимиты размера загрузок, обработчик ошибок без раскрытия внутренностей.</li><li>ИИ-помощник читает только разрешённый снимок данных в памяти; SQL модели — только чтение под авторизатором.</li><li>Резервные копии снимаются автоматически перед обновлением, импортом, заменой базы и уборкой.</li></ul></div>
+
+<h2>Развёртывание и обновление</h2>
+<div class="card"><ul><li>Код попадает на серверы только пушем в ветки репозитория: пайплайн собирает образ, кладёт в реестр и перезапускает контейнер.</li><li>Два контура: тестовый и рабочий; перенос данных между ними — обменом выбранными разделами или переносом базы целиком.</li><li>Перед выкладкой миграции прогоняются «вхолостую» на копии базы того сервера, куда выкатывается версия.</li><li>Откат — возврат на предыдущий образ и восстановление базы из копии; порядок описан в руководстве по развёртыванию.</li></ul></div>
+
+<h2>Два интерфейса</h2>
+<p>Рядом существуют интерфейс V1 (рабочий, весь функционал) и V2 (полный интерфейс нового поколения со всеми экранами сервиса).
+Пользователь переключается между ними в настройках, при необходимости есть аварийный возврат на V1. Каждое изменение интерфейса вносится
+в оба, схема в V2 встроена как режим «только сцена» движка V1 — отрисовка одна, оболочка своя.</p>
+
+<div class="pager"><a href="effects.html">← Бизнес-эффекты</a><a href="modules.html">Программные модули →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

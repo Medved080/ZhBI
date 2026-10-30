@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Программные модули — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html" class="on">Программные модули</a><a href="database.html">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>Программные модули</h1><p>Каталог серверных модулей, клиентских файлов и служебных скриптов с назначением каждого.</p></section>
+
+<div class="toc"><a href="#g0">Ядро и платформа</a><a href="#g1">Справочники и структура объекта</a><a href="#g2">Импорт чертежей и геометрия ЖБИ</a><a href="#g3">Статусы, изделия, массовые операции</a><a href="#g4">Контрактация и график СМР</a><a href="#g5">Отчёты</a><a href="#g6">Монолит и общестрой (МФР)</a><a href="#g7">Численность, бот и производственная программа</a><a href="#g8">ИИ-помощник</a><a href="#g9">Администрирование и эксплуатация</a><a href="#g10">Подсистема «Калькулятор» (app/calc/)</a><a href="#front">Клиентская часть</a><a href="#scripts">Служебные скрипты</a></div><p class="lead">Серверная часть — около 150 модулей Python в пакете <code>app/</code> (≈ 88 тыс. строк, включая калькулятор). Модули сгруппированы по назначению; имена файлов даны относительно репозитория.</p><h2 id="g0">Ядро и платформа</h2><p>Точка входа, доступ к базе, аутентификация, права, журналы. На этом слое стоят все остальные модули.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>main.py</td><td>Приложение FastAPI: маршруты, сквозные обработчики ошибок, заголовки безопасности, запуск и миграции при старте</td></tr><tr><td class='mono'>db.py · schema.sql</td><td>Подключение к SQLite (режим WAL), схема и последовательные миграции</td></tr><tr><td class='mono'>models.py</td><td>Модели запросов и ответов (pydantic)</td></tr><tr><td class='mono'>auth.py · ldap_auth.py</td><td>Вход по паролю (PBKDF2) и по доменной учётной записи; серверные сессии</td></tr><tr><td class='mono'>access.py · features.py · roles.py</td><td>Реестр разделов прав, роли на объекте, настраиваемая матрица «раздел × роль»</td></tr><tr><td class='mono'>team_access.py · rights_matrix.py</td><td>Права по проектной команде; отчёт «Матрица прав»</td></tr><tr><td class='mono'>users.py · impersonation.py</td><td>Управление пользователями; режим «Зайти под пользователем»</td></tr><tr><td class='mono'>activity.py · activity_actions.py · error_log.py</td><td>Журнал действий и ошибок; реестр «код события → подпись и категория»</td></tr><tr><td class='mono'>settings.py · ui_state.py · home_layout.py</td><td>Общие настройки, личное состояние интерфейса, раскладка страницы «Действия»</td></tr><tr><td class='mono'>response_compression.py · upload_limits.py</td><td>Сжатие ответов; лимиты размера загружаемых файлов</td></tr></table></div><h2 id="g1">Справочники и структура объекта</h2><p>Проекты, объекты, команды, адреса, карта, вложения и сквозные справочники.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>marks.py</td><td>Справочник марок: владелец — тип, область — объект</td></tr><tr><td class='mono'>reference_catalogs.py · object_team.py</td><td>Справочники СМУ и физлиц; проектная команда объекта</td></tr><tr><td class='mono'>objects_import.py</td><td>Загрузка справочника объектов из Excel с построчной сверкой</td></tr><tr><td class='mono'>kladr.py</td><td>Адресный классификатор КЛАДР: загрузка, подсказки, проверка дома (отдельная база addr.db)</td></tr><tr><td class='mono'>project_map.py</td><td>Карта проектов и офлайн-подложка</td></tr><tr><td class='mono'>attachments.py</td><td>Вложения к проекту, объекту и изделию</td></tr><tr><td class='mono'>dict_delete.py</td><td>Удаление записи справочника с переводом ссылок на замену</td></tr><tr><td class='mono'>egrul.py</td><td>Реквизиты контрагента по ИНН</td></tr></table></div><h2 id="g2">Импорт чертежей и геометрия ЖБИ</h2><p>Превращение DXF в изделия, оси, зоны; сверка версий чертежа.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>dxf_import.py</td><td>Полный цикл загрузки DXF через интерфейс: сохранение, разбор марок, адресация, зоны</td></tr><tr><td class='mono'>input_import.py</td><td>Пакетная загрузка файлов из папки Input</td></tr><tr><td class='mono'>element_sync.py · element_identity.py</td><td>Импорт в рамках объекта: сверка, сводка расхождений, сопоставление изделий между версиями</td></tr><tr><td class='mono'>zone_sync.py · zone_recalc.py · zone_color_service.py</td><td>Запись зон в справочник; пересчёт привязки; цвета кранов</td></tr><tr><td class='mono'>crane_zone_*.py (9 модулей)</td><td>Редакции кранов и стоянок: черновик, публикация, активация по дате, переход со старой схемы, отчёты</td></tr><tr><td class='mono'>shaft_panels/ · shaft_panels_host.py · shaft_panels_scope.py</td><td>Панели облицовки шахт подъёмников — дополняющий импорт</td></tr><tr><td class='mono'>external_models.py · fbx_global_settings.py · object_geometry_*.py</td><td>Внешние 3D-модели (FBX): хранение, проверка осей и единиц, габарит объекта</td></tr></table></div><h2 id="g3">Статусы, изделия, массовые операции</h2><p>Жизненный цикл изделия и пакетные операции над ним.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>element_fields.py · element_dates.py · status_facts.py</td><td>Правка реквизитов, плановая дата поставки, определение даты факта</td></tr><tr><td class='mono'>element_ops.py · element_rows.py</td><td>Пакетные и построчные операции над изделиями для экранов схемы V2</td></tr><tr><td class='mono'>element_bulk_edit.py · status_bulk_edit.py</td><td>Массовая правка реквизитов и истории статусов через Excel</td></tr><tr><td class='mono'>history_import.py · status_timeline.py</td><td>Импорт истории статусов; компактная история для режима «хронология»</td></tr><tr><td class='mono'>export.py · pdf_export.py</td><td>Выгрузка в Excel и PDF</td></tr></table></div><h2 id="g4">Контрактация и график СМР</h2><p>Договорная цепочка, закрытие потребности, графики и прогноз.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>counterparties.py</td><td>Контрагенты → Договоры → Спецификации</td></tr><tr><td class='mono'>contracts.py · allocation.py</td><td>Контракты, позиции, остатки; атомарное распределение изделий по позициям</td></tr><tr><td class='mono'>contract_guard.py · record_version.py</td><td>Страж связи «изделие ↔ позиция»; оптимистичная проверка версии записи</td></tr><tr><td class='mono'>supplier_change.py</td><td>Документы «Замена поставщика» и «Обмен привязками»; проведение и отмена</td></tr><tr><td class='mono'>contracting_import.py · contracting_bulk_edit.py</td><td>Импорт и массовая правка контрактации через Excel</td></tr><tr><td class='mono'>capacity.py</td><td>Производительность завода — очередь изготовления</td></tr><tr><td class='mono'>schedule_import.py · schedule_versions.py</td><td>Загрузка графика, базовый/актуализированные версии, отклонения, дерево Ганта</td></tr><tr><td class='mono'>schedule_calc.py · schedule_gantt_export.py</td><td>Собственный расчёт графика; выгрузка Ганта в XLSX и PDF</td></tr></table></div><h2 id="g5">Отчёты</h2><p>Каждый отчёт — отдельный модуль; общая календарная сетка и выбор группировок — в reports.py.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>reports.py · report_help.py</td><td>Общее ядро отчётов (динамика, календарь) и справка по отчётам</td></tr><tr><td class='mono'>report_status_summary.py</td><td>«Статус монтажа»: план/факт и темпы</td></tr><tr><td class='mono'>report_completion.py · report_pivot.py</td><td>«Статус комплектации»: перечень и сводная таблица</td></tr><tr><td class='mono'>report_delivery_recon.py</td><td>«Сверка поставки по договорам»</td></tr><tr><td class='mono'>report_analytics.py</td><td>«Аналитическая справка»: что мешает стройке</td></tr><tr><td class='mono'>report_my_work.py</td><td>«Моя работа» и отбор «изменено за период»</td></tr><tr><td class='mono'>report_block_schedule.py · report_linear_track.py</td><td>Отчёты по блокам МФР</td></tr></table></div><h2 id="g6">Монолит и общестрой (МФР)</h2><p>Второй контур учёта — блоки «этаж × секция» и виды работ.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>revit_package.py · revit_import.py · revit_elements.py · revit_catalog.py · revit_sections.py · revit_plan.py · revit_colors.py</td><td>Выгрузки Revit: разбор пакета, справочники секций и этажей, элементы и помещения, показ на плане, цветовые схемы</td></tr><tr><td class='mono'>pdf_rooms.py · pdf_import.py · pdf_facade_import.py · pdf_plan_images.py</td><td>Второй источник геометрии — PDF: помещения, стены, фасады, планы этажей</td></tr><tr><td class='mono'>blocks.py · block_geometry.py</td><td>Секции, этажи, блоки и их геометрия по осям</td></tr><tr><td class='mono'>work_types_import.py · work_classifier.py · work_classifier_api.py</td><td>Справочник видов работ (WBS) и универсальный классификатор</td></tr><tr><td class='mono'>work_progress.py · work_fact.py · object_works.py</td><td>Статусы и проценты, отчёты о фактическом выполнении, работы объекта вне блоков</td></tr><tr><td class='mono'>block_works.py · block_bulk_edit.py · block_ops.py</td><td>Запланированные работы (ЗР), сроки и версии; массовая правка</td></tr><tr><td class='mono'>chess_flat.py · import_reset.py · wall_classes.py</td><td>Плоская «Шахматка», очистка перед повторной загрузкой, категории стен</td></tr></table></div><h2 id="g7">Численность, бот и производственная программа</h2><p>Учёт людей и денег.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>headcount.py · headcount_import.py</td><td>Учёт численности: ввод, история, отчёты; загрузка кодификатора и выгрузок</td></tr><tr><td class='mono'>express_bot.py · express_dialog.py · express_scheduler.py · express_api.py</td><td>Бот eXpress: подключение, диалог кнопками, планировщик, API</td></tr><tr><td class='mono'>pp.py · pp_import.py</td><td>Производственная программа в деньгах: хранение, загрузка, правки, группы</td></tr></table></div><h2 id="g8">ИИ-помощник</h2><p>Вопросы на естественном языке по данным системы.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>assistant.py · assistant_data.py</td><td>Конвейер ответа; поиск по разрешённому снимку данных</td></tr><tr><td class='mono'>assistant_llm.py · assistant_period.py · assistant_evidence.py</td><td>Бюджет запросов к модели, разбор периодов, компактные источники</td></tr><tr><td class='mono'>ai_integration.py</td><td>Общие настройки подключения к локальным моделям</td></tr><tr><td class='mono'>rmr_router.py · rmr_api.py · rmr_pricing.py</td><td>Необязательный облачный маршрутизатор моделей, расход и стоимость</td></tr></table></div><h2 id="g9">Администрирование и эксплуатация</h2><p>Копии, перенос, обновление, мониторинг, обучение.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>release_tasks.py</td><td>Реестр обработок релиза: что новая версия делает с накопленными данными</td></tr><tr><td class='mono'>backups.py · full_backup.py</td><td>Резервные копии базы и полные копии (база + вложения + калькулятор)</td></tr><tr><td class='mono'>db_transfer.py · data_exchange.py · data_exchange_api.py</td><td>Перенос базы целиком; обмен выбранными разделами между серверами</td></tr><tr><td class='mono'>db_status.py · db_schema_doc.py</td><td>Экран «Состояние БД»; единое описание схемы (таблицы, поля, связи)</td></tr><tr><td class='mono'>server_status.py · perf.py · perf_core.py</td><td>Состояние сервера; встроенные замеры производительности</td></tr><tr><td class='mono'>training.py · training_content.py · changelog.py · admin_guide.py</td><td>Обучение и тест; журнал версий; памятка администратора</td></tr><tr><td class='mono'>import_templates.py · settings_import.py</td><td>Описание и генерация файлов-образцов; импорт/экспорт настроек</td></tr></table></div><h2 id="g10">Подсистема «Калькулятор» (app/calc/)</h2><p>Отдельная база и интерфейс; общие с трекером вход и права.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Модуль</th><th>Назначение</th></tr><tr><td class='mono'>api.py · schemas.py · repository.py · database.py</td><td>Интерфейс, схемы, хранилище, база с собственными миграциями</td></tr><tr><td class='mono'>calculation.py · norms.py · prices.py · commercial_references.py</td><td>Расчёт себестоимости на Decimal, нормы, прайс-лист, справочные цены</td></tr><tr><td class='mono'>readings.py · qwen_client.py · source_sheets.py · geometry_check.py</td><td>Чтение листов КЖИ (вектор + нейросеть), проверка геометрии</td></tr><tr><td class='mono'>collisions.py · discrepancies.py · reinforcement.py · recovery_*.py</td><td>Коллизии, расхождения моделей, армирование, восстановление данных</td></tr><tr><td class='mono'>marks.py · link.py</td><td>Связь «марка трекера ↔ изделие калькулятора»</td></tr><tr><td class='mono'>sync.py · sync_api.py · exchange.py</td><td>Перенос на тестовый и рабочий серверы пакетом по токену</td></tr><tr><td class='mono'>web/</td><td>Интерфейс калькулятора (вкладки изделия, таблица калькуляции, 3D)</td></tr></table></div><h2 id="front">Клиентская часть (app/static/)</h2><p>Интерфейс — статические файлы без сборщика и фреймворка; крупные новые части выполнены отдельными ES-модулями и подгружаются по требованию.</p><div class="tbl-wrap"><table><tr><th style="width:38%">Файл / каталог</th><th>Назначение</th></tr><tr><td class='mono'>app.js (≈38 тыс. строк)</td><td>Интерфейс V1: схема 2D/3D, фильтры, формы, отчёты, меню «Действия»; ванильный JavaScript без сборщика</td></tr><tr><td class='mono'>v2/ (≈130 файлов)</td><td>Интерфейс V2: оболочка с навигацией и ES-модулями; отдельный экран на каждый раздел, общие панели и шлюз записи</td></tr><tr><td class='mono'>v2/workspace.js · embed-bridge.js</td><td>Рабочие места V2 со схемой: оболочка + режим «только сцена» движка V1 (протокол сообщений)</td></tr><tr><td class='mono'>timeline.js · chess-flat.js · column-select.js</td><td>Лента времени, плоская «Шахматка», выбор колонок</td></tr><tr><td class='mono'>external-models/</td><td>Слой внешних 3D-моделей (FBX): разбор, приведение к осям, панель положения</td></tr><tr><td class='mono'>pp/</td><td>Производственная программа: расчётное ядро без DOM, экран, стили</td></tr><tr><td class='mono'>headcount-ui.js · express-ui.js</td><td>Общие экраны численности и бота для V1 и V2</td></tr><tr><td class='mono'>map.js · address.js</td><td>Карта проектов (MapLibre, офлайн-подложка) и виджет адреса КЛАДР</td></tr><tr><td class='mono'>assistant.js · work-classifier.js · server-exchange.js</td><td>ИИ-помощник, классификатор видов работ, обмен между серверами</td></tr><tr><td class='mono'>vendor/</td><td>Вендоренные сторонние библиотеки: Three.js, MapLibre GL, PMTiles, загрузчик FBX — без обращения к внешним CDN</td></tr></table></div><h2 id="scripts">Служебные скрипты (scripts/, более 200 файлов)</h2><p>Разовые и регулярные утилиты: импорт, обслуживание данных, генераторы документации, стражи целостности и проверочные стенды.</p><div class="tbl-wrap"><table><tr><th style="width:24%">Назначение</th><th>Примеры</th></tr><tr><td><b>Импорт и разбор</b></td><td class='mono'>parse_zhbi.py, layer_naming.py, new_standard_pipeline.py, assign_axes.py, zone_parser.py, zone_binding.py, rebuild_db.py</td></tr><tr><td><b>Обслуживание данных</b></td><td class='mono'>anonymize_db.py, dry_run_migration.py, reset_password.py, fetch_map_tiles.py, import_rmr_prices.py</td></tr><tr><td><b>Генераторы</b></td><td class='mono'>gen_db_schema_drawio.py (схема БД), gen_v2_coverage.py (реестр экранов), generate_test_dxf.py (синтетические чертежи)</td></tr><tr><td><b>Стражи</b></td><td class='mono'>check_undefined_names.py, check_activity_actions.py, check_training_coverage.py, check_grant_widening.py, check_contract_coverage.py, audit_endpoints.py</td></tr><tr><td><b>Проверки и стенды</b></td><td class='mono'>verify_*.py, v2_tests/ (набор сценариев на фейковом бэкенде), dev_*_stand.py, express_cts_mock.py</td></tr><tr><td><b>Развёртывание</b></td><td class='mono'>linux/ (установка, обновление, откат), install_git_hooks.py, start_8000.sh</td></tr></table></div><h2>Как модули взаимодействуют</h2>
+<div class="card"><ul>
+<li><b>Реестр разделов</b> (<code>features.py</code>) — источник, из которого берут перечень прав доступа, матрица прав, обучение и проверка эндпоинтов.</li>
+<li><b>Реестр событий журнала</b> (<code>activity_actions.py</code>) — единое соответствие «код действия → подпись и категория»; страж не пускает в коммит событие без подписи.</li>
+<li><b>Описание схемы</b> (<code>db_schema_doc.py</code>) — из него строятся экран «Состояние БД» и диаграмма схемы; расхождение с реальной базой подсвечивается красным.</li>
+<li><b>Обработки релиза</b> (<code>release_tasks.py</code>) — единая точка, через которую новая версия приводит накопленные данные в порядок.</li>
+<li><b>Стражи</b> — проверки при импорте и в git-хуке: необъявленные имена, события журнала, полнота обучения, целостность договоров, расширение прав.</li>
+</ul></div>
+<div class="pager"><a href="architecture.html">← Архитектура</a><a href="database.html">База данных →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>
