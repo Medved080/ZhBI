@@ -61,6 +61,13 @@ def say(text="/hc", data=None):
     ed.handle_incoming({"from": {"user_huid": "menu-user", "group_chat_id": "menu-chat", "chat_type": "chat"},
                         "command": {"body": text, "data": data or {}}})
     assert sent, "Бот должен ответить"
+    for message in sent:
+        actions = [b["data"]["a"] for row in message[2] for b in row]
+        main = set(actions).intersection(ed.MAIN_ACTIONS)
+        if main:
+            assert set(actions) == set(ed.MAIN_ACTIONS) and len(actions) == 3, "Главное меню содержит только три основных действия"
+        else:
+            assert actions.count("home") == 1, "Каждый вложенный экран содержит ровно одну кнопку «В меню»"
     return sent[-1]
 
 
@@ -74,16 +81,35 @@ def text():
     return "\n".join(m[1] for m in sent)
 
 
+def open_action(label):
+    if any(b["data"]["a"] == "home" for row in sent[-1][2] for b in row):
+        press("В меню")
+    return press(label)
+
+
 fixed = datetime(2026, 10, 30, 12, tzinfo=hc.MSK)
 with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_message", side_effect=lambda *a: sent.append(a)), patch.object(hc, "now_msk", return_value=fixed):
     say("/start")
     ok({b["label"] for row in sent[-1][2] for b in row} == set(ed.MAIN_ACTIONS.values()), "Без расписания /start показывает три основных действия")
+    for label, expected in (("Внести численность", {"За сегодня", "На дату", "В меню"}),
+                            ("Уточнить данные", {"За сегодня", "На дату", "В меню"}),
+                            ("Получить сводку", {"Сегодня", "Неделя", "Месяц", "В меню"})):
+        press(label)
+        ok({b["label"] for row in sent[-1][2] for b in row} == expected, f"{label}: только кнопки раздела и «В меню»")
+        press("В меню")
+        ok({b["label"] for row in sent[-1][2] for b in row} == set(ed.MAIN_ACTIONS.values()), "«В меню» возвращает три основных действия")
     say("/entry"); ok("Выберите дату" in text(), "Команда из меню eXpress запускает самостоятельный ввод")
-    press("Внести численность"); press("На дату")
+    open_action("Внести численность"); press("На дату")
     say("31.02.2026"); ok("существующая дата" in text(), "Неверная дата отклонена")
     say("31.10.2026"); ok("будущую дату" in text(), "Будущая дата отклонена")
     say("01.09.2026"); ok("01.09.2026" in text(), "Самостоятельный ввод за давнюю дату без запроса по расписанию")
-    press("MENU-TEST"); say("10"); say("2"); say("1")
+    press("MENU-TEST"); press("В меню"); say("999")
+    c = db.get_connection()
+    ok(c.execute("SELECT COUNT(*) FROM headcount_records WHERE contractor_id = ?", (ctr,)).fetchone()[0] == 0,
+       "Возврат в меню прерывает ввод: последующее число ничего не записывает")
+    c.close()
+    open_action("Внести численность"); press("На дату"); say("01.09.2026"); press("MENU-TEST")
+    say("10"); say("2"); say("1")
     ok("Записано" in text() and "Все ваши строки" in text(), "Ввод сохранился за выбранную давнюю дату, заполненная строка скрыта из нового ввода")
     press("Готово")
     c = db.get_connection()
@@ -92,7 +118,7 @@ with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_me
     c.close()
     ok(original["work_date"] == "2026-09-01" and original["workers"] == 10, "Число записано именно в выбранный день")
     say(data={"a": "row", "r": closed, "i": cw}); ok("уже закрыт" in text(), "Закрытая кнопка не открывает запрос повторно")
-    press("Уточнить данные"); press("На дату"); say("01.09.2026"); press("MENU-TEST")
+    open_action("Уточнить данные"); press("На дату"); say("01.09.2026"); press("MENU-TEST")
     ok("Сейчас внесено: рабочие 10, ИТР 2, механизаторы 1" in text(), "Уточнение показывает прежние значения")
     say("20"); say("3"); say("2")
     ok("Заменено" in text(), "Уточнение после закрытия сохраняет новые значения")
@@ -101,7 +127,7 @@ with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_me
     ok([tuple(r) for r in history] == [(None, 10), (10, 20)], "История содержит создание и замену")
     ok(c.execute("SELECT status FROM express_requests WHERE id = ?", (closed,)).fetchone()[0] == "closed", "Прежний запрос остаётся закрытым")
     c.close()
-    press("Внести численность"); press("За сегодня"); press("MENU-TEST"); say("10"); say("2"); say("1")
+    open_action("Внести численность"); press("За сегодня"); press("MENU-TEST"); say("10"); say("2"); say("1")
     c = db.get_connection()
     work3 = c.execute("INSERT INTO work_codifier (code, name) VALUES ('MENU-THIRD', '987656. Дополнительные работы меню')").lastrowid
     c.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id) VALUES (?, ?, ?)", (ctr, work3, person["id"]))
@@ -110,17 +136,17 @@ with patch.object(eb, "is_active", return_value=True), patch.object(eb, "send_me
     hc.save_row_from_bot(obj, fixed.date().replace(day=28), ctr, work, 30, 4, 3, contact_name=person["name"])
     hc.save_row_from_bot(obj, fixed.date(), ctr, work2, 9999, 0, contact_name="Чужой ответственный")
     hc.save_row_from_bot(obj, fixed.date().replace(day=20), ctr, work, 50, 6, 5, contact_name=person["name"])
-    press("Получить сводку"); press("Сегодня")
+    open_action("Получить сводку"); press("Сегодня")
     ok("рабочие 30, ИТР 2, механизаторы 1; всего 33" in text() and "9999" not in text(), "Дневная сводка содержит только свои строки")
-    press("Получить сводку"); press("Неделя")
+    open_action("Получить сводку"); press("Неделя")
     ok("24.10.2026" in text() and "рабочие 30, ИТР 3, механизаторы 2; всего 35" in text() and "2 из 7" in text(), "Недельная сводка усредняет суммы дней, не строки, за последние 7 дней")
-    press("Получить сводку"); press("Месяц")
+    open_action("Получить сводку"); press("Месяц")
     ok("01.10.2026" in text() and "рабочие 36,667, ИТР 4, механизаторы 3; всего 43,667" in text() and "3 из 30" in text(), "Месячная сводка от начала месяца, дни без данных исключены")
     # Второй объект и подмена идентификатора в кнопке.
     c = db.get_connection()
     c.execute("INSERT INTO headcount_contractor_works (contractor_id, codifier_id, responsible_id) VALUES (?, ?, ?)", (foreign_ctr, work, person["id"]))
     c.commit(); c.close()
-    press("Уточнить данные"); press("За сегодня")
+    open_action("Уточнить данные"); press("За сегодня")
     ok("Выберите объект" in text(), "Несколько объектов — явный выбор")
     say(data={"a": "self_object", "o": -1}); ok("недоступен" in text(), "Подмена объекта отклоняется")
     say(data={"a": "self_object", "o": other_obj})

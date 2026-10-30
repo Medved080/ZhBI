@@ -84,10 +84,12 @@ def _deliver(contact, request_id: Optional[int], text: str, bubble: Optional[lis
         log_event("out", kind, text, contact_id=contact["id"], request_id=request_id, ok=False, error=err)
         raise BotxError(err, retryable=True, reason="chat_not_found")
     try:
-        # Основные действия доступны на каждом шаге, в том числе после закрытия запроса.
+        # Три основных действия показываем только в главном меню. На остальных
+        # экранах — их собственные кнопки и один явный возврат в главное меню.
         bubble = list(bubble or [])
         shown = {b.get("data", {}).get("a") for row in bubble for b in row}
-        bubble += [[button(label, {"a": action})] for action, label in MAIN_ACTIONS.items() if action not in shown]
+        if not shown.intersection(MAIN_ACTIONS) and "home" not in shown:
+            bubble.append([button("В меню", {"a": "home"})])
         express_bot.send_message(contact["chat_id"], text, bubble)
     except BotxError as exc:
         log_event("out", kind, text, contact_id=contact["id"], request_id=request_id, ok=False, error=str(exc))
@@ -229,7 +231,8 @@ def _set_session(conn, contact, dialog: dict) -> None:
 
 def _home(conn, contact) -> None:
     _set_session(conn, contact, {"step": "home"})
-    _say(contact, None, "Сбор численности. Выберите действие.")
+    _say(contact, None, "Сбор численности. Выберите действие.",
+         [[button(label, {"a": action})] for action, label in MAIN_ACTIONS.items()])
 
 
 def _available_objects(conn, contact, *, summary: bool = False):
@@ -611,7 +614,7 @@ def _button(conn, contact, data: dict) -> None:
         _say(contact, None, "Этот запрос не найден.")
         return
     if req["status"] not in OPEN_STATUSES:
-        _say(contact, req["id"], "Этот запрос уже закрыт. Для изменения численности выберите «Уточнить данные».")
+        _say(contact, req["id"], "Этот запрос уже закрыт. Для изменения численности нажмите «В меню» и выберите «Уточнить данные».")
         return
     action = data.get("a")
     _set_session(conn, contact, {"step": "request", "r": req["id"]})
@@ -671,7 +674,7 @@ def _text(conn, contact, body: str) -> None:
         return
     req = current_request(conn, contact["id"])
     if req is None:
-        _say(contact, None, "Выберите действие кнопками.\n" + HELP_TEXT)
+        _say(contact, None, "Выберите действие: нажмите «В меню».\n" + HELP_TEXT)
         return
     dialog = _load_dialog(req)
     step = dialog.get("step")
