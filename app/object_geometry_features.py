@@ -61,7 +61,7 @@ def get_wall_segments(conn: sqlite3.Connection, object_id: int) -> dict:
     проверку в этой же сессии, Docs/DECISIONS.md)."""
     rows = conn.execute(
         "SELECT outline_json, elevation_mm, height_mm, updated_at FROM revit_elements "
-        "WHERE object_id = ? AND is_current = 1 AND (category IN ('Стены', 'Стены монолит', 'Стены кладка', 'Стены блоки', 'Стены кирпич') "
+        "WHERE object_id = ? AND is_current = 1 AND (category IN ('Стены', 'Стены монолит', 'Стены кладка', 'Стены блоки', 'Стены кирпич', 'Монолит стены', 'Кладка наружная', 'Кладка внутренняя') "
         # Перегородки Revit раньше были «Стенами» (деление по имени типа,
         # `app/wall_classes.py`, 2026-10-21): набор сегментов для FBX-привязки
         # у таких объектов не должен меняться. Перегородки PDF в него не

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>БД: Пользователи, роли, доступ — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html" class="on">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>БД: Пользователи, роли, доступ</h1><p>Таблицы домена с описанием каждого поля, ключей и связей.</p></section>
+
+
+<div class="sub"><a href="database.html">Обзор БД</a><a href="db-hier.html">Проекты, объекты, здания</a><a href="db-access.html" class="on">Пользователи, роли, доступ</a><a href="db-zhbi.html">Сборный ЖБИ: изделия и статусы</a><a href="db-zones.html">Зоны: захватки, краны, стоянки</a><a href="db-contract.html">Контрактация и поставка</a><a href="db-schedule.html">График СМР</a><a href="db-mfr.html">Монолит и общестрой (МФР)</a><a href="db-people.html">Численность и бот eXpress</a><a href="db-pp.html">Производственная программа</a><a href="db-ref.html">Справочники, настройки, журналы</a></div>
+<p class="lead">Учётные записи, сессии входа, роли и их разрешения по разделам, гранты на объекты, права по проектной команде, обучение.</p>
+<p><span class="tag">11 таблиц</span><span class="tag">82 полей</span></p>
+<div class="btns"><button onclick="setAll(true)">Развернуть все таблицы</button><button onclick="setAll(false)">Свернуть все</button></div>
+<div class="toc"><a href="#users">users</a><a href="#sessions">sessions</a><a href="#user_ui_state">user_ui_state</a><a href="#user_access">user_access</a><a href="#object_roles">object_roles</a><a href="#role_features">role_features</a><a href="#team_role_access">team_role_access</a><a href="#individual_user_links">individual_user_links</a><a href="#team_access_grants">team_access_grants</a><a href="#training_attempts">training_attempts</a><a href="#training_answers">training_answers</a></div>
+<details class="t" id="users"><summary><span class="tn">users</span><span class="tl">Пользователи</span> <span class="tag o">ключевая</span>
+<span class="tc">23 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>last_object_id</code> → <code>objects.id</code> <span class='fkref'>(обнуление ссылки)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>activity_log</code>, <code>attachments</code>, <code>block_work_forecasts</code>, <code>block_works</code>, <code>chess_flat_batches</code>, <code>crane_zone_drafts</code>, <code>crane_zone_versions</code>, <code>express_config</code>, <code>express_contacts</code>, <code>express_requests</code>, <code>express_schedules</code>, <code>headcount_contractor_works</code>, <code>headcount_history</code>, <code>headcount_records</code>, <code>individual_user_links</code>, <code>object_external_models</code>, <code>object_fact_reports</code>, <code>object_works</code>, <code>pp_dataset</code>, <code>pp_edits</code>, <code>pp_groups</code>, <code>schedule_versions</code>, <code>sessions</code>, <code>status_history</code>, <code>supplier_change_docs</code>, <code>training_attempts</code>, <code>user_access</code>, <code>user_ui_state</code>, <code>work_fact_item_history</code>, <code>work_fact_items</code>, <code>work_fact_reports</code>, <code>work_progress</code>, <code>zone_edit_undo</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор пользователя</td></tr><tr><td class='mono'>last_name</td><td class='mono'>TEXT</td><td class='k'></td><td>фамилия</td></tr><tr><td class='mono'>first_name</td><td class='mono'>TEXT</td><td class='k'></td><td>имя</td></tr><tr><td class='mono'>patronymic</td><td class='mono'>TEXT</td><td class='k'></td><td>отчество</td></tr><tr><td class='mono'>position</td><td class='mono'>TEXT</td><td class='k'></td><td>должность</td></tr><tr><td class='mono'>department</td><td class='mono'>TEXT</td><td class='k'></td><td>подразделение</td></tr><tr><td class='mono'>domain_login</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>доменный логин (уникален, по нему вход)</td></tr><tr><td class='mono'>role</td><td class='mono'>TEXT</td><td class='k'></td><td>СИСТЕМНАЯ роль: admin/user/view (ведение сервиса)</td></tr><tr><td class='mono'>password_hash</td><td class='mono'>TEXT</td><td class='k'></td><td>хэш пароля сервиса; NULL = входа по паролю нет</td></tr><tr><td class='mono'>password_salt</td><td class='mono'>TEXT</td><td class='k'></td><td>соль пароля</td></tr><tr><td class='mono'>auth_method</td><td class='mono'>TEXT</td><td class='k'></td><td>чем проверяется вход: local (пароль сервиса) / domain (учётная запись домена, LDAP)</td></tr><tr><td class='mono'>label_color</td><td class='mono'>TEXT</td><td class='k'></td><td>персональный цвет подписей марок на схеме</td></tr><tr><td class='mono'>ui_theme</td><td class='mono'>TEXT</td><td class='k'></td><td>персональная цветовая гамма интерфейса; NULL = по умолчанию</td></tr><tr><td class='mono'>must_change_password</td><td class='mono'>INTEGER</td><td class='k'></td><td>пароль задан администратором и должен быть заменён при первом входе</td></tr><tr><td class='mono'>changelog_ack_version</td><td class='mono'>TEXT</td><td class='k'></td><td>подтверждённая кнопкой «Ознакомился» версия «Что нового»; NULL = не подтверждал</td></tr><tr><td class='mono'>menu_prefs</td><td class='mono'>TEXT</td><td class='k'></td><td>личная настройка меню «Действия»: порядок пунктов внутри блоков и избранное (JSON)</td></tr><tr><td class='mono'>recent_objects</td><td class='mono'>TEXT</td><td class='k'></td><td>переиспользован под личные настройки оболочки V2 (2026-09-22): закреплённые объекты выбора объекта в шапке, состояние левой навигации и группировка начальной страницы «Действия» (`home_grouping`: kind/process) (JSON, app/users.py::set_v2_shell_prefs). Первоначальное назначение — «недавние объекты» поповера тулбара V1 — убрано 2026-09-08, тем полем никогда не пользовались</td></tr><tr><td class='mono'>view3d_pitch_deg</td><td class='mono'>REAL</td><td class='k'></td><td>начальный ракурс 3D: подъём камеры над горизонтом, градусы (90 = вид сверху)</td></tr><tr><td class='mono'>view3d_yaw_deg</td><td class='mono'>REAL</td><td class='k'></td><td>начальный ракурс 3D: поворот вокруг объекта, градусы (0 = числовые оси вертикально)</td></tr><tr><td class='mono'>min_label_px</td><td class='mono'>REAL</td><td class='k'></td><td>персональный порог читаемости подписей: мельче этого числа пикселей подпись не рисуется (2D и 3D)</td></tr><tr><td class='mono'>last_object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>последний выбранный объект → objects.id</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>создан</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>изменён</td></tr></table></div></details><details class="t" id="sessions"><summary><span class="tn">sessions</span><span class="tl">Сессии входа</span>
+<span class="tc">8 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>user_id</code> → <code>users.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>impersonator_user_id</code> → <code>users.id</code> <span class='fkref'>(режим «от имени»)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>token</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>токен из cookie</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>владелец сессии → users.id (CASCADE)</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>начало сессии</td></tr><tr><td class='mono'>expires_at</td><td class='mono'>TEXT</td><td class='k'></td><td>истекает (30 дней)</td></tr><tr><td class='mono'>created_ip</td><td class='mono'>TEXT</td><td class='k'></td><td>адрес, с которого вошли; NULL у сеансов, выданных до появления колонки</td></tr><tr><td class='mono'>user_agent</td><td class='mono'>TEXT</td><td class='k'></td><td>устройство и браузер входа (для списка активных сеансов)</td></tr><tr><td class='mono'>last_seen_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда сеансом пользовались (пишется не чаще раза в минуту; по нему считается таймаут бездействия)</td></tr><tr><td class='mono'>impersonator_user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>отладочный сеанс «от имени»: кто из администраторов открыл → users.id (CASCADE); NULL = обычный сеанс, только такие подходят по cookie</td></tr></table></div></details><details class="t" id="user_ui_state"><summary><span class="tn">user_ui_state</span><span class="tl">Личное состояние интерфейса</span>
+<span class="tc">4 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>user_id</code> → <code>users.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> <span class="key">FK</span> </td><td>владелец → users.id (CASCADE)</td></tr><tr><td class='mono'>scope</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>область состояния: «scene:&lt;id объекта&gt;» — фильтры, вид и камера схемы объекта</td></tr><tr><td class='mono'>data</td><td class='mono'>TEXT</td><td class='k'></td><td>JSON состояния (фильтры, видимость зон и подписей, режим 2D/3D, камера)</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда сохранено</td></tr></table></div></details><details class="t" id="user_access"><summary><span class="tn">user_access</span><span class="tl">Доступ и роль на объекте</span> <span class="tag o">ключевая</span>
+<span class="tc">6 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>user_id</code> → <code>users.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>project_id</code> → <code>projects.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>role</code> → <code>object_roles.key</code> <span class='fkref'>(запрет удаления)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>team_access_grants</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор гранта</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>кому выдан → users.id (CASCADE)</td></tr><tr><td class='mono'>project_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>проект → projects.id (CASCADE)</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект → objects.id; NULL = весь проект</td></tr><tr><td class='mono'>role</td><td class='mono'>TEXT</td><td class='k'><span class="key">FK</span> </td><td>роль на этом объекте/проекте → object_roles.key; ролей на одном уровне может быть НЕСКОЛЬКО, разрешения складываются (2026-08-14), поимённого CHECK больше нет</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>выдан</td></tr></table></div></details><details class="t" id="object_roles"><summary><span class="tn">object_roles</span><span class="tl">Роли на объекте</span>
+<span class="tc">5 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>На таблицу ссылаются:</b> <code>role_features</code>, <code>team_role_access</code>, <code>user_access</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор роли</td></tr><tr><td class='mono'>key</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>ключ роли; именно он лежит в user_access.role и в role_features</td></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'></td><td>как роль называется в интерфейсе («Комплектовщик»)</td></tr><tr><td class='mono'>rank</td><td class='mono'>INTEGER</td><td class='k'></td><td>порядок ПОКАЗА колонок в матрице настройки; смысла «старше/младше» нет — роли независимы и складываются</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>заведена</td></tr></table></div></details><details class="t" id="role_features"><summary><span class="tn">role_features</span><span class="tl">Разрешения роли</span>
+<span class="tc">4 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>role_key</code> → <code>object_roles.key</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>role_key</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> <span class="key">FK</span> </td><td>роль → object_roles.key (CASCADE)</td></tr><tr><td class='mono'>feature_key</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>раздел системы; перечень разделов ведёт разработчик в app/features.py вместе с кодом проверки</td></tr><tr><td class='mono'>level</td><td class='mono'>TEXT</td><td class='k'></td><td>&#x27;read&#x27; — просмотр, &#x27;write&#x27; — изменение (включает просмотр). ОТСУТСТВИЕ строки означает «Нет»: нули не хранятся, и новый раздел оказывается закрытым, а не открытым</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда разрешение правили последний раз</td></tr></table></div></details><details class="t" id="team_role_access"><summary><span class="tn">team_role_access</span><span class="tl">Какие системные роли получает роль проектной команды</span>
+<span class="tc">2 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>role_key</code> → <code>object_roles.key</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>team_role_key</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>роль команды (smu_director или ключ из app/object_team.py)</td></tr><tr><td class='mono'>role_key</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>системная роль → object_roles.key (CASCADE); пары (роль команды, системная роль) уникальны; по умолчанию таблица пуста</td></tr></table></div></details><details class="t" id="individual_user_links"><summary><span class="tn">individual_user_links</span><span class="tl">Явная привязка физлица к учётной записи</span>
+<span class="tc">2 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>individual_id</code> → <code>individuals.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>user_id</code> → <code>users.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>individual_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>физлицо → individuals.id (CASCADE)</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>учётная запись → users.id (CASCADE); NULL — «не сопоставлять» (автосопоставление по ФИО отключено)</td></tr></table></div></details><details class="t" id="team_access_grants"><summary><span class="tn">team_access_grants</span><span class="tl">Гранты, выданные по проектной команде</span>
+<span class="tc">3 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>grant_id</code> → <code>user_access.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>grant_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>грант → user_access.id (CASCADE); без записи здесь грант считается выданным вручную</td></tr><tr><td class='mono'>team_role_key</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>роль команды, по которой выдан грант (грант держится, пока есть хотя бы одно основание)</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект, на котором выдан грант → objects.id (CASCADE)</td></tr></table></div></details><details class="t" id="training_attempts"><summary><span class="tn">training_attempts</span><span class="tl">Попытка прохождения теста</span>
+<span class="tc">14 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>user_id</code> → <code>users.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(обнуление ссылки)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>training_answers</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор попытки</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>кто проходил → users.id (CASCADE)</td></tr><tr><td class='mono'>role_key</td><td class='mono'>TEXT</td><td class='k'></td><td>под какую роль проходили → object_roles.key; NULL — по всем своим ролям сразу</td></tr><tr><td class='mono'>feature_key</td><td class='mono'>TEXT</td><td class='k'></td><td>раздел, если тест запущен по одному разделу → app/features.py; NULL — по всем доступным сразу</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект, по правам на котором собран набор вопросов → objects.id (SET NULL)</td></tr><tr><td class='mono'>content_version</td><td class='mono'>TEXT</td><td class='k'></td><td>редакция учебного материала (CONTENT_VERSION в app/training_content.py)</td></tr><tr><td class='mono'>questions</td><td class='mono'>INTEGER</td><td class='k'></td><td>сколько вопросов в попытке (размер выборки)</td></tr><tr><td class='mono'>answered</td><td class='mono'>INTEGER</td><td class='k'></td><td>сколько уже отвечено</td></tr><tr><td class='mono'>correct</td><td class='mono'>INTEGER</td><td class='k'></td><td>сколько из отвеченных верно</td></tr><tr><td class='mono'>started_at</td><td class='mono'>TEXT</td><td class='k'></td><td>начата</td></tr><tr><td class='mono'>finished_at</td><td class='mono'>TEXT</td><td class='k'></td><td>завершена; NULL — попытка брошена или продолжается, в рейтинг не идёт</td></tr><tr><td class='mono'>current_question</td><td class='mono'>TEXT</td><td class='k'></td><td>ключ заданного сейчас вопроса; в базе, а не в памяти — попытку продолжают после перезапуска сервиса</td></tr><tr><td class='mono'>current_options</td><td class='mono'>TEXT</td><td class='k'></td><td>порядок вариантов в текущей выдаче (JSON исходных индексов): варианты тасуются, иначе правильный стоял бы на месте, где его записал автор</td></tr><tr><td class='mono'>asked_at</td><td class='mono'>TEXT</td><td class='k'></td><td>момент выдачи текущего вопроса; от него сервер считает, сколько человек думал</td></tr></table></div></details><details class="t" id="training_answers"><summary><span class="tn">training_answers</span><span class="tl">Ответ на вопрос теста</span>
+<span class="tc">11 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>attempt_id</code> → <code>training_attempts.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор ответа</td></tr><tr><td class='mono'>attempt_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>попытка → training_attempts.id (CASCADE)</td></tr><tr><td class='mono'>ord</td><td class='mono'>INTEGER</td><td class='k'></td><td>номер вопроса внутри попытки (уникален в паре с попыткой)</td></tr><tr><td class='mono'>question_key</td><td class='mono'>TEXT</td><td class='k'></td><td>ключ вопроса в app/training_content.py</td></tr><tr><td class='mono'>feature_key</td><td class='mono'>TEXT</td><td class='k'></td><td>раздел прав, к которому относится вопрос → app/features.py</td></tr><tr><td class='mono'>question_text</td><td class='mono'>TEXT</td><td class='k'></td><td>текст вопроса СНИМКОМ: правка формулировки не должна задним числом менять историю</td></tr><tr><td class='mono'>chosen_text</td><td class='mono'>TEXT</td><td class='k'></td><td>выбранный вариант снимком</td></tr><tr><td class='mono'>correct_text</td><td class='mono'>TEXT</td><td class='k'></td><td>правильный вариант снимком</td></tr><tr><td class='mono'>is_correct</td><td class='mono'>INTEGER</td><td class='k'></td><td>1 — ответ верный, 0 — нет</td></tr><tr><td class='mono'>spent_ms</td><td class='mono'>INTEGER</td><td class='k'></td><td>сколько думал, миллисекунд; считает СЕРВЕР от asked_at — клиентское время подделывается</td></tr><tr><td class='mono'>answered_at</td><td class='mono'>TEXT</td><td class='k'></td><td>момент ответа</td></tr></table></div></details>
+
+
+<div class="pager"><a href="db-hier.html">← Проекты, объекты, здания</a><a href="db-zhbi.html">Сборный ЖБИ: изделия и статусы →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

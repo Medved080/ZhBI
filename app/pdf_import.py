@@ -48,6 +48,7 @@ import threading
 import uuid
 
 from app import blocks as blocks_mod
+from app import classifier_categories
 from app import db as db_mod
 from app import pdf_plan_images
 from app import pdf_rooms
@@ -260,7 +261,8 @@ def build_wall_rows(walls: list, floors: dict, section_ids: dict, filename: str 
             "section_code": "PDF",
             "uid": "pdf:%s:%s:%d" % (_WALL_UID_PREFIX[w.category], w.floor, w.index),
             "revit_id": None,
-            "category": w.category,
+            "category": classifier_categories.classifier_category(
+                w.category, w.material, pdf_rooms.EXTERIOR_MASONRY_MATERIAL),
             "family": None,
             "type_name": w.material,
             "mark": None,
@@ -303,7 +305,7 @@ def build_slab_rows(slabs: list, floors: dict, filename: str = None) -> list:
             "section_code": "PDF",
             "uid": "pdf:плита:%s" % s.floor,
             "revit_id": None,
-            "category": "Перекрытия",
+            "category": classifier_categories.CLS_SLAB_MONOLITH,
             "family": None,
             "type_name": "Плита перекрытия (приближение контуром)",
             "mark": None,
@@ -665,7 +667,7 @@ def apply(conn, object_id: int, analysis: dict) -> dict:
     # Плиты — на весь этаж, без секции по устройству (build_slab_rows),
     # это не «не определилась», а «не применимо» — не считаем их в сводке
     # про неизвестную секцию, иначе 26 плит выглядели бы как брак разбора.
-    sectioned = [r for r in rows if r["category"] != "Перекрытия"]
+    sectioned = [r for r in rows if r["category"] != classifier_categories.CLS_SLAB_MONOLITH]
     known_section = sum(1 for r in sectioned if r["section_id"] is not None)
     windows_count = sum(1 for w in walls if w.category == "Окна")
     doors_count = sum(1 for w in walls if w.category == "Двери")

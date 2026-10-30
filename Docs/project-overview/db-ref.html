@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>БД: Справочники, настройки, журналы — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html" class="on">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>БД: Справочники, настройки, журналы</h1><p>Таблицы домена с описанием каждого поля, ключей и связей.</p></section>
+
+
+<div class="sub"><a href="database.html">Обзор БД</a><a href="db-hier.html">Проекты, объекты, здания</a><a href="db-access.html">Пользователи, роли, доступ</a><a href="db-zhbi.html">Сборный ЖБИ: изделия и статусы</a><a href="db-zones.html">Зоны: захватки, краны, стоянки</a><a href="db-contract.html">Контрактация и поставка</a><a href="db-schedule.html">График СМР</a><a href="db-mfr.html">Монолит и общестрой (МФР)</a><a href="db-people.html">Численность и бот eXpress</a><a href="db-pp.html">Производственная программа</a><a href="db-ref.html" class="on">Справочники, настройки, журналы</a></div>
+<p class="lead">Марки и префиксы, СМУ и физлица, подтипы, цвета и формы, настройки, обработки релиза, журнал действий, замеры.</p>
+<p><span class="tag">13 таблиц</span><span class="tag">79 полей</span></p>
+<div class="btns"><button onclick="setAll(true)">Развернуть все таблицы</button><button onclick="setAll(false)">Свернуть все</button></div>
+<div class="toc"><a href="#mark_type_prefixes">mark_type_prefixes</a><a href="#marks">marks</a><a href="#smu_catalog">smu_catalog</a><a href="#individuals">individuals</a><a href="#allowed_subtypes">allowed_subtypes</a><a href="#status_colors">status_colors</a><a href="#element_shapes">element_shapes</a><a href="#label_visibility">label_visibility</a><a href="#app_settings">app_settings</a><a href="#report_notes">report_notes</a><a href="#release_tasks">release_tasks</a><a href="#activity_log">activity_log</a><a href="#perf_samples">perf_samples</a></div>
+<details class="t" id="mark_type_prefixes"><summary><span class="tn">mark_type_prefixes</span><span class="tl">Префикс марки → тип</span>
+<span class="tc">2 полей</span></summary><div class="tbl-wrap">
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>prefix</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>начало марки (эвристика импорта контрактации)</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'></td><td>тип элемента для такой марки</td></tr></table></div></details><details class="t" id="marks"><summary><span class="tn">marks</span><span class="tl">Справочник марок</span>
+<span class="tc">6 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>elements</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор записи справочника марок</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект-владелец → objects.id (CASCADE); марки нумеруются в пределах здания</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'></td><td>тип-владелец: Колонна / Ригель / Панель / Плита перекрытия</td></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>марка (уникальна в пределах объекта и типа)</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>создана</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>изменена</td></tr></table></div></details><details class="t" id="smu_catalog"><summary><span class="tn">smu_catalog</span><span class="tl">Справочник СМУ</span>
+<span class="tc">5 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>На таблицу ссылаются:</b> <code>objects</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор записи справочника СМУ</td></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>название подразделения (СМУ, дивизион)</td></tr><tr><td class='mono'>archived</td><td class='mono'>INTEGER</td><td class='k'></td><td>1 — подразделение больше не действует (прежние дивизионы): скрыто в выпадашках и отборах, у объектов с ним остаётся</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>создана</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>изменена</td></tr></table></div></details><details class="t" id="individuals"><summary><span class="tn">individuals</span><span class="tl">Справочник физлиц</span>
+<span class="tc">4 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>На таблицу ссылаются:</b> <code>express_contacts</code>, <code>headcount_contractor_works</code>, <code>individual_user_links</code>, <code>object_team_members</code>, <code>objects</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор записи справочника физлиц</td></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>ФИО строкой; один справочник на «Директор СМУ» и роли проектной команды</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>создана</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>изменена</td></tr></table></div></details><details class="t" id="allowed_subtypes"><summary><span class="tn">allowed_subtypes</span><span class="tl">Подтипы объекта</span>
+<span class="tc">3 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK FK</span> </td><td>объект-владелец: подтип — обычно отметка перекрытия, то есть свойство здания</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>тип элемента</td></tr><tr><td class='mono'>subtype</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>подтип объекта (разбор имени слоя без учёта регистра); заводится загрузкой чертежа</td></tr></table></div></details><details class="t" id="status_colors"><summary><span class="tn">status_colors</span><span class="tl">Цвета статусов</span>
+<span class="tc">2 полей</span></summary><div class="tbl-wrap">
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>status</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>код статуса (planned, delivered, …)</td></tr><tr><td class='mono'>color</td><td class='mono'>TEXT</td><td class='k'></td><td>цвет заливки на схеме</td></tr></table></div></details><details class="t" id="element_shapes"><summary><span class="tn">element_shapes</span><span class="tl">Форма маркера</span>
+<span class="tc">3 полей</span></summary><div class="tbl-wrap">
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>layer</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>слой DXF</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>тип элемента</td></tr><tr><td class='mono'>shape</td><td class='mono'>TEXT</td><td class='k'></td><td>форма на схеме; по умолчанию реальный контур</td></tr></table></div></details><details class="t" id="label_visibility"><summary><span class="tn">label_visibility</span><span class="tl">Видимость подписей</span>
+<span class="tc">4 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> <span class="key">FK</span> </td><td>объект → objects.id (CASCADE)</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>тип элемента</td></tr><tr><td class='mono'>visible</td><td class='mono'>INTEGER</td><td class='k'></td><td>показывать марку (по умолчанию выключено — быстродействие)</td></tr><tr><td class='mono'>dates_visible</td><td class='mono'>INTEGER</td><td class='k'></td><td>показывать допстроку с кодом и датой</td></tr></table></div></details><details class="t" id="app_settings"><summary><span class="tn">app_settings</span><span class="tl">Настройки (ключ-значение)</span>
+<span class="tc">3 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>key</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>ключ настройки</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект → objects.id; NULL = системная запись (маркер миграции)</td></tr><tr><td class='mono'>value</td><td class='mono'>TEXT</td><td class='k'></td><td>значение (часто JSON)</td></tr></table></div></details><details class="t" id="report_notes"><summary><span class="tn">report_notes</span><span class="tl">Тексты отчёта на дату</span>
+<span class="tc">8 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(каскадное удаление)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор редакции</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>объект → objects.id (CASCADE)</td></tr><tr><td class='mono'>effective_date</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span> </td><td>дата, с которой действует редакция (одна на дату)</td></tr><tr><td class='mono'>key_events</td><td class='mono'>TEXT</td><td class='k'></td><td>ключевые события, JSON-массив строк</td></tr><tr><td class='mono'>key_tasks</td><td class='mono'>TEXT</td><td class='k'></td><td>ключевые задачи, JSON-массив</td></tr><tr><td class='mono'>open_questions</td><td class='mono'>TEXT</td><td class='k'></td><td>открытые вопросы, JSON-массив</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>изменена</td></tr><tr><td class='mono'>updated_by</td><td class='mono'>TEXT</td><td class='k'></td><td>кем изменена (ФИО снимком)</td></tr></table></div></details><details class="t" id="release_tasks"><summary><span class="tn">release_tasks</span><span class="tl">Обработки релиза</span>
+<span class="tc">8 полей</span></summary><div class="tbl-wrap">
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>name</td><td class='mono'>TEXT</td><td class='k'><span class="key">PK</span> </td><td>стабильный идентификатор обработки (реестр — app/release_tasks.py)</td></tr><tr><td class='mono'>version</td><td class='mono'>TEXT</td><td class='k'></td><td>релиз, в котором обработка появилась</td></tr><tr><td class='mono'>kind</td><td class='mono'>TEXT</td><td class='k'></td><td>data — выполняется при старте; cleanup — уборка, только по кнопке администратора</td></tr><tr><td class='mono'>status</td><td class='mono'>TEXT</td><td class='k'></td><td>ok — выполнена, error — упала (версия базы тогда не повышается)</td></tr><tr><td class='mono'>note</td><td class='mono'>TEXT</td><td class='k'></td><td>что сделано или текст ошибки</td></tr><tr><td class='mono'>applied_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда выполнялась в последний раз, UTC</td></tr><tr><td class='mono'>duration_ms</td><td class='mono'>INTEGER</td><td class='k'></td><td>сколько заняла, мс</td></tr><tr><td class='mono'>attempts</td><td class='mono'>INTEGER</td><td class='k'></td><td>сколько раз запускалась (повторы после ошибки)</td></tr></table></div></details><details class="t" id="activity_log"><summary><span class="tn">activity_log</span><span class="tl">Журнал действий</span>
+<span class="tc">19 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>user_id</code> → <code>users.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>impersonator_user_id</code> → <code>users.id</code> <span class='fkref'>(режим «от имени»)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор события</td></tr><tr><td class='mono'>at</td><td class='mono'>TEXT</td><td class='k'></td><td>момент события, время СЕРВЕРА</td></tr><tr><td class='mono'>source</td><td class='mono'>TEXT</td><td class='k'></td><td>server — событие сервиса, client — тайминг браузера</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>пользователь → users.id (SET NULL)</td></tr><tr><td class='mono'>user_name</td><td class='mono'>TEXT</td><td class='k'></td><td>ФИО снимком</td></tr><tr><td class='mono'>impersonator_user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span> </td><td>администратор, выполнивший действие «от имени» пользователя из user_id → users.id (SET NULL); NULL = обычная работа</td></tr><tr><td class='mono'>impersonator_name</td><td class='mono'>TEXT</td><td class='k'></td><td>ФИО этого администратора снимком (режим «Зайти под пользователем»)</td></tr><tr><td class='mono'>action</td><td class='mono'>TEXT</td><td class='k'></td><td>действие: status_change, form_open, import_input, …</td></tr><tr><td class='mono'>category</td><td class='mono'>TEXT</td><td class='k'></td><td>категория события: error — ошибка программы, denied — отказ (нет прав, не прошло проверку), security — вход и права, data — изменение данных, settings — справочники и параметры, transfer — импорт/выгрузка/копии, system — сам сервис, view — просмотр и замеры; NULL у записей старее 2026-08-20</td></tr><tr><td class='mono'>entity_type</td><td class='mono'>TEXT</td><td class='k'></td><td>над чем: element / contract / …</td></tr><tr><td class='mono'>entity_id</td><td class='mono'>INTEGER</td><td class='k'></td><td>идентификатор сущности (без FK — журнал переживает удаление)</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'></td><td>тип снимком (по нему ищут в журнале)</td></tr><tr><td class='mono'>subtype</td><td class='mono'>TEXT</td><td class='k'></td><td>подтип снимком</td></tr><tr><td class='mono'>mark</td><td class='mono'>TEXT</td><td class='k'></td><td>марка снимком</td></tr><tr><td class='mono'>old_value</td><td class='mono'>TEXT</td><td class='k'></td><td>было</td></tr><tr><td class='mono'>new_value</td><td class='mono'>TEXT</td><td class='k'></td><td>стало</td></tr><tr><td class='mono'>duration_ms</td><td class='mono'>REAL</td><td class='k'></td><td>длительность; у клиента — по performance.now()</td></tr><tr><td class='mono'>request_id</td><td class='mono'>TEXT</td><td class='k'></td><td>связывает клиентские и серверные события одной операции</td></tr><tr><td class='mono'>details</td><td class='mono'>TEXT</td><td class='k'></td><td>произвольный JSON с подробностями</td></tr></table></div></details><details class="t" id="perf_samples"><summary><span class="tn">perf_samples</span><span class="tl">Замеры производительности</span>
+<span class="tc">12 полей</span></summary><div class="tbl-wrap">
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> </td><td>идентификатор замера</td></tr><tr><td class='mono'>at</td><td class='mono'>TEXT</td><td class='k'></td><td>момент замера, время СЕРВЕРА (у браузерных — приёма минус возраст)</td></tr><tr><td class='mono'>run_id</td><td class='mono'>TEXT</td><td class='k'></td><td>сбор, в который попал замер (его включает и выключает администратор)</td></tr><tr><td class='mono'>side</td><td class='mono'>TEXT</td><td class='k'></td><td>server — замер сервера, client — замер браузера</td></tr><tr><td class='mono'>kind</td><td class='mono'>TEXT</td><td class='k'></td><td>вид: http, fetch, screen, scene, longtask, frame, event, page, memory, device, span, error</td></tr><tr><td class='mono'>op</td><td class='mono'>TEXT</td><td class='k'></td><td>операция: маршрут по шаблону, экран, этап построения схемы, элемент интерфейса</td></tr><tr><td class='mono'>duration_ms</td><td class='mono'>REAL</td><td class='k'></td><td>сколько заняла, мс</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'></td><td>кто работал (снимок, без внешнего ключа)</td></tr><tr><td class='mono'>user_name</td><td class='mono'>TEXT</td><td class='k'></td><td>ФИО снимком</td></tr><tr><td class='mono'>client_id</td><td class='mono'>TEXT</td><td class='k'></td><td>вкладка браузера: случайный код на время жизни страницы, связывает замеры одной машины</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'></td><td>объект, с которым работали, если известен</td></tr><tr><td class='mono'>details</td><td class='mono'>TEXT</td><td class='k'></td><td>JSON с разбивкой: SQL, байты, ожидание и скачивание, длинные скрипты; храню трое суток</td></tr></table></div></details>
+
+
+<div class="pager"><a href="db-pp.html">← Производственная программа</a><a href="status.html">Статус и развитие →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

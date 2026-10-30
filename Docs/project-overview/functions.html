@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Функциональные блоки — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html" class="on">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>Функциональные блоки</h1><p>Что система умеет, кто с ней работает, какой эффект это даёт бизнесу и какие программные модули за это отвечают.</p></section>
+
+<div class="toc"><a href="#hier">1. Проекты, объекты и справочники</a><a href="#dxf">2. Загрузка чертежей и цифровая модель ЖБИ</a><a href="#zones">3. Зоны крановой логистики: захватки, краны, стоянки</a><a href="#scheme">4. Интерактивная схема 2D/3D и рабочие места</a><a href="#status">5. Статусы поставки и монтажа</a><a href="#contract">6. Контрактация и поставка</a><a href="#schedule">7. График СМР и прогноз</a><a href="#reports">8. Отчёты и аналитика</a><a href="#mfr">9. Модель МФР и учёт работ по блокам</a><a href="#headcount">10. Учёт численности персонала и бот eXpress</a><a href="#pp">11. Производственная программа в деньгах</a><a href="#calc">12. Калькулятор изделий</a><a href="#ai">13. ИИ-помощник</a><a href="#security">14. Доступ, безопасность и аудит</a><a href="#ops">15. Эксплуатация и надёжность</a></div><h2>Основа</h2><article class="block" id="hier">
+<header><span class="num">1</span><h2>Проекты, объекты и справочники</h2></header>
+<p>Единый реестр проектов и зданий-объектов, к которому привязано всё остальное: изделия, договоры, графики, люди, документы. Объект бывает одного из двух типов учёта — сборный ЖБИ или монолит/общестрой (МФР).</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Иерархия «Проект → Объект»; тип учёта задаёт состав меню, рабочих мест и отчётов</li><li>Статус записи: перспективный / в работе / приостановлен / завершён / архивный</li><li>Единая карточка объекта: реквизиты, проектная команда (8 ролей), вложения, превью</li><li>Адрес по классификатору КЛАДР с проверкой номера дома и координатами</li><li>Карта проектов на офлайн-подложке — работает без выхода в интернет</li><li>Загрузка справочника объектов из Excel с построчной сверкой</li><li>Справочники СМУ, физических лиц, марок, подтипов; удаление записи с автоматическим переводом ссылок на замену</li></ul></div>
+<div><h4>Кто работает</h4><p>Администраторы, руководители проектов, ПТО</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Одно место, где живёт «паспорт» объекта и его команды — исчезают разрозненные перечни в Excel</li><li>Справочники выбираются из списка, а не вводятся текстом — меньше опечаток и дублей</li><li>Карта и фильтры по региону/СМУ/ответственному дают портфельный взгляд на сотни объектов</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>objects / projects (app/main.py)</code> <code>app/project_map.py</code> <code>app/kladr.py</code> <code>app/objects_import.py</code> <code>app/reference_catalogs.py</code> <code>app/object_team.py</code> <code>app/dict_delete.py</code> <code>app/marks.py</code> <code>app/attachments.py</code></p>
+</article><h2>Сборный ЖБИ</h2><article class="block" id="dxf">
+<header><span class="num">2</span><h2>Загрузка чертежей и цифровая модель ЖБИ</h2></header>
+<p>Из DXF-чертежа система сама извлекает каждое сборное изделие: марку, тип и подтип, контур, отметки, адрес по осям и привязку к монтажным зонам. Так появляется поштучный учёт без ручного набора ведомостей.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Загрузка DXF из браузера или из папки; два конвейера разбора (прежние плоские слои и новый стандарт имён слоёв)</li><li>Определение марки, типа, подтипа; справочник марок принадлежит объекту и пополняется сам</li><li>Адресация по осям здания, привязка к захватке, крану и стоянке крана</li><li>Версии чертежа объекта; сопоставление изделий между версиями с сохранением истории статусов</li><li>Сводка расхождений перед применением нового чертежа — «сверка, а не перезапись»</li><li>Панели облицовки шахт подъёмников: дополняющий чертёж внутри того же объекта</li></ul></div>
+<div><h4>Кто работает</h4><p>ПТО, проектировщики, администратор объекта</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Исключается ручной перенос позиций из чертежа в таблицы — главный источник ошибок учёта</li><li>Каждое изделие имеет устойчивую идентичность: перевыпуск чертежа не обнуляет накопленный факт</li><li>Новая версия чертежа сначала показывает, что изменилось, и лишь потом применяется</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/dxf_import.py</code> <code>scripts/parse_zhbi.py</code> <code>scripts/layer_naming.py</code> <code>scripts/new_standard_pipeline.py</code> <code>scripts/assign_axes.py</code> <code>app/element_sync.py</code> <code>app/element_identity.py</code> <code>app/shaft_panels/</code></p>
+</article><article class="block" id="zones">
+<header><span class="num">3</span><h2>Зоны крановой логистики: захватки, краны, стоянки</h2></header>
+<p>Монтажная логика объекта: на какой захватке, в зоне какого крана и с какой стоянки монтируется изделие. Зона крана строится как объединение его стоянок и версионируется по датам.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Справочник зон объекта, наполняемый из чертежа; цвет зоны — по крану</li><li>Редакции кранов и стоянок: черновик → публикация → вступление в силу в назначенный день</li><li>Ручная привязка изделий рамкой на схеме и автоматический пересчёт после правки геометрии зоны</li><li>Исторические отчёты строятся по той редакции, которая действовала на нужную дату</li><li>Переход со старой схемы (полигон крана) на новую (стоянки) выполняется транзакционно и повторяем</li></ul></div>
+<div><h4>Кто работает</h4><p>Планировщики монтажа, ПТО, прорабы</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Отчёты и графики говорят на языке стройплощадки: захватка, кран, стоянка</li><li>Изменение крановой схемы не «ломает» прошлые данные — можно ответить «что было в зоне на такую-то дату»</li><li>Основа для расчёта очерёдности монтажа и потребности в поставке</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/zone_sync.py</code> <code>app/zone_recalc.py</code> <code>app/crane_zone_service.py</code> <code>app/crane_zone_versions.py</code> <code>app/crane_zone_transition.py</code> <code>app/crane_zone_import.py</code> <code>scripts/zone_binding.py</code></p>
+</article><article class="block" id="scheme">
+<header><span class="num">4</span><h2>Интерактивная схема 2D/3D и рабочие места</h2></header>
+<p>Живая схема объекта в браузере: каждое изделие окрашено по статусу, фильтруется по любому признаку и открывается карточкой. Три рабочих места настроены под разные роли.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>2D-схема (SVG) и 3D-сцена (Three.js) с тенями, солнцем и режимом для слабых компьютеров</li><li>Рабочие места: «Модель», «АРМ комплектовщика» (дашборд с дефицитами), «АРМ прораба» (постоянная панель фильтров)</li><li>Лента времени: срез состояния на любую дату, воспроизведение динамики, штриховка отстающих</li><li>Карточка изделия: реквизиты, контракт, даты, история статусов, комментарий и вложения</li><li>Внешние 3D-модели объекта (благоустройство, фасады, формат FBX) с автоматическим совмещением</li><li>Личные настройки схемы сохраняются на сервере и переживают новый вход</li></ul></div>
+<div><h4>Кто работает</h4><p>Прорабы, комплектовщики, ПТО, руководители проектов</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Состояние монтажа видно «одним взглядом» — не нужно собирать картину из таблиц</li><li>Комплектовщик сразу видит, где контрактов не хватает (дельта «контракт − модель» по типу и марке)</li><li>Срез на дату и воспроизведение помогают разбирать причины задержек и готовить совещания</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/static/app.js</code> <code>app/static/timeline.js</code> <code>app/static/v2/workspace.js</code> <code>app/static/embed-bridge.js</code> <code>app/static/external-models/</code> <code>app/status_timeline.py</code> <code>app/ui_state.py</code> <code>app/external_models.py</code></p>
+</article><article class="block" id="status">
+<header><span class="num">5</span><h2>Статусы поставки и монтажа</h2></header>
+<p>Каждое изделие проходит восемь статусов (включая «Готов к монтажу») — от «Запланирован» до «Принят». Любая смена фиксируется в истории с автором, временем и контрактом.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Статусы: запланирован → контрактация → в производстве → отгружен → доставлен → смонтирован → принят</li><li>Смена одного изделия или группы (рамкой на схеме) с подтверждением, датой и выбором контракта с остатками</li><li>«Рабочая дата» — ввод факта задним числом по дате события, а не дате ввода</li><li>Полная история изменений с автором; удаление записи пересчитывает текущий статус</li><li>Массовая правка реквизитов и истории статусов через Excel (выгрузка → правка → загрузка с предпросмотром)</li><li>Комментарий к изделию и вложения (фото, акты)</li></ul></div>
+<div><h4>Кто работает</h4><p>Прорабы, комплектовщики, снабжение</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Единый источник правды о факте поставки и монтажа вместо личных таблиц</li><li>Прослеживаемость «кто и когда» — основа для разбора спорных ситуаций с поставщиками</li><li>Массовые операции сокращают время ввода факта с часов до минут</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/element_ops.py</code> <code>app/element_rows.py</code> <code>app/status_bulk_edit.py</code> <code>app/element_bulk_edit.py</code> <code>app/history_import.py</code> <code>app/status_facts.py</code> <code>app/attachments.py</code></p>
+</article><article class="block" id="contract">
+<header><span class="num">6</span><h2>Контрактация и поставка</h2></header>
+<p>Юридическая цепочка «Контрагент → Договор (на объект) → Спецификация → Контракт → Позиции» связана с изделиями модели: видно, чем покрыта потребность и где дефицит.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Позиции контракта по паре «тип + марка»; остаток, разнесённое количество, повреждённые изделия</li><li>Предупреждение о превышении количества по позиции (овербукинг) при назначении</li><li>Три шкалы дат: плановая поставка, начало/завершение СМР, фактическая; сравнение — подсказка на схеме</li><li>Документы «Замена поставщика» и «Обмен привязками»: проводятся и отменяются целиком</li><li>Балансировка плановых дат поставщика внутри марки по очереди (FIFO) с таблицей «было → стало»</li><li>Производительность завода по типам изделий; реквизиты контрагента по ИНН</li><li>Импорт контрактации из Excel, массовая правка через Excel, страж целостности «изделие ↔ позиция»</li></ul></div>
+<div><h4>Кто работает</h4><p>Комплектовщики, снабжение, юристы, ПЭО</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Дефицит и избыток по маркам видны до того, как они превращаются в простой монтажа</li><li>Смена поставщика — документ с откатом, а не ручная перепривязка сотен изделий</li><li>Контрактные обязательства и плановые даты привязаны к конкретным изделиям модели</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/counterparties.py</code> <code>app/contracts.py</code> <code>app/allocation.py</code> <code>app/supplier_change.py</code> <code>app/contracting_import.py</code> <code>app/contracting_bulk_edit.py</code> <code>app/capacity.py</code> <code>app/egrul.py</code> <code>app/contract_guard.py</code></p>
+</article><article class="block" id="schedule">
+<header><span class="num">7</span><h2>График СМР и прогноз</h2></header>
+<p>Два графика вместо одного: базовый (директивный — «когда надо») и накапливаемые актуализации (прогноз — «насколько отстаём»). Отклонение считается по обеим датам.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Загрузка графика из MS Project (xlsx); базовый — единственный, актуализации — версиями</li><li>Отклонение от базового графика: среднее, максимум, число отстающих, разрез по захваткам</li><li>Собственный расчёт графика монтажа внутри системы (поток, темп, порядок по кранам)</li><li>Диаграмма Ганта «кран → стоянка → этаж → тип + подтип» с полосами плана и прогноза</li><li>Выгрузка Ганта в XLSX (с группировкой Excel) и PDF формата A3</li><li>Потребность в поставке везде считается по прогнозу, а не по директивной дате</li></ul></div>
+<div><h4>Кто работает</h4><p>Планировщики, ПТО, руководители проектов</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Отставание видно по каждому изделию и по захватке, а не только по итогу проекта</li><li>История прогнозов показывает, как менялись обещания («две недели назад обещали 1-е, сейчас 15-е»)</li><li>Поставка планируется под реальный, а не плановый график монтажа</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/schedule_versions.py</code> <code>app/schedule_calc.py</code> <code>app/schedule_import.py</code> <code>app/schedule_gantt_export.py</code></p>
+</article><article class="block" id="reports">
+<header><span class="num">8</span><h2>Отчёты и аналитика</h2></header>
+<p>Набор готовых отчётов для совещаний и ежедневной работы: каждый строится по тем же данным и с тем же правилом потребности, поэтому цифры в разных отчётах сходятся.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>«Статус монтажа» — сводка план/факт и темпы</li><li>«Динамика поставки и монтажа» — кривые плана, факта и прогноза за период</li><li>«Статус комплектации» — перечень позиций и сводная таблица с настраиваемой иерархией; проверка сроков (ИСТИНА/ЛОЖЬ + отклонение в днях)</li><li>«Сверка поставки по договорам» — спецификация / факт / плановые даты</li><li>«Аналитическая справка» — что мешает стройке прямо сейчас: контрактация под ближайшие этапы СМР, критический путь поставки</li><li>«Моя работа», «Матрица прав», справка по каждому отчёту; выгрузка в Excel и PDF</li></ul></div>
+<div><h4>Кто работает</h4><p>Руководители проектов, ПТО, комплектация, ПЭО</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Отчёт для совещания формируется нажатием кнопки — исчезает ручная сборка и «досыпание» столбцов в Excel</li><li>Аналитическая справка переводит данные в список конкретных проблем с приоритетом</li><li>Единые правила расчёта — нет спора о «чьи цифры верные»</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/reports.py</code> <code>app/report_status_summary.py</code> <code>app/report_completion.py</code> <code>app/report_pivot.py</code> <code>app/report_delivery_recon.py</code> <code>app/report_analytics.py</code> <code>app/report_my_work.py</code> <code>app/pdf_export.py</code></p>
+</article><h2>Монолит и общестрой (МФР)</h2><article class="block" id="mfr">
+<header><span class="num">9</span><h2>Модель МФР и учёт работ по блокам</h2></header>
+<p>Второй тип учёта — для монолитных и общестроительных работ. Здание делится на блоки «этаж × секция»; по каждому блоку ведётся выполнение видов работ по типовой структуре (WBS).</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Источники геометрии: выгрузки Revit и PDF-комплекты (помещения, стены, перекрытия, фасады)</li><li>Секции, этажи, блоки; геометрия блока по осям здания или прямоугольниками</li><li>Справочник видов работ из Excel; универсальный классификатор видов работ с категориями элементов</li><li>Статусы и проценты выполнения; запланированные работы (ЗР) со сроками базовыми и актуализированными</li><li>Отчёты о фактическом выполнении, журнал факта, «Шахматка» с массовым вводом и печатью бланка обхода</li><li>Отчёты «Учёт по блокам: статусы», «График работ по блокам», «Линейный трек»</li><li>Модель МФР окрашивает элементы по состоянию работы в блоке</li></ul></div>
+<div><h4>Кто работает</h4><p>Прорабы, ПТО, планировщики МФР</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Тот же принцип «один источник факта» распространён на монолит, где нет поштучных изделий</li><li>Бумажный обход переходит в систему: печать бланка и пакетный ввод факта</li><li>Процент выполнения по блокам даёт управляемый прогресс по этажам и секциям</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/revit_*.py</code> <code>app/pdf_rooms.py</code> <code>app/pdf_import.py</code> <code>app/blocks.py</code> <code>app/block_works.py</code> <code>app/work_fact.py</code> <code>app/work_progress.py</code> <code>app/work_classifier.py</code> <code>app/chess_flat.py</code> <code>app/block_geometry.py</code></p>
+</article><h2>Люди и деньги</h2><article class="block" id="headcount">
+<header><span class="num">10</span><h2>Учёт численности персонала и бот eXpress</h2></header>
+<p>Ежедневный учёт рабочих на площадке по объекту × подрядчику × виду работ. Данные собирает менеджер проекта в форме или отвечает на запрос бота в корпоративном мессенджере.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Ввод численности с историей значений и отметкой просрочки (срок — до 11:00 того же дня)</li><li>Подрядчики объекта, кодификатор видов работ, ответственные</li><li>Отчёты факта: по объектам, подрядчикам, работам; неделя / месяц / период; выгрузка в Excel</li><li>Загрузка кодификатора и исторической выгрузки из SharePoint с сопоставлением объектов 1С</li><li>Бот eXpress: запрос по расписанию, диалог кнопками, напоминание неответившим, сводка адресату</li></ul></div>
+<div><h4>Кто работает</h4><p>Менеджеры проектов, начальники участков, ПЭО, охрана труда</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Перенос ввода из внутреннего сервиса в единую систему — численность рядом с поставкой и графиком</li><li>Бот снимает рутину ввода и повышает своевременность сдачи данных</li><li>Появляется база для сопоставления численности с объёмами работ и производительностью</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/headcount.py</code> <code>app/headcount_import.py</code> <code>app/express_bot.py</code> <code>app/express_dialog.py</code> <code>app/express_scheduler.py</code> <code>app/express_api.py</code></p>
+</article><article class="block" id="pp">
+<header><span class="num">11</span><h2>Производственная программа в деньгах</h2></header>
+<p>Дашборд сроков работ и остатка денег по объектам. Сдвиг сроков сразу пересчитывает распределение остатка денег по месяцам.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Диаграмма Ганта на четыре уровня вложенности (объект → работа → задача → подзадача)</li><li>Правка сроков перетаскиванием; общие правки видны всем</li><li>Просмотр по объекту, подразделению или произвольной группе объектов</li><li>Загрузка выгрузки программы из Excel; выгрузка результата в Excel</li><li>Расчётное ядро без привязки к интерфейсу, сверено с исходным прототипом заказчика</li></ul></div>
+<div><h4>Кто работает</h4><p>ПЭО, финансы, руководство дивизиона</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Видно, как сдвиг работы меняет потребность в деньгах по месяцам — решение принимается до, а не после</li><li>Единый инструмент вместо автономной страницы-прототипа: данные, права и история общие</li><li>Основа для управления стоимостью финансирования и приоритетами объектов</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/pp.py</code> <code>app/pp_import.py</code> <code>app/static/pp/core.js</code> <code>app/static/pp/pp-ui.js</code></p>
+</article><article class="block" id="calc">
+<header><span class="num">12</span><h2>Калькулятор изделий</h2></header>
+<p>Отдельная подсистема внутри сервиса: расчёт стоимости и ресурсов сборных изделий по каталогу и чертежам КЖИ. Имеет собственную базу и интерфейс, но единый вход и права.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Каталог около тысячи изделий с 3D-моделями; индивидуальные модели плит перекрытия по листам КЖИ</li><li>Расчёт себестоимости на точной десятичной арифметике; неизменяемые снимки и версии расчётов</li><li>Нормы, прайс-лист, профили калькуляции; выгрузка калькуляций в XLSX</li><li>Чтение векторных листов КЖИ кодом и локальной нейросетью; проверка расхождений</li><li>Переход с элемента схемы в калькулятор по марке («Открыть в калькуляторе»)</li><li>Перенос данных между тестовым и рабочим серверами отправкой пакета по токену</li></ul></div>
+<div><h4>Кто работает</h4><p>Сметчики, ПЭО, технологи завода</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Стоимость изделия считается по единым правилам и воспроизводима — любая калькуляция имеет версию</li><li>Связь марки модели со стоимостью позволяет оценивать объём контрактации в деньгах</li><li>Ручной разбор чертежей заменяется полуавтоматическим чтением листов</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/calc/ (api, calculation, norms, prices, readings, sync)</code> <code>app/calc/web/</code> <code>app/calc/marks.py</code> <code>scripts/build_calc_slab_models.py</code></p>
+</article><h2>Платформа</h2><article class="block" id="ai">
+<header><span class="num">13</span><h2>ИИ-помощник</h2></header>
+<p>Диалог на естественном языке по данным системы: «сколько смонтировано на объекте за сентябрь», «что отстаёт по графику». Ответ сопровождается проверяемыми источниками.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Локальная модель; опционально — облачный маршрутизатор моделей (отдельное решение службы ИБ)</li><li>Поиск идёт по разрешённому снимку данных в памяти; SQL модели — только чтение, с авторизатором и лимитом времени</li><li>Права пользователя проверяются на каждом шаге; период и объект понимаются из текста вопроса</li><li>Под ответом — модель, время, период, предупреждения и ссылки на источники и отчёты</li><li>Доступен в обоих интерфейсах и в калькуляторе; учитывает экран, на котором находится человек</li></ul></div>
+<div><h4>Кто работает</h4><p>Все роли в пределах своих прав</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Быстрые ответы на разовые вопросы без заказа отчёта</li><li>Снижение порога входа: не нужно знать, в каком отчёте лежит цифра</li><li>Контролируемый риск: модель видит только то, что разрешено пользователю</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/assistant.py</code> <code>app/assistant_data.py</code> <code>app/assistant_llm.py</code> <code>app/assistant_evidence.py</code> <code>app/ai_integration.py</code> <code>app/rmr_router.py</code></p>
+</article><article class="block" id="security">
+<header><span class="num">14</span><h2>Доступ, безопасность и аудит</h2></header>
+<p>Гибкая модель прав: системная роль отдельно, роли на объекте отдельно. Все значимые действия и ошибки попадают в журнал.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Вход по логину и паролю (PBKDF2) или доменной учётной записью AD; серверные сессии</li><li>Настраиваемые роли: матрица «раздел × роль» с уровнями Нет / Чтение / Изменение; разрешения ролей складываются</li><li>Права по проектной команде: роль в команде объекта → системные роли</li><li>Журнал действий и ошибок (сервера и браузера) с отбором по любой колонке</li><li>Режим «Зайти под пользователем» для разбора обращений — с записью в журнал</li><li>Обучение: инструкция, собираемая из доступных человеку разделов, и тест с рейтингом</li><li>Ограничение размера загрузок, политика безопасности контента (CSP)</li></ul></div>
+<div><h4>Кто работает</h4><p>Администраторы сервиса, ИБ, руководители</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Каждый видит и меняет только своё — снижение риска случайных и несанкционированных правок</li><li>Разбор инцидентов по журналу занимает минуты, а не дни</li><li>Единый вход с корпоративной учёткой упрощает администрирование</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/auth.py</code> <code>app/ldap_auth.py</code> <code>app/access.py</code> <code>app/features.py</code> <code>app/roles.py</code> <code>app/team_access.py</code> <code>app/activity.py</code> <code>app/error_log.py</code> <code>app/training.py</code></p>
+</article><article class="block" id="ops">
+<header><span class="num">15</span><h2>Эксплуатация и надёжность</h2></header>
+<p>Обновление версии не требует участия человека на сервере, а данные защищены копиями на каждом опасном шаге.</p>
+<div class="cols">
+<div><h4>Возможности</h4><ul><li>Реестр «обработок релиза»: новая версия сама приводит накопленные данные в порядок после копии базы</li><li>Журнал версий «Что нового» и холостой прогон миграций на копии базы перед выкладкой</li><li>Автокопии перед обновлением, импортом и уборкой; полная копия: база + вложения + калькулятор</li><li>Перенос базы целиком и обмен выбранными разделами между тестовым и рабочим серверами</li><li>Экраны «Состояние БД», «Состояние сервера», «Замеры производительности»; памятка администратора</li><li>Развёртывание в Docker; код попадает на серверы через GitLab CI/CD и реестр образов</li><li>Стражи целостности: запускаются в git-хуке и при старте сервера</li></ul></div>
+<div><h4>Кто работает</h4><p>Администраторы, DevOps</p>
+<div class="effect"><b class="h">Бизнес-эффект</b><ul><li>Обновления без простоя команды сопровождения и без ручных скриптов</li><li>Любая ошибка оператора обратима — копия есть перед каждым опасным действием</li><li>Предсказуемая эксплуатация: состояние сервера и базы видно из интерфейса</li></ul></div></div>
+</div>
+<h4>Основные модули</h4><p class="mods"><code>app/release_tasks.py</code> <code>app/backups.py</code> <code>app/full_backup.py</code> <code>app/db_transfer.py</code> <code>app/data_exchange.py</code> <code>app/db_status.py</code> <code>app/server_status.py</code> <code>app/perf.py</code> <code>Dockerfile · docker-compose.yml · .gitlab-ci.yml</code></p>
+</article>
+<div class="pager"><a href="index.html">← Обзор</a><a href="effects.html">Бизнес-эффекты →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

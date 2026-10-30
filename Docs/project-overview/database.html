@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>База данных — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 28.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html" class="on">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>База данных</h1><p>Структура хранилища: домены данных, ключевые связи и подробное описание всех таблиц и полей.</p></section>
+
+
+<div class="sub"><a href="database.html" class="on">Обзор БД</a><a href="db-hier.html">Проекты, объекты, здания</a><a href="db-access.html">Пользователи, роли, доступ</a><a href="db-zhbi.html">Сборный ЖБИ: изделия и статусы</a><a href="db-zones.html">Зоны: захватки, краны, стоянки</a><a href="db-contract.html">Контрактация и поставка</a><a href="db-schedule.html">График СМР</a><a href="db-mfr.html">Монолит и общестрой (МФР)</a><a href="db-people.html">Численность и бот eXpress</a><a href="db-pp.html">Производственная программа</a><a href="db-ref.html">Справочники, настройки, журналы</a></div>
+<div class="grid g4">
+<div class="card stat"><div class="v">107</div><div class="l">таблиц в основной базе</div></div>
+<div class="card stat"><div class="v">945</div><div class="l">полей, у каждого описано назначение</div></div>
+<div class="card stat"><div class="v">193</div><div class="l">внешних ключей между таблицами</div></div>
+<div class="card stat"><div class="v">106</div><div class="l">из них с каскадным удалением</div></div>
+</div>
+
+<h2>Устройство хранилища</h2>
+<div class="grid g3">
+<div class="card"><h3>Основная база</h3><p>Файл SQLite в режиме WAL: все данные трекера. Миграции схемы выполняются при старте, перед обработками данных снимается копия.</p></div>
+<div class="card"><h3>Адресный классификатор</h3><p>Отдельный файл КЛАДР: подсказки по населённым пунктам и улицам. Не входит в основную базу, чтобы не раздувать копии.</p></div>
+<div class="card"><h3>База калькулятора</h3><p>Отдельный файл подсистемы расчёта: изделия, версии расчётов, нормы, прайс-лист, чтение чертежей, очередь синхронизации. Своя схема и миграции.</p></div>
+</div>
+
+<h2>Ключевые связи</h2>
+<p>Четыре главные оси данных: <b>иерархия</b> (проект → объект), <b>изделие</b> (объект → элементы → история статусов),
+<b>юридическая цепочка</b> (контрагент → договор → спецификация → контракт → позиции) и <b>время</b> (версии графика).
+Договор заключается на объект, контракт ссылается на спецификацию, изделие — на контракт и зоны.</p>
+<figure><svg viewBox="0 0 1180 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Ядро: объекты, изделия, контрактация"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+<style>
+.bb{fill:var(--brand-l);stroke:var(--brand);stroke-width:1.5}
+.bo{fill:var(--acc-l);stroke:var(--acc);stroke-width:1.5}
+.bg{fill:var(--ok-l);stroke:var(--ok);stroke-width:1.5}
+.bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.tt{fill:var(--ink);font:600 12.5px ui-monospace,Menlo,Consolas,monospace}
+.ts{fill:var(--muted);font:11.5px -apple-system,Segoe UI,Arial,sans-serif}
+.ls{fill:var(--muted);font:11px -apple-system,Segoe UI,Arial,sans-serif}
+.ln{stroke:var(--muted);stroke-width:1.5;fill:none}.dsh{stroke-dasharray:5 4}
+.ht{fill:var(--brand);font:700 12px -apple-system,Segoe UI,Arial,sans-serif;letter-spacing:.8px}
+</style><rect class="bx" x="10" y="24" width="190" height="48" rx="8"/><text class="tt" x="22" y="44">counterparties</text><text class="ts" x="22" y="61">контрагент (сквозной)</text><rect class="bx" x="260" y="24" width="190" height="48" rx="8"/><text class="tt" x="272" y="44">agreements</text><text class="ts" x="272" y="61">договор НА ОБЪЕКТ</text><rect class="bx" x="510" y="24" width="190" height="48" rx="8"/><text class="tt" x="522" y="44">specifications</text><text class="ts" x="522" y="61">спецификация</text><rect class="bx" x="760" y="24" width="190" height="48" rx="8"/><text class="tt" x="772" y="44">contracts</text><text class="ts" x="772" y="61">контракт</text><rect class="bx" x="985" y="24" width="185" height="48" rx="8"/><text class="tt" x="997" y="44">contract_lines</text><text class="ts" x="997" y="61">позиция: тип + марка</text><rect class="bb" x="10" y="150" width="190" height="48" rx="8"/><text class="tt" x="22" y="170">projects</text><text class="ts" x="22" y="187">проект</text><rect class="bb" x="260" y="150" width="190" height="48" rx="8"/><text class="tt" x="272" y="170">objects</text><text class="ts" x="272" y="187">объект (здание)</text><rect class="bo" x="760" y="150" width="190" height="48" rx="8"/><text class="tt" x="772" y="170">elements</text><text class="ts" x="772" y="187">изделие ЖБИ (ядро)</text><rect class="bo" x="985" y="150" width="185" height="48" rx="8"/><text class="tt" x="997" y="170">status_history</text><text class="ts" x="997" y="187">история статусов</text><rect class="bg" x="300" y="290" width="190" height="48" rx="8"/><text class="tt" x="312" y="310">schedule_versions</text><text class="ts" x="312" y="327">базовый и прогнозы</text><rect class="bg" x="760" y="290" width="190" height="48" rx="8"/><text class="tt" x="772" y="310">schedule_version_dates</text><text class="ts" x="772" y="327">даты изделий в версии</text><rect class="bg" x="985" y="290" width="185" height="48" rx="8"/><text class="tt" x="997" y="310">zones</text><text class="ts" x="997" y="327">захватка / кран / стоянка</text><path class="ln" d="M200,48 L260,48" marker-end="url(#ar)"/><path class="ln" d="M450,48 L510,48" marker-end="url(#ar)"/><path class="ln" d="M700,48 L760,48" marker-end="url(#ar)"/><path class="ln" d="M950,48 L985,48" marker-end="url(#ar)"/><path class="ln" d="M355,150 L355,72" marker-end="url(#ar)"/><text class="ls" x="361" y="118">agreements.object_id</text><path class="ln" d="M200,174 L260,174" marker-end="url(#ar)"/><path class="ln" d="M450,174 L760,174" marker-end="url(#ar)"/><text class="ls" x="560" y="168">elements.object_id</text><path class="ln" d="M855,72 L855,150" marker-end="url(#ar)"/><text class="ls" x="861" y="116">elements.contract_id</text><path class="ln" d="M950,174 L985,174" marker-end="url(#ar)"/><path class="ln" d="M395,198 L395,290" marker-end="url(#ar)"/><text class="ls" x="401" y="250">object_id</text><path class="ln" d="M490,314 L760,314" marker-end="url(#ar)"/><text class="ls" x="600" y="308">version_id</text><path class="ln" d="M855,198 L855,290" marker-end="url(#ar)"/><text class="ls" x="861" y="250">element_id</text><path class="ln dsh" d="M1080,290 L1080,262 L900,262 L900,198" marker-end="url(#ar)"/><text class="ls" x="920" y="256">elements.zone_*_id</text><path class="ln dsh" d="M275,198 L275,400 L1080,400 L1080,338" marker-end="url(#ar)"/><text class="ls" x="560" y="394">zones.object_id</text></svg><figcaption>Ядро. Голубой — иерархия, оранжевый — изделия и статусы, зелёный — график и зоны, белый — договорная цепочка. Стрелка идёт от родительской таблицы к дочерней, которая хранит ссылку; подпись — колонка-ссылка. Пунктир — связь, проходящая мимо соседних таблиц.</figcaption></figure>
+
+<div>
+<figure><svg viewBox="0 0 820 350" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Доступ"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+<style>
+.bb{fill:var(--brand-l);stroke:var(--brand);stroke-width:1.5}
+.bo{fill:var(--acc-l);stroke:var(--acc);stroke-width:1.5}
+.bg{fill:var(--ok-l);stroke:var(--ok);stroke-width:1.5}
+.bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.tt{fill:var(--ink);font:600 12.5px ui-monospace,Menlo,Consolas,monospace}
+.ts{fill:var(--muted);font:11.5px -apple-system,Segoe UI,Arial,sans-serif}
+.ls{fill:var(--muted);font:11px -apple-system,Segoe UI,Arial,sans-serif}
+.ln{stroke:var(--muted);stroke-width:1.5;fill:none}.dsh{stroke-dasharray:5 4}
+.ht{fill:var(--brand);font:700 12px -apple-system,Segoe UI,Arial,sans-serif;letter-spacing:.8px}
+</style><rect class="bx" x="10" y="24" width="200" height="48" rx="8"/><text class="tt" x="22" y="44">sessions</text><text class="ts" x="22" y="61">сессии входа</text><rect class="bx" x="10" y="150" width="200" height="48" rx="8"/><text class="tt" x="22" y="170">users</text><text class="ts" x="22" y="187">учётные записи</text><rect class="bx" x="10" y="276" width="200" height="48" rx="8"/><text class="tt" x="22" y="296">activity_log</text><text class="ts" x="22" y="313">журнал действий</text><rect class="bb" x="290" y="126" width="210" height="48" rx="8"/><text class="tt" x="302" y="146">user_access</text><text class="ts" x="302" y="163">грант: человек × объект × роль</text><rect class="bb" x="590" y="24" width="200" height="48" rx="8"/><text class="tt" x="602" y="44">objects</text><text class="ts" x="602" y="61">объект</text><rect class="bb" x="590" y="200" width="200" height="48" rx="8"/><text class="tt" x="602" y="220">projects</text><text class="ts" x="602" y="237">проект</text><rect class="bb" x="290" y="276" width="210" height="48" rx="8"/><text class="tt" x="302" y="296">object_roles</text><text class="ts" x="302" y="313">роли (настраиваются)</text><rect class="bb" x="590" y="276" width="200" height="48" rx="8"/><text class="tt" x="602" y="296">role_features</text><text class="ts" x="602" y="313">разрешение: раздел × уровень</text><path class="ln" d="M110,150 L110,72" marker-end="url(#ar)"/><text class="ls" x="116" y="116">user_id</text><path class="ln" d="M110,198 L110,276" marker-end="url(#ar)"/><text class="ls" x="116" y="242">user_id</text><path class="ln" d="M210,150 L290,150" marker-end="url(#ar)"/><text class="ls" x="222" y="144">user_id</text><path class="ln" d="M590,48 L545,48 L545,140 L500,140" marker-end="url(#ar)"/><text class="ls" x="552" y="96">object_id</text><path class="ln" d="M590,224 L545,224 L545,160 L500,160" marker-end="url(#ar)"/><text class="ls" x="552" y="196">project_id</text><path class="ln" d="M395,276 L395,174" marker-end="url(#ar)"/><text class="ls" x="401" y="232">role → key</text><path class="ln" d="M500,300 L590,300" marker-end="url(#ar)"/><text class="ls" x="515" y="294">role_key</text></svg><figcaption>Доступ: грант связывает человека, объект (или проект) и роль; роль состоит из разрешений по разделам.</figcaption></figure>
+<figure><svg viewBox="0 0 740 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="МФР"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+<path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+<style>
+.bb{fill:var(--brand-l);stroke:var(--brand);stroke-width:1.5}
+.bo{fill:var(--acc-l);stroke:var(--acc);stroke-width:1.5}
+.bg{fill:var(--ok-l);stroke:var(--ok);stroke-width:1.5}
+.bx{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+.tt{fill:var(--ink);font:600 12.5px ui-monospace,Menlo,Consolas,monospace}
+.ts{fill:var(--muted);font:11.5px -apple-system,Segoe UI,Arial,sans-serif}
+.ls{fill:var(--muted);font:11px -apple-system,Segoe UI,Arial,sans-serif}
+.ln{stroke:var(--muted);stroke-width:1.5;fill:none}.dsh{stroke-dasharray:5 4}
+.ht{fill:var(--brand);font:700 12px -apple-system,Segoe UI,Arial,sans-serif;letter-spacing:.8px}
+</style><rect class="bb" x="10" y="24" width="190" height="48" rx="8"/><text class="tt" x="22" y="44">objects</text><text class="ts" x="22" y="61">объект</text><rect class="bo" x="260" y="24" width="190" height="48" rx="8"/><text class="tt" x="272" y="44">blocks</text><text class="ts" x="272" y="61">блок: секция × этаж</text><rect class="bo" x="520" y="24" width="200" height="48" rx="8"/><text class="tt" x="532" y="44">work_progress</text><text class="ts" x="532" y="61">статус вида работ в блоке</text><rect class="bo" x="520" y="150" width="200" height="48" rx="8"/><text class="tt" x="532" y="170">work_types</text><text class="ts" x="532" y="187">виды работ (WBS, дерево)</text><rect class="bo" x="260" y="150" width="190" height="48" rx="8"/><text class="tt" x="272" y="170">block_works</text><text class="ts" x="272" y="187">запланированная работа</text><rect class="bx" x="10" y="150" width="190" height="48" rx="8"/><text class="tt" x="22" y="170">revit_elements</text><text class="ts" x="22" y="187">элементы модели (Revit/PDF)</text><rect class="bg" x="10" y="290" width="190" height="48" rx="8"/><text class="tt" x="22" y="310">block_work_forecasts</text><text class="ts" x="22" y="327">версии прогноза сроков</text><rect class="bg" x="260" y="290" width="190" height="48" rx="8"/><text class="tt" x="272" y="310">work_fact_reports</text><text class="ts" x="272" y="327">отчёт о факте по блоку</text><rect class="bg" x="520" y="290" width="200" height="48" rx="8"/><text class="tt" x="532" y="310">work_fact_items</text><text class="ts" x="532" y="327">процент по операции</text><path class="ln" d="M200,48 L260,48" marker-end="url(#ar)"/><text class="ls" x="208" y="42">object_id</text><path class="ln" d="M450,48 L520,48" marker-end="url(#ar)"/><path class="ln" d="M620,150 L620,72" marker-end="url(#ar)"/><text class="ls" x="626" y="116">work_type_id</text><path class="ln" d="M355,72 L355,150" marker-end="url(#ar)"/><text class="ls" x="361" y="114">block_id</text><path class="ln" d="M520,174 L450,174" marker-end="url(#ar)"/><path class="ln" d="M105,72 L105,150" marker-end="url(#ar)"/><text class="ls" x="111" y="116">object_id</text><path class="ln" d="M300,198 L300,244 L105,244 L105,290" marker-end="url(#ar)"/><text class="ls" x="112" y="238">block_work_id</text><path class="ln" d="M450,314 L520,314" marker-end="url(#ar)"/><text class="ls" x="456" y="308">report_id</text><path class="ln" d="M620,198 L620,290" marker-end="url(#ar)"/><text class="ls" x="626" y="250">work_type_id</text><path class="ln dsh" d="M375,72 L375,100 L480,100 L480,290 L450,290" marker-end="url(#ar)"/><text class="ls" x="486" y="214">work_fact_reports.block_id</text></svg><figcaption>Монолит и общестрой: блок «этаж × секция», дерево видов работ, запланированные работы и факт.</figcaption></figure>
+</div>
+
+<h2>Правила, общие для всей схемы</h2>
+<div class="card"><ul>
+<li><b>Идентификаторы.</b> Целочисленные <code>id</code>; объект дополнительно имеет сквозной <code>object_uid</code> для обмена между серверами, изделие — <code>element_uid</code>.</li>
+<li><b>Каскады.</b> Дочерние записи объекта удаляются вместе с ним (<code>CASCADE</code>); записи, на которые ссылаются справочники, защищены от удаления (<code>RESTRICT</code>) — вместо этого их переводят на замену.</li>
+<li><b>Авторство.</b> Сущности хранят ссылку на пользователя (<code>SET NULL</code>) и текстовый снимок ФИО, чтобы история переживала удаление учётной записи.</li>
+<li><b>История не перезаписывается.</b> Статусы, версии графика, редакции кранов, версии прогноза ЗР — накапливаются записями.</li>
+<li><b>Описание схемы одно.</b> Назначение каждой таблицы и поля хранится в одном модуле и сверяется с реальной базой: расхождение подсвечивается в интерфейсе администратора.</li>
+<li><b>Логические связи</b> без внешнего ключа (например, привязка изделия к версии чертежа по имени файла) перечислены в описании схемы отдельно.</li>
+</ul></div>
+
+<h2>Домены данных</h2>
+<div class="tbl-wrap"><table><tr><th>Домен</th><th class="num">Таблиц</th><th class="num">Полей</th><th>Объём</th></tr><tr><td><a href='db-hier.html'><b>Проекты, объекты, здания</b></a><br><span class='mods'>Иерархия «Проект → Объект», структура здания (секции, этажи, оси, квартиры), версии чертежа, проектная команда, вложения и внешние 3D-модели.</span></td><td class='num'>11</td><td class='num'>139</td><td><div class='bar'><div class='b' style='width:123px'></div></div></td></tr><tr><td><a href='db-access.html'><b>Пользователи, роли, доступ</b></a><br><span class='mods'>Учётные записи, сессии входа, роли и их разрешения по разделам, гранты на объекты, права по проектной команде, обучение.</span></td><td class='num'>11</td><td class='num'>82</td><td><div class='bar'><div class='b' style='width:73px'></div></div></td></tr><tr><td><a href='db-zhbi.html'><b>Сборный ЖБИ: изделия и статусы</b></a><br><span class='mods'>Ядро учёта: каждое изделие (elements), история смены статусов, сетка осей чертежа и панели облицовки шахт.</span></td><td class='num'>5</td><td class='num'>73</td><td><div class='bar'><div class='b' style='width:64px'></div></div></td></tr><tr><td><a href='db-zones.html'><b>Зоны: захватки, краны, стоянки</b></a><br><span class='mods'>Справочник зон объекта, их ярусы, правки с откатом и версионные редакции кранов и стоянок.</span></td><td class='num'>9</td><td class='num'>76</td><td><div class='bar'><div class='b' style='width:67px'></div></div></td></tr><tr><td><a href='db-contract.html'><b>Контрактация и поставка</b></a><br><span class='mods'>Контрагенты, договоры, спецификации, контракты и их позиции, повреждения, производительность заводов, документы замены поставщика.</span></td><td class='num'>14</td><td class='num'>100</td><td><div class='bar'><div class='b' style='width:89px'></div></div></td></tr><tr><td><a href='db-schedule.html'><b>График СМР</b></a><br><span class='mods'>Базовый и актуализированные графики, даты изделий в версиях, темп и порядок монтажа, поток крана.</span></td><td class='num'>4</td><td class='num'>25</td><td><div class='bar'><div class='b' style='width:22px'></div></div></td></tr><tr><td><a href='db-mfr.html'><b>Монолит и общестрой (МФР)</b></a><br><span class='mods'>Выгрузки Revit и PDF, блоки «этаж × секция», виды работ, запланированные работы, документы факта, классификатор.</span></td><td class='num'>23</td><td class='num'>213</td><td><div class='bar'><div class='b' style='width:190px'></div></div></td></tr><tr><td><a href='db-people.html'><b>Численность и бот eXpress</b></a><br><span class='mods'>Подрядчики объекта, кодификатор видов работ, ежедневная численность с историей, контакты и расписания бота.</span></td><td class='num'>13</td><td class='num'>142</td><td><div class='bar'><div class='b' style='width:107px'></div></div></td></tr><tr><td><a href='db-pp.html'><b>Производственная программа</b></a><br><span class='mods'>Загрузка программы, объекты, работы и сроки, деньги по работам, общие правки и группы объектов.</span></td><td class='num'>7</td><td class='num'>39</td><td><div class='bar'><div class='b' style='width:34px'></div></div></td></tr><tr><td><a href='db-ref.html'><b>Справочники, настройки, журналы</b></a><br><span class='mods'>Марки и префиксы, СМУ и физлица, подтипы, цвета и формы, настройки, обработки релиза, журнал действий, замеры.</span></td><td class='num'>13</td><td class='num'>79</td><td><div class='bar'><div class='b' style='width:70px'></div></div></td></tr></table></div>
+
+<h2>Подсистема «Калькулятор»: отдельная база</h2>
+<p>Собственная схема (версия 6) с пронумерованными миграциями. Основные группы таблиц:</p>
+<div class="tbl-wrap"><table><tr><th>Группа</th><th>Таблицы</th></tr>
+<tr><td>Каталог и расчёт</td><td class="mono">products, calculation_profiles, calculation_versions, extra_lines, line_overrides, production_norms, product_resource_baselines, price_list, product_verifications</td></tr>
+<tr><td>Чтение чертежей</td><td class="mono">model_discrepancies, discrepancy_versions, collision_state, collision_notes, project_files, browser_imports</td></tr>
+<tr><td>Восстановление данных</td><td class="mono">recovery_batches, recovery_jobs, recovery_steps, recovery_events, recovery_revisions, recovery_publications, recovery_live, recovery_settings</td></tr>
+<tr><td>Синхронизация с серверами</td><td class="mono">sync_tokens, sync_state, sync_log</td></tr>
+<tr><td>Служебные</td><td class="mono">projects, mutations, audit_log, application_meta</td></tr></table></div>
+<p>Из таблиц калькулятора не используются пользователи и сессии — вход и права общие с трекером.</p>
+
+<div class="pager"><a href="modules.html">← Программные модули</a><a href="status.html">Статус и развитие →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 28.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>

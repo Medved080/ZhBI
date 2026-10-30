@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>БД: Сборный ЖБИ: изделия и статусы — ЖБИ-трекер</title>
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--ink:#1c2430;--muted:#5d6878;--line:#dde2ea;
+  --brand:#1f4e8c;--brand-d:#163a69;--brand-l:#e7eef8;
+  --acc:#c9701a;--acc-l:#fdf1e4;
+  --ok:#23775a;--ok-l:#e6f4ee;--warn:#9a6a00;--warn-l:#fff4d6;
+  --code:#eef1f6;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c;--card:#1a2029;--ink:#e6eaf0;--muted:#9aa5b5;--line:#2d3644;
+  --brand:#7fb0ee;--brand-d:#a8c9f5;--brand-l:#1c2a40;--acc:#f0a35c;--acc-l:#33271a;
+  --ok:#6fcba6;--ok-l:#173026;--warn:#e8bf62;--warn-l:#352c12;--code:#232b37}
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
+header.top{background:var(--brand-d);color:#fff}
+@media (prefers-color-scheme:dark){header.top{background:#0e1520}}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.brandrow{display:flex;align-items:center;gap:14px;padding:14px 0 6px}
+.logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand-d);
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:-.5px}
+.brandrow b{font-size:18px}.brandrow span{opacity:.75;font-size:13px;margin-left:auto}
+nav.tabs{display:flex;flex-wrap:wrap;gap:2px;padding-bottom:0}
+nav.tabs a{color:#dbe6f5;padding:9px 14px;border-radius:8px 8px 0 0;font-size:14.5px;white-space:nowrap}
+nav.tabs a:hover{background:rgba(255,255,255,.1);text-decoration:none}
+nav.tabs a.on{background:var(--bg);color:var(--brand-d);font-weight:600}
+@media (prefers-color-scheme:dark){nav.tabs a.on{color:var(--brand)}}
+main{padding:28px 0 56px}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 30px;margin-bottom:26px;
+  border-left:6px solid var(--acc)}
+.hero h1{margin:0 0 8px;font-size:30px;line-height:1.2;letter-spacing:-.3px}
+.hero p{margin:6px 0 0;color:var(--muted);font-size:17px;max-width:860px}
+h2{font-size:23px;margin:38px 0 12px;letter-spacing:-.2px}
+h3{font-size:18px;margin:0 0 6px}
+h2 .n{color:var(--acc);margin-right:6px}
+p{margin:10px 0}
+.lead{font-size:17px;color:var(--muted);max-width:900px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:900px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.card h3{color:var(--brand)}
+.card p{margin:6px 0;color:var(--ink)}
+.card ul{margin:6px 0 0;padding-left:20px}
+.card li{margin:3px 0}
+.stat{text-align:left}
+.stat .v{font-size:32px;font-weight:750;color:var(--brand);line-height:1.1;letter-spacing:-.5px}
+.stat .l{color:var(--muted);font-size:14px;margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:99px;background:var(--brand-l);color:var(--brand);
+  margin:2px 4px 2px 0;white-space:nowrap}
+.tag.o{background:var(--acc-l);color:var(--acc)}
+.tag.g{background:var(--ok-l);color:var(--ok)}
+.tag.w{background:var(--warn-l);color:var(--warn)}
+.effect{background:var(--ok-l);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:12px 0 0}
+.effect b.h{color:var(--ok);display:block;font-size:13px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px}
+.effect ul{margin:4px 0 0;padding-left:20px}
+.note{background:var(--warn-l);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:10px;
+  padding:12px 16px;margin:14px 0;color:var(--ink);font-size:15px}
+.note b{color:var(--warn)}
+.block{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin:0 0 20px}
+.block header{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.block header .num{background:var(--acc);color:#fff;border-radius:8px;min-width:32px;height:32px;display:grid;
+  place-items:center;font-weight:700;font-size:15px;padding:0 8px}
+.block header h2{margin:0;font-size:21px}
+.block .cols{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:8px}
+@media (max-width:860px){.block .cols{grid-template-columns:1fr}}
+.block h4{margin:12px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.block ul{margin:4px 0;padding-left:20px}.block li{margin:3px 0}
+.mods{font-size:13.5px;color:var(--muted)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+code{background:var(--code);padding:1px 6px;border-radius:5px}
+table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;font-size:14.5px;margin:12px 0}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--brand-l);color:var(--brand-d);font-weight:650;font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+@media (prefers-color-scheme:dark){th{color:var(--brand)}}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.tbl-wrap{overflow-x:auto}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 13px;font-size:14px}
+.toc a:hover{border-color:var(--brand);text-decoration:none}
+details.t{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:10px 0}
+details.t>summary{cursor:pointer;padding:11px 16px;list-style:none;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.t>summary::-webkit-details-marker{display:none}
+details.t>summary::before{content:"▸";color:var(--acc);transition:transform .15s}
+details.t[open]>summary::before{transform:rotate(90deg)}
+details.t>summary .tn{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:650;color:var(--brand)}
+details.t>summary .tl{color:var(--ink)}
+details.t>summary .tc{margin-left:auto;color:var(--muted);font-size:13px}
+details.t .tbl-wrap{padding:0 12px 12px}
+details.t table{margin:0;font-size:13.5px}
+td.k{white-space:nowrap}
+.key{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:var(--acc-l);color:var(--acc)}
+.fkref{font-size:12.5px;color:var(--muted)}
+.btns{margin:0 0 14px;display:flex;gap:8px;flex-wrap:wrap}
+.btns button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:8px;padding:6px 14px;cursor:pointer}
+.btns button:hover{border-color:var(--brand)}
+.sub{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.sub a{font-size:13.5px;padding:4px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.sub a.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.sub a:hover{text-decoration:none;border-color:var(--brand)}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+figure svg{width:100%;height:auto;display:block}
+figcaption{color:var(--muted);font-size:14px;margin-top:8px}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:12px 0}
+.flow .st{flex:1 1 120px;background:var(--card);border:1px solid var(--line);border-top:4px solid var(--brand);
+  border-radius:8px;padding:10px 12px;font-size:14px}
+.flow .st b{display:block;color:var(--brand)}
+footer.bot{border-top:1px solid var(--line);color:var(--muted);font-size:13.5px;padding:20px 0 40px}
+.pager{display:flex;justify-content:space-between;gap:12px;margin-top:34px}
+.pager a{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px}
+.bar{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:14px}
+.bar .b{height:12px;border-radius:6px;background:var(--brand)}
+.bar .t{width:240px;flex:none}.bar .c{color:var(--muted);width:80px;flex:none}
+@media print{
+  header.top nav,.btns,.pager,.sub{display:none}
+  body{background:#fff;color:#000;font-size:11.5pt}
+  .block,.card,figure,details.t{break-inside:avoid}
+  header.top{background:#fff;color:#000}
+  .brandrow{padding:0 0 8px}
+}
+</style></head><body>
+<header class="top"><div class="wrap">
+<div class="brandrow"><div class="logo">ЖБИ</div><b>ЖБИ-трекер</b><span>Описание проекта · 30.10.2026</span></div>
+<nav class="tabs"><a href="index.html">Обзор</a><a href="functions.html">Функциональные блоки</a><a href="effects.html">Бизнес-эффекты</a><a href="architecture.html">Архитектура</a><a href="modules.html">Программные модули</a><a href="database.html" class="on">База данных</a><a href="status.html">Статус и развитие</a></nav></div></header>
+<main><div class="wrap">
+<section class="hero"><h1>БД: Сборный ЖБИ: изделия и статусы</h1><p>Таблицы домена с описанием каждого поля, ключей и связей.</p></section>
+
+
+<div class="sub"><a href="database.html">Обзор БД</a><a href="db-hier.html">Проекты, объекты, здания</a><a href="db-access.html">Пользователи, роли, доступ</a><a href="db-zhbi.html" class="on">Сборный ЖБИ: изделия и статусы</a><a href="db-zones.html">Зоны: захватки, краны, стоянки</a><a href="db-contract.html">Контрактация и поставка</a><a href="db-schedule.html">График СМР</a><a href="db-mfr.html">Монолит и общестрой (МФР)</a><a href="db-people.html">Численность и бот eXpress</a><a href="db-pp.html">Производственная программа</a><a href="db-ref.html">Справочники, настройки, журналы</a></div>
+<p class="lead">Ядро учёта: каждое изделие (elements), история смены статусов, сетка осей чертежа и панели облицовки шахт.</p>
+<p><span class="tag">5 таблиц</span><span class="tag">73 полей</span></p>
+<p class="note">Статус «Готов к монтажу» следует после «Доставлен». Плановую дату монтажа можно менять только в этом статусе, отдельно или для выбранных изделий.</p>
+<div class="btns"><button onclick="setAll(true)">Развернуть все таблицы</button><button onclick="setAll(false)">Свернуть все</button></div>
+<div class="toc"><a href="#elements">elements</a><a href="#status_history">status_history</a><a href="#axis_lines">axis_lines</a><a href="#shaft_panel_geometry">shaft_panel_geometry</a><a href="#shaft_panel_imports">shaft_panel_imports</a></div>
+<details class="t" id="elements"><summary><span class="tn">elements</span><span class="tl">Элементы ЖБИ (ядро)</span> <span class="tag o">ключевая</span>
+<span class="tc">45 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>contract_id</code> → <code>contracts.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>mark_id</code> → <code>marks.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>zone_zakhvatka_id</code> → <code>zones.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>zone_crane_id</code> → <code>zones.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>zone_stance_id</code> → <code>zones.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>zone_stance_level_id</code> → <code>zone_levels.id</code> <span class='fkref'>(обнуление ссылки)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>schedule_version_dates</code>, <code>shaft_panel_geometry</code>, <code>status_history</code>, <code>supplier_change_items</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span></td><td>идентификатор строки</td></tr><tr><td class='mono'>element_uid</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span></td><td>сквозной идентификатор, переживает перевыпуск чертежа</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>объект-владелец → objects.id</td></tr><tr><td class='mono'>source_file</td><td class='mono'>TEXT</td><td class='k'></td><td>файл, из которого элемент пришёл в последний раз</td></tr><tr><td class='mono'>dxf_handle</td><td class='mono'>TEXT</td><td class='k'></td><td>handle объекта в DXF (уникален с source_file)</td></tr><tr><td class='mono'>is_current</td><td class='mono'>INTEGER</td><td class='k'></td><td>1 — есть в актуальной версии чертежа; 0 — исчез</td></tr><tr><td class='mono'>layer</td><td class='mono'>TEXT</td><td class='k'></td><td>имя слоя DXF (WEB_констр_…)</td></tr><tr><td class='mono'>element_type</td><td class='mono'>TEXT</td><td class='k'></td><td>тип: Колонна / Ригель / Панель / Плита перекрытия / Панель облицовки шахты</td></tr><tr><td class='mono'>subtype</td><td class='mono'>TEXT</td><td class='k'></td><td>подтип (нижняя/верхняя, «на отм. +15.000», …)</td></tr><tr><td class='mono'>mark</td><td class='mono'>TEXT</td><td class='k'></td><td>марка изделия текстом (напр. 4Кв2) — исходное поле, живёт рядом с mark_id до сверки</td></tr><tr><td class='mono'>mark_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>марка справочником → marks.id (SET NULL); заполняется по mark и типу</td></tr><tr><td class='mono'>mark_source</td><td class='mono'>TEXT</td><td class='k'></td><td>откуда взята марка при разборе DXF</td></tr><tr><td class='mono'>x</td><td class='mono'>REAL</td><td class='k'></td><td>координата X марки/выноски, мм</td></tr><tr><td class='mono'>y</td><td class='mono'>REAL</td><td class='k'></td><td>координата Y марки/выноски, мм</td></tr><tr><td class='mono'>z</td><td class='mono'>REAL</td><td class='k'></td><td>координата Z, мм</td></tr><tr><td class='mono'>elevation_mm</td><td class='mono'>INTEGER</td><td class='k'></td><td>отметка яруса, мм</td></tr><tr><td class='mono'>floor</td><td class='mono'>INTEGER</td><td class='k'></td><td>этаж (из суффикса слоя либо расчёт по отметке)</td></tr><tr><td class='mono'>outline_json</td><td class='mono'>TEXT</td><td class='k'></td><td>реальный контур (JSON-точки) — ГОРИЗОНТАЛЬНЫЙ след, основа 2D/3D-геометрии; не высота этажа</td></tr><tr><td class='mono'>height_mm</td><td class='mono'>REAL</td><td class='k'></td><td>вертикальная высота ИЗДЕЛИЯ, мм (панели облицовки шахты, app.shaft_panels) — самостоятельное поле, не выводится из outline_json</td></tr><tr><td class='mono'>address</td><td class='mono'>TEXT</td><td class='k'></td><td>готовый адрес по осям</td></tr><tr><td class='mono'>axis_status</td><td class='mono'>TEXT</td><td class='k'></td><td>результат адресации (точно/приблизительно/нет)</td></tr><tr><td class='mono'>axis_number</td><td class='mono'>TEXT</td><td class='k'></td><td>цифровая ось при точном попадании</td></tr><tr><td class='mono'>axis_letter</td><td class='mono'>TEXT</td><td class='k'></td><td>буквенная ось при точном попадании</td></tr><tr><td class='mono'>nearest_axis_number</td><td class='mono'>TEXT</td><td class='k'></td><td>ближайшая цифровая ось</td></tr><tr><td class='mono'>nearest_axis_letter</td><td class='mono'>TEXT</td><td class='k'></td><td>ближайшая буквенная ось</td></tr><tr><td class='mono'>offset_x_mm</td><td class='mono'>REAL</td><td class='k'></td><td>смещение от ближайшей оси по X, мм</td></tr><tr><td class='mono'>offset_y_mm</td><td class='mono'>REAL</td><td class='k'></td><td>смещение от ближайшей оси по Y, мм</td></tr><tr><td class='mono'>zone_zakhvatka_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>захватка → zones.id</td></tr><tr><td class='mono'>zone_zakhvatka_status</td><td class='mono'>TEXT</td><td class='k'></td><td>как определилась привязка к захватке</td></tr><tr><td class='mono'>zone_crane_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>кран → zones.id</td></tr><tr><td class='mono'>zone_crane_status</td><td class='mono'>TEXT</td><td class='k'></td><td>как определилась привязка к крану</td></tr><tr><td class='mono'>zone_stance_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>стоянка крана → zones.id</td></tr><tr><td class='mono'>zone_stance_status</td><td class='mono'>TEXT</td><td class='k'></td><td>как определилась привязка к стоянке</td></tr><tr><td class='mono'>zone_stance_level_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>конкретный ярус стоянки → zone_levels.id</td></tr><tr><td class='mono'>current_status</td><td class='mono'>TEXT</td><td class='k'></td><td>текущий статус — по последней записи истории (changed_at)</td></tr><tr><td class='mono'>contract_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>контракт-реквизит → contracts.id; пуст при «Запланирован»</td></tr><tr><td class='mono'>planned_delivery_date</td><td class='mono'>TEXT</td><td class='k'></td><td>плановая дата поставки (правится вручную)</td></tr><tr><td class='mono'>planned_installation_date</td><td class='mono'>TEXT</td><td class='k'></td><td>плановая дата монтажа; назначение и правка только в статусе ready_for_installation, при смене статуса сохраняется</td></tr><tr><td class='mono'>project_smr_start_date</td><td class='mono'>TEXT</td><td class='k'></td><td>начало СМР по графику MS Project</td></tr><tr><td class='mono'>project_delivery_date</td><td class='mono'>TEXT</td><td class='k'></td><td>завершение СМР по графику MS Project</td></tr><tr><td class='mono'>actual_delivery_date</td><td class='mono'>TEXT</td><td class='k'></td><td>факт перехода в «Доставлено» (кэш по истории)</td></tr><tr><td class='mono'>manual_fields</td><td class='mono'>TEXT</td><td class='k'></td><td>JSON-список полей, правленных вручную (импорт их не трогает)</td></tr><tr><td class='mono'>comment</td><td class='mono'>TEXT</td><td class='k'></td><td>произвольный комментарий к изделию («отбит угол при разгрузке»)</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>создан</td></tr><tr><td class='mono'>updated_at</td><td class='mono'>TEXT</td><td class='k'></td><td>изменён (по нему работает опрос /changes)</td></tr></table></div></details><details class="t" id="status_history"><summary><span class="tn">status_history</span><span class="tl">История статусов (аудит)</span> <span class="tag o">ключевая</span>
+<span class="tc">8 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>element_id</code> → <code>elements.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>changed_by_user_id</code> → <code>users.id</code> <span class='fkref'>(обнуление ссылки)</span>; <code>contract_id</code> → <code>contracts.id</code> <span class='fkref'>(обнуление ссылки)</span></p><p class='fkref'><b>На таблицу ссылаются:</b> <code>supplier_change_history_moves</code></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span></td><td>идентификатор записи</td></tr><tr><td class='mono'>element_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>элемент → elements.id (CASCADE)</td></tr><tr><td class='mono'>status</td><td class='mono'>TEXT</td><td class='k'></td><td>статус на этот момент</td></tr><tr><td class='mono'>changed_at</td><td class='mono'>TEXT</td><td class='k'></td><td>«рабочая дата» — по ней и определяется текущий статус</td></tr><tr><td class='mono'>changed_by</td><td class='mono'>TEXT</td><td class='k'></td><td>ФИО снимком (переживает переименование пользователя)</td></tr><tr><td class='mono'>changed_by_user_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>аккаунт → users.id (SET NULL)</td></tr><tr><td class='mono'>contract_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>контракт снимком → contracts.id (аудит)</td></tr><tr><td class='mono'>comment</td><td class='mono'>TEXT</td><td class='k'></td><td>комментарий к смене</td></tr></table></div></details><details class="t" id="axis_lines"><summary><span class="tn">axis_lines</span><span class="tl">Сетка осей чертежа</span>
+<span class="tc">5 полей</span></summary><div class="tbl-wrap">
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span></td><td>идентификатор линии</td></tr><tr><td class='mono'>source_file</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span></td><td>файл чертежа</td></tr><tr><td class='mono'>kind</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span></td><td>numeric — цифровая ось, letter — буквенная</td></tr><tr><td class='mono'>label</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span></td><td>подпись оси</td></tr><tr><td class='mono'>coord</td><td class='mono'>REAL</td><td class='k'></td><td>координата оси, мм</td></tr></table></div></details><details class="t" id="shaft_panel_geometry"><summary><span class="tn">shaft_panel_geometry</span><span class="tl">Геометрия панелей облицовки шахты</span>
+<span class="tc">7 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>element_id</code> → <code>elements.id</code> <span class='fkref'>(каскадное удаление)</span>; <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(без действия)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>element_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span> <span class="key">FK</span></td><td>изделие → elements.id (CASCADE); одна строка на панель</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>объект → objects.id — область импорта в пределах объекта</td></tr><tr><td class='mono'>scope_key</td><td class='mono'>TEXT</td><td class='k'></td><td>область дополняющего импорта (сейчас всегда &#x27;gp1-gp2&#x27;, app.shaft_panels.storage.SCOPE)</td></tr><tr><td class='mono'>physical_key</td><td class='mono'>TEXT</td><td class='k'><span class="key">U</span></td><td>устойчивый ключ физической позиции: шахта+сторона+U/Z, не зависит от марки/файла/handle</td></tr><tr><td class='mono'>source_name</td><td class='mono'>TEXT</td><td class='k'></td><td>имя ЗАГРУЖЕННОГО файла развертки (для дедупликации/хэша) — НЕ совпадает с object_drawings.source_file панели: тот синтетический, &#x27;Панели шахт &lt;scope&gt; (объект &lt;id&gt;).dxf&#x27; (elements.source_file панельных строк — та же синтетика)</td></tr><tr><td class='mono'>source_sha256</td><td class='mono'>TEXT</td><td class='k'></td><td>контрольная сумма DXF, из которого получена геометрия</td></tr><tr><td class='mono'>metadata_json</td><td class='mono'>TEXT</td><td class='k'></td><td>точная геометрия панели (marка, шахта/сторона, U/Z, толщина, front_xyz_mm и др.) — снимок на момент импорта</td></tr></table></div></details><details class="t" id="shaft_panel_imports"><summary><span class="tn">shaft_panel_imports</span><span class="tl">Журнал применений импорта панелей шахт</span>
+<span class="tc">8 полей</span></summary><div class="tbl-wrap"><p class='fkref'><b>Ссылается на:</b> <code>object_id</code> → <code>objects.id</code> <span class='fkref'>(без действия)</span></p>
+<table><tr><th style="width:20%">Поле</th><th style="width:11%">Тип</th><th style="width:8%">Ключ</th><th>Назначение</th></tr><tr><td class='mono'>id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">PK</span></td><td>идентификатор записи журнала</td></tr><tr><td class='mono'>object_id</td><td class='mono'>INTEGER</td><td class='k'><span class="key">FK</span></td><td>объект → objects.id</td></tr><tr><td class='mono'>scope_key</td><td class='mono'>TEXT</td><td class='k'></td><td>область импорта (см. shaft_panel_geometry.scope_key)</td></tr><tr><td class='mono'>user_id</td><td class='mono'>INTEGER</td><td class='k'></td><td>кто применил (без внешнего ключа — как и elements.mark_source, снимок id)</td></tr><tr><td class='mono'>source_name</td><td class='mono'>TEXT</td><td class='k'></td><td>исходный чертёж развертки</td></tr><tr><td class='mono'>source_sha256</td><td class='mono'>TEXT</td><td class='k'></td><td>контрольная сумма файла</td></tr><tr><td class='mono'>summary_json</td><td class='mono'>TEXT</td><td class='k'></td><td>сводка применения: new/updated/unchanged/missing/retired</td></tr><tr><td class='mono'>created_at</td><td class='mono'>TEXT</td><td class='k'></td><td>когда применено</td></tr></table></div></details>
+<h2>Логические связи без внешнего ключа</h2><div class='tbl-wrap'><table><tr><th>Откуда</th><th>Куда</th><th>Смысл</th></tr><tr><td class='mono'>elements.source_file</td><td class='mono'>object_drawings.source_file</td><td>версия чертежа</td></tr><tr><td class='mono'>axis_lines.source_file</td><td class='mono'>object_drawings.source_file</td><td>сетка осей файла</td></tr><tr><td class='mono'>elements.current_status</td><td class='mono'>status_colors.status</td><td>цвет статуса</td></tr><tr><td class='mono'>elements.subtype</td><td class='mono'>allowed_subtypes.subtype</td><td>справочник подтипов объекта</td></tr><tr><td class='mono'>elements.layer</td><td class='mono'>element_shapes.layer</td><td>форма маркера</td></tr><tr><td class='mono'>elements.element_type</td><td class='mono'>label_visibility.element_type</td><td>видимость подписей</td></tr><tr><td class='mono'>elements.element_type</td><td class='mono'>default_contracts.element_type</td><td>контракт по умолчанию</td></tr><tr><td class='mono'>elements.mark</td><td class='mono'>contract_lines.mark</td><td>план по марке ↔ факт</td></tr></table></div>
+
+<div class="pager"><a href="db-access.html">← Пользователи, роли, доступ</a><a href="db-zones.html">Зоны: захватки, краны, стоянки →</a></div>
+</div></main>
+<footer class="bot"><div class="wrap">ЖБИ-трекер · структурированное описание проекта · версия документа от 30.10.2026.
+Документ собран по рабочей документации и коду проекта; реальные данные заказчика в него не включены.</div></footer>
+<script>
+function setAll(open){document.querySelectorAll('details.t').forEach(function(d){d.open=open})}
+window.addEventListener('beforeprint',function(){setAll(true)});
+</script></body></html>
