@@ -147,6 +147,7 @@ import { showUnsavedDialog, showConfirmDialog, showInfoDialog, showChoices } fro
 import { trashIconHtml } from "./icons.js";
 import { ApiError } from "./api.js";
 import { runDeleteFlow } from "./delete-plan.js";
+import { ELEMENT_STATUS_LABELS as CONTRACT_STATUS_LABELS } from "./element-statuses.js";
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -2580,13 +2581,7 @@ export function mountCounterparties(container, ctx) {
   // плановой даты — отдельная фича "planned_date", проверяется здесь через
   // /me/permissions?object_id=... тем же приёмом, что уже применён для
   // вложений в projects-objects.js, вместо копирования расчёта на клиенте).
-  // Метки статусов — зеркало app/models.py STATUS_LABELS_RU: V2 не тянет
-  // тяжёлый /plan-data ради семи подписей (тот же приём, что и
-  // AVATAR_MIME_TYPES в projects-objects.js).
-  const CONTRACT_STATUS_LABELS = {
-    planned: "Запланирован", contracting: "Контрактация", in_production: "В производстве",
-    shipped: "Отгружен", delivered: "Доставлен", installed: "Смонтирован", accepted: "Принят",
-  };
+  // Общий список подписей согласован с локальными проверками операций.
 
   async function renderContractExpandedTab(id) {
     body.innerHTML = `<p class="v2-muted">Загрузка…</p>`;

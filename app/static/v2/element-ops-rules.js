@@ -1,7 +1,7 @@
 // Правила операций над изделиями на схеме (модель ЖБИ, АРМ прораба): чистые функции без DOM — проверка формы тела для шлюза записи
 // (`write-gate.js`) и тексты последствий для интерфейса. Серверные маршруты — `app/element_ops.py` (`/element-ops/*`).
 
-const STATUSES = ["planned", "contracting", "in_production", "shipped", "delivered", "installed", "accepted"];
+import { ELEMENT_STATUSES as STATUSES } from "./element-statuses.js";
 const isObj = (b) => b && typeof b === "object" && !Array.isArray(b);
 const extra = (b, allowed) => Object.keys(b).some((k) => !allowed.includes(k));
 const posInt = (x) => Number.isInteger(x) && x > 0;

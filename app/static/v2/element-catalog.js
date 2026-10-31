@@ -14,6 +14,7 @@ import { statusChip } from "./registry.js";
 import { ApiError } from "./api.js";
 import { createElementOps } from "./element-ops.js";
 import { requestLocate } from "./locate-handoff.js";
+import { ELEMENT_STATUSES as STATUSES, ELEMENT_STATUS_LABELS as STATUS_RU } from "./element-statuses.js";
 
 (() => {
   if (document.querySelector("link[data-ec-css]")) return;
@@ -25,8 +26,6 @@ import { requestLocate } from "./locate-handoff.js";
 const PAGE = 200;
 const FILLED = "__filled__", NONE = "__none__";            // сентинелы сервера (app/main.py: FILLED_SENTINEL, PLACEMENT_NONE_SENTINEL)
 const STATE_KEY = "v2.elementCatalog";                     // отбор/страница/строка переживают переход на схему и «Назад»
-const STATUSES = ["planned", "contracting", "in_production", "shipped", "delivered", "installed", "accepted"];
-const STATUS_RU = { planned: "Запланирован", contracting: "Контрактация", in_production: "В производстве", shipped: "Отгружен", delivered: "Доставлен", installed: "Смонтирован", accepted: "Принят" };
 const ZONE_STATUS_RU = { matched: "привязан", unmatched: "не определено", needs_review: "требует проверки", not_applicable: "неприменимо" };
 const ATTACH = "📎";
 

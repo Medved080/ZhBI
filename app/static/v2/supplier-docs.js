@@ -28,7 +28,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const ruDate = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]}` : (v ? String(v) : "—"); };
 const ruMoment = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(v || "")); return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : ruDate(v); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const STATUS = { planned: "Запланирован", contracting: "Контрактация", in_production: "В производстве", shipped: "Отгружен", delivered: "Доставлен", installed: "Смонтирован", accepted: "Принят" };
+import { ELEMENT_STATUS_LABELS as STATUS } from "./element-statuses.js";
 const KIND_TITLE = { supplier_change: "Замена поставщика", link_swap: "Обмен привязками", date_rebalance: "Балансировка поставки" };
 // Балансировка поставки (2026-10-05, A4) — тот же раздел прав, что у обмена привязками: сервер (app/supplier_change.py KIND_FEATURES).
 const KIND_FEATURE = { supplier_change: "doc_supplier_change", link_swap: "doc_link_swap", date_rebalance: "doc_link_swap" };
