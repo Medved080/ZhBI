@@ -638,8 +638,10 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     # длиной weeks: и график, и выгрузка в Excel индексируют их по неделям.
     report_week = _week_start(today)
     cut = weeks.index(report_week) if report_week in weeks else len(weeks) - 1
-    for key in ("fact_montage", "fact_delivery"):
+    for key, rows in (("fact_montage", fact_montage), ("fact_delivery", fact_delivery)):
         series[key] = [v if i <= cut else None for i, v in enumerate(series[key])]
+        # Отчётная неделя ещё не закончилась: будущие дни этой недели не являются фактом на today.
+        series[key][cut] = sum(r["n"] for r in rows if r["d"] <= today[:10])
     # План, наоборот, ОБРЫВАЕТСЯ на последней неделе, где у него есть изделия (2026-10-05, A2.1): накопленный итог за
     # окончанием графика тянулся горизонтальной полкой до правого края сетки (его задают прогноз и вехи), и план
     # «шёл» за дату окончания базового графика.
@@ -653,30 +655,24 @@ def build_dynamics_report(conn, source_file: Optional[str], report_date: Optiona
     #
     # НЕ ПРИВЯЗЫВАЕТСЯ К ФАКТУ (2026-10-05, решение пользователя по протоколу «Развитие WEB 4Q26»; заменяет решение
     # 2026-08-14 «кривая из точки факта»). Актуализацию делают, когда накопился заметный разрыв, и до неё разрыв остаётся:
-    # прогноз не подгоняется под факт, а показывает, где мы должны были быть по последней актуализации. Версия содержит
-    # только НЕ смонтированные на дату загрузки изделия, поэтому её накопленный итог стартует с нуля; уровень кривой —
-    # «смонтировано на дату актуализации» (база) плюс накопленный итог версии. Тогда на дату актуализации прогноз и факт
-    # совпадают, а дальше расходятся ровно на отставание/опережение.
+    # прогноз не подгоняется под факт, а показывает, где мы должны были быть по последней актуализации. Уровень кривой —
+    # факт соответствующего вида на дату актуализации (база) плюс приросты версии ПОСЛЕ этого дня. Тогда на дату
+    # актуализации прогноз и факт совпадают, а дальше расходятся ровно на отставание/опережение.
     #
     # Начинается кривая на отчётной неделе — до неё там факт, прогноз в прошлом читался бы как второй факт.
-    base_fact = _installed_at_loading(conn, прогноз.get("version_id"), fact_montage)
-    for key, факт, сырые in (("forecast_montage", "fact_montage", прогноз["end"]),
-                             ("forecast_delivery", "fact_delivery",
+    version = (conn.execute("SELECT date(loaded_at) AS d FROM schedule_versions WHERE id = ?",
+                            (прогноз["version_id"],)).fetchone() if прогноз.get("version_id") else None)
+    loading_day = version["d"] if version else None
+    for key, facts, сырые in (("forecast_montage", fact_montage, прогноз["end"]),
+                             ("forecast_delivery", fact_delivery,
                               [(_shift_days(d, -DELIVERY_LEAD_DAYS), n) for d, n in прогноз["start"]])):
-        ряд = series[key]
-        if not ряд or cut >= len(ряд):
-            continue
-        сдвиг = base_fact
         # Справа кривая ОБРЫВАЕТСЯ на своей последней дате — так же, как факт
         # обрывается на отчётной (2026-08-14, живой репорт: «почему монтаж
         # практически прекращается»). Накопительный итог за последней датой
         # версии держал горизонтальную полку, и она читалась как «работы
         # встали», хотя означает ровно обратное: в прогнозе закончились
         # изделия. Линия должна кончаться там, где кончаются данные.
-        последняя = _week_start(max(d for d, _ in сырые)) if сырые else None
-        предел = weeks.index(последняя) if последняя in weeks else len(ряд) - 1
-        series[key] = [None if i < cut or i > предел else (v or 0) + сдвиг
-                       for i, v in enumerate(ряд)]
+        series[key] = _forecast_from_loading(сырые, facts, weeks, today[:10], loading_day)
 
     # Период графика (живой запрос 2026-08-03: «в отчёт динамики добавь
     # интервал дат аналогичный тому что сделан … в правой панели») — это
@@ -777,14 +773,25 @@ def _shift_days(day: str, delta: int) -> str:
     return (date.fromisoformat(str(day)[:10]) + timedelta(days=delta)).isoformat()
 
 
-def _installed_at_loading(conn, version_id, fact_montage: list) -> int:
-    """Сколько изделий смонтировано на дату загрузки актуализации — уровень, с которого стартует кривая прогноза."""
-    if not version_id:
-        return 0
-    row = conn.execute("SELECT date(loaded_at) AS d FROM schedule_versions WHERE id = ?", (version_id,)).fetchone()
-    if not row or not row["d"]:
-        return 0
-    return sum(r["n"] for r in fact_montage if r["d"] and r["d"] <= row["d"])
+def _forecast_from_loading(pairs: list, facts: list, weeks: list,
+                           report_day: str, loading_day: Optional[str]) -> list:
+    """Факт на день актуализации + приросты прогноза ПОСЛЕ этого дня.
+
+    Отчётная точка — срез по дню, остальные — недельные итоги. Нельзя прибавлять к базе всю неделю актуализации:
+    это переносит будущие работы в начало пунктира. Поставка имеет собственную базу факта, отличную от монтажа.
+    После актуализации база фиксирована: отставание от сохранённого графика не скрываем ежедневным сдвигом.
+    """
+    if not pairs or not loading_day or report_day < loading_day:
+        return [None] * len(weeks)
+    base = sum(r["n"] for r in facts if r["d"] and r["d"] <= loading_day)
+    future = [(_week_start(d), n) for d, n in pairs if d > loading_day]
+    cumulative = _cumulative(future, weeks)
+    report_week = _week_start(report_day)
+    last_week = max(_week_start(loading_day), _week_start(max(d for d, _ in pairs)))
+    on_report_day = base + sum(n for d, n in pairs if loading_day < d <= report_day)
+    return [None if w < report_week or w > last_week else
+            on_report_day if w == report_week else base + n
+            for w, n in zip(weeks, cumulative)]
 
 
 def _finish_summary(raw_days: dict, прогноз: dict, card: dict) -> dict:
