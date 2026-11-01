@@ -31991,6 +31991,7 @@ document.getElementById("mfr-workspace").addEventListener("click", async (e) => 
 });
 
 async function loadRevitPlanElements() {
+  hideMfrElementWorksHover();
   const s = revitPlanState;
   const q = new URLSearchParams({ object_id: s.objectId });
   for (const id of s.levels) q.append("level_id", id);
@@ -32319,6 +32320,7 @@ function relevantAxes(list, ox, oy, ow, oh) {
 }
 
 function drawRevitPlan(data) {
+  hideMfrElementWorksHover();
   const box = document.getElementById("revit-plan-canvas");
   // `!data.size` — единственное, что означает «рисовать нечего»: при
   // упрощённой загрузке «по фасадам» элементов нет вовсе, только габарит
@@ -32529,6 +32531,7 @@ function updateMfrAxisLabelSizing(svg, v) {
 // толщина линий тогда остаётся в координатах модели и не «худеет» при
 // увеличении.
 function bindRevitPlanZoom(svg) {
+  bindMfrElementWorksHover(svg,"2d",(x,y) => document.elementsFromPoint(x,y).map(node => node.closest("path[data-id]")).find(Boolean)?.dataset.id || null);
   const v = revitPlanState.view;
   const apply = () => {
     const fit = revitPlanState.fit;
@@ -32626,6 +32629,34 @@ document.getElementById("revit-plan-fit").addEventListener("click", resetRevitPl
 document.getElementById("mfr-plan-zoom-reset").addEventListener("click", resetRevitPlanView);
 
 
+// Связанные работы: один формат с V2; hover получает карточку только после паузы.
+const mfrElementHoverHandles = new Map();
+function hideMfrElementWorksHover() {
+  for (const handle of mfrElementHoverHandles.values()) handle.hide();
+}
+function bindMfrElementWorksHover(surface, mode, pick) {
+  import("/static/mfr-element-works.js").then(({createElementWorksHover}) => {
+    if (!surface.isConnected) return;
+    mfrElementHoverHandles.get(mode)?.dispose();
+    const handle = createElementWorksHover({
+      context: () => `${revitPlanState.objectId}:${mfrMode()}`,
+      enabled: () => mfrMode() === mode && mfrShowElements() && surface.isConnected && surface.getClientRects().length > 0,
+      load: async (id,signal) => {
+        const q = new URLSearchParams({object_id:revitPlanState.objectId,element_id:id});
+        const response = await fetch(`/revit-plan/element?${q}`,{signal});
+        if (!response.ok) throw new Error("Не удалось получить связанные работы");
+        return response.json();
+      },
+    });
+    mfrElementHoverHandles.set(mode,handle);
+    surface.addEventListener("pointermove",e => e.buttons ? handle.hide() : handle.move(pick,e.clientX,e.clientY));
+    surface.addEventListener("pointerleave",handle.leave);
+    surface.addEventListener("pointerdown",handle.hide);
+    surface.addEventListener("pointerup",e => handle.move(pick,e.clientX,e.clientY));
+    surface.addEventListener("wheel",handle.hide,{passive:true});
+  });
+}
+
 async function showRevitCard(elementId) {
   const box = document.getElementById("revit-plan-card");
   revitPlanState.selected = { kind: "element", id: Number(elementId) };
@@ -32645,7 +32676,7 @@ async function showRevitCard(elementId) {
     `<div class="card-row"><span class="card-key">${escapeHtml(k)}</span>` +
     `<span class="card-val">${escapeHtml(String(v))}</span></div>`;
   const строки = Object.entries(card)
-    .filter(([k, v]) => k !== "параметры" && k !== "id" && k !== "доли по секциям"
+    .filter(([k, v]) => k !== "параметры" && k !== "id" && k !== "доли по секциям" && k !== "связанные_работы"
       && v !== null && v !== "" && v !== false)
     .map(строка);
   const доп = Object.entries(card["параметры"] || {}).map(строка);
@@ -32660,7 +32691,9 @@ async function showRevitCard(elementId) {
       `<span class="card-val">${d["доля"] != null ? d["доля"] + "%" : "—"}` +
       ` <span style="color:var(--color-text-muted)">(${d["площадь"].toLocaleString("ru-RU")} мм²)</span></span></div>`)
       .join("") : "";
-  box.innerHTML = строки.join("")
+  const {renderElementWorks} = await import("/static/mfr-element-works.js");
+  if (revitPlanState.selected?.kind !== "element" || revitPlanState.selected.id !== Number(elementId)) return;
+  box.innerHTML = renderElementWorks(card["связанные_работы"]) + строки.join("")
     + долиHtml
     + (доп.length ? `<h4 style="margin-top:12px">Параметры Revit</h4>` + доп.join("") : "");
 }
@@ -34888,6 +34921,7 @@ document.getElementById("mfr-view-switch").addEventListener("click", async (e) =
 });
 
 function applyMfrMode() {
+  hideMfrElementWorksHover();
   const трёхмерный = mfrMode() === "3d";
   запомнить(MFR_MODE_KEY, трёхмерный ? "3d" : "2d");
   document.getElementById("revit-plan-canvas").style.display = трёхмерный ? "none" : "";
@@ -35646,6 +35680,16 @@ function bindMfr3DPick(canvas, camera, scene) {
   const raycaster = new THREE.Raycaster();
   const точка = new THREE.Vector2();
   let старт = null;
+  bindMfrElementWorksHover(canvas,"3d",(x,y) => {
+    const r = canvas.getBoundingClientRect();
+    точка.set(((x-r.left)/r.width)*2-1,-((y-r.top)/r.height)*2+1);
+    raycaster.setFromCamera(точка,camera);
+    const meshes = scene.children.filter(o => o.isMesh && o.userData.диапазоны);
+    const hit = raycaster.intersectObjects(meshes,false)[0];
+    if (!hit) return null;
+    const vertex = (hit.faceIndex || 0)*3;
+    return hit.object.userData.диапазоны.find(range => vertex < range.конец)?.id || null;
+  });
 
   canvas.addEventListener("pointerdown", (e) => { старт = { x: e.clientX, y: e.clientY }; });
   canvas.addEventListener("pointerup", async (e) => {
@@ -35698,6 +35742,8 @@ function onMfr3DResize() {
 window.addEventListener("resize", onMfr3DResize);
 
 function disposeMfr3D() {
+  mfrElementHoverHandles.get("3d")?.dispose();
+  mfrElementHoverHandles.delete("3d");
   if (mfr3d.loop) cancelAnimationFrame(mfr3d.loop);
   if (mfr3d.controls) mfr3d.controls.dispose();   // снимает свои DOM-слушатели (pointerdown/wheel/…)
   // Внешние 3D-модели (app/static/external-models/) СЮДА не входят: их

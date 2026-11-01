@@ -11,6 +11,7 @@
 // Выбор, фильтры и режим 2D/3D живут в движке (это его модель) — оболочка их отображает и меняет командами, своей копии не ведёт.
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
+import { renderElementWorks } from "../mfr-element-works.js";
 import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
@@ -754,10 +755,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     const params = Object.entries(d["параметры"] || {});
     const shares = d["доли по секциям"] || [];
     return `<div class="ws-pad"><div class="ws-card-head"><div class="ws-mark">${esc(d["имя"] || d["название"] || d["категория"] || "Элемент модели")}</div><div class="ws-type">Элемент модели Revit</div></div>${actions}
+      ${renderElementWorks(d["связанные_работы"])}
       <h4>Свойства</h4><dl class="ws-dl">${cardRows(d)}</dl>
       ${shares.length ? `<h4>Доли по секциям</h4><dl class="ws-dl">${shares.map((x) => row(x["код"], x["доля"] != null ? `${x["доля"]}%` : "—")).join("")}</dl>` : ""}
-      ${params.length ? `<h4>Параметры Revit</h4><dl class="ws-dl">${params.map(([k, v]) => row(k, String(v))).join("")}</dl>` : ""}
-      ${panelHtml("objectHtml")}</div>`;
+      ${params.length ? `<h4>Параметры Revit</h4><dl class="ws-dl">${params.map(([k, v]) => row(k, String(v))).join("")}</dl>` : ""}</div>`;
   }
 
   function pills(items, kind) {

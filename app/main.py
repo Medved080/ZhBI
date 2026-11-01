@@ -6407,7 +6407,8 @@ def revit_plan_element(object_id: int, element_id: int,
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "revit_model", "read")
-        data = revit_plan.card(conn, object_id, element_id)
+        data = revit_plan.card(conn, object_id, element_id,
+                               include_works=has_feature(conn, user, "work_progress", "read", object_id))
     finally:
         conn.close()
     if data is None:

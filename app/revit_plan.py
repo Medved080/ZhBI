@@ -263,7 +263,7 @@ def elements(conn, object_id: int, level_ids=None, section_ids=None,
     }
 
 
-def card(conn, object_id: int, element_id: int):
+def card(conn, object_id: int, element_id: int, *, include_works: bool = True):
     """Карточка одного элемента — по клику на плане."""
     row = conn.execute(
         "SELECT e.*, s.code AS section_code_name, l.name AS level_full "
@@ -298,6 +298,8 @@ def card(conn, object_id: int, element_id: int):
         # а по площади контура в другом): доли площади габарита элемента
         # по секциям-кандидатам того же этажа, только для чтения.
         "доли по секциям": revit_sections.section_shares(conn, object_id, element_id),
+        "связанные_работы": work_classifier.element_works(conn, object_id, element_id)
+        if include_works else {"items": [], "reason": "Нет доступа к учёту выполнения работ."},
     }
 
 

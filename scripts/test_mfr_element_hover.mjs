@@ -1,0 +1,25 @@
+// Timing, cancellation and escaping without a browser or the production database.
+import {readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+let now=0, nextId=0;const timers=new Map(),nodes=[];
+globalThis.setTimeout=(fn,ms)=>{const id=++nextId;timers.set(id,{fn,at:now+ms});return id;};
+globalThis.clearTimeout=id=>timers.delete(id);
+globalThis.innerWidth=900;globalThis.innerHeight=700;
+globalThis.window={addEventListener(){},removeEventListener(){}};
+globalThis.document={addEventListener(){},removeEventListener(){},body:{append(e){nodes.push(e);}},createElement(){return {hidden:true,style:{},addEventListener(){},remove(){},contains(){return false;},getBoundingClientRect(){return {width:390,height:300};}};}};
+const source=await readFile(new URL('../app/static/mfr-element-works.js',import.meta.url),'utf8');
+const {createElementWorksHover,renderElementWorks}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const tick=async ms=>{now+=ms;for(const[id,t]of [...timers])if(t.at<=now){timers.delete(id);t.fn();}await Promise.resolve();await Promise.resolve();};
+let context='object:1:3d',calls=[];
+const pending=[];
+const hover=createElementWorksHover({context:()=>context,load:(id,signal)=>{calls.push(id);return new Promise(resolve=>pending.push({resolve,signal}));}});
+hover.move(()=>1,50,50);await tick(1999);assert.equal(calls.length,0);await tick(1);assert.deepEqual(calls,[1]);
+hover.move(()=>2,90,90);assert.equal(pending[0].signal.aborted,true);await tick(2000);assert.deepEqual(calls,[1,2]);
+pending[1].resolve({'связанные_работы':{items:[{name:'Window',percent:13,status:'in_progress'}]}});await tick(0);assert.match(nodes[0].innerHTML,/Window/);
+pending[0].resolve({'связанные_работы':{items:[{name:'Stale wall'}]}});await tick(0);assert.doesNotMatch(nodes[0].innerHTML,/Stale wall/);
+hover.hide();assert.equal(nodes[0].hidden,true);
+hover.move(()=>3,100,100);context='object:2:3d';await tick(2000);assert.deepEqual(calls,[1,2]);
+hover.move(()=>3,100,100);hover.dispose();await tick(2000);assert.deepEqual(calls,[1,2]);
+const html=renderElementWorks({items:[{name:'<img src=x onerror=alert(1)>',code:'"evil',path:'<script>',percent:400,status:'done'}]});
+assert.doesNotMatch(html,/<img|<script>/);assert.match(html,/aria-valuenow="100"/);
+console.log('PASS: 2-second delay, cancellation, stale responses, context changes, disposal, HTML escaping.');

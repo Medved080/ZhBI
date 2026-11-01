@@ -490,6 +490,56 @@ def save_category_map(conn, object_id: int, mapping) -> dict:
 
 # ---------------------------------------------------------- состояние элементов
 
+def element_works(conn, object_id: int, element_id: int) -> dict:
+    """Работы категории элемента в его собственном блоке, как у element_states.
+
+    Процент принадлежит работе блока, а не отдельному физическому элементу.
+    Никакого геометрического угадывания секции или распространения на соседние
+    этажи: используются те же связи, по которым окрашивается модель.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app import block_works, work_fact
+
+    element = conn.execute(
+        "SELECT e.category, e.section_id, e.level_id, s.code AS section, l.name AS level "
+        "FROM revit_elements e LEFT JOIN object_sections s ON s.id=e.section_id "
+        "LEFT JOIN object_levels l ON l.id=e.level_id "
+        "WHERE e.object_id=? AND e.id=?", (object_id, element_id)).fetchone()
+    result = {"items": [], "reason": "", "block_id": None}
+    if element is None:
+        result["reason"] = "Элемент не найден."
+        return result
+    result.update(category=element["category"], section=element["section"], level=element["level"])
+    if element["section_id"] is None or element["level_id"] is None:
+        result["reason"] = "Для элемента не определены этаж и секция — связь с работами блока недоступна."
+        return result
+    block = conn.execute(
+        "SELECT id FROM blocks WHERE object_id=? AND section_id=? AND level_id=?",
+        (object_id, element["section_id"], element["level_id"])).fetchone()
+    if block is None:
+        result["reason"] = "Для этажа и секции элемента не создан блок учёта работ."
+        return result
+    result["block_id"] = block["id"]
+    rows = conn.execute(
+        "SELECT DISTINCT bw.*, w.code, w.name, w.path, w.sort_order "
+        "FROM block_works bw JOIN work_types w ON w.id=bw.work_type_id "
+        "AND w.object_id=bw.object_id AND w.retired_at IS NULL "
+        "JOIN work_classifier_categories l ON l.classifier_id=w.classifier_id "
+        "JOIN object_category_map m ON m.category_id=l.category_id AND m.object_id=bw.object_id "
+        "WHERE bw.object_id=? AND bw.block_id=? AND bw.retired_at IS NULL AND m.model_category=? "
+        "ORDER BY w.sort_order, bw.id", (object_id, block["id"], element["category"])).fetchall()
+    percents = work_fact._current_percents(conn, block["id"]) if rows else {}
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+    for row in rows:
+        item = {"id": row["id"], "work_type_id": row["work_type_id"], "code": row["code"],
+                "name": row["name"], "path": row["path"]}
+        item.update(block_works.derive(dict(row), percents.get(row["work_type_id"], 0), today))
+        result["items"].append(item)
+    if not rows:
+        result["reason"] = "Связанных работ в плане этого блока нет. Проверьте категории WBS и состав работ блока."
+    return result
+
 def element_states(conn, object_id: int) -> dict:
     """{(section_id, level_id): {категория модели: STATE_*}} — для отрисовки.
 
