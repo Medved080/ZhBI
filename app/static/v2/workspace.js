@@ -12,6 +12,7 @@
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
 import { renderElementWorks } from "../mfr-element-works.js";
+import { createDetailPanelScroll } from "./detail-panel-scroll.js";
 import { ApiError } from "./api.js";
 import { showUnsavedDialog, showConfirmDialog } from "./dialogs.js";
 import { checkWrite } from "./write-gate.js";
@@ -76,6 +77,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   let panelHidden = false;
   let panelW = readNum(ws === "picker" ? "v2.ws.panelW.picker" : "v2.ws.panelW", ws === "picker" ? 430 : 340);
   const detail = { id: null, data: null, error: "", seq: 0 };
+  const panelScroll = createDetailPanelScroll({ alive: () => !dead });
   // Операции над изделиями (смена статуса одного и пачки, плановая дата, контракт, комментарий, история, реквизиты) — модуль element-ops.js.
   // Здесь только связка: снимок сцены, права, перерисовка панели, команды кадру.
   const ops = createElementOps({
@@ -377,15 +379,21 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     if (dead) return;
     for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     const body = $("#ws-panel-body");
-    const keepScroll = body.scrollTop;
     const restoreFocus = ops.captureFocus(body);     // фокус и курсор переживают перерисовку (снимки сцены приходят часто)
     if (!tabs.some(([k]) => k === tab) || (tab === "filters" && filtersLeft())) tab = "props";
     el.querySelector('.ws-tabs [data-tab="filters"]')?.toggleAttribute("hidden", filtersLeft());
-    body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml())
-      : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
-    body.scrollTop = keepScroll;
-    bindPanel(body);
-    restoreFocus();
+    const elementProps = mfr && tab === "props" && sc?.mfr?.selected?.kind === "element";
+    const matchesDetail = detail.id === selKey(sc);
+    panelScroll.update(body, {
+      scope: elementProps ? `mfr-element:${curObject}` : null,
+      loading: elementProps && (!matchesDetail || (!detail.data && !detail.error)),
+      complete: elementProps && matchesDetail && !!detail.data && !detail.error,
+    }, () => {
+      body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml())
+        : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
+      bindPanel(body);
+      restoreFocus();
+    });
     const left = $("#ws-left-body");
     if (left && filtersLeft()) { const ks = left.scrollTop; left.innerHTML = sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml()); left.scrollTop = ks; bindPanel(left); }
     paintMultiBar();
