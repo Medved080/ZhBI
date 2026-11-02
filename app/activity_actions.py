@@ -73,6 +73,7 @@ _SY, _V = CATEGORY_SYSTEM, CATEGORY_VIEW
 #
 # код: (подпись для человека, категория)
 ACTIONS = {
+    "contracting_plan_change": ("Изменён график контрактации СМР", _D),
     "ai_settings": ("Изменены настройки интеграции с ИИ", _ST),
     "ai_router_settings": ("Изменены настройки облачного роутера ИИ", _ST),
     "ai_router_key": ("Изменён ключ облачного роутера ИИ", _S),

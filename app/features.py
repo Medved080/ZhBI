@@ -228,6 +228,10 @@ FEATURES = [
             ["GET /objects/{id}/drawings", "POST /import-dxf/analyze и /apply"],
             SCOPE_OBJECT, _от(ADMIN, WRITE)),
 
+    Feature("contracting_plan", "График контрактации СМР", "РД, лоты, ВОР, ТЗ и загрузка в 1С",
+            "Отдельный объектный контур подготовки конкурсов СМР. Новое право назначается администратором явно.",
+            ["GET /objects/{id}/contracting-plan", "GET /objects/{id}/contracting-plan/history", "POST /objects/{id}/contracting-plan/commands"],
+            SCOPE_OBJECT, {}),
     # ------------------------------------------------------ Контрактация
     Feature("contracts", "Контрактация", "Контракты и их позиции",
             None, ["GET /contracts", "POST/PATCH /contracts"], SCOPE_OBJECT, _от(CONTRACT, WRITE)),

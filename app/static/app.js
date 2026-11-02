@@ -38685,3 +38685,8 @@ window.ZhbiAssistantContext = () => {
 document.getElementById("menu-ai-settings").addEventListener("click", () => {
   const url=new URL("/v2",location.origin);if(state.objectId)url.searchParams.set("object_id",String(state.objectId));url.hash="/ai-integration";location.assign(url);
 });
+
+// Новый контур конкурсов СМР живёт в V2; объект переносится явно.
+document.getElementById("menu-contracting-plan").addEventListener("click", () => {
+  location.href = `/v2?object_id=${state.objectId || ""}#/contracting-plan`;
+});

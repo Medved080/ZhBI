@@ -186,6 +186,7 @@ function renderFatal(err) {
 // Экраны области «МФР / учёт по блокам» (рабочие модули с записью через шлюз): impl экрана → монтирование
 // (модули грузятся при первом открытии экрана, а не при старте: холодный запуск V2 не тяжелеет)
 const MFR_SCREENS = {
+  "contracting-plan": () => import("./contracting-plan.js").then((m) => m.mountContractingPlan),
   "blocks-edit": () => import("./blocks-screen.js").then((m) => m.mountBlocksScreen),
   "fact-journal-edit": () => import("./fact-journal-screen.js").then((m) => m.mountFactJournalScreen),
   "chess-flat-edit": () => import("./chess-flat-screen.js").then((m) => m.mountChessFlatScreen),

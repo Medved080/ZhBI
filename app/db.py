@@ -130,6 +130,7 @@ def ensure_wal(conn: sqlite3.Connection) -> str:
 # доступ к новым полям (или падали бы на INSERT/SELECT) после обновления,
 # пока не удалят data/zhbi.db вручную.
 _COLUMN_MIGRATIONS = [
+    ("cp_lots", "completion_json", "TEXT"),
     ("elements", "planned_installation_date", "TEXT"),
     ("headcount_history", "shift", "TEXT NOT NULL DEFAULT 'day' CHECK (shift IN ('day', 'night'))"),
     ("headcount_contractors", "is_archived", "INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1))"),

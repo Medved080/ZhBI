@@ -2087,3 +2087,99 @@ CREATE TABLE IF NOT EXISTS pp_group_members (
     PRIMARY KEY (group_id, pp_object_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pp_group_members_obj ON pp_group_members (pp_object_id);
+
+-- График контрактации СМР: отдельный от договоров поставки контур (Docs/contracting-plan-design.md).
+CREATE TABLE IF NOT EXISTS cp_state (
+    object_id INTEGER PRIMARY KEY REFERENCES objects(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS cp_rd (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    responsible_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    composition_confirmed INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    customer_agreement TEXT NOT NULL DEFAULT '',
+    UNIQUE(object_id,code)
+);
+CREATE INDEX IF NOT EXISTS ix_cp_rd_object ON cp_rd(object_id);
+CREATE TABLE IF NOT EXISTS cp_works (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    rd_id INTEGER NOT NULL REFERENCES cp_rd(id) ON DELETE RESTRICT,
+    title TEXT NOT NULL,
+    classifier_id INTEGER REFERENCES work_classifier(id) ON DELETE SET NULL,
+    required_start TEXT,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ix_cp_works_object ON cp_works(object_id);
+CREATE TABLE IF NOT EXISTS cp_lots (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    pto_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    required_start TEXT,
+    vor_due TEXT,
+    tz_due TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    gpr_note TEXT NOT NULL DEFAULT '',
+    archived_at TEXT,
+    archive_reason TEXT NOT NULL DEFAULT '',
+    uploaded_date TEXT,
+    upload_ref TEXT NOT NULL DEFAULT '',
+    uploaded_tz_id INTEGER REFERENCES cp_documents(id) ON DELETE RESTRICT,
+    completion_json TEXT,
+    UNIQUE(object_id,code)
+);
+CREATE INDEX IF NOT EXISTS ix_cp_lots_object ON cp_lots(object_id);
+CREATE TABLE IF NOT EXISTS cp_assignments (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    lot_id INTEGER NOT NULL REFERENCES cp_lots(id) ON DELETE CASCADE,
+    work_id INTEGER NOT NULL REFERENCES cp_works(id) ON DELETE RESTRICT,
+    share INTEGER NOT NULL CHECK(share BETWEEN 1 AND 100),
+    scope TEXT NOT NULL,
+    rd_planned TEXT,
+    rd_agreed TEXT,
+    rd_issued TEXT,
+    rd_sufficient INTEGER NOT NULL DEFAULT 0,
+    rd_scope TEXT NOT NULL DEFAULT '',
+    rd_ref TEXT NOT NULL DEFAULT '',
+    UNIQUE(lot_id,work_id)
+);
+CREATE INDEX IF NOT EXISTS ix_cp_assignments_object ON cp_assignments(object_id);
+CREATE TABLE IF NOT EXISTS cp_documents (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    lot_id INTEGER NOT NULL REFERENCES cp_lots(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('vor','tz')),
+    number TEXT NOT NULL,
+    document_date TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ix_cp_documents_object ON cp_documents(object_id);
+CREATE TABLE IF NOT EXISTS cp_document_work (
+    document_id INTEGER NOT NULL REFERENCES cp_documents(id) ON DELETE CASCADE,
+    work_id INTEGER NOT NULL REFERENCES cp_works(id) ON DELETE RESTRICT,
+    PRIMARY KEY(document_id,work_id)
+);
+CREATE TABLE IF NOT EXISTS cp_tz_vor (
+    tz_id INTEGER NOT NULL REFERENCES cp_documents(id) ON DELETE CASCADE,
+    vor_id INTEGER NOT NULL REFERENCES cp_documents(id) ON DELETE RESTRICT,
+    PRIMARY KEY(tz_id,vor_id)
+);
+CREATE TABLE IF NOT EXISTS cp_history (
+    id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    action TEXT NOT NULL,
+    entity_id INTEGER,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_cp_history_object ON cp_history(object_id);

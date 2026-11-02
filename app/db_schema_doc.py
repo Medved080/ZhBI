@@ -1466,6 +1466,94 @@ SOFT = [
 # Порядок колонок подобран так, чтобы таблицы стояли рядом со своими
 # предками: короткая связь не пересекает половину полотна.
 
+# График контрактации СМР (не контракты поставки).
+TABLES.extend([
+('cp_state', 'cp_state — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('object_id', 'INTEGER', 'PK', 'Объект графика'),
+    ('revision', 'INTEGER', '', 'Общая ревизия графика; защита всех изменений от потери параллельных правок'),
+]),
+('cp_rd', 'cp_rd — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('id', 'INTEGER', 'PK', 'Марка РД'),
+    ('object_id', 'INTEGER', 'FK', 'Объект'),
+    ('code', 'TEXT', '', 'Шифр марки РД; уникален на объекте'),
+    ('name', 'TEXT', '', 'Наименование раздела РД'),
+    ('responsible_id', 'INTEGER', 'FK', 'Ответственный за согласование выдачи РД'),
+    ('composition_confirmed', 'INTEGER', '', 'Явное подтверждение полноты детализации марки на виды работ; снимается при изменении состава'),
+    ('note', 'TEXT', '', 'Примечание по РД: текущая проблема, условия выдачи и срок решения'),
+    ('customer_agreement', 'TEXT', '', 'Согласование с заказчиком: свободный справочный статус/комментарий, не gate конкурса'),
+]),
+('cp_works', 'cp_works — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('id', 'INTEGER', 'PK', 'Позиция работ марки РД'),
+    ('object_id', 'INTEGER', 'FK', 'Объект'),
+    ('rd_id', 'INTEGER', 'FK', 'Марка РД'),
+    ('title', 'TEXT', '', 'Вид работ в составе марки'),
+    ('classifier_id', 'INTEGER', 'FK', 'Необязательная ссылка на общий кодификатор работ'),
+    ('required_start', 'TEXT', '', 'Требуемая дата начала СМР по виду работ (ISO)'),
+    ('note', 'TEXT', '', 'Примечание по виду работ'),
+]),
+('cp_lots', 'cp_lots — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('id', 'INTEGER', 'PK', 'Лот конкурса СМР'),
+    ('object_id', 'INTEGER', 'FK', 'Объект'),
+    ('code', 'TEXT', '', 'Уникальный на объекте шифр лота'),
+    ('title', 'TEXT', '', 'Наименование лота'),
+    ('pto_id', 'INTEGER', 'FK', 'Ответственный ПТО за подготовку ВОР/ТЗ'),
+    ('required_start', 'TEXT', '', 'Требуемая дата начала СМР лота (ISO)'),
+    ('vor_due', 'TEXT', '', 'Заданный пользователем срок подготовки ВОР; автоматических нормативов нет'),
+    ('tz_due', 'TEXT', '', 'Заданный пользователем срок подготовки ТЗ'),
+    ('note', 'TEXT', '', 'Текущие проблемы лота и сроки решения'),
+    ('gpr_note', 'TEXT', '', 'Отдельное примечание по ГПР'),
+    ('archived_at', 'TEXT', '', 'Момент вывода лота из работы; состав и история сохранены'),
+    ('archive_reason', 'TEXT', '', 'Причина вывода лота'),
+    ('uploaded_date', 'TEXT', '', 'Подтвержденная пользователем фактическая дата загрузки ТЗ в 1С; не результат API 1С'),
+    ('upload_ref', 'TEXT', '', 'Реквизиты/ссылка подтверждения загрузки в 1С'),
+    ('uploaded_tz_id', 'INTEGER', 'FK', 'ТЗ, для которого зафиксирована загрузка в 1С'),
+    ('completion_json', 'TEXT', '', 'Снимок состава лота/РД/работ/документов на момент подтверждения 1С; история сохраняет снимок при возобновлении'),
+]),
+('cp_assignments', 'cp_assignments — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('id', 'INTEGER', 'PK', 'Назначение части вида работ лоту'),
+    ('object_id', 'INTEGER', 'FK', 'Объект'),
+    ('lot_id', 'INTEGER', 'FK', 'Лот'),
+    ('work_id', 'INTEGER', 'FK', 'Позиция работ марки РД'),
+    ('share', 'INTEGER', '', 'Доля вида работ; сумма по активным лотам <=100%; полнота =100%'),
+    ('scope', 'TEXT', '', 'Явная граница части работ: корпус/этажи/этап; целая позиция = весь объем'),
+    ('rd_planned', 'TEXT', '', 'Плановая дата выдачи достаточной РД'),
+    ('rd_agreed', 'TEXT', '', 'Отдельно согласованный с проектировщиком срок выдачи РД'),
+    ('rd_issued', 'TEXT', '', 'Фактическая дата выдачи части РД'),
+    ('rd_sufficient', 'INTEGER', '', 'Ответственный подтвердил, что выданной части РД достаточно для конкурса этой части работ'),
+    ('rd_scope', 'TEXT', '', 'Описание выданной части РД (не обязательно финальная РД целиком)'),
+    ('rd_ref', 'TEXT', '', 'Ссылка/реквизиты выданного комплекта РД'),
+]),
+('cp_documents', 'cp_documents — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('id', 'INTEGER', 'PK', 'Регистрация ВОР или ТЗ в принятом хранилище'),
+    ('object_id', 'INTEGER', 'FK', 'Объект'),
+    ('lot_id', 'INTEGER', 'FK', 'Лот документа'),
+    ('kind', 'TEXT', '', 'Тип: ВОР или ТЗ; это регистрация состава, не физическое объединение файлов'),
+    ('number', 'TEXT', '', 'Номер ВОР/ТЗ'),
+    ('document_date', 'TEXT', '', 'Дата документа (ISO)'),
+    ('reference', 'TEXT', '', 'Обязательная ссылка/реквизиты доступного документа'),
+    ('note', 'TEXT', '', 'Примечание к документу'),
+]),
+('cp_document_work', 'cp_document_work — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('document_id', 'INTEGER', 'FK', 'ВОР'),
+    ('work_id', 'INTEGER', 'FK', 'Вид работ в составе ВОР; часть определяется назначением лоту'),
+]),
+('cp_tz_vor', 'cp_tz_vor — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('tz_id', 'INTEGER', 'FK', 'ТЗ лота'),
+    ('vor_id', 'INTEGER', 'FK', 'ВОР, включенная в состав ТЗ; несколько ВОР на ТЗ'),
+]),
+('cp_history', 'cp_history — График контрактации СМР', C_CONTR, S_CONTR, [
+    ('id', 'INTEGER', 'PK', 'Запись неизменяемой истории графика'),
+    ('object_id', 'INTEGER', 'FK', 'Объект'),
+    ('user_id', 'INTEGER', 'FK', 'Автор изменения'),
+    ('action', 'TEXT', '', 'Операция графика'),
+    ('entity_id', 'INTEGER', '', 'Идентификатор измененной записи; сохраняется после удаления'),
+    ('before_json', 'TEXT', '', 'Предыдущее состояние измененной записи/состава'),
+    ('after_json', 'TEXT', '', 'Проверенные параметры выполненного изменения, включая причину'),
+    ('created_at', 'TEXT', '', 'Момент изменения UTC'),
+]),
+])
+FKS.extend([('cp_state', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_rd', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_rd', 'responsible_id', 'users', 'id', 'SET NULL'), ('cp_works', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_works', 'rd_id', 'cp_rd', 'id', 'RESTRICT'), ('cp_works', 'classifier_id', 'work_classifier', 'id', 'SET NULL'), ('cp_lots', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_lots', 'pto_id', 'users', 'id', 'SET NULL'), ('cp_lots', 'uploaded_tz_id', 'cp_documents', 'id', 'RESTRICT'), ('cp_assignments', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_assignments', 'lot_id', 'cp_lots', 'id', 'CASCADE'), ('cp_assignments', 'work_id', 'cp_works', 'id', 'RESTRICT'), ('cp_documents', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_documents', 'lot_id', 'cp_lots', 'id', 'CASCADE'), ('cp_document_work', 'document_id', 'cp_documents', 'id', 'CASCADE'), ('cp_document_work', 'work_id', 'cp_works', 'id', 'RESTRICT'), ('cp_tz_vor', 'tz_id', 'cp_documents', 'id', 'CASCADE'), ('cp_tz_vor', 'vor_id', 'cp_documents', 'id', 'RESTRICT'), ('cp_history', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_history', 'user_id', 'users', 'id', 'SET NULL')])
+
 BY_NAME = {t[0]: t for t in TABLES}
 
 # Домен таблицы — по цвету заливки: чем окрашена в схеме, к той группе и

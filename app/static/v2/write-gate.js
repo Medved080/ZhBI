@@ -232,6 +232,7 @@ function shellPrefsBodyProblem(b) {
 // Проверка «на настоящем backend» — сокращённо в `proof`; полные записи — в `screens.json` (`checks`) и `Docs/v2-limited-release.md`.
 export const POLICY = [
   // ---- разрешено ----
+  { id: "contracting.plan.command", screen: "contracting-plan", action: "Изменить график контрактации СМР", method: "POST", path: re(`/objects/\\d+/contracting-plan/commands`), onlyKeys: ["expected_revision", "action", "payload"], allowed: true, risk: "общий график объекта, документы и факт 1С; ревизия и этапы проверяются сервером", proof: "scripts/verify_contracting_plan.py и scripts/verify_contracting_plan_ui.mjs: синтетический объект, права, M:N, документы, финальный gate и конфликты" },
   { id: "ai.config", screen: "ai-integration", action: "Общее подключение к локальному ИИ", method: "PUT", path: re("/ai/config"), onlyKeys: ["connection", "assistantModel", "assistantEnabled", "assistantContextTokens", "expectedRevision"], risk: "настройки сервиса", allowed: true, proof: "Проверка на копии: права, конфликт версии и чтение настройки калькулятором" },
   { id: "ai.models", screen: "ai-integration", action: "Получить список локальных моделей", method: "POST", path: re("/ai/models"), risk: "чтение", allowed: true, proof: "Тот же локальный клиент без перенаправлений" },
   { id: "ai.probe", screen: "ai-integration", action: "Проверить чтение изображения", method: "POST", path: re("/ai/drawing-test"), onlyKeys: [], risk: "проверка подключения", allowed: true, proof: "Существующая проверка изображения с общей блокировкой GPU" },

@@ -259,6 +259,34 @@ def zone_snapshot_source_files(raw: str) -> set[str]:
     return found
 
 
+def _blank_cp_json(raw):
+    """Снимки СМР: свободный текст скрыть, структурные enum и даты сохранить."""
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return "null"
+
+    enums = {
+        "kind": {"vor", "tz"},
+        "status": {"rd", "vor", "tz", "upload", "completed", "archived"},
+    }
+
+    def walk(node, key=None):
+        if isinstance(node, str):
+            if key in enums and node in enums[key]:
+                return node
+            if key == "completion_json":
+                return _blank_cp_json(node)
+            return node if not node.strip() or _ISO_DATE.match(node.strip()) else "скрыто"
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        if isinstance(node, dict):
+            return {name: walk(value, name) for name, value in node.items()}
+        return node
+
+    return json.dumps(walk(data), ensure_ascii=False)
+
+
 def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
     stats: dict[str, int] = {}
 
@@ -331,6 +359,36 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             alias = mapping.put(group, row["name"], f"{label} {n}")
             conn.execute(f"UPDATE {table} SET name=? WHERE id=?", (alias, row["id"]))
         count(f"{table}.name", len(rows))
+
+    # Конкурсы СМР: реестр и сохранённые снимки содержат свободный текст/ссылки.
+    # Даты, числовые связи, доли и этапы сохраняются; ссылки заменяются условными реквизитами.
+    cp_text = {
+        "cp_rd": ["code", "name", "note", "customer_agreement"],
+        "cp_works": ["title", "note"],
+        "cp_lots": ["code", "title", "note", "gpr_note", "archive_reason", "upload_ref"],
+        "cp_assignments": ["scope", "rd_scope", "rd_ref"],
+        "cp_documents": ["number", "reference", "note"],
+    }
+    for table, fields in cp_text.items():
+        if table not in existing:
+            continue
+        cp_rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+        for field in fields:
+            # Два прохода для уникальных шифров: реальный шифр мог совпасть с псевдонимом.
+            if field == "code":
+                for item in cp_rows:
+                    conn.execute(f"UPDATE {table} SET {field}=? WHERE id=?", (f"__cp_anon_{item['id']}__", item["id"]))
+            for item in cp_rows:
+                if item[field]:
+                    value = mapping.put(f"{table}.{field}", item[field], f"Условное {field} {item['id']}")
+                    conn.execute(f"UPDATE {table} SET {field}=? WHERE id=?", (value, item["id"]))
+        count(table, len(cp_rows))
+    if "cp_lots" in existing and "completion_json" in {r[1] for r in conn.execute("PRAGMA table_info(cp_lots)")}:
+        for item in conn.execute("SELECT id,completion_json FROM cp_lots WHERE completion_json IS NOT NULL").fetchall():
+            conn.execute("UPDATE cp_lots SET completion_json=? WHERE id=?", (_blank_cp_json(item["completion_json"]), item["id"]))
+    if "cp_history" in existing:
+        for item in conn.execute("SELECT id,before_json,after_json FROM cp_history").fetchall():
+            conn.execute("UPDATE cp_history SET before_json=?,after_json=? WHERE id=?", (_blank_cp_json(item["before_json"]), _blank_cp_json(item["after_json"]), item["id"]))
 
     # Производственная программа (2026-10-23, Docs/pp-money.md): в pp_objects лежат реальные коды проектов и названия объектов, в pp_money —
     # деньги заказчика, в pp_groups — названия групп, набранные людьми. Коды и названия меняются на псевдонимы (код уникален — два прохода),
