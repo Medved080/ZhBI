@@ -294,7 +294,8 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-component-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0 24px}
 #precast-concept .pc-specification{margin:14px 0 24px;min-width:500px}
 @media(max-width:740px){#precast-concept .pc-viewer{height:360px}#precast-concept .pc-component-list{grid-template-columns:1fr}}
-#precast-concept #pc-norms-panel{overflow:auto;min-height:0;grid-row:2/-1;padding:4px 4px 20px}
+/* Панель занимает единственную строку рабочей области без пустой строки перед ней. */
+#precast-concept #pc-norms-panel{overflow:auto;min-height:0;padding:4px 4px 20px}
 #precast-concept .pc-norms-heading h2{margin:8px 0}
 #precast-concept .pc-norms-heading p{font-size:13px;line-height:1.5;max-width:1000px}
 #precast-concept .pc-norms-warning{padding:10px 14px;border-left:3px solid #c89b3c;background:light-dark(#fff8e9,#332c1d)}
