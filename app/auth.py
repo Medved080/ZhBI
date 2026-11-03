@@ -175,6 +175,7 @@ def _prune_login_attempts(now: float) -> None:
 
 
 def _check_login_rate_limit(client_ip: str, login: str) -> None:
+    login = login.casefold()
     now = time.time()
     _prune_login_attempts(now)
 
@@ -197,6 +198,7 @@ def _check_login_rate_limit(client_ip: str, login: str) -> None:
 
 
 def _record_login_failure(client_ip: str, login: str) -> None:
+    login = login.casefold()
     now = time.time()
     for ключ in (("pair", login, client_ip), ("ip", client_ip), ("login", login)):
         _login_attempts.setdefault(ключ, []).append(now)
@@ -215,6 +217,7 @@ def _reset_login_attempts(client_ip: str, login: str) -> None:
     """Успешный вход обнуляет счётчики САМОГО ВОШЕДШЕГО, но не широкую сеть
     по адресу: иначе атакующий, у которого есть одна своя учётная запись,
     сбрасывал бы себе ограничение каждым удачным входом."""
+    login = login.casefold()
     _login_attempts.pop(("pair", login, client_ip), None)
     _login_attempts.pop(("login", login), None)
 
@@ -734,24 +737,29 @@ def login(body: LoginRequest, request: Request, response: Response):
 
     conn = get_connection()
     try:
-        user = conn.execute(
-            "SELECT * FROM users WHERE domain_login = ?", (body.domain_login,)
-        ).fetchone()
-        if user is None:
+        matches = conn.execute(
+            "SELECT * FROM users WHERE CASEFOLD(domain_login) = ? LIMIT 2",
+            (body.domain_login.casefold(),),
+        ).fetchall()
+        # Старые логины могли различаться только регистром. Не выбираем
+        # произвольную учётную запись, если в базе уже есть такая коллизия.
+        if len(matches) != 1:
             # Несуществующий логин отвечает ровно так же, как неверный
             # пароль, и НЕ уходит в домен: иначе перебор логинов на нашей
             # форме превратился бы в перебор по чужому каталогу.
             _record_login_failure(client_ip, body.domain_login)
             _log_login("login_failed", client_ip, login=body.domain_login,
-                       detail="учётной записи с таким логином нет")
+                       detail="учётной записи с таким логином нет" if not matches
+                       else "несколько учётных записей с одинаковым логином без учёта регистра")
             raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+        user = matches[0]
 
         # Способ проверки — свойство учётной записи, а не глобальный режим:
         # доменный пароль НИКОГДА не проверяется локальным хэшем и наоборот
         # (см. app/ldap_auth.py о том, почему нет отката с одного на другой).
         if auth_method_of(user) == "domain":
             try:
-                ldap_auth.authenticate(conn, body.domain_login, body.password)
+                ldap_auth.authenticate(conn, user["domain_login"], body.password)
             except ldap_auth.DomainAuthError as e:
                 _record_login_failure(client_ip, body.domain_login)
                 # Причина отказа домена уходит в журнал действий целиком, а

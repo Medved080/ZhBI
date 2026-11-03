@@ -51,6 +51,11 @@ class _TextOnlyResponder(GZipResponder):
     """Тот же GZipResponder, но нетекстовые ответы пропускает без сжатия."""
 
     async def send_with_compression(self, message: Message) -> None:
+        if message["type"] == "http.response.start":
+            # Response может храниться в кеше (рабочая область калькулятора).
+            # Starlette меняет список заголовков на месте, но не Response.body:
+            # без копии повторный запрос отдаёт JSON с заголовком gzip.
+            message = {**message, "headers": list(message["headers"])}
         await super().send_with_compression(message)
         if message["type"] == "http.response.start" and not self.started:
             headers = Headers(raw=message["headers"])

@@ -147,8 +147,9 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service
     _validate_role(body.role)
     conn = get_connection()
     try:
+        begin_write(conn)
         existing = conn.execute(
-            "SELECT id FROM users WHERE domain_login = ?", (body.domain_login,)
+            "SELECT id FROM users WHERE CASEFOLD(domain_login) = ?", (body.domain_login.casefold(),)
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail="Такое доменное имя уже занято")
@@ -210,7 +211,8 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
                        "вернуть её будет некому. Попросите об этом другого администратора",
             )
         conflict = conn.execute(
-            "SELECT id FROM users WHERE domain_login = ? AND id != ?", (body.domain_login, user_id)
+            "SELECT id FROM users WHERE CASEFOLD(domain_login) = ? AND id != ?",
+            (body.domain_login.casefold(), user_id)
         ).fetchone()
         if conflict:
             raise HTTPException(status_code=409, detail="Такое доменное имя уже занято")

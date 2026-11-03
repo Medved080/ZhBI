@@ -31,6 +31,9 @@ def get_connection() -> sqlite3.Connection:
     # factory — соединение, которое мерит SQL, пока идёт замеряемый запрос (app/perf_core.py); вне замера ведёт себя как обычное
     conn = sqlite3.connect(DB_PATH, factory=PerfConnection)
     conn.row_factory = sqlite3.Row
+    # SQLite NOCASE учитывает только ASCII; логины бывают и кириллическими.
+    conn.create_function("CASEFOLD", 1, lambda value: value.casefold() if value is not None else None,
+                         deterministic=True)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     return conn
