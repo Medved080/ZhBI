@@ -87,14 +87,14 @@ export function createElementOps(ctx) {
   const sw = (k) => statusColor(k);
 
   // ------------------------------------------------------------ права (по объекту, как в V1: раздел + порог «запись»)
-  const R = { loaded: false, status: false, plannedDate: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false };
+  const R = { loaded: false, status: false, plannedDate: false, schedule: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false };
   function setRights(r) {
     const can = (k) => !!r && (!!r.system_admin || (r.features?.[k] === "write" && !(r.not_applicable || []).includes(k)));
-    Object.assign(R, { loaded: true, status: can("status"), plannedDate: can("planned_date"), comment: can("comment"), history: can("history"), fields: can("element_fields"),
+    Object.assign(R, { loaded: true, status: can("status"), plannedDate: can("planned_date"), schedule: can("schedule"), comment: can("comment"), history: can("history"), fields: can("element_fields"),
       attachments: can("attachments"), attachmentsDelete: can("attachments_delete") });
     repaint();
   }
-  function rightsFailed() { Object.assign(R, { loaded: true, status: false, plannedDate: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false }); repaint(); }
+  function rightsFailed() { Object.assign(R, { loaded: true, status: false, plannedDate: false, schedule: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false }); repaint(); }
 
   // ------------------------------------------------------------ состояние форм (по изделию: переключение выбора не теряет ввод)
   const forms = new Map();
@@ -472,39 +472,45 @@ export function createElementOps(ctx) {
     } finally { h.busy = false; reloadDetail(id); if (!isDead()) repaint(); }
   }
 
-  // ---- форма реквизитов (PATCH /elements/{id}/fields)
+  // ---- форма реквизитов и дат: одна транзакция, сверка снимка изделия и актуализации
   const EF = [
     { key: "element_type", label: "Тип", kind: "type" }, { key: "subtype", label: "Подтип", kind: "subtype" }, { key: "mark", label: "Марка", kind: "mark" },
     { key: "elevation_mm", label: "Отметка, мм", type: "number" }, { key: "floor", label: "Этаж", type: "number" }, { key: "address", label: "Адрес по осям" },
-    { key: "project_smr_start_date", label: "Начало СМР", type: "date" }, { key: "planned_delivery_date", label: "Плановая дата поставки", type: "date" },
+    { key: "project_smr_start_date", label: "Начало СМР", type: "date" },
+    { key: "forecast_start", label: "Начало СМР актуализированное", type: "date", schedule: true },
     { key: "project_delivery_date", label: "Завершение СМР", type: "date" },
+    { key: "forecast_end", label: "Завершение СМР актуализированное", type: "date", schedule: true },
+    { key: "planned_delivery_date", label: "Плановая дата поставки", type: "date" },
+    { key: "planned_installation_date", label: "Плановая дата монтажа", type: "date", installation: true },
   ];
   async function openElementForm(id) {
     if (!R.fields) return;
     let el, marks = [], allowed = {};
     try {
-      el = await api.get(`/elements/${id}`);
+      el = await api.get(`/element-ops/fields/${id}`);
       if (el.object_id != null) {
         try { marks = await api.get(`/marks?object_id=${el.object_id}`); } catch (e) { marks = []; }
         try { allowed = await api.get(`/allowed-subtypes?object_id=${el.object_id}`); } catch (e) { allowed = {}; }
       }
     } catch (err) { await showInfoDialog(`Не удалось открыть форму: ${err instanceof ApiError ? err.detail : "нет связи"}`); return; }
     const f = F(id);
-    const res = await openModal({ title: `Изделие · ${el.mark || "без марки"} · ${el.element_type}`, width: 620, mount(body, m) {
+    const res = await openModal({ title: `Изделие · ${el.mark || "без марки"} · ${el.element_type}`, width: 760, mount(body, m) {
       const manual = new Set(el.manual_fields || []);
       const types = Array.from(new Set([...Object.keys(allowed || {}), el.element_type].filter(Boolean))).sort();
       const subOpts = (t, cur) => ['<option value="">— не задан —</option>'].concat((allowed[t] || []).map((v) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(v)}</option>`)).join("");
       const markOpts = (t, cur) => { const l = marks.filter((x) => x.element_type === t).map((x) => x.name); if (cur && !l.includes(cur)) l.unshift(cur); return ['<option value="">— не задана —</option>'].concat(l.map((v) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(v)}</option>`)).join(""); };
+      const readonly = (x) => (x.schedule && !R.schedule) || (x.installation && (!R.plannedDate || el.current_status !== "ready_for_installation"));
       const ctl = (x) => {
         const v = el[x.key] ?? "";
         if (x.kind === "type") return `<select name="element_type">${types.map((t) => `<option value="${esc(t)}" ${t === el.element_type ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`;
         if (x.kind === "subtype") return `<select name="subtype">${subOpts(el.element_type, el.subtype)}</select>`;
         if (x.kind === "mark") return `<select name="mark">${markOpts(el.element_type, el.mark)}</select>`;
-        return `<input type="${x.type || "text"}" name="${x.key}" value="${esc(v)}">`;
+        return `<input type="${x.type || "text"}" name="${x.key}" value="${esc(v)}" ${readonly(x) ? "disabled" : ""}>`;
       };
       body.innerHTML = `<form class="ws-form eo-grid" id="eo-ef" autocomplete="off" novalidate>
         ${EF.map((x) => `<label class="ws-fld">${esc(x.label)}${manual.has(x.key) ? " ✎" : ""}${ctl(x)}</label>`).join("")}
-        <p class="v2-muted ws-fnote eo-span">✎ — поле правлено руками: повторная загрузка чертежа его не перезапишет молча. Статус и контракт меняются в карточке изделия, комментарий — там же. Смена типа или марки отклоняется, если изделие перестаёт соответствовать позиции его контракта.</p>
+        <p class="v2-muted ws-fnote eo-span">Актуализированные даты относятся к последнему графику; при загрузке нового графика используются его даты.${!R.schedule ? " Для их изменения нужно право редактирования графика СМР." : ""} Плановую дату монтажа можно менять только в статусе «Готов к монтажу» и при наличии права изменения плановых дат.</p>
+        <p class="v2-muted ws-fnote eo-span">✎ — реквизит правлен руками: повторная загрузка чертежа его не перезапишет молча. Статус и контракт меняются в карточке изделия, комментарий — там же. Смена типа или марки отклоняется, если изделие перестаёт соответствовать позиции его контракта.</p>
         <div class="ws-actions eo-foot eo-span"><button type="button" class="v2-btn" data-cancel>Отмена</button><button type="submit" class="v2-btn v2-primary">Сохранить</button></div>
         <p class="ws-err eo-span" role="alert" hidden></p></form>`;
       const form = body.querySelector("form"), err = body.querySelector(".ws-err");
@@ -517,13 +523,14 @@ export function createElementOps(ctx) {
         if (busy) return;
         const payload = {};
         for (const x of EF) {
+          if (readonly(x)) continue;
           const raw = String(form.elements[x.key].value).trim();
           const was = el[x.key] === null || el[x.key] === undefined ? "" : String(el[x.key]);
           if (raw !== was) payload[x.key] = raw === "" ? null : raw;
         }
         if (!Object.keys(payload).length) { err.hidden = false; err.textContent = "Изменений нет."; return; }
         busy = true; m.setBusy(true); err.hidden = true; form.querySelector("[type=submit]").disabled = true;
-        try { m.close({ ok: await api.patch(`/elements/${id}/fields`, payload) }); }
+        try { m.close({ ok: await api.patch(`/element-ops/fields/${id}`, { changes: payload, expected_revision: el.form_revision }) }); }
         catch (e) { busy = false; m.setBusy(false); form.querySelector("[type=submit]").disabled = false; if (unknownOutcome(e)) m.close({ unknown: true }); else { err.hidden = false; err.textContent = errText(e, "Не удалось сохранить"); } }
       });
     } });

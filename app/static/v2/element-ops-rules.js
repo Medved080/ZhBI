@@ -147,6 +147,13 @@ export function fieldsBodyProblem(body) {
   return null;
 }
 
+export function elementFormBodyProblem(body) {
+  if (!isObj(body) || extra(body, ["changes", "expected_revision"]) || !/^[a-f0-9]{64}$/.test(body.expected_revision || "")) return "нет снимка формы";
+  const changes = body.changes, keys = [...FIELD_KEYS, "forecast_start", "forecast_end", "planned_installation_date"];
+  if (!isObj(changes) || !Object.keys(changes).length || extra(changes, keys)) return "поля формы";
+  return Object.values(changes).every(v => v === null || typeof v === "string" || typeof v === "number") ? null : "значение";
+}
+
 // ---- тексты последствий (по ответу сервера в режиме preview) ----
 const n = (x) => Number(x).toLocaleString("ru-RU");
 /** Последствия операции для показа ДО подтверждения: [{text, sub?: [строки]}]; пусто — последствий сверх смены статуса нет. */

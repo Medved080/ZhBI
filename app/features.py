@@ -185,7 +185,8 @@ FEATURES = [
     Feature("planned_date", "Схема объекта", "Плановые даты поставки и монтажа изделия",
             None,
             ["PATCH /elements/{id}/planned-delivery-date",
-             "PATCH /elements/bulk-planned-delivery-date", "PATCH /elements/bulk-planned-installation-date"], SCOPE_OBJECT, _от(USER, WRITE)),
+             "PATCH /elements/bulk-planned-delivery-date", "PATCH /elements/bulk-planned-installation-date",
+             "PATCH /element-ops/fields/{id} (план монтажа)"], SCOPE_OBJECT, _от(USER, WRITE)),
     Feature("comment", "Схема объекта", "Комментарий к изделию",
             None, ["PATCH /elements/{id}/comment"], SCOPE_OBJECT, _от(USER, WRITE)),
     Feature("attachments", "Схема объекта", "Вложения: просмотр и добавление",
@@ -196,7 +197,7 @@ FEATURES = [
             None, ["DELETE /attachments/{id}"], SCOPE_OBJECT, _от(ADMIN, WRITE, ниже=NONE)),
     Feature("element_fields", "Схема объекта", "Реквизиты изделий: правка полей",
             "Правка того, что пришло из чертежа: марка, отметка, зоны, этаж.",
-            ["PATCH /elements/{id}/fields"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
+            ["PATCH /elements/{id}/fields", "GET/PATCH /element-ops/fields/{id}"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
     Feature("element_catalog", "Схема объекта", "Справочник элементов объекта",
             None, ["GET /elements (списком)"], SCOPE_OBJECT, _от(ADMIN, WRITE)),
     Feature("export", "Схема объекта", "Выгрузка схемы в XLSX и PDF",
@@ -263,7 +264,8 @@ FEATURES = [
             ["GET /schedule-versions", "GET /schedule-versions/gantt",
              "GET /schedule-versions/gantt.xlsx|.pdf",
              "DELETE /schedule-versions/{id}",
-             "GET/PUT /schedule-calc/inputs", "POST /schedule-calc"],
+             "GET/PUT /schedule-calc/inputs", "POST /schedule-calc",
+             "PATCH /element-ops/fields/{id} (актуализированные даты)"],
             SCOPE_OBJECT, _от(CONTRACT, WRITE)),
 
     # ------------------------------------------------------------ Отчёты

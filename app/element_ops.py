@@ -37,9 +37,12 @@ from app.contracts import (_specification_chain, apply_status_change, build_cont
                            sync_element_contract)
 from app.db import begin_write, get_connection
 from app.element_dates import set_planned_delivery_date
+from app.element_form import router as element_form_router
 from app.models import Status
 
 router = APIRouter(prefix="/element-ops", tags=["element-ops"])
+
+router.include_router(element_form_router)
 
 MAX_ITEMS = 2000
 _DT_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$")
