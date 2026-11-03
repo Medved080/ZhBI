@@ -4,6 +4,7 @@
     python -m app.calc.manage create-token <логин> "<название>"
     python -m app.calc.manage link-project
     python -m app.calc.manage backup <файл.zip>
+    python -m app.calc.manage check-sources --assets <копия-assets> --database <снимок.sqlite3>
 
 Окружение то же, что у сервиса: ZHBI_DB_PATH (где база ЖБИ) и при необходимости
 ZHBI_CALC_DIR / ZHBI_CALC_ASSETS_DIR.
@@ -122,7 +123,15 @@ def main(argv=None):
     sub.add_parser("link-project")
     backup = sub.add_parser("backup")
     backup.add_argument("output")
+    preflight = sub.add_parser("check-sources", help="Проверка исходников на копии данных целевого сервера без записи")
+    preflight.add_argument("--assets", required=True)
+    preflight.add_argument("--database", required=True)
     args = parser.parse_args(argv)
+    if args.cmd == "check-sources":
+        from .deployment_check import check_sources
+        result = check_sources(args.assets, args.database)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["ready"] else 2
     if args.cmd == "import-legacy":
         import_legacy(args.source, not args.no_assets)
     elif args.cmd == "create-token":

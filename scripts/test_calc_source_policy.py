@@ -183,6 +183,48 @@ class PolicyTests(unittest.TestCase):
         with patch.object(dm,'ASSETS',self.root):
             self.blocked(lambda:read_rows((5,110)),'annulled_source_sheet')
 
+    def test_production_preflight_is_readonly_and_counts_manual_data(self):
+        import sqlite3
+        from app.calc.deployment_check import check_sources
+        from app.calc import manage
+        import contextlib,io
+        database=self.root/'snapshot.sqlite3'
+        with sqlite3.connect(database) as c:
+            c.execute('CREATE TABLE schema_migrations(version INTEGER)')
+            c.execute('INSERT INTO schema_migrations VALUES(?)',(SCHEMA_VERSION,))
+            c.execute('CREATE TABLE products(document_model_id TEXT,manual_fields TEXT)')
+            c.execute('INSERT INTO products VALUES(?,?)',('test','["volume"]'))
+        (self.root/'promka-register.json').write_text(json.dumps({'test':self.model}))
+        before={p.name:p.read_bytes() for p in [database,self.root/'promka-register.json']}
+        report=check_sources(self.root,database)
+        self.assertTrue(report['ready']);self.assertEqual(report['linkedProducts'],1);self.assertEqual(report['productsWithManualFields'],1)
+        with patch.object(manage,'initialize') as initialize,contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(manage.main(['check-sources','--assets',str(self.root),'--database',str(database)]),0)
+            initialize.assert_not_called()
+        for name,raw in before.items():self.assertEqual((self.root/name).read_bytes(),raw)
+        self.assertFalse((self.root/'.source-link-backups').exists())
+        with sqlite3.connect(database) as c:c.execute('UPDATE products SET document_model_id="missing"')
+        report=check_sources(self.root,database)
+        self.assertFalse(report['ready']);self.assertEqual(report['errors'][0]['code'],'missing_models')
+
+    def test_production_preflight_blocks_unsafe_catalog_and_has_nonzero_cli_exit(self):
+        import sqlite3,contextlib,io
+        from app.calc.deployment_check import check_sources
+        from app.calc import manage
+        database=self.root/'snapshot.sqlite3'
+        with sqlite3.connect(database) as c:
+            c.execute('CREATE TABLE schema_migrations(version INTEGER)')
+            c.execute('INSERT INTO schema_migrations VALUES(?)',(SCHEMA_VERSION,))
+            c.execute('CREATE TABLE products(document_model_id TEXT,manual_fields TEXT)')
+        bad=copy.deepcopy(self.model);bad['components'][0]['pdfPage']=110
+        (self.root/'promka-register.json').write_text(json.dumps({'test':bad}))
+        report=check_sources(self.root,database)
+        self.assertFalse(report['ready']);self.assertEqual(report['errors'][0]['code'],'annulled_source_sheet')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(manage.main(['check-sources','--assets',str(self.root),'--database',str(database)]),2)
+        nonexistent=self.root/'does-not-exist.sqlite3'
+        self.assertFalse(check_sources(self.root,nonexistent)['ready']);self.assertFalse(nonexistent.exists())
+
     def test_preview_cache_cannot_bypass_page_policy(self):
         from app.calc import source_sheets
         with patch.object(source_sheets,'ASSETS',self.root):
