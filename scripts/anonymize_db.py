@@ -488,6 +488,24 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
         )
     count("counterparties", len(rows))
 
+    # Численность хранит исходные реквизиты отдельно от ссылки на контрагента.
+    # Они нужны и несвязанным подрядчикам, поэтому сохраняем строки/ссылки,
+    # а реквизиты заменяем уникальными псевдонимами (включая частичные индексы).
+    if "headcount_contractors" in existing:
+        rows = conn.execute("SELECT id,name_raw,inn_raw FROM headcount_contractors ORDER BY id").fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE headcount_contractors SET name_raw=?,inn_raw=? WHERE id=?",
+                (f"__anon_name_{row['id']}__" if row["name_raw"] is not None else None,
+                 f"__anon_inn_{row['id']}__" if row["inn_raw"] is not None else None,
+                 row["id"]),
+            )
+        for row in rows:
+            name = mapping.put("headcount_contractors.name_raw", row["name_raw"], f"Подрядчик-{row['id']}") if row["name_raw"] is not None else None
+            inn = mapping.put("headcount_contractors.inn_raw", row["inn_raw"], str(7800000000 + row["id"])) if row["inn_raw"] is not None else None
+            conn.execute("UPDATE headcount_contractors SET name_raw=?,inn_raw=? WHERE id=?", (name, inn, row["id"]))
+        count("headcount_contractors (реквизиты)", len(rows))
+
     for table, prefix in (("agreements", "Д"), ("specifications", "С")):
         rows = conn.execute(f"SELECT id, number FROM {table} ORDER BY id").fetchall()
         for n, row in enumerate(rows, start=1):
@@ -654,6 +672,12 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             scrubbed += 1
     count("app_settings (скрыто значений)", scrubbed)
 
+    # Персональный кэш форм/фильтров содержит произвольный ввод. Сбрасываем
+    # его штатно отсутствием строки: строковая заглушка испортила бы enum/IDs
+    # в настройках UI. Рабочие предпочтения source-БД остаются неизменными.
+    if "user_ui_state" in existing:
+        count("user_ui_state (персональный кэш сброшен)", conn.execute("DELETE FROM user_ui_state").rowcount)
+
     # ------------------------------------------------- модель Revit / МФР
     # До 2026-08-31 эти четыре таблицы вообще не трогались — обнаружилось
     # только на реальных данных, когда собственная проверка на утечки
@@ -714,6 +738,7 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             ("revit_rooms", ("number", "name", "plan_type", "level_name")),
             ("object_flats", ("plan_type",)),
             ("object_roles", ("name",)),
+            ("work_codifier", ("name", "parent_name", "section_name")),
         ):
             n = 0
             for row in conn.execute(f"SELECT rowid AS rid, {', '.join(columns)} FROM {table}"):
@@ -752,7 +777,13 @@ _ENUM_COLUMNS = {"element_type"}
 # Служебные значения конкретных колонок: совпадение с ними — не утечка. Например,
 # schedule_versions.origin — «import»/«calc», а «import» встречается и как
 # служебный автор в status_history.changed_by. Иное значение проверяется как обычно.
-_ENUM_VALUES = {("schedule_versions", "origin"): {"import", "calc"}}
+_ENUM_VALUES = {
+    ("schedule_versions", "origin"): {"import", "calc"},
+    # app/headcount.py:SOURCES и CHECK schema.sql. Проверяется только
+    # этот закрытый словарь в этих колонках; произвольный source не исключён.
+    ("headcount_records", "source"): {"form", "import", "bot"},
+    ("headcount_history", "source"): {"form", "import", "bot"},
+}
 _RELEASE_TASK_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$")
 
 
