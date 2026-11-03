@@ -11,6 +11,13 @@ def import_register(settings, connection=None):
     """Insert source-linked KZhI assemblies once; existing calculations stay untouched."""
     from .norms import get_norms,parameters_for
     from .prices import get_prices
+    from .source_policy import SourcePolicy
+    from .document_models import ASSETS
+    policy = SourcePolicy(ASSETS)
+    # Preflight precedes even norm/price creation; a rejected batch imports nothing.
+    for entry in catalog().values():
+        if entry.get("kind") == "registry" and not entry.get("excluded"):
+            policy.model(entry)
     imported=[]
     with (transaction(settings.database_path) if connection is None else nullcontext(connection)) as conn:
         norms=get_norms(conn);prices=get_prices(conn)['parameters']

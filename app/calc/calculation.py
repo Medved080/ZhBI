@@ -5,6 +5,15 @@ from .document_models import model, resource_cost
 
 
 def calculate(product, extra, overrides, profile=None):
+    from .source_policy import ensure_model, SourceSheetBlocked
+    identifier = product.get("documentModelId")
+    document = model(identifier)
+    if identifier and document is None:
+        raise SourceSheetBlocked(identifier, "?", "модель и её источники не найдены")
+    if document:
+        ensure_model(document)
+    if product.get("documentModel"):
+        ensure_model(product["documentModel"])
     profile = profile or PROFILE
     with localcontext() as context:
         context.prec = 40
@@ -16,7 +25,6 @@ def calculate(product, extra, overrides, profile=None):
         for code in ["energy", "overhead", "admin", "commercial"]:
             cost += material * D(profile[code + "Percent"]) / 100
         service_margin = D(profile["profitPercent"])
-        document = model(product.get("documentModelId"))
         resources = (product.get("documentModel") or {}).get("resources", document["resources"]) if document else []
         resource_amount = sum((D(r["qty"])*D(r["rate"]) for r in resources),D(0))
         material_codes = {"concrete", "rest"} | {r["id"] for r in resources}

@@ -40,6 +40,15 @@ def import_legacy(source_root, with_assets=True):
     source_db = source / "data" / "calczhbi.sqlite3"
     if not source_db.is_file():
         raise SystemExit("Нет базы %s" % source_db)
+    from .source_link_repairs import validate_assets
+    from .source_policy import SourceSheetBlocked
+    source_assets = source / "backend" / "assets" if with_assets else cfg.data_dir / "assets"
+    models, policy = validate_assets(source_assets)
+    with sqlite3.connect(source_db.as_uri() + "?mode=ro", uri=True) as check:
+        for (identifier,) in check.execute("SELECT document_model_id FROM products WHERE document_model_id IS NOT NULL"):
+            if identifier not in models:
+                raise SourceSheetBlocked(identifier, "?", "модель отсутствует в импортируемом каталоге")
+            policy.model(models[identifier])
     target = cfg.database_path
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -93,6 +102,9 @@ def import_legacy(source_root, with_assets=True):
                 if not destination.exists() or destination.stat().st_size != path.stat().st_size:
                     shutil.copyfile(path, destination)
                     assets_count += 1
+    from .paths import ASSETS_DIR
+    from .source_link_repairs import repair_assets
+    repair_assets(ASSETS_DIR)
     from .link import link_project
     info = link_project(cfg)
     print(json.dumps({"schema": SCHEMA_VERSION, "attachments": len(files), "assetsCopied": assets_count, "link": info}, ensure_ascii=False))

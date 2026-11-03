@@ -108,6 +108,12 @@ def apply_readings(models, directory):
     if not path.exists():
         return 0
     data = json.loads(path.read_text())
+    from .source_policy import SourcePolicy
+    policy = SourcePolicy(directory)
+    # Validate every reading before its values influence models or reference norms.
+    for key, reading in data.items():
+        if key in models:
+            policy.reading(reading, (models[key].get("source") or {}).get("id", "doc02"))
     changed = 0
     from . import reinforcement
     # типичный расход арматуры по самим чтениям листов (они проходят самопроверки по суммам), по группе изделий: данные поставщика для эталона не годятся — у большинства
@@ -163,6 +169,9 @@ def apply_readings(models, directory):
             sheet = reading.get("sheet") or {}
             model["readings"] = {"applied": applied, "sheet": sheet, "confirmed": False, "method": reading.get("method"), "addedResources": added, "embeddedChecked": checked, "embeddedVerified": verified,
                                  "embedded": (reading.get("embedded") or {}).get("items") or []}
+            from .source_policy import references as source_references
+            model["readings"]["sourcePages"] = [{"sourceId": sid, "pdfPage": page}
+                for sid, page in sorted(set(source_references(reading, (model.get("source") or {}).get("id", "doc02"))))]
             if replaced: model["readings"]["replacedResources"] = replaced
             if reading.get("concreteClassSource") and "класс бетона" in applied:
                 model["readings"]["concreteClassSource"] = reading["concreteClassSource"]

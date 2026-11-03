@@ -43,6 +43,8 @@ def catalog():
     register = ASSETS / "promka-register.json"
     if register.exists():
         result.update(json.loads(register.read_text()))
+    from .source_link_repairs import repair_links
+    repair_links(result)
     sketches=ASSETS/'promka-sketches.json'
     if sketches.exists():
         for key,sketch in json.loads(sketches.read_text()).items():
@@ -146,4 +148,7 @@ def model_summary(identifier):
 
 def resource_cost(identifier):
     entry = model(identifier)
+    if entry:
+        from .source_policy import ensure_model
+        ensure_model(entry)
     return sum((Decimal(str(r["qty"])) * Decimal(r["rate"]) for r in entry["resources"]), Decimal(0)) if entry else Decimal(0)

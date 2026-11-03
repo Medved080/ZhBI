@@ -269,8 +269,9 @@ class RebarAssembler:
     assemble(doc, page, mark, mass) → {'rods': {(класс, диаметр): кг на 1 шт.}, 'unresolved': кг, 'issues': [...]}.
     Лист может быть спецификацией одного узла или серии марок (строки с полем 'mark', итог по марке — в 'note'): тогда берутся строки марки узла,
     а если марка прочитана с ошибкой — марка, чья масса изделия равна массе узла."""
-    def __init__(self, rows, offset, window=12, pages=None, marks=None):
+    def __init__(self, rows, offset, window=12, pages=None, marks=None, page_allowed=None):
         self.rows, self.offset, self.cache, self.window = rows, offset, {}, window
+        self.page_allowed = page_allowed or (lambda d, p: True)
         self.pages = pages      # pages(doc) → номера уже прочитанных листов альбома (для поиска листа узла по марке и массе, когда ссылка «л.NNN» прочитана неверно)
         self.marks = marks      # marks(doc, page) → марки одиночных узлов из штампа
         self.problems = set()      # (альбом, страница) вокруг которых не удалось найти лист узла: сборщик слоя дочитывает окно и повторяет
@@ -301,7 +302,7 @@ class RebarAssembler:
     def find_by_mass(self, doc, center, mass):
         """Лист узла по массе в окне вокруг ожидаемой страницы (когда ссылка «л.NNN» прочитана с ошибкой): ровно один подходящий лист или None."""
         hits = [p for p in range(max(1, center - self.window), center + self.window + 1)
-                if self.rows(doc, p) is not None and any(abs(m / mass - 1) <= 0.005 for m in self.sheet_masses(doc, p))]
+                if self.page_allowed(doc, p) and self.rows(doc, p) is not None and any(abs(m / mass - 1) <= 0.005 for m in self.sheet_masses(doc, p))]
         return hits[0] if len(hits) == 1 else None
 
     def find_by_mark(self, doc, mark, mass):
@@ -309,6 +310,7 @@ class RebarAssembler:
         if not self.pages or not mark: return None
         hits = []
         for q in self.pages(doc):
+            if not self.page_allowed(doc, q): continue
             rows = self.rows(doc, q) or []
             title_match = self.marks and any(fuzzy_key(m) == fuzzy_key(mark) for m in self.marks(doc, q) or []) and any(abs(m / mass - 1) <= 0.005 for m in self.sheet_masses(doc, q))
             if title_match or any(r.get('mark') and fuzzy_key(r['mark']) == fuzzy_key(mark) and num(r.get('mass_item') or r.get('note')) and abs(num(r.get('mass_item') or r['note']) / mass - 1) <= 0.005 for r in rows):
@@ -330,8 +332,14 @@ class RebarAssembler:
 
     def assemble(self, doc, page, mark=None, mass=None, depth=0, stack=()):
         key = (doc, page, mark if mass is None else (mark, round(mass, 2)))
-        if key in self.cache: return self.cache[key]
-        out = {'rods': collections.Counter(), 'loop_rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'sheet_rounding': 0.0, 'issues': [], 'sum': 0.0, 'emb': collections.Counter()}
+        if not self.page_allowed(doc, page):
+            raise ValueError(f"Использование листа doc{doc:02d}, PDF-стр. {page} запрещено")
+        if key in self.cache:
+            for d, p in self.cache[key]["sourcePages"]:
+                if not self.page_allowed(d, p):
+                    raise ValueError(f"Кэш содержит запрещённый лист doc{d:02d}, PDF-стр. {p}")
+            return self.cache[key]
+        out = {'rods': collections.Counter(), 'loop_rods': collections.Counter(), 'unresolved': 0.0, 'sheet_total': None, 'sheet_rounding': 0.0, 'issues': [], 'sum': 0.0, 'emb': collections.Counter(), 'sourcePages': {(doc, page)}}
         rows = self.rows(doc, page)
         # Лист бетонного изделия не может быть листом его арматурного узла.
         # Иначе трубы этого изделия попадут в сборку повторно (ошибка ссылки на предыдущую страницу).
@@ -367,6 +375,7 @@ class RebarAssembler:
                         sub = self.assemble(doc, refs[-1] + self.offset.get(doc, 0), node_mark(name), mass_e, depth + 1, stack + (key,))
                         got = sum(sub['rods'].values())
                         if not sub['unresolved'] and got and abs(got / mass_e - 1) <= 0.03:
+                            out['sourcePages'].update(sub['sourcePages'])
                             for k, v in sub['rods'].items(): out['loop_rods'][k] += v * qty
                 else: out['issues'].append('«%s»: нет количества или массы' % emb_name(name)[:40])
                 continue
@@ -388,6 +397,7 @@ class RebarAssembler:
             if not got or abs(got / mass_e - 1) > 0.03:
                 out['issues'].append('узел «%s»%s: по листу %.2f кг, в спецификации %.2f кг' % (name[:30], (' л.%d' % refs[-1]) if refs else ' без листа', got, mass_e))
                 out['unresolved'] += kg; continue
+            out['sourcePages'].update(sub['sourcePages'])
             out['issues'] += sub['issues']
             for k, v in sub['rods'].items(): out['rods'][k] += v * qty
             for k, v in sub['emb'].items(): out['emb'][k] += v * qty

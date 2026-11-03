@@ -1,0 +1,193 @@
+{
+  "format": 1,
+  "reviewedAt": "2026-11-03",
+  "method": "Full vector/content scan and visual stamp review; unreviewed PDF hashes are not eligible.",
+  "albums": {
+    "7a27c733998a90320d3c2b8684d16ea59d564ed2b961f6f6dce06db665361df1": {
+      "pages": 90,
+      "annulledPages": [
+        59,
+        60,
+        65,
+        66
+      ]
+    },
+    "112aec3d65c071e076f167da1c35cfd0c9768450054a7186b5882b57c772b3bf": {
+      "pages": 139,
+      "annulledPages": []
+    },
+    "f78e8fd6a57f4a5d8d295519b8e4c652e1fe981f92d52dcc6364f5a854bb6c3e": {
+      "pages": 228,
+      "annulledPages": []
+    },
+    "c002cbcc27c61e5c4054c75e9524ff57c3fc0785cbb0331614a43a5283036c80": {
+      "pages": 330,
+      "annulledPages": [
+        106,
+        108,
+        110,
+        112,
+        132
+      ]
+    },
+    "e335359e43a3c2ede07e7e7211393f156b71b92ca24ccbe7a11ab35d3ad80a42": {
+      "pages": 163,
+      "annulledPages": []
+    },
+    "ba7abb43c562fd8476c3cab0a50c78656d6d6421f592776fba0e990e77f29d02": {
+      "pages": 135,
+      "annulledPages": []
+    },
+    "f69c8c95ae2f1e113b5a3936a7318bc7bbd2818e1e95165e831794b37916b9e3": {
+      "pages": 101,
+      "annulledPages": []
+    },
+    "31ad9d83f2d1a1933007804ffe05925b177a074ca93b25a6c0a72795eea08992": {
+      "pages": 121,
+      "annulledPages": []
+    },
+    "77dc6f46928dae5615c77fde8f6413cf789e25516c40b5c4007058ca15b9031e": {
+      "pages": 162,
+      "annulledPages": [
+        17,
+        19,
+        21,
+        41,
+        45,
+        49,
+        51
+      ]
+    },
+    "f630a6a21dca9e4e6f47d3214696791afc1c898285f797ec1b7e89fdeb181438": {
+      "pages": 227,
+      "annulledPages": [
+        22,
+        32,
+        36,
+        40,
+        46,
+        50,
+        60,
+        64,
+        66,
+        68,
+        72,
+        76,
+        78,
+        82,
+        86,
+        88,
+        90
+      ]
+    },
+    "07705526b74dfd4fde8d8f25aaafd5d2cbed0800b50f1d6f95824f4154d3227f": {
+      "pages": 13,
+      "annulledPages": []
+    },
+    "b8031a53f1d75c4ddafff4de3ff0c6b2b21361d3cf7c9506ac9075130da4459e": {
+      "pages": 10,
+      "annulledPages": []
+    },
+    "bccb53b8a68a81d63b18bd3112560f268b6cc7ba01420dacd30a1f121bc3f973": {
+      "pages": 181,
+      "annulledPages": [
+        11,
+        14,
+        17,
+        26,
+        54,
+        55
+      ]
+    },
+    "19d6040f9cfeab00f20515288b4cd42af71eb1a7402a39cd75b98fa6d60d4205": {
+      "pages": 18,
+      "annulledPages": []
+    },
+    "c69fa45db92454ef8160851d58859139745c925e4ed051e8824d4165dd783747": {
+      "pages": 295,
+      "annulledPages": [
+        30,
+        31,
+        32,
+        33,
+        34,
+        36,
+        37,
+        39,
+        40,
+        42,
+        43,
+        45,
+        46,
+        51,
+        52,
+        54,
+        55,
+        57,
+        58,
+        59,
+        81,
+        82,
+        90,
+        91,
+        282
+      ]
+    },
+    "4667a0baf3d85111a6afd66cc678781f2d7c7b91fb5b2ef97790df2e8fa4cf7d": {
+      "pages": 65,
+      "annulledPages": []
+    },
+    "01c23905eaa268653a3b23b8e00759dc5e50ea610a49d20e262f8c58058eabd0": {
+      "pages": 141,
+      "annulledPages": []
+    },
+    "4595355ea8a036d7fc201096b2c04368e35c6a0a2d3052fd2bdc0f0d60ba6a8e": {
+      "pages": 137,
+      "annulledPages": []
+    },
+    "9b3826f1c3254f665b1ec3fe5bc32977817bd38c0df6f283ddad3dd9b9ede193": {
+      "pages": 231,
+      "annulledPages": []
+    },
+    "542f992e4425207b27a1fda7ba915323ae01e9c73c309ea0fde625920c252d44": {
+      "pages": 256,
+      "annulledPages": []
+    },
+    "f17349126b9b1e94b41bc9b687c2f5d767d202a3a642cdd033950b4a8daa4395": {
+      "pages": 163,
+      "annulledPages": [
+        18,
+        20,
+        22,
+        42,
+        46,
+        50,
+        52
+      ]
+    },
+    "32bb6db0002bc7fb58f1cb9f35b063b33aa8df2822beff9c4f5df8b2c8d3328f": {
+      "pages": 93,
+      "annulledPages": [
+        62,
+        63,
+        68,
+        69
+      ]
+    },
+    "7c32cd6ceafdb2021eac6bf3e225512c6cd416a5ecbf0fa878dd78644d693176": {
+      "pages": 139,
+      "annulledPages": []
+    },
+    "4ea5b42363665c44109eb8b4dbc6e3a223cd7d9ceeb7dcf70d896e8d65c48ddc": {
+      "pages": 272,
+      "annulledPages": [
+        231,
+        232
+      ]
+    },
+    "d237122be01b3314cbae8baa0e1f8a6cca8b3bcc6378895292c189ebc3f364cb": {
+      "pages": 37,
+      "annulledPages": []
+    }
+  }
+}

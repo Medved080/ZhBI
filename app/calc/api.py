@@ -135,7 +135,8 @@ def build_router(settings):
         def mtime(name):
             try: return _os.stat(ASSETS / name).st_mtime_ns
             except OSError: return 0
-        return (conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0], conn.execute("SELECT MAX(version) FROM price_list").fetchone()[0], conn.execute("SELECT MAX(version) FROM calculation_profiles").fetchone()[0],
+        from .source_policy import signature as source_signature
+        return (source_signature(ASSETS), conn.execute("SELECT COUNT(*),MAX(updated_at) FROM products").fetchone()[:], conn.execute("SELECT MAX(version) FROM production_norms").fetchone()[0], conn.execute("SELECT MAX(version) FROM price_list").fetchone()[0], conn.execute("SELECT MAX(version) FROM calculation_profiles").fetchone()[0],
                 conn.execute("SELECT COUNT(*),MAX(updated_at) FROM model_discrepancies").fetchone()[:], conn.execute("SELECT COUNT(*) FROM recovery_publications").fetchone()[0],
                 conn.execute("SELECT zhbi_project_name FROM projects WHERE id=?", (PROJECT_ID,)).fetchone()[0],
                 mtime("promka-models.json"), mtime("promka-register.json"), mtime("promka-solid-models.json"), mtime("promka-discrepancies.json"), mtime("promka-readings.json"), conn.execute("SELECT COUNT(*),MAX(verified_at) FROM product_verifications").fetchone()[:])

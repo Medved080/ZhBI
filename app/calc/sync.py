@@ -114,6 +114,14 @@ def product_bundle(conn, product_id, with_versions=True):
 
 
 def collect_package(conn, assets_dir, uploads_dir):
+    from .source_link_repairs import validate_assets
+    from .source_policy import SourceSheetBlocked
+    models, policy = validate_assets(assets_dir)
+    for row in conn.execute("SELECT document_model_id FROM products WHERE document_model_id IS NOT NULL"):
+        identifier = row["document_model_id"]
+        if identifier not in models:
+            raise SourceSheetBlocked(identifier, "?", "модель отсутствует в каталоге отправителя")
+        policy.model(models[identifier])
     products = [product_bundle(conn, r["id"]) for r in conn.execute("SELECT id FROM products ORDER BY created_at, id")]
     norms = conn.execute("SELECT * FROM production_norms").fetchall()
     prices = conn.execute("SELECT * FROM price_list").fetchall()
@@ -235,11 +243,25 @@ def _write_product(conn, bundle, existing, actor, staged_blobs, uploads_dir):
     return added
 
 
-def apply_package(conn, package, actor, staged_blobs=None, uploads_dir=None, dry_run=False):
+def apply_package(conn, package, actor, staged_blobs=None, uploads_dir=None, dry_run=False, source_models=None, source_policy=None):
     """Применяет данные пакета в открытой транзакции. Возвращает отчёт.
 
     При dry_run ничего не пишет: в отчёте то же, что было бы сделано."""
     _validate_package(package)
+    if not dry_run:
+        from .source_policy import SourcePolicy, SourceSheetBlocked
+        from .document_models import ASSETS, catalog
+        models = source_models if source_models is not None else catalog()
+        policy = source_policy or SourcePolicy(ASSETS)
+        for product in package.get("products", []):
+            identifier = product["row"].get("document_model_id")
+            if identifier:
+                if identifier not in models:
+                    raise SyncError("Модель и её источники отсутствуют: " + identifier)
+                try:
+                    policy.model(models[identifier])
+                except SourceSheetBlocked as error:
+                    raise SyncError(error.detail["message"], error.status_code) from error
     staged_blobs = staged_blobs or {}
     report = {"profiles": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},
               "norms": {"created": 0, "updated": 0, "unchanged": 0, "serverPriority": []},

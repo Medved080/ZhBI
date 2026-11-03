@@ -27,6 +27,10 @@ def sheets_for(conn,product_id,recovery=False):
     doc=model(effective_model_id(conn,product_id,row['document_model_id']))
     if not doc:return {'productName':row['name'],'sheets':[],'unresolved':[],'note':'Для изделия пока не назначены исходные проектные листы. Прикрепите документацию в разделе «Файлы и основания».'}
     source=doc['source'];source_id=source.get('id','promka-columns');info=source_info(source_id)
+    from .source_policy import SourcePolicy, SourceSheetBlocked, ensure_model
+    policy = SourcePolicy(ASSETS)
+    if recovery:
+        ensure_model(doc, policy=policy)
     sheets={};unresolved=[]
     def add(page,title,kind,sheet=None,linked_source=None):
         sid=linked_source or source_id
@@ -35,6 +39,12 @@ def sheets_for(conn,product_id,recovery=False):
             unresolved.append(title);return
         if not isinstance(page,int) or not 1<=page<=linked_info['pages']:
             unresolved.append(title);return
+        try:
+            policy.page(sid, page)
+        except SourceSheetBlocked as error:
+            if recovery: raise
+            unresolved.append(title + " · " + error.detail["message"])
+            return
         key=f'{sid}-p{page}'
         if key in sheets:
             if title not in sheets[key]['titles']:sheets[key]['titles'].append(title)
@@ -77,6 +87,8 @@ def sheets_for(conn,product_id,recovery=False):
 
 
 def preview_path(settings,sheet):
+    from .source_policy import SourcePolicy
+    SourcePolicy(ASSETS).page(sheet['sourceId'], sheet['pdfPage'])
     info=source_info(sheet['sourceId']);page_number=sheet['pdfPage']
     folder=settings.data_dir/'source-previews';folder.mkdir(parents=True,exist_ok=True)
     target=folder/(info['sha256']+f'-p{page_number}-3200.png')

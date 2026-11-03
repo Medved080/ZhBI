@@ -1117,6 +1117,12 @@ def _retire_pdf_facade_duplicates(conn):
     return f'Белых дублей монолита снято с показа: {count}; строки и геометрия сохранены'
 
 
+def _repair_calc_source_links(conn):
+    from app.calc.paths import ASSETS_DIR
+    from app.calc.source_link_repairs import repair_assets
+    return f"Исправлено ссылок на актуальный лист КПВ10: {repair_assets(ASSETS_DIR)}"
+
+
 RELEASE_TASKS = [
     {"name": "2026-10-30-express-independent-summaries", "version": "0.122", "date": "2026-10-30",
      "title": "Разделить расписания опроса и рассылки сводок", "why": "сохранить прежние рассылки в независимых расписаниях", "kind": KIND_DATA, "run": _split_express_summaries},
@@ -1605,6 +1611,9 @@ RELEASE_TASKS = [
         "why": "пользователь подтвердил материал заполнений: наружные стены из блоков; фасад вокруг монолита сохраняется",
         "kind": KIND_DATA, "run": _correct_pdf_window_bands,
     },
+    {"name": "2026-11-03-calc-active-source-links", "version": code_version(), "date": "2026-11-03",
+     "title": "Исправить ссылки КПВ10 на действующий лист", "why": "Исключить аннулированный лист из оснований калькулятора",
+     "kind": KIND_DATA, "run": _repair_calc_source_links},
 ]
 
 

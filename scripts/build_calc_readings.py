@@ -27,6 +27,10 @@ def read_rows(args):
     """(doc, страница) → строки спецификации листа (список словарей по ролям столбцов) или None; ошибка чтения — None."""
     global FONT
     n, p = args
+    from app.calc.document_models import ASSETS
+    from app.calc.source_policy import SourcePolicy
+    SourcePolicy(ASSETS).page("doc%02d" % n, p)
+    tf.D = str(ASSETS / "sources") + os.sep
     if FONT is None: FONT = tc.Font(str(ROOT / "scripts" / "prototypes" / "vector_ocr" / "font_protos.json"))
     try:
         segs = vo.segments(tf.D + "doc%02d.pdf" % n, p); H, V = tb.frame_lines(segs); gl, Ls = tf.load_sheet(n, p, minlen=1)
@@ -132,6 +136,7 @@ def preserve_accepted(result, before, assembly_loops=None):
         for field, value in previous.items():
             if value is not None and value != current[field]:
                 item[field] = old[field]
+                item["sourcePages"] = item.get("sourcePages", []) + [p for p in old.get("sourcePages", []) if p not in item.get("sourcePages", [])]
                 if field == "volume": item["volumeSource"] = old.get("volumeSource")
                 retained[field] += 1; fields.append(field)
         if fields: item["retainedAccepted"] = fields
@@ -155,6 +160,10 @@ def main(out, families, before_path=None):
     from app.calc import document_models as dm
     from app.calc.readings import reviewed_page_matches
     catalog = dm.catalog()
+    from app.calc.source_policy import SourcePolicy
+    policy = SourcePolicy(dm.ASSETS)
+    def permitted(key):
+        return policy.allowed("doc%02d" % key[0], key[1])
     models = {k: v for k, v in catalog.items() if v.get("family") in families and (v.get("source") or {}).get("id") and v["source"].get("productPage")}
     # Несколько марок могут иметь общую таблицу. Индивидуально сверенные
     # строки хранятся отдельно, чтобы повторная OCR-сборка не взяла чужую строку.
@@ -166,6 +175,7 @@ def main(out, families, before_path=None):
     reviewed = {k: reviewed[k] for k in required}
     for key, reading in reviewed.items():
         source = models[key]["source"]
+        policy.reading(reading, source["id"])
         if not reviewed_page_matches(reading, source):
             raise ValueError("Чтение относится к другому листу: " + key)
         evidence = reading.get("concreteClassSource")
@@ -178,7 +188,7 @@ def main(out, families, before_path=None):
     models = {k: v for k, v in models.items() if k not in required}
     offset = steel.sheet_offsets(catalog.values())
     print("моделей OCR:", len(models), "индивидуальных чтений:", len(reviewed), "смещения листов:", offset)
-    cache = load_cache()
+    cache = {k: v for k, v in load_cache().items() if permitted(k)}
     refresh = [k for k, v in cache.items() if needs_numeric_refresh(v)]
     if refresh:
         print("перечитываем числовые ячейки и штампы узлов:", len(refresh), flush=True)
@@ -223,12 +233,21 @@ def main(out, families, before_path=None):
                     if steel.SKIP_RE.match(row.get("name", "") or "") or steel.parse_rod(row.get("name"), steel.num(row.get("mass"))): continue
                     for ref in steel.ref_numbers(row.get("oboz", "") or ""):
                         target = (key[0], ref + offset.get(key[0], 0))
-                        if target[1] >= 1 and target not in cache: nxt.add(target)
+                        if target[1] >= 1 and target not in cache and permitted(target): nxt.add(target)
             print("слой: прочитано листов", len(todo), "следующий слой", len(nxt), flush=True)
             frontier = nxt
     def make_assembler():
-        return steel.RebarAssembler(lambda d, p: (cache.get((d, p)) or {}).get("rows"), offset, pages=lambda d: [p for (dd, p) in cache if dd == d],
-                                    marks=lambda d, p: (cache.get((d, p)) or {}).get("node_marks"))
+        def rows(d, p):
+            policy.page("doc%02d" % d, p)
+            parsed = (cache.get((d, p)) or {}).get("rows")
+            if d == 5 and p in (305, 306, 307) and parsed:
+                parsed = [dict(row) for row in parsed]
+                for row in parsed:
+                    if steel.fuzzy_key(steel.node_mark(row.get("name", ""))) == steel.fuzzy_key("КПВ10"):
+                        row["oboz"] = re.sub(r"(л\.\s*)97\b", r"\g<1>98", row.get("oboz", ""))
+            return parsed
+        return steel.RebarAssembler(rows, offset, pages=lambda d: [p for (dd, p) in cache if dd == d],
+                                    marks=lambda d, p: (cache.get((d, p)) or {}).get("node_marks"), page_allowed=lambda d, p: permitted((d, p)))
 
     def model_page(model):
         source = model["source"]
@@ -242,7 +261,7 @@ def main(out, families, before_path=None):
         return asm
     assembler = assemble_all()
     # узлы, чьи листы не нашлись по ссылке: дочитываем окно страниц вокруг ожидаемой и повторяем сборку (ссылка «л.108» могла быть прочитана с ошибкой)
-    extra = {(d, q) for d, c in assembler.problems for q in range(max(1, c - assembler.window), c + assembler.window + 1) if (d, q) not in cache}
+    extra = {(d, q) for d, c in assembler.problems for q in range(max(1, c - assembler.window), c + assembler.window + 1) if (d, q) not in cache and permitted((d, q))}
     if extra:
         print("дочитываем окна вокруг неразрешённых ссылок:", len(extra), "листов", flush=True)
         with Pool(int(os.environ.get("VOCR_PROCS", "8"))) as pool:
@@ -279,6 +298,7 @@ def main(out, families, before_path=None):
             item["volume"] = round(mass_total / 2500, 3); item["volumeSource"] = "масса ÷ 2500"
         if mass_total and not partial: item["massKg"] = mass_total
         tree = assembler.assemble(doc, page, steel.mark_key(v.get("alias")) or None, None)
+        item["sourcePages"] = [{"sourceId": "doc%02d" % d, "pdfPage": p} for d, p in sorted(tree["sourcePages"])]
         loop_mass = sum(mass * qty for (kind, name, mass), qty in tree["emb"].items() if kind == "loop")
         if loop_mass and abs(sum(tree["loop_rods"].values()) / loop_mass - 1) <= 0.005:
             assembly_loops[key] = tree["loop_rods"]
@@ -291,11 +311,16 @@ def main(out, families, before_path=None):
     result.update(reviewed)
     if before_path:
         before = json.loads(Path(before_path).read_text())
+        for key, reading in before.items():
+            if key in catalog:
+                policy.reading(reading, catalog[key].get("source", {}).get("id", "doc02"))
         retained = preserve_accepted(result, before, assembly_loops)
         from verify_calc_readings_regression import compare
         errors, _, _ = compare(before, result)
         if errors: raise ValueError("Не сохранены принятые результаты: %s" % errors[:3])
         print("сохранено прежних принятых разделов:", retained)
+    for key, reading in result.items():
+        policy.reading(reading, catalog[key].get("source", {}).get("id", "doc02"))
     Path(out).write_text(json.dumps(result, ensure_ascii=False, indent=1))
     print("записано:", out, len(result))
 

@@ -291,7 +291,11 @@ def prepare_bundle(conn,row,config):
     additional=previous.get('additionalPages',[])
     for page in previous.get('sheets',[]):
         if source_info(page['sourceId'])['sha256']!=page['sha256']: raise ValueError('Редакция исходника изменилась после запуска; создайте новую партию')
+    from .source_policy import SourcePolicy
+    from .document_models import ASSETS
+    policy = SourcePolicy(ASSETS)
     for page in additional:
+        policy.page(sid, page)
         info=source_info(sid)
         if not 1<=page<=info['pages']: raise ValueError('Дополнительная PDF-страница за пределами альбома')
         if not any(p['sourceId']==sid and p['pdfPage']==page for p in sheets):

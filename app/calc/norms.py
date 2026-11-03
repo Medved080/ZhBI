@@ -116,6 +116,8 @@ def parameters_for(doc,norms,prices,volume=None,concrete_class=None,concrete_pri
     norms — get_norms(); prices — параметры прайса (prices.get_prices()['parameters']); volume — объём, если он задан вручную
     (иначе проектный × коэффициент норм); concrete_class — класс бетона изделия (иначе из каталога);
     concrete_price — цена бетона, если она задана вручную (иначе из прайса по классу)."""
+    from .source_policy import ensure_model
+    ensure_model(doc)
     from .prices import concrete_rate,material_rate
     p=norms['parameters'];project=D(doc['projectVolume'] or 0)
     group=(p.get('groups') or {}).get(doc.get('family')) or {}      # нормы группы, если заданы; иначе общая норма

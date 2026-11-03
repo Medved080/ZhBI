@@ -37,6 +37,11 @@ def dynamic_values(row, ctx):
     manual = set(json.loads(row["manual_fields"] or "[]"))
     prices = ctx["prices"]["parameters"]
     document = model(row["document_model_id"]) if row["document_model_id"] else None
+    from .source_policy import ensure_model, SourceSheetBlocked
+    if row["document_model_id"] and document is None:
+        raise SourceSheetBlocked(row["document_model_id"], "?", "модель и её источники не найдены")
+    if document:
+        ensure_model(document)
     result = {}
     if ctx["norms"] and document and document.get("kind") == "registry" and row["norms_version"] is not None:
         concrete_class = row["concrete_class"]
@@ -129,6 +134,12 @@ def get_product(conn, product_id, ctx=None):
 
 
 def save_product(conn, body, actor, legacy_key=None, baseline_resources=None, norms_version=None, labour_rate=None):
+    from .source_policy import ensure_model, SourceSheetBlocked
+    if body.product.documentModelId:
+        entry = model(body.product.documentModelId)
+        if entry is None:
+            raise SourceSheetBlocked(body.product.documentModelId, "?", "модель и её источники не найдены")
+        ensure_model(entry)
     request_id = str(body.requestId)
     request_hash = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
     replay = conn.execute("SELECT * FROM mutations WHERE request_id=?", (request_id,)).fetchone()

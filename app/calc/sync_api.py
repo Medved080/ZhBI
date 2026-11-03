@@ -438,10 +438,24 @@ def commit_package(settings, staging, assets_dir, uploads, package, package_file
         finally:
             conn.close()
         try:
+            from .source_link_repairs import validate_assets, repair_assets
+            from .source_policy import SourceSheetBlocked
+            incoming = {a["path"]: a["sha256"] for a in package.get("assets", [])}
+            def resolve_asset(relative):
+                sha = incoming.get(relative)
+                if sha and staging.done("asset", relative).is_file():
+                    return staging.done("asset", relative)
+                return Path(assets_dir) / relative
+            try:
+                source_models, source_policy = validate_assets(assets_dir, resolve_asset)
+            except SourceSheetBlocked as error:
+                raise SyncError(error.detail["message"], error.status_code) from error
             with transaction(settings.database_path) as conn:
-                report = apply_package(conn, package, actor_id, staged_blobs=sources, uploads_dir=uploads)
+                report = apply_package(conn, package, actor_id, staged_blobs=sources, uploads_dir=uploads, source_models=source_models, source_policy=source_policy)
                 audit(conn, actor_id, "sync.received", PROJECT_ID, {"products": {k: (len(v) if isinstance(v, list) else v) for k, v in report["products"].items()}})
             updated_assets = install_assets(assets_dir, staging, package.get("assets", []))
+            if repair_assets(assets_dir) and "promka-register.json" not in updated_assets:
+                updated_assets.append("promka-register.json")
         except SyncError as error:
             _log(settings, "receive", None, actor_id, "error", {"error": str(error)}, started)
             raise
