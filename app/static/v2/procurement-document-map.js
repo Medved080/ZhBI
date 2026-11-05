@@ -34,7 +34,7 @@ function items(rows,isRequest=false,requests=new Map()){
       const note=isRequest?`Нужно ${qty(r.qty)}; заказано ${qty(r.ordered)} ${r.unit}`:comparison.note;
       const caption=r.raw.cancelled?"Отменено":isRequest?(match==="missing"?(r.raw.pending_orders?"Заказ не сопоставлен":"Не заказано"):""):comparison.note;
       return `<li data-mm-item="${isRequest?"request":"order"}" data-mm-id="${r.requestId||r.orderId}" data-quantity-match="${match}" data-order-match="${comparison?.state||""}" data-cancelled="${!!r.raw.cancelled}" title="${esc(note)}">
-        <span><span class="pr-mm-item-name">${esc(r.item)}</span>${caption?`<small>${esc(caption)}</small>`:""}${comparison?.state==="different"&&r.request_item.length?`<small>ЗВП: ${esc(r.request_item.join("; "))}</small>`:""}</span>
+        <span>${r.raw.cancelled?`<span class="pr-mm-item-name">${esc(r.item)}</span>`:`<button type="button" class="pr-mm-item-select" aria-pressed="false"><span class="pr-mm-item-name">${esc(r.item)}</span></button>`}${caption?`<small>${esc(caption)}</small>`:""}${comparison?.state==="different"&&r.request_item.length?`<small>ЗВП: ${esc(r.request_item.join("; "))}</small>`:""}</span>
         <span>${esc(r.unit)}</span><b data-mm-count="original">${qty(r.qty)}</b>${isRequest?`<b data-mm-count="ordered">${qty(r.ordered)}</b>`:""}</li>`;
     }).join("")}</ul>`;
 }
@@ -43,37 +43,37 @@ export function createDocumentMap(host){
   const openOrders=new Set();
   let documentTotals=new Map();
   let requestRows=new Map();
+  let orderRows=new Map(),requestDocuments=new Map();
+  let pinnedItem=null,hoveredItem=null,focusedItem=null;
+  const itemSelection=row=>row && row.dataset.cancelled!=="true"?{kind:row.dataset.mmItem,id:row.dataset.mmId}:null;
+  const sameItem=(a,b)=>a?.kind===b?.kind && a?.id===b?.id;
+  function highlightItems(){
+    const selected=hoveredItem||focusedItem||pinnedItem;
+    const requests=new Set(selected?.kind==="request"?[selected.id]:selected?orderRows.get(selected.id)?.raw.links.map(l=>l.request_line_id)||[]:[]);
+    for(const row of host.querySelectorAll("[data-mm-item]")){
+      const item=itemSelection(row);
+      const linked=!!(item && selected && (sameItem(item,selected)||(item.kind==="request"?requests.has(item.id):orderRows.get(item.id)?.raw.links.some(l=>requests.has(l.request_line_id)))));
+      row.classList.toggle("is-linked",linked);
+      row.querySelector(".pr-mm-item-select")?.setAttribute("aria-pressed",String(!!pinnedItem && sameItem(item,pinnedItem)));
+    }
+  }
   function drawEdges(){
     const canvas=host.querySelector(".pr-mm-canvas");
     if(!canvas || canvas.offsetWidth===0)return;
     const svg=canvas.querySelector("svg"),origin=canvas.getBoundingClientRect();
     const paths=[];
-    function connect(from,to,kind,match="",label=""){
-      const x=from.right-origin.left,y=kind==="item"?from.top-origin.top+from.height/2:from.top-origin.top+24;
-      const end=to.left-origin.left,bottom=kind==="item"?to.top-origin.top+to.height/2:to.top-origin.top+24;
+    function connect(from,to){
+      const x=from.right-origin.left,y=from.top-origin.top+24;
+      const end=to.left-origin.left,bottom=to.top-origin.top+24;
       const bend=Math.max(18,(end-x)*0.55);
-      const color=match==="full"?"#26875a":match==="different"?"#bf8b16":"";
-      paths.push(`<path class="${kind==="item"?"pr-mm-item-wire":""}" data-quantity-match="${match}" data-mm-link="${kind}" d="M${x} ${y} C${x+bend} ${y} ${end-bend} ${bottom} ${end} ${bottom}"><title>${esc(label)}</title></path>`);
-      if(kind==="item")paths.push(`<circle cx="${x}" cy="${y}" r="2" fill="${color}"/><circle cx="${end}" cy="${bottom}" r="2" fill="${color}"/>`);
+      paths.push(`<path data-mm-link="document" d="M${x} ${y} C${x+bend} ${y} ${end-bend} ${bottom} ${end} ${bottom}"/>`);
     }
     for(const [source,target] of [["request","order"],["order","payment"]]){
       for(const active of canvas.querySelectorAll(`[data-mm-node="${source}"].is-active`)){
         for(const node of canvas.querySelectorAll(`[data-mm-node="${target}"]`)){
           if(source==="order" && node.dataset.mmParent!==active.dataset.mmKey)continue;
-          connect(active.getBoundingClientRect(),node.getBoundingClientRect(),"document");
+          connect(active.getBoundingClientRect(),node.getBoundingClientRect());
         }
-      }
-    }
-    const doc=index.find(x=>x.doc.groupKey===rootKey)?.doc;
-    const requestNodes=new Map([...canvas.querySelectorAll('[data-mm-item="request"]')].map(n=>[n.dataset.mmId,n]));
-    const orderNodes=new Map([...canvas.querySelectorAll('[data-mm-item="order"]')].map(n=>[n.dataset.mmId,n]));
-    if(doc)for(const order of doc.orders.values())for(const line of order.lines){
-      const target=orderNodes.get(line.orderId);
-      if(!target)continue;
-      for(const link of line.raw.links){
-        const source=requestNodes.get(link.request_line_id);
-        if(!source || line.raw.cancelled)continue;
-        connect(source.getBoundingClientRect(),target.getBoundingClientRect(),"item",source.dataset.quantityMatch,source.title);
       }
     }
     svg.innerHTML=paths.join("");
@@ -106,8 +106,9 @@ export function createDocumentMap(host){
       <small>ЗРДС · ${p.payment_date?displayDate(p.payment_date):"дата не указана"}</small><b>${esc(p.payment_number)}</b>
       <span>Расход по всему ЗП <strong>${rub(p.amount)}</strong></span><span class="pr-mm-payment-status">${p.amount>0?"Есть расход по выгрузке":"Расход по выгрузке отсутствует"}</span></article>`;
   }
-  function clearPath(){rootKey=null;openOrders.clear();}
+  function clearPath(){rootKey=null;openOrders.clear();pinnedItem=hoveredItem=focusedItem=null;}
   function render(){
+    hoveredItem=focusedItem=null;
     const left=host.querySelector(".pr-mm-scroll")?.scrollLeft||0;
     const shown=visible.slice(page*pageSize,(page+1)*pageSize).map(x=>x.doc);
     const doc=shown.find(d=>d.groupKey===rootKey);
@@ -115,7 +116,7 @@ export function createDocumentMap(host){
     const expanded=orders.filter(o=>openOrders.has(o.groupKey));
     host.innerHTML=`<div class="pr-mm-toolbar"><strong>Заявки · ${visible.length}</strong>
       ${rootKey?'<button type="button" class="v2-btn" data-map-fold>Свернуть ветку</button>':""}</div>
-      <p class="pr-mm-legend"><span>Зелёная связь — суммарное количество совпало</span> · <span>Жёлтая связь — количество отличается</span> · <span>Красная позиция — заказ отсутствует или ещё не сопоставлен</span></p>
+      <p class="pr-mm-legend">Наведите на номенклатуру, чтобы подсветить сопоставленные позиции. Клик закрепляет подсветку, клик по другой позиции переключает её. Esc снимает выделение.</p>
       <p class="pr-mm-legend">В ЗП: жёлтые позиции — замена или расхождение количества; красные — не сопоставлены с ЗВП. Отменённые позиции зачёркнуты.</p>
       <div class="pr-mm-scroll"><div class="pr-mm-canvas">
       <svg class="pr-mm-wires" aria-hidden="true"></svg>
@@ -137,8 +138,38 @@ export function createDocumentMap(host){
       }
     }
     drawEdges();
+    highlightItems();
   }
+  host.onpointerover=e=>{
+    const row=e.target.closest("[data-mm-item]");
+    if(!row || row.contains(e.relatedTarget))return;
+    hoveredItem=itemSelection(row);highlightItems();
+  };
+  host.onpointerout=e=>{
+    const row=e.target.closest("[data-mm-item]");
+    if(!row || row.contains(e.relatedTarget))return;
+    hoveredItem=null;highlightItems();
+  };
+  host.onfocusin=e=>{focusedItem=itemSelection(e.target.closest("[data-mm-item]"));highlightItems();};
+  host.onfocusout=e=>{
+    if(e.target.closest("[data-mm-item]")?.contains(e.relatedTarget))return;
+    focusedItem=null;highlightItems();
+  };
+  host.onkeydown=e=>{
+    if(e.key==="Escape"){pinnedItem=hoveredItem=focusedItem=null;highlightItems();}
+  };
   host.onclick=e=>{
+    const item=itemSelection(e.target.closest("[data-mm-item]"));
+    if(item){
+      const doc=item.kind==="request"?requestDocuments.get(item.id):null;
+      if(doc && doc.groupKey!==rootKey){
+        clearPath();rootKey=doc.groupKey;
+        for(const order of doc.orders.values())openOrders.add(order.groupKey);
+        pinnedItem=item;render();
+        [...host.querySelectorAll('[data-mm-item="request"]')].find(row=>row.dataset.mmId===item.id)?.querySelector("button")?.focus({preventScroll:true});
+      }else{pinnedItem=item;focusedItem=null;highlightItems();}
+      return;
+    }
     const b=e.target.closest("button");if(!b)return;
     const isRequest=b.closest('[data-mm-node="request"]')!==null;
     if(b.dataset.mapBranch){
@@ -165,9 +196,11 @@ export function createDocumentMap(host){
   };
   observer.observe(host);
   return {
-    destroy(){observer.disconnect();},
+    destroy(){observer.disconnect();host.onclick=host.onpointerover=host.onpointerout=host.onfocusin=host.onfocusout=host.onkeydown=null;},
     update(model,id){
       requestRows=new Map(model.requests.map(r=>[r.requestId,r]));
+      orderRows=new Map(model.orders.map(r=>[r.orderId,r]));
+      requestDocuments=new Map(model.groups.flatMap(doc=>doc.requests.map(r=>[r.requestId,doc])));
       documentTotals=new Map();
       for(const order of model.orders){
         if(order.raw.cancelled)continue;

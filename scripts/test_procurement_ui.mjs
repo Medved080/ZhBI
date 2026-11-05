@@ -132,6 +132,9 @@ for n in ['1','2']:
  r=copy.deepcopy(s['ЗВП'][1]);r[0]='ЗВП R5';r[1]='R5';r[4]='Исходная позиция '+n;r[6]=30;s['ЗВП'].append(r)
  o=copy.deepcopy(s['ЗП'][1]);o[0]='Заказ P5'+n;o[1]='P5'+n;o[3]='Аналог '+n;o[7]=30;o[9]='R5';s['ЗП'].append(o)
 p=copy.deepcopy(next(p for p in s['Оплаты ЗРДС'][1:] if p[4]=='P4'));p[0]='Заявка на расходование ДС ZERO от 01.03.2026';p[2]=0;s['Оплаты ЗРДС'].append(p)
+r=copy.deepcopy(s['ЗВП'][1]);r[0]='ЗВП R6';r[1]='R6';r[4]='Общая потребность двух заказов';r[6]=5;s['ЗВП'].append(r)
+for n,q in [('1',2),('2',3)]:
+ o=copy.deepcopy(s['ЗП'][1]);o[0]='Заказ P6'+n;o[1]='P6'+n;o[3]=r[4];o[7]=q;o[8]=q*10;o[9]='R6';s['ЗП'].append(o)
 Path(sys.argv[1]).write_bytes(xlsx_bytes(s))`,extended]);
   run(['/Users/max/.codex/scripts/validate_xlsx.py',extended]);
   await page.locator('#pr-file').setInputFiles(extended);await page.locator('#pr-analyze').click();await page.locator('#pr-apply').waitFor({state:'visible'});await page.locator('#pr-apply').click();
@@ -188,7 +191,7 @@ Path(sys.argv[1]).write_bytes(xlsx_bytes(s))`,extended]);
   check('Column searches combine',await page.locator('#pr-table tbody tr').count()===1&&(await page.locator('#pr-table tbody').innerText()).includes('R4'));
   await page.locator('#pr-clear-search').click();
   await page.locator('#pr-search').fill('Заказано полностью, оплата не завершена');
-  check('Global search includes status column',await page.locator('#pr-table tbody tr').count()===1&&(await page.locator('#pr-table tbody').innerText()).includes('R4'));
+  check('Global search includes status column',await page.locator('#pr-table tbody tr').count()===2&&(await page.locator('#pr-table tbody').innerText()).includes('R4')&&(await page.locator('#pr-table tbody').innerText()).includes('R6'));
   await page.locator('#pr-clear-search').click();await page.locator('[data-tab="chain"]').click();
   await page.locator('#pr-table [data-column="payment_number"]').fill('Z3');
   check('Child search preserves document ancestors',await page.locator('#pr-table tr.pr-group[data-level="0"]').count()===1&&(await page.locator('#pr-table tbody').innerText()).includes('ЗВП R3')&&(await page.locator('#pr-table tbody').innerText()).includes('ЗП P3'));
@@ -258,23 +261,47 @@ Path(sys.argv[1]).write_bytes(xlsx_bytes(s))`,extended]);
   await rootNode('R1').scrollIntoViewIfNeeded();await page.screenshot({path:join(shots,'document-map-cancelled.png')});
   await rootNode('R3').locator('[data-map-branch]').click();
   check('Fully paid orders are distinguished',(await mapNodes('order').innerText()).includes('ЗП оплачен полностью'));
-  check('Matched quantities get individual green and yellow connections',await mind.locator('path.pr-mm-item-wire[data-quantity-match="full"]').count()===1&&await mind.locator('path.pr-mm-item-wire[data-quantity-match="different"]').count()===1);
+  check('Nomenclature links are removed but document links remain',await mind.locator('[data-mm-link="item"],.pr-mm-item-wire,svg circle').count()===0&&await mind.locator('[data-mm-link="document"]').count()===2);
   check('Order rows distinguish matching and differing quantities',await mind.locator('[data-mm-item="order"][data-order-match="full"]').count()===1&&await mind.locator('[data-mm-item="order"][data-order-match="different"]').count()===1&&(await mind.locator('[data-order-match="different"]').innerText()).includes('Количество отличается'));
-  check('Columns leave a wide gutter for nomenclature links',await mind.locator('.pr-mm-canvas').evaluate(canvas=>{const lanes=canvas.querySelectorAll('section');return lanes[1].getBoundingClientRect().left-lanes[0].getBoundingClientRect().right>=140&&lanes[2].getBoundingClientRect().left-lanes[1].getBoundingClientRect().right>=140;}));
-  check('All document and item links are thin solid curves',await mind.locator('svg path').evaluateAll(paths=>paths.every(p=>p.getAttribute('d').includes(' C')&&!/[HV]/.test(p.getAttribute('d'))&&Number.parseFloat(getComputedStyle(p).strokeWidth)===1&&getComputedStyle(p).strokeDasharray==='none')));
-  const endpoints=await mind.evaluate(host=>{
-    const canvas=host.querySelector('.pr-mm-canvas').getBoundingClientRect();
-    return [...host.querySelectorAll('.pr-mm-item-wire')].every(p=>{
-      const points=p.getAttribute('d').match(/-?\d+(?:\.\d+)?/g).map(Number);
-      const source=[...host.querySelectorAll('[data-mm-item="request"]')].find(n=>Math.abs(n.getBoundingClientRect().right-canvas.left-points[0])<1&&Math.abs(n.getBoundingClientRect().top+n.getBoundingClientRect().height/2-canvas.top-points[1])<1);
-      const target=[...host.querySelectorAll('[data-mm-item="order"]')].find(n=>Math.abs(n.getBoundingClientRect().left-canvas.left-points.at(-2))<1&&Math.abs(n.getBoundingClientRect().top+n.getBoundingClientRect().height/2-canvas.top-points.at(-1))<1);
-      return Boolean(source&&target);
-    });
-  });
-  check('Nomenclature wires end on the exact item rows',endpoints);
-  await mind.scrollIntoViewIfNeeded();await page.screenshot({path:join(shots,'document-map-quantities.png')});
+  check('Original column spacing fits the laptop',await mind.locator('.pr-mm-canvas').evaluate(canvas=>getComputedStyle(canvas).columnGap==='36px'&&canvas.getBoundingClientRect().width<=canvas.parentElement.clientWidth)&&await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  check('Document links remain thin solid curves',await mind.locator('svg path').evaluateAll(paths=>paths.every(p=>p.getAttribute('d').includes(' C')&&!/[HV]/.test(p.getAttribute('d'))&&Number.parseFloat(getComputedStyle(p).strokeWidth)===1&&getComputedStyle(p).strokeDasharray==='none')));
+  const sourceItems=rootNode('R3').locator('[data-mm-item="request"]'),orderItems=mind.locator('[data-mm-item="order"]');
+  const selectedOrders=()=>mind.locator('[data-mm-item="order"].is-linked');
+  await sourceItems.first().hover();
+  check('Hover highlights only the mapped order line',await selectedOrders().count()===1&&(await selectedOrders().innerText()).includes('Полностью обеспеченный'));
+  await mind.locator('h4').first().hover();
+  check('Unpinned hover clears when the mouse leaves',await mind.locator('[data-mm-item].is-linked').count()===0);
+  await sourceItems.first().locator('button').click();await mind.locator('h4').first().hover();
+  check('Click pins selection after pointer leaves',await selectedOrders().count()===1&&await sourceItems.first().locator('button').getAttribute('aria-pressed')==='true');
+  await sourceItems.nth(1).hover();
+  check('Hover previews another match while selection is pinned',(await selectedOrders().innerText()).includes('Частичная позиция'));
+  await mind.locator('h4').first().hover();
+  check('Leaving the preview restores pinned selection',(await selectedOrders().innerText()).includes('Полностью обеспеченный'));
+  await sourceItems.nth(1).locator('button').click();await mind.locator('h4').first().hover();
+  check('Clicking another item switches the pinned selection',(await selectedOrders().innerText()).includes('Частичная позиция')&&await sourceItems.first().locator('button').getAttribute('aria-pressed')==='false');
+  await mapNodes('order').locator('[data-map-branch]').click();
+  check('Pinned match survives folding the payment branch',(await selectedOrders().innerText()).includes('Частичная позиция'));
+  await mapNodes('order').locator('[data-map-branch]').click();
+  await orderItems.first().hover();
+  check('Order hover also highlights its original request',await rootNode('R3').locator('[data-mm-item="request"].is-linked').count()===1&&(await rootNode('R3').locator('[data-mm-item="request"].is-linked').innerText()).includes('Полностью обеспеченный'));
+  await sourceItems.first().locator('button').focus();await page.keyboard.press('Space');
+  await mind.locator('h4').first().hover();
+  check('Keyboard can pin a match',await sourceItems.first().locator('button').getAttribute('aria-pressed')==='true'&&(await selectedOrders().innerText()).includes('Полностью обеспеченный'));
+  await page.keyboard.press('Escape');
+  check('Escape clears pinned selection',await mind.locator('[data-mm-item].is-linked').count()===0);
+  await sourceItems.nth(1).locator('button').click();await mind.locator('h4').first().hover();
+  await rootNode('R3').scrollIntoViewIfNeeded();await page.screenshot({path:join(shots,'document-map-highlight.png')});
   await rootNode('R3').locator('[data-map-branch]').click();
   check('Collapsing the root removes orders and payments but keeps original items',await mapNodes('order').count()===0&&await mapNodes('payment').count()===0&&await rootNode('R3').locator('li').count()===2);
+  await rootNode('R1').locator('.pr-mm-item-select').click();
+  check('Clicking a collapsed request item opens its structure and highlights the replacement',await mapNodes('order').count()===1&&(await selectedOrders().innerText()).includes('Замена материала'));
+  await mind.locator('h4').first().hover();
+  await rootNode('R1').locator('[data-cancelled="true"]').hover();
+  check('Cancelled positions do not replace the pinned selection',(await selectedOrders().innerText()).includes('Замена материала')&&await mind.locator('[data-cancelled="true"].is-linked').count()===0);
+  await rootNode('R6').locator('[data-map-branch]').click();await rootNode('R6').locator('.pr-mm-item-select').hover();
+  check('One request highlights matching positions in multiple orders',await selectedOrders().count()===2);
+  await rootNode('R5').locator('[data-map-branch]').click();await rootNode('R5').locator('.pr-mm-item-select').nth(1).hover();
+  check('Unmatched request does not highlight unrelated supplier positions',await selectedOrders().count()===0);
   check('No browser script errors',errors.length===0);
   console.log(JSON.stringify({checks,work},null,2));
 } catch(e) {if(page){console.error((await page.locator('body').innerText()).slice(-4500));mkdirSync('output/validation/procurement',{recursive:true});await page.screenshot({path:'output/validation/procurement/failure.png',fullPage:true});}console.error(log);throw e;}
