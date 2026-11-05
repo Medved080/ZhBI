@@ -2183,3 +2183,30 @@ CREATE TABLE IF NOT EXISTS cp_history (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_cp_history_object ON cp_history(object_id);
+-- Independent immutable procurement uploads; user mappings have their own audit.
+CREATE TABLE IF NOT EXISTS procurement_snapshots (
+    id INTEGER PRIMARY KEY,
+    filename TEXT NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    data_json TEXT NOT NULL,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS procurement_allocations (
+    snapshot_id INTEGER NOT NULL REFERENCES procurement_snapshots(id) ON DELETE CASCADE,
+    order_line_id TEXT NOT NULL,
+    allocations_json TEXT NOT NULL,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (snapshot_id, order_line_id)
+);
+CREATE TABLE IF NOT EXISTS procurement_mapping_history (
+    id INTEGER PRIMARY KEY,
+    snapshot_id INTEGER NOT NULL REFERENCES procurement_snapshots(id) ON DELETE CASCADE,
+    order_line_id TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

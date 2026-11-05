@@ -186,6 +186,7 @@ function renderFatal(err) {
 // Экраны области «МФР / учёт по блокам» (рабочие модули с записью через шлюз): impl экрана → монтирование
 // (модули грузятся при первом открытии экрана, а не при старте: холодный запуск V2 не тяжелеет)
 const MFR_SCREENS = {
+  "procurement-edit": () => import("./procurement-screen.js").then((m) => m.mountProcurementScreen),
   "contracting-plan": () => import("./contracting-plan.js").then((m) => m.mountContractingPlan),
   "blocks-edit": () => import("./blocks-screen.js").then((m) => m.mountBlocksScreen),
   "fact-journal-edit": () => import("./fact-journal-screen.js").then((m) => m.mountFactJournalScreen),
@@ -293,7 +294,7 @@ async function renderShell(user, permissions) {
   const isModule = (s) => s.impl.startsWith("module:");
   const allowedScreen = (s) => isModule(s)
     ? !!moduleAvailable[s.id]
-    : screenAllowed(s, registry.structure[s.id], rights);
+    : screenAllowed(s, registry.structure[s.id], s.id === "procurement" ? permissions : rights);
   const groupTitle = (id) => registry.groups.find((g) => g.id === id)?.title || "";
 
   // Настройки оболочки — закреплённые объекты и левая навигация (shell-prefs.js): читаются из уже загруженного
@@ -907,7 +908,7 @@ async function renderShell(user, permissions) {
         document.title = `${target.title} — ЖБИ`;
         const mountMfr = await MFR_SCREENS[target.impl]();
         activeModule = mountMfr(content, {
-          screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group), go: (k) => openSection(k),
+          screen: target, structure: registry.structure[target.id], objectId, api, rights: target.id === "procurement" ? permissions : rights, groupTitle: groupTitle(target.group), go: (k) => openSection(k),
         });
       } else if (target.impl === "element-catalog") {
         // «Элементы»: справочник изделий с отбором по колонкам и карточкой изделия (та же, что на схеме — element-ops.js)
