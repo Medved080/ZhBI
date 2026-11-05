@@ -83,7 +83,7 @@ export function createDocumentMap(host){
     const totals=documentTotals.get(order.document)||{amount:0,paid:0,count:0};
     if(!totals.count)return '<span class="pr-mm-payment-status is-unpaid">ЗРДС отсутствуют</span>';
     if(totals.amount>0 && totals.paid>=totals.amount)return '<span class="pr-mm-payment-status is-paid">ЗП оплачен полностью</span>';
-    return `<span class="pr-mm-payment-status is-unpaid">Осталось по ЗП ${rub(Math.max(0,totals.amount-totals.paid))}</span>`;
+    return `<span class="pr-mm-payment-status is-unpaid pr-mm-balance"><span>Осталось по ЗП</span><strong>${rub(Math.max(0,totals.amount-totals.paid))}</strong></span>`;
   }
   function requestNode(d){
     const active=d.groupKey===rootKey;

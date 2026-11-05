@@ -204,6 +204,8 @@ dialog.pr-mapping-dialog { margin:auto; width:min(900px,94vw); max-height:88vh; 
 .pr-mm-payment-status.is-paid { color:#217448; background:color-mix(in srgb,#2c9c69 13%,Canvas); }
 .pr-mm-payment-status.is-unpaid,.pr-mm-payment.is-unpaid { --pr-state-color:#bf8b16; }
 .pr-mm-payment-status.is-unpaid { color:var(--text,CanvasText); background:color-mix(in srgb,#ecc84b 20%,Canvas); }
+.pr-mm-payment-status.pr-mm-balance { display:grid; gap:3px; margin:3px 0; padding:10px 12px; color:#422000; background:#ffda70; border:1px solid #d28a12; border-left:4px solid #b45a00; border-radius:6px; font-size:14px; font-weight:700; line-height:1.3; }
+.pr-mm-balance strong { font-size:23px; font-weight:800; font-variant-numeric:tabular-nums; }
 .pr-mm-payment-branch { margin-bottom:18px; }
 .pr-mm-payment-branch h5 { margin:0 0 7px; }
 .pr-mm-wires .pr-mm-item-wire { stroke-width:3; }
