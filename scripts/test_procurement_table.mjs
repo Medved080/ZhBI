@@ -87,3 +87,21 @@ const noProof=tableModel(missingProof);
 assert.equal(noProof.requests[0].progress,'unknown');assert.ok(noProof.requests[0].payment_note.includes('ЗРДС не найдена'));
 assert.equal(noProof.groups[0].progress,'unknown');
 console.log('Procurement table: grouping, statuses, per-column search, numeric/date sorting passed');
+
+const {supplierLedger}=await import('../app/static/v2/procurement-suppliers.js');
+const order=(document_key,supplier,amount_cents,request_number,cancelled=false)=>({document_key,supplier,amount_cents,request_number,cancelled,number:document_key,date:'2026-01-01'});
+const pay=(document_key,supplier,amount_cents,day)=>({document_key,supplier,amount_cents,source_row:day,order_number:document_key,ref:`Заявка на расходование ДС X${day} от ${String(day).padStart(2,'0')}.01.2026`});
+const ledger=supplierLedger({
+  orders:[order('P','А ООО (ИНН 1234567890)',400,'R1'),order('P','А ООО (ИНН 1234567890)',600,'R2'),
+    order('Q','А ООО (ИНН 1234567890)',100,'R2'),order('X','Б',300,'R3'),order('Y','Б',999,'R3',true)],
+  payments:[pay('P','А (ИНН 1234567890)',200,3),pay('P','А (ИНН 1234567890)',300,1),
+    pay('Q','А (ИНН 1234567890)',150,2),pay(null,'Б',70,4),pay('P','Б',20,5)]});
+assert.deepEqual(ledger.map(s=>[s.ordered,s.paid,s.due,s.over,s.unlinked]),[[1100,650,500,50,0],[300,90,300,0,90]]);
+assert.equal(ledger[0].orders.size,2);
+assert.deepEqual(ledger[0].payments.map(p=>p.amount),[300,150,200]);
+
+const {quantityMatch}=await import('../app/static/v2/procurement-document-map.js');
+assert.equal(quantityMatch({raw:{cancelled:false},ordered:10,qty:10}),'full');
+assert.equal(quantityMatch({raw:{cancelled:false},ordered:9,qty:10}),'different');
+assert.equal(quantityMatch({raw:{cancelled:false},ordered:12,qty:10}),'different');
+assert.equal(quantityMatch({raw:{cancelled:false},ordered:0,qty:10}),'missing');

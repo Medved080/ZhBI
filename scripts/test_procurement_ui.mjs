@@ -131,6 +131,7 @@ next(p for p in s['Оплаты ЗРДС'][1:] if p[4]=='P3')[2]=140
 for n in ['1','2']:
  r=copy.deepcopy(s['ЗВП'][1]);r[0]='ЗВП R5';r[1]='R5';r[4]='Исходная позиция '+n;r[6]=30;s['ЗВП'].append(r)
  o=copy.deepcopy(s['ЗП'][1]);o[0]='Заказ P5'+n;o[1]='P5'+n;o[3]='Аналог '+n;o[7]=30;o[9]='R5';s['ЗП'].append(o)
+p=copy.deepcopy(next(p for p in s['Оплаты ЗРДС'][1:] if p[4]=='P4'));p[0]='Заявка на расходование ДС ZERO от 01.03.2026';p[2]=0;s['Оплаты ЗРДС'].append(p)
 Path(sys.argv[1]).write_bytes(xlsx_bytes(s))`,extended]);
   run(['/Users/max/.codex/scripts/validate_xlsx.py',extended]);
   await page.locator('#pr-file').setInputFiles(extended);await page.locator('#pr-analyze').click();await page.locator('#pr-apply').waitFor({state:'visible'});await page.locator('#pr-apply').click();
@@ -228,6 +229,52 @@ Path(sys.argv[1]).write_bytes(xlsx_bytes(s))`,extended]);
   await page.locator('[data-stage="ordered_unpaid"]').click();await page.locator('[data-inspect]').first().click();
   await page.locator('#pr-overview').scrollIntoViewIfNeeded();
   await page.screenshot({path:join(shots,'fulfillment-overview.png')});
+  await page.locator('[data-tab="suppliers"]').click();
+  const ledgerRow=page.locator('#pr-suppliers [data-payee]').first();
+  check('Supplier view groups orders and shows three monetary totals',(await ledgerRow.innerText()).includes('Оплачено по ЗРДС')&&(await ledgerRow.innerText()).includes('Осталось по ЗП'));
+  await ledgerRow.click();
+  check('Supplier details show orders and dated payment history',await page.locator('#pr-suppliers .pr-supplier-order').count()>0&&(await page.locator('.pr-supplier-timeline').innerText()).includes('01.02.2026'));
+  await page.locator('#pr-search').fill('нет такого контрагента');
+  check('Supplier search narrows the ledger',await page.locator('#pr-suppliers [data-payee]').count()===0);
+  await page.locator('[data-tab="map"]').click();await page.locator('#pr-clear-search').click();
+  const mind=page.locator('#pr-document-map'), mapNodes=kind=>mind.locator(`[data-mm-node="${kind}"]`);
+  check('Document map starts with requests only',await mapNodes('request').count()>1&&await mapNodes('order').count()===0&&await mapNodes('payment').count()===0);
+  const rootNode=num=>mapNodes('request').filter({has:page.getByRole('button',{name:num,exact:true})});
+  check('Nomenclature is visible without fold controls',await mind.locator('[data-map-items]').count()===0&&await rootNode('R5').locator('li').count()===2);
+  const original= rootNode('R5').locator('li').first();
+  check('Request line shows original and ordered quantities',await original.locator('[data-mm-count="original"]').innerText()==='30'&&await original.locator('[data-mm-count="ordered"]').innerText()==='14');
+  await rootNode('R5').locator('[data-map-branch]').click();
+  check('One expand opens the complete request structure',await mapNodes('order').count()===2&&await mind.locator('[data-payment-branch]').count()===2&&await mind.locator('[data-mm-item="order"]').count()===2);
+  check('Orders without payment requests are labelled',(await mapNodes('order').first().innerText()).includes('ЗРДС отсутствуют'));
+  check('Unmatched order positions are highlighted and explained',await mind.locator('[data-mm-item="order"][data-order-match="missing"]').count()===1&&(await mind.locator('[data-order-match="missing"]').innerText()).includes('Не сопоставлено с ЗВП'));
+  check('Replacement positions show the original request nomenclature',(await mind.locator('[data-mm-item="order"][data-order-match="different"]').innerText()).includes('ЗВП: Исходная позиция 1'));
+  await mapNodes('order').first().locator('[data-map-branch]').click();
+  check('Closing one order keeps the neighboring payment branch open',await mapNodes('order').nth(1).locator('[data-map-branch]').getAttribute('aria-expanded')==='true'&&await mind.locator('[data-payment-branch]').count()===1);
+  await mapNodes('order').first().locator('[data-map-branch]').click();
+  check('Opening a sibling keeps both branches',await mind.locator('[data-payment-branch]').count()===2);
+  await rootNode('R1').locator('[data-map-branch]').click();
+  check('Switching request opens its own complete path',await mapNodes('order').count()===1&&await mapNodes('payment').count()===2&&(await mapNodes('order').innerText()).includes('P1'));
+  check('Cancelled request and order positions are struck through',await rootNode('R1').locator('[data-cancelled="true"]').count()===1&&await mapNodes('order').locator('[data-cancelled="true"]').count()===1&&await mind.locator('[data-cancelled="true"] .pr-mm-item-name').evaluateAll(nodes=>nodes.every(n=>getComputedStyle(n).textDecorationLine==='line-through')));
+  await rootNode('R1').scrollIntoViewIfNeeded();await page.screenshot({path:join(shots,'document-map-cancelled.png')});
+  await rootNode('R3').locator('[data-map-branch]').click();
+  check('Fully paid orders are distinguished',(await mapNodes('order').innerText()).includes('ЗП оплачен полностью'));
+  check('Matched quantities get individual green and yellow connections',await mind.locator('path.pr-mm-item-wire[data-quantity-match="full"]').count()===1&&await mind.locator('path.pr-mm-item-wire[data-quantity-match="different"]').count()===1);
+  check('Order rows distinguish matching and differing quantities',await mind.locator('[data-mm-item="order"][data-order-match="full"]').count()===1&&await mind.locator('[data-mm-item="order"][data-order-match="different"]').count()===1&&(await mind.locator('[data-order-match="different"]').innerText()).includes('Количество отличается'));
+  check('Columns leave a wide gutter for nomenclature links',await mind.locator('.pr-mm-canvas').evaluate(canvas=>{const lanes=canvas.querySelectorAll('section');return lanes[1].getBoundingClientRect().left-lanes[0].getBoundingClientRect().right>=140&&lanes[2].getBoundingClientRect().left-lanes[1].getBoundingClientRect().right>=140;}));
+  check('All document and item links are thin solid curves',await mind.locator('svg path').evaluateAll(paths=>paths.every(p=>p.getAttribute('d').includes(' C')&&!/[HV]/.test(p.getAttribute('d'))&&Number.parseFloat(getComputedStyle(p).strokeWidth)===1&&getComputedStyle(p).strokeDasharray==='none')));
+  const endpoints=await mind.evaluate(host=>{
+    const canvas=host.querySelector('.pr-mm-canvas').getBoundingClientRect();
+    return [...host.querySelectorAll('.pr-mm-item-wire')].every(p=>{
+      const points=p.getAttribute('d').match(/-?\d+(?:\.\d+)?/g).map(Number);
+      const source=[...host.querySelectorAll('[data-mm-item="request"]')].find(n=>Math.abs(n.getBoundingClientRect().right-canvas.left-points[0])<1&&Math.abs(n.getBoundingClientRect().top+n.getBoundingClientRect().height/2-canvas.top-points[1])<1);
+      const target=[...host.querySelectorAll('[data-mm-item="order"]')].find(n=>Math.abs(n.getBoundingClientRect().left-canvas.left-points.at(-2))<1&&Math.abs(n.getBoundingClientRect().top+n.getBoundingClientRect().height/2-canvas.top-points.at(-1))<1);
+      return Boolean(source&&target);
+    });
+  });
+  check('Nomenclature wires end on the exact item rows',endpoints);
+  await mind.scrollIntoViewIfNeeded();await page.screenshot({path:join(shots,'document-map-quantities.png')});
+  await rootNode('R3').locator('[data-map-branch]').click();
+  check('Collapsing the root removes orders and payments but keeps original items',await mapNodes('order').count()===0&&await mapNodes('payment').count()===0&&await rootNode('R3').locator('li').count()===2);
   check('No browser script errors',errors.length===0);
   console.log(JSON.stringify({checks,work},null,2));
 } catch(e) {if(page){console.error((await page.locator('body').innerText()).slice(-4500));mkdirSync('output/validation/procurement',{recursive:true});await page.screenshot({path:'output/validation/procurement/failure.png',fullPage:true});}console.error(log);throw e;}

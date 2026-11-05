@@ -1,4 +1,6 @@
 import { esc } from "./screen-view.js";
+import { createDocumentMap } from "./procurement-document-map.js";
+import { createSupplierView } from "./procurement-suppliers.js";
 import { createProcurementOverview } from "./procurement-overview.js";
 import { createRequestCards } from "./procurement-request-cards.js";
 import { openMappingDialog } from "./procurement-mapping-dialog.js";
@@ -32,20 +34,22 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
       <p>«Оплачено» — сумма «СуммаРасход» из листа «Оплаты ЗРДС». Она распределяется между действующими позициями всего ЗП пропорционально стоимости с НДС. Оплаченное количество — расчётная доля количества, а не подтверждение оплаты конкретной позиции или поставки. При переплате количество ограничено заказанным. ЗРДС сама по себе не доказывает проведение платежа в банке.</p>
       <p>Отменённые строки исключены. Повторы строк сохранены. Количества разных номенклатур и единиц не суммируются. Фильтры меняют таблицу, итоги выше относятся ко всей загрузке.</p></details>
       <div id="pr-shortcuts" class="pr-shortcuts" aria-label="Быстрый отбор позиций"></div>
-      <div class="pr-tabs">${[ ["overview","Обзор исполнения"],["chain","ЗВП → ЗП → ЗРДС"],["cards","Карточка заявки"],["requests","Потребности ЗВП"],["orders","Заказы и замены"],["payments","Оплаты ЗРДС"] ].map(([id,label])=>button(label,`data-tab="${id}" aria-pressed="${id===tab}"`)).join("")}</div>
+      <div class="pr-tabs">${[ ["overview","Обзор исполнения"],["map","Карта документов"],["suppliers","Деньги по контрагентам"],["chain","ЗВП → ЗП → ЗРДС"],["cards","Карточка заявки"],["requests","Потребности ЗВП"],["orders","Заказы и замены"],["payments","Оплаты ЗРДС"] ].map(([id,label])=>button(label,`data-tab="${id}" aria-pressed="${id===tab}"`)).join("")}</div>
       <div class="pr-filters"><label><span id="pr-search-label">Поиск</span><input id="pr-search" type="search" placeholder="Дата, номер, количество, состояние…"></label>
       <label>Состояние<select id="pr-filter"></select></label><label>Колонки<select id="pr-columns"><option value="all">Все колонки</option><option value="quantities">Количество и замены</option><option value="money">Суммы и оплаты</option></select></label>
       <details class="pr-extra"><summary>Дополнительные фильтры</summary><div class="pr-actions"><label data-demand-filter>Склад<select id="pr-warehouse"><option value="">Все склады</option></select></label>
       <label data-demand-filter>Категория<select id="pr-category"><option value="">Все категории</option></select></label>
       <label data-demand-filter>Дата ЗВП с<input id="pr-from" type="date"></label><label data-demand-filter>по<input id="pr-to" type="date"></label></div></details>${button("Сбросить отбор",'id="pr-clear-search"')}</div>
       <div id="pr-group-actions" class="pr-actions">${button("Свернуть все группы",'id="pr-collapse-all"')}${button("Развернуть все группы",'id="pr-expand-all"')}<span class="v2-muted">Кнопки + / − у номера сворачивают отдельную ЗВП или ЗП.</span></div>
-      <div id="pr-focus" class="pr-focus" hidden></div><div id="pr-editor"></div><div id="pr-detail"></div><div id="pr-overview" hidden></div><div id="pr-cards" hidden></div><div class="pr-scroll" id="pr-table"></div>
+      <div id="pr-focus" class="pr-focus" hidden></div><div id="pr-editor"></div><div id="pr-detail"></div><div id="pr-document-map" hidden></div><div id="pr-suppliers" hidden></div><div id="pr-overview" hidden></div><div id="pr-cards" hidden></div><div class="pr-scroll" id="pr-table"></div>
       <div class="pr-actions">${button("Назад",'id="pr-prev"')}<span id="pr-page"></span>${button("Далее",'id="pr-next"')}</div></div></div>`;
   const $=s=>el.querySelector(s);
   const grid=createProcurementTable($("#pr-table"),{writable,onRequest:detail,onMap:editor,onPage:({page,count,size,unit})=>{
     $("#pr-page").textContent=count?`${page*size+1}–${Math.min(count,(page+1)*size)} из ${count} ${unit}`:"0 строк";
     $("#pr-prev").disabled=page===0;$("#pr-next").disabled=(page+1)*size>=count;
   }});
+  const documentMap=createDocumentMap($("#pr-document-map"));
+  const suppliers=createSupplierView($("#pr-suppliers"));
   const overview=createProcurementOverview($("#pr-overview"),writable);
   const cards=createRequestCards($("#pr-cards"),writable);
   const error=e=>{if(!disposed) $("#pr-error").textContent=e?.message || String(e);};
@@ -94,6 +98,8 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
     const counts=grid.update(report);
     cards.update(grid.model);
     overview.update(grid.model);
+    suppliers.update(report);
+    documentMap.update(grid.model,report.id);
     const shortcuts=[
       ["requests","open","Незакрытые потребности",counts.open],
       ["requests","progress:ordered_unpaid","Ожидают полной оплаты",counts.ordered_unpaid || 0],
@@ -106,24 +112,26 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
   }
   function filterOptions() {
     const progressOptions=Object.entries(progressLabels).map(([k,v])=>["progress:"+k,v]);
-    const options=["chain","cards"].includes(tab) ? progressOptions : tab==="requests" ? progressOptions.concat([["open","Незакрытые потребности"]],Object.entries(labels),[["replacement","С заменами"]]) : tab==="orders" ? progressOptions.concat([["unmapped","Нужно сопоставить"],["replacement","Подтверждённые замены"],["cancelled","Отменено"]]) : [["orphan","Без найденного ЗП"],["linked","Связаны с ЗП"]];
+    const options=["chain","cards","map"].includes(tab) ? progressOptions : tab==="requests" ? progressOptions.concat([["open","Незакрытые потребности"]],Object.entries(labels),[["replacement","С заменами"]]) : tab==="orders" ? progressOptions.concat([["unmapped","Нужно сопоставить"],["replacement","Подтверждённые замены"],["cancelled","Отменено"]]) : [["orphan","Без найденного ЗП"],["linked","Связаны с ЗП"]];
     $("#pr-filter").innerHTML='<option value="">Все состояния</option>'+options.map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-    el.querySelectorAll("[data-demand-filter]").forEach(e=>e.hidden=!["chain","cards","requests","overview"].includes(tab));
-    const cardView=tab==="cards", summaryView=tab==="overview", listView=cardView||summaryView;
+    el.querySelectorAll("[data-demand-filter]").forEach(e=>e.hidden=!["chain","cards","requests","overview","map"].includes(tab));
+    const cardView=tab==="cards", summaryView=tab==="overview", supplierView=tab==="suppliers", mapView=tab==="map", listView=cardView||summaryView||supplierView||mapView;
+    $("#pr-document-map").hidden=!mapView;
+    $("#pr-suppliers").hidden=!supplierView;
     $("#pr-overview").hidden=!summaryView;
-    $("#pr-shortcuts").hidden=summaryView;
-    $("#pr-filter").closest("label").hidden=summaryView;
-    $("#pr-search-label").textContent=listView?"Поиск по заявкам и позициям":"Поиск по всем колонкам";
-    $("#pr-search").placeholder=listView?"Номенклатура, номер ЗВП, ЗП или ЗРДС":"Дата, номер, количество, состояние…";
+    $("#pr-shortcuts").hidden=summaryView||supplierView;
+    $("#pr-filter").closest("label").hidden=summaryView||supplierView;
+    $("#pr-search-label").textContent=supplierView?"Поиск по контрагентам":listView?"Поиск по заявкам и позициям":"Поиск по всем колонкам";
+    $("#pr-search").placeholder=supplierView?"Название или ИНН":listView?"Номенклатура, номер ЗВП, ЗП или ЗРДС":"Дата, номер, количество, состояние…";
     $("#pr-cards").hidden=!cardView;
     $("#pr-table").hidden=listView;
-    for(const panel of [$("#pr-overview"),$("#pr-cards"),$("#pr-table")]){
+    for(const panel of [$("#pr-document-map"),$("#pr-suppliers"),$("#pr-overview"),$("#pr-cards"),$("#pr-table")]){
       if(panel.hidden)panel.replaceChildren();
     }
     $("#pr-page").closest(".pr-actions").hidden=listView;
     $("#pr-columns").closest("label").hidden=listView;
     $("#pr-group-actions").hidden=tab!=="chain";
-    $(".pr-extra").hidden=!["chain","cards","requests","overview"].includes(tab);
+    $(".pr-extra").hidden=!["chain","cards","requests","overview","map"].includes(tab);
   }
   function table(headers, rows) { return `<table class="pr-table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("") || `<tr><td colspan="${headers.length}">Нет подходящих строк</td></tr>`}</tbody></table>`; }
   const td=(v,cls="")=>`<td class="${cls}">${v}</td>`;
@@ -131,7 +139,7 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
     if(!report) return;
     const state=$("#pr-filter").value;
     el.querySelectorAll("[data-shortcut]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.view===tab && b.dataset.shortcut===state)));
-    const activeView=tab==="overview"?overview:tab==="cards"?cards:grid;
+    const activeView=tab==="map"?documentMap:tab==="suppliers"?suppliers:tab==="overview"?overview:tab==="cards"?cards:grid;
     activeView.filter($("#pr-search").value.trim(),(row,view)=>{
       const r=row.raw||row;
       if(["chain","requests"].includes(view)) {
@@ -220,7 +228,7 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
     el.querySelectorAll("[data-tab]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.tab===tab)));
     $("#pr-detail").replaceChildren();
     filterOptions();
-    if(tab!=="cards" && tab!=="overview")grid.show(tab);
+    if(tab!=="cards" && tab!=="overview" && tab!=="suppliers" && tab!=="map")grid.show(tab);
     return true;
   }
   el.addEventListener("click",async e=>{
@@ -246,5 +254,5 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
     if(b.id==="pr-close-detail")$("#pr-detail").replaceChildren();
   });
   setBusy(true);listSnapshots().catch(error).finally(()=>{if(!disposed)setBusy(false);});
-  return {hasUnsavedChanges:()=>dirty,guardLeave:leaveEditor,destroy(){disposed=true;generation++;}};
+  return {hasUnsavedChanges:()=>dirty,guardLeave:leaveEditor,destroy(){documentMap.destroy();disposed=true;generation++;}};
 }
