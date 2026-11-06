@@ -105,3 +105,22 @@ assert.equal(quantityMatch({raw:{cancelled:false},ordered:10,qty:10}),'full');
 assert.equal(quantityMatch({raw:{cancelled:false},ordered:9,qty:10}),'different');
 assert.equal(quantityMatch({raw:{cancelled:false},ordered:12,qty:10}),'different');
 assert.equal(quantityMatch({raw:{cancelled:false},ordered:0,qty:10}),'missing');
+
+const {documentIndicators}=await import('../app/static/v2/procurement-document-status.js');
+const statusDoc=(ordered=0,orders=[],cancelled=false)=>({
+  requests:[{qty:10,ordered,raw:{cancelled}}],
+  orders:new Map(orders.map((o,i)=>[i,{lines:[{raw:{cancelled:false}}],payments:[],...o}]))
+});
+const stageStates=doc=>documentIndicators(doc).map(s=>s.state);
+assert.deepEqual(stageStates(statusDoc()),['none','none','none']);
+assert.deepEqual(stageStates(statusDoc(0,[{}])),['unknown','none','none'],'unmapped orders are not reported as absent');
+assert.deepEqual(stageStates(statusDoc(4,[{payments:[{amount:20}]},{}])),['partial','partial','full'],'positive expense does not imply full order or payment-request coverage');
+assert.deepEqual(stageStates(statusDoc(10,[{payments:[{amount:0}]}])),['full','full','waiting']);
+assert.deepEqual(stageStates(statusDoc(10,[{payments:[{amount:20},{amount:0}]}])),['full','full','partial']);
+assert.deepEqual(stageStates(statusDoc(12,[{payments:[{amount:20}]}])),['full','full','full']);
+assert.deepEqual(stageStates(statusDoc(0,[{lines:[{raw:{cancelled:true}}],payments:[{amount:20}]}])),['none','none','none'],'cancelled order documents are excluded');
+assert.deepEqual(stageStates(statusDoc(0,[],true)),['cancelled','cancelled','cancelled']);
+assert.ok(documentIndicators(statusDoc(10,[{payments:[{amount:20}]}]))[2].hint.includes('полнота оплаты каждой заявки неизвестна'));
+const repeatedReceipt=documentIndicators(statusDoc(10,[{document:'D',payments:[{amount:0,raw:{ref:'Z'}},{amount:20,raw:{ref:'Z'}}]}]))[2];
+assert.equal(repeatedReceipt.state,'full');assert.ok(repeatedReceipt.hint.includes('по 1 из 1 ЗРДС'),'multiple exported rows of one ZRDS count as one document');
+console.log('Procurement document indicators: quantity, payment-request coverage and expense are independent');

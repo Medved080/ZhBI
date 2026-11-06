@@ -1,8 +1,24 @@
 import { esc } from "./screen-view.js";
-import { displayDate, qty, rub } from "./procurement-table-model.js";
+import { displayDate, qty, rub, progressLabels } from "./procurement-table-model.js";
+import { documentIndicators } from "./procurement-document-status.js";
 
 const pageSize=10;
 const textKey=value=>String(value??"").toLocaleLowerCase("ru").trim();
+const stateIcons={
+  none:'<circle cx="9" cy="9" r="7"/><path d="M5 9h8"/>',
+  partial:'<circle cx="9" cy="9" r="7"/><path d="M9 2a7 7 0 0 1 0 14Z" fill="currentColor" stroke="none"/>',
+  full:'<circle cx="9" cy="9" r="7"/><path d="m5 9 3 3 5-6"/>',
+  waiting:'<circle cx="9" cy="9" r="7"/><path d="M9 5v5l3 2"/>',
+  unknown:'<circle cx="9" cy="9" r="7"/><path d="M7 6a2 2 0 1 1 3 2c-1 0-1 1-1 2m0 2v1"/>',
+  cancelled:'<circle cx="9" cy="9" r="7"/><path d="m4 4 10 10"/>'
+};
+function indicators(doc){
+  return '<div class="pr-mm-indicators" aria-label="Этапы исполнения ЗВП">'+documentIndicators(doc).map(s=>{
+    const hint=s.code+": "+s.label+". "+s.hint;
+    const icon=s.kind==="expense"&&["partial","waiting"].includes(s.state)?"waiting":s.state;
+    return '<span class="pr-mm-indicator" data-indicator="'+s.kind+'" data-state="'+s.state+'" tabindex="0" role="img" aria-label="'+esc(hint)+'" title="'+esc(hint)+'" data-hint="'+esc(hint)+'"><b>'+s.code+'</b><svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">'+stateIcons[icon]+'</svg></span>';
+  }).join("")+'</div>';
+}
 function orderText(order){
   return [order.order_number,displayDate(order.order_date),order.supplier,...order.lines.map(l=>l.item),
     ...order.payments.flatMap(p=>[p.payment_number,displayDate(p.payment_date)])].join(" ");
@@ -89,7 +105,7 @@ export function createDocumentMap(host){
   function requestNode(d){
     const active=d.groupKey===rootKey;
     return `<article class="pr-mm-node pr-progress-${d.progress} ${active?"is-active":""}" data-mm-node="request">
-      <small>ЗВП · ${displayDate(d.date)}</small><b class="pr-mm-request-number">${esc(d.number)}</b>
+      <div class="pr-mm-request-heading"><div><small>ЗВП · ${displayDate(d.date)}</small><b class="pr-mm-request-number">${esc(d.number)}</b></div>${indicators(d)}</div>
       <span>${esc(d.warehouse)}</span><span>${esc(d.item)} · ЗП: ${d.orders.size}</span>
       ${d.orders.size && [...d.orders.values()].every(o=>{const t=documentTotals.get(o.document);return t?.amount>0&&t.paid>=t.amount;})?'<span class="pr-mm-payment-status is-paid">Все связанные ЗП оплачены</span>':""}
       ${active?items(d.requests,true):""}
@@ -116,8 +132,12 @@ export function createDocumentMap(host){
     const doc=shown.find(d=>d.groupKey===rootKey);
     const orders=doc?[...doc.orders.values()]:[];
     const expanded=orders.filter(o=>openOrders.has(o.groupKey));
+    const counts=new Map();
+    for(const {doc} of visible)counts.set(doc.progress,(counts.get(doc.progress)||0)+1);
     host.innerHTML=`<div class="pr-mm-toolbar"><strong>Заявки · ${visible.length}</strong>
       ${rootKey?'<button type="button" class="v2-btn" data-map-fold>Свернуть ветку</button>':""}</div>
+      <div class="pr-mm-state-legend" aria-label="Цвета состояний ЗВП">${Object.entries(progressLabels).map(([state,label])=>'<span class="pr-progress-'+state+'" data-map-legend="'+state+'">'+esc(label)+' <b>'+(counts.get(state)||0)+'</b></span>').join("")}</div>
+      <p class="pr-mm-icon-legend">Иконки: ЗП — обеспеченность потребности; ЗРДС — заказы с созданными заявками; ₽ — заявки с отражённым расходом. Наведите на иконку для подробностей.</p>
       <p class="pr-mm-legend">Наведите на номенклатуру, чтобы подсветить сопоставленные позиции. Клик закрепляет подсветку, клик по другой позиции переключает её. Esc снимает выделение.</p>
       <p class="pr-mm-legend">В ЗП: жёлтые позиции — замена или расхождение количества; красные — не сопоставлены с ЗВП. Отменённые позиции зачёркнуты.</p>
       <div class="pr-mm-scroll"><div class="pr-mm-canvas">

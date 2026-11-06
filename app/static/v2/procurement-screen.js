@@ -106,8 +106,9 @@ export function mountProcurementScreen(el, {api, rights, screen}) {
       ["orders","unmapped","Требуют сопоставления",s.unmapped_orders],
       ["payments","orphan","Оплаты без ЗП",s.orphan_payments]
     ];
+    const shortcutStates={open:"partial","progress:ordered_unpaid":"ordered_unpaid",unmapped:"unknown",orphan:"not_ordered"};
     $("#pr-shortcuts").innerHTML=shortcuts.map(([view,filter,label,count])=>
-      `<button type="button" class="v2-btn" data-shortcut="${filter}" data-view="${view}">${label} <b>${count}</b></button>`).join("");
+      `<button type="button" class="v2-btn pr-progress-${shortcutStates[filter]}" data-shortcut="${filter}" data-view="${view}">${label} <b>${count}</b></button>`).join("");
     renderTable();
   }
   function filterOptions() {
