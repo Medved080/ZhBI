@@ -7,8 +7,8 @@ function orderText(order){
   return [order.order_number,displayDate(order.order_date),order.supplier,...order.lines.map(l=>l.item),
     ...order.payments.flatMap(p=>[p.payment_number,displayDate(p.payment_date)])].join(" ");
 }
-function toggle(key,open,label,full=false){
-  return `<button type="button" data-map-branch="${esc(key)}" aria-expanded="${open}" class="pr-mm-toggle">${esc(label)} <span aria-hidden="true">${full?(open?"Свернуть −":"Развернуть +"):(open?"−":"+")}</span></button>`;
+function toggle(key,open,label){
+  return `<button type="button" data-map-branch="${esc(key)}" aria-expanded="${open}" class="pr-mm-toggle">${esc(label)} <span aria-hidden="true">${open?"−":"+"}</span></button>`;
 }
 export function quantityMatch(r){
   if(r.raw.cancelled)return "cancelled";
@@ -43,7 +43,7 @@ export function createDocumentMap(host){
   const openOrders=new Set();
   let documentTotals=new Map();
   let requestRows=new Map();
-  let orderRows=new Map(),requestDocuments=new Map();
+  let orderRows=new Map();
   let pinnedItem=null,hoveredItem=null,focusedItem=null;
   const itemSelection=row=>row && row.dataset.cancelled!=="true"?{kind:row.dataset.mmItem,id:row.dataset.mmId}:null;
   const sameItem=(a,b)=>a?.kind===b?.kind && a?.id===b?.id;
@@ -62,8 +62,8 @@ export function createDocumentMap(host){
     if(!canvas || canvas.offsetWidth===0)return;
     const svg=canvas.querySelector("svg"),origin=canvas.getBoundingClientRect();
     const paths=[];
-    function connect(from,to){
-      const x=from.right-origin.left,y=from.top-origin.top+24;
+    function connect(from,to,fromButton=false){
+      const x=from.right-origin.left,y=from.top-origin.top+(fromButton?from.height/2:24);
       const end=to.left-origin.left,bottom=to.top-origin.top+24;
       const bend=Math.max(18,(end-x)*0.55);
       paths.push(`<path data-mm-link="document" d="M${x} ${y} C${x+bend} ${y} ${end-bend} ${bottom} ${end} ${bottom}"/>`);
@@ -72,7 +72,8 @@ export function createDocumentMap(host){
       for(const active of canvas.querySelectorAll(`[data-mm-node="${source}"].is-active`)){
         for(const node of canvas.querySelectorAll(`[data-mm-node="${target}"]`)){
           if(source==="order" && node.dataset.mmParent!==active.dataset.mmKey)continue;
-          connect(active.getBoundingClientRect(),node.getBoundingClientRect());
+          const start=source==="request"?active.querySelector(".pr-mm-expand"):active;
+          connect(start.getBoundingClientRect(),node.getBoundingClientRect(),source==="request");
         }
       }
     }
@@ -88,10 +89,11 @@ export function createDocumentMap(host){
   function requestNode(d){
     const active=d.groupKey===rootKey;
     return `<article class="pr-mm-node pr-progress-${d.progress} ${active?"is-active":""}" data-mm-node="request">
-      <small>ЗВП · ${displayDate(d.date)}</small>${toggle(d.groupKey,active,d.number,true)}
+      <small>ЗВП · ${displayDate(d.date)}</small><b class="pr-mm-request-number">${esc(d.number)}</b>
       <span>${esc(d.warehouse)}</span><span>${esc(d.item)} · ЗП: ${d.orders.size}</span>
       ${d.orders.size && [...d.orders.values()].every(o=>{const t=documentTotals.get(o.document);return t?.amount>0&&t.paid>=t.amount;})?'<span class="pr-mm-payment-status is-paid">Все связанные ЗП оплачены</span>':""}
-      ${items(d.requests,true)}</article>`;
+      ${active?items(d.requests,true):""}
+      <button type="button" class="pr-mm-expand" data-map-branch="${esc(d.groupKey)}" aria-expanded="${active}" aria-label="${active?"Свернуть":"Развернуть"} всю детализацию ЗВП ${esc(d.number)}" title="${active?"Свернуть":"Развернуть"} всю детализацию"><span aria-hidden="true">${active?"−":"+"}</span></button></article>`;
   }
   function orderNode(o){
     const active=openOrders.has(o.groupKey);
@@ -161,13 +163,7 @@ export function createDocumentMap(host){
   host.onclick=e=>{
     const item=itemSelection(e.target.closest("[data-mm-item]"));
     if(item){
-      const doc=item.kind==="request"?requestDocuments.get(item.id):null;
-      if(doc && doc.groupKey!==rootKey){
-        clearPath();rootKey=doc.groupKey;
-        for(const order of doc.orders.values())openOrders.add(order.groupKey);
-        pinnedItem=item;render();
-        [...host.querySelectorAll('[data-mm-item="request"]')].find(row=>row.dataset.mmId===item.id)?.querySelector("button")?.focus({preventScroll:true});
-      }else{pinnedItem=item;focusedItem=null;highlightItems();}
+      pinnedItem=item;focusedItem=null;highlightItems();
       return;
     }
     const b=e.target.closest("button");if(!b)return;
@@ -200,7 +196,6 @@ export function createDocumentMap(host){
     update(model,id){
       requestRows=new Map(model.requests.map(r=>[r.requestId,r]));
       orderRows=new Map(model.orders.map(r=>[r.orderId,r]));
-      requestDocuments=new Map(model.groups.flatMap(doc=>doc.requests.map(r=>[r.requestId,doc])));
       documentTotals=new Map();
       for(const order of model.orders){
         if(order.raw.cancelled)continue;

@@ -194,6 +194,10 @@ dialog.pr-mapping-dialog { margin:auto; width:min(900px,94vw); max-height:88vh; 
 .pr-mm-node small { color:var(--muted,GrayText); }
 .pr-mm-toggle,.pr-mm-items-toggle { cursor:pointer; color:inherit; font:inherit; background:none; border:0; padding:0; text-align:left; }
 .pr-mm-toggle { display:flex; justify-content:space-between; font-weight:700; }
+.pr-mm-node[data-mm-node="request"] { padding-right:56px; }
+.pr-mm-expand { position:absolute; top:50%; right:10px; transform:translateY(-50%); display:grid; place-items:center; width:36px; height:36px; padding:0; border:1px solid #2458bd; border-radius:6px; background:#2864d7; color:#fff; font:700 27px/1 system-ui,sans-serif; cursor:pointer; opacity:.48; transition:opacity .15s,box-shadow .15s; z-index:3; }
+.pr-mm-expand:hover,.pr-mm-expand:focus-visible { opacity:1; box-shadow:0 2px 8px rgb(40 100 215 / 30%); }
+.pr-mm-expand:focus-visible { outline:2px solid #2864d7; outline-offset:3px; }
 .pr-mm-items-toggle { padding-top:7px; border-top:1px solid var(--border,#d2d8df); color:var(--accent,#3166b3); }
 .pr-mm-items { list-style:none; margin:0; padding:0; }
 .pr-mm-items li { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:7px; font-size:12px; padding:6px 0; }
