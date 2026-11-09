@@ -6,7 +6,7 @@ import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app import activity, impersonation, ldap_auth, team_access
 from app.access import is_system_admin, require_service_feature, role_keys
@@ -40,6 +40,7 @@ class UserCreateIn(BaseModel):
     domain_login: str
     role: str
     auth_method: str = "local"
+    copy_from_user_id: Optional[int] = Field(default=None, gt=0)
     # По умолчанию ВКЛЮЧЕНО при заведении: пароль новому человеку задаёт
     # администратор, то есть пароль знают двое, и до первой смены он не
     # является личным (2026-08-03).
@@ -148,24 +149,45 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service
     conn = get_connection()
     try:
         begin_write(conn)
+        source = None
+        source_grants = []
+        if body.copy_from_user_id is not None:
+            source = conn.execute("SELECT * FROM users WHERE id = ?", (body.copy_from_user_id,)).fetchone()
+            if source is None:
+                raise HTTPException(status_code=404, detail="Пользователь для копирования не найден")
+            # Снимок берём ДО создания: совпадение ФИО новой учётной записи
+            # может изменить автоматическое сопоставление проектной команды.
+            source_grants = conn.execute(
+                "SELECT project_id, object_id, role FROM user_access WHERE user_id = ?",
+                (source["id"],),
+            ).fetchall()
+        role = source["role"] if source is not None else body.role
         existing = conn.execute(
             "SELECT id FROM users WHERE CASEFOLD(domain_login) = ?", (body.domain_login.casefold(),)
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail="Такое доменное имя уже занято")
         _validate_auth_method(conn, body.auth_method)
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO users (last_name, first_name, patronymic, position, department,
                 domain_login, role, auth_method, must_change_password)
             VALUES (:last_name, :first_name, :patronymic, :position, :department,
                 :domain_login, :role, :auth_method, :must_change_password)
             """,
-            {**body.model_dump(),
+            {**body.model_dump(exclude={"copy_from_user_id"}), "role": role,
              # Доменной учётной записи требование смены бессмысленно: её
              # пароль живёт в домене (см. auth.must_change_password_of).
              "must_change_password": int(body.must_change_password
                                          and body.auth_method == "local")},
+        )
+        user_id = cursor.lastrowid
+        # Копируем и ручные, и командные гранты как независимые ручные
+        # назначения. Чужую личность/место в команде не переносим: иначе
+        # следующий sync_all отозвал бы скопированные командные права.
+        conn.executemany(
+            "INSERT INTO user_access (user_id, project_id, object_id, role) VALUES (?, ?, ?, ?)",
+            [(user_id, g["project_id"], g["object_id"], g["role"]) for g in source_grants],
         )
         team_access.sync_all(conn)   # новая учётная запись могла совпасть с человеком из проектной команды (B2)
         conn.commit()
@@ -173,7 +195,9 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service
             "SELECT * FROM users WHERE domain_login = ?", (body.domain_login,)
         ).fetchone()
         activity.log("user_create", user=admin, entity_type="user", entity_id=row["id"],
-                     new_value=f"{body.domain_login} ({body.role}, {body.auth_method})")
+                     new_value=f"{body.domain_login} ({role}, {body.auth_method})"
+                     + (f"; права скопированы с {source['domain_login']} (id {source['id']}), "
+                        f"назначений: {len(source_grants)}" if source is not None else ""))
         return user_out(row)
     finally:
         conn.close()

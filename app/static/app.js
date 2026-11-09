@@ -16023,6 +16023,7 @@ const userEditBackdrop = document.getElementById("user-edit-backdrop");
 const userPasswordBackdrop = document.getElementById("user-password-backdrop");
 const ROLE_LABELS = { admin: "Администратор", user: "Пользователь", view: "Просмотр" };
 let editingUserId = null;
+let copyingUserId = null;
 let passwordTargetUserId = null;
 
 // Одна колонка вместо прежней «Пароль: задан/пустой» (2026-08-03): у
@@ -16097,7 +16098,8 @@ function renderUsersRows() {
         : `<small>${escapeHtml(authMethodLabel(u))}</small>`}</td>
       <td><span class="ue-tag">${escapeHtml(ROLE_LABELS[u.role] || u.role)}</span></td>
       <td><button type="button" class="link-btn" data-open-access="${u.id}">${escapeHtml(accessSummaryLabel(u, summary))}</button></td>
-      <td class="user-actions"><button type="button" class="link-btn" data-edit="${u.id}">Изменить</button></td>
+      <td class="user-actions"><button type="button" class="link-btn" data-edit="${u.id}">Изменить</button>
+        ${can("users", "write") ? `<button type="button" class="link-btn" data-copy-user="${u.id}">Копировать</button>` : ""}</td>
     </tr>`;
   };
   let rowsHtml = рабочие.map(строка).join("");
@@ -16116,6 +16118,8 @@ function renderUsersRows() {
   });
   table.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () =>
     openUserEdit(usersCache.find(u => u.id === Number(btn.dataset.edit)))));
+  table.querySelectorAll("[data-copy-user]").forEach(btn => btn.addEventListener("click", () =>
+    openUserEdit(null, { copyFrom: usersCache.find(u => u.id === Number(btn.dataset.copyUser)) })));
   // Значение колонки «Доступ» открывает карточку СРАЗУ на вкладке доступа
   // (требование задания) — не «Изменить» и потом искать вкладку самому.
   table.querySelectorAll("[data-open-access]").forEach(btn => btn.addEventListener("click", () =>
@@ -16301,6 +16305,14 @@ async function renderUeAccessPanel() {
       + `выданных ролей — назначать здесь нечего.</div>`;
     return;
   }
+  if (copyingUserId) {
+    box.innerHTML = `<div class="ue-note">Все текущие роли и доступы выбранного пользователя будут скопированы при создании.
+      Назначения по проектной команде станут самостоятельными ручными правами.
+      Изменить доступы можно в карточке нового пользователя после создания.</div>`
+      + ueSummaryHtml(await accessCatalog());
+    box.querySelectorAll(".ue-access-toolbar, [data-ue-area], [data-ue-check]").forEach(el => el.remove());
+    return;
+  }
   const catalog = await accessCatalog();
   if (ueAccessView === "summary") {
     box.innerHTML = ueSummaryHtml(catalog);
@@ -16450,16 +16462,27 @@ function ueWireEditor(box, key) {
 }
 
 async function openUserEdit(user, opts) {
+  const source = opts?.copyFrom;
+  copyingUserId = source?.id || null;
   editingUserId = user ? user.id : null;
   document.getElementById("user-edit-title").textContent = user ? "Изменить пользователя" : "Новый пользователь";
+  document.getElementById("ue-copy-note")?.remove();
+  if (source) {
+    const note = document.createElement("div");
+    note.id = "ue-copy-note";
+    note.className = "u-note";
+    note.textContent = `Системная роль и все текущие доступы будут скопированы с пользователя ${source.display_name} (${source.domain_login}). Укажите новые ФИО и логин. Пароль задаётся отдельно после создания.`;
+    document.querySelector('#user-edit-backdrop [data-ue-panel="profile"]').prepend(note);
+  }
   document.getElementById("ue-last-name").value = user ? user.last_name : "";
   document.getElementById("ue-first-name").value = user ? user.first_name : "";
   document.getElementById("ue-patronymic").value = user && user.patronymic ? user.patronymic : "";
-  document.getElementById("ue-position").value = user && user.position ? user.position : "";
-  document.getElementById("ue-department").value = user && user.department ? user.department : "";
+  document.getElementById("ue-position").value = (user || source)?.position || "";
+  document.getElementById("ue-department").value = (user || source)?.department || "";
   document.getElementById("ue-domain-login").value = user ? user.domain_login : "";
-  document.getElementById("ue-role").value = user ? user.role : "user";
-  document.getElementById("ue-auth-method").value = user ? (user.auth_method || "local") : "local";
+  document.getElementById("ue-role").value = (user || source)?.role || "user";
+  document.getElementById("ue-role").disabled = !!source;
+  document.getElementById("ue-auth-method").value = (user || source)?.auth_method || "local";
   // У НОВОГО — включено по умолчанию (пароль задаст администратор), у
   // существующего — как есть: снять требование, забыв про галочку, хуже,
   // чем не поставить его лишний раз.
@@ -16491,7 +16514,7 @@ async function openUserEdit(user, opts) {
   ueSwitchTab((opts && opts.tab) || "profile");
 
   userEditBackdrop.classList.add("open");
-  await loadAccessInto(editingUserId);
+  await loadAccessInto(copyingUserId || editingUserId);
   await renderUeAccessPanel();
 }
 // Предупреждение о снятии пароля показывается ДО сохранения: перевод на
@@ -16544,7 +16567,9 @@ function запретСервисОтАдминистраторов(body) {
     + "(scripts/reset_password.py).\n\nВсё равно сохранить?");
 }
 
-document.getElementById("user-edit-save").addEventListener("click", async () => {
+document.getElementById("user-edit-save").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  if (button.disabled) return;
   const body = {
     last_name: document.getElementById("ue-last-name").value.trim(),
     first_name: document.getElementById("ue-first-name").value.trim(),
@@ -16557,18 +16582,23 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     must_change_password: document.getElementById("ue-must-change").checked,
   };
   if (запретСервисОтАдминистраторов(body)) return;
+  if (!editingUserId && copyingUserId) body.copy_from_user_id = copyingUserId;
+  button.disabled = true;
   try {
     let userId = editingUserId;
+    let created = null;
     if (editingUserId) {
       await api(`/users/${editingUserId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     } else {
       const создан = await api("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      created = создан;
       userId = создан.id;
     }
     // Права — вторым запросом, ПОСЛЕ создания: у нового пользователя ещё нет
     // id, и выдать грант раньше физически нечему. Отправляем СОСТОЯНИЕ
     // целиком, сервер заменяет им весь набор грантов.
-    await api(`/users/${userId}/access`, {
+    // При копировании пользователь и ВСЕ права уже сохранены одной транзакцией.
+    if (!body.copy_from_user_id) await api(`/users/${userId}/access`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ grants: collectAccessGrants() }),
     });
@@ -16576,8 +16606,13 @@ document.getElementById("user-edit-save").addEventListener("click", async () => 
     // Каталог не устарел (проекты/объекты этой правкой не создаются) —
     // только гранты, а их renderUsersTable читает заново из access-matrix.
     await renderUsersTable();
+    if (body.copy_from_user_id && created) await openUserEdit(created, {
+      tab: created.auth_method === "domain" ? "access" : "security",
+    });
   } catch (e) {
     document.getElementById("user-edit-error").textContent = e.message;
+  } finally {
+    button.disabled = false;
   }
 });
 

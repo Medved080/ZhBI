@@ -446,7 +446,8 @@ export function mountUsersAccess(container, ctx) {
           : `<small>${u.auth_method === "domain" ? "Домен" : "Пароль сервиса"}</small>`}</td>
         <td><span class="v2-tag">${escapeHtml(ROLE_LABELS[u.role] || u.role)}</span></td>
         <td>${accessCell}</td>
-        <td class="v2-row-action"><button class="v2-link" data-user="${u.id}">Открыть</button></td>
+        <td class="v2-row-action"><button class="v2-link" data-user="${u.id}">Открыть</button>
+          ${canWriteUsers ? `<button class="v2-link" data-copy-user="${u.id}">Копировать</button>` : ""}</td>
       </tr>`;
     }
   }
@@ -483,6 +484,8 @@ export function mountUsersAccess(container, ctx) {
       }
       const openAccess = e.target.closest("[data-open-access]");
       if (openAccess) { openUser(Number(openAccess.dataset.openAccess), "access"); return; }
+      const copyUserBtn = e.target.closest("[data-copy-user]");
+      if (copyUserBtn) { copyUser(Number(copyUserBtn.dataset.copyUser)); return; }
       const openUserBtn = e.target.closest("[data-user]");
       if (openUserBtn) openUser(Number(openUserBtn.dataset.user));
     });
@@ -495,9 +498,11 @@ export function mountUsersAccess(container, ctx) {
 
   function markNewUserDirty(el) {
     // Форма «грязная» только пока в ней что-то введено: стёрли — сторож снимается.
-    const filled = ["#nu-last", "#nu-first", "#nu-login"].some((sel) => (el.querySelector(sel)?.value || "").trim());
+    const filled = ["#nu-last", "#nu-first", "#nu-patr", "#nu-pos", "#nu-dept", "#nu-login", "#nu-copy-from"]
+      .some((sel) => (el.querySelector(sel)?.value || "").trim());
     const roleChanged = !!el.querySelector("#nu-role") && el.querySelector("#nu-role").value !== "user"; // «Пользователь» — значение по умолчанию
-    if (!filled && !roleChanged) { clearDirtyState(); status.textContent = ""; return; }
+    const authChanged = el.querySelector("#nu-auth-method").value !== "local";
+    if (!filled && !roleChanged && !authChanged) { clearDirtyState(); status.textContent = ""; return; }
     setDirty({
       message: "В форме нового пользователя есть введённые данные.",
       save: () => submitNewUser(el),
@@ -515,9 +520,15 @@ export function mountUsersAccess(container, ctx) {
       errorEl.textContent = "Заполните фамилию и логин";
       throw new Error("Заполните фамилию и логин");
     }
+    const sourceId = Number(el.querySelector("#nu-copy-from").value) || null;
     const created = await api.post("/users", {
       last_name, first_name: el.querySelector("#nu-first").value.trim(),
+      patronymic: el.querySelector("#nu-patr").value.trim() || null,
+      position: el.querySelector("#nu-pos").value.trim() || null,
+      department: el.querySelector("#nu-dept").value.trim() || null,
       domain_login, role: el.querySelector("#nu-role").value,
+      auth_method: el.querySelector("#nu-auth-method").value,
+      copy_from_user_id: sourceId,
     });
     // Только что созданного пользователя добавляем в кэш НАПРЯМУЮ (сервер
     // уже вернул его целиком) — не полагаемся на перечитку списка: тогда
@@ -525,18 +536,42 @@ export function mountUsersAccess(container, ctx) {
     state.users = state.users ? [...state.users, created] : [created];
     clearDirtyState();
     await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
-    await openUser(created.id);
+    await openUser(created.id, sourceId ? (created.auth_method === "domain" ? "access" : "security") : undefined);
   }
 
-  function renderNewUserForm() {
+  async function copyUser(id) {
+    if (!canWriteUsers) return;
+    await withNavGuard(async () => {
+      if (!(await requestLeave())) return;
+      state.page = "users";
+      state.status = "";
+      await render();
+      renderNewUserForm(state.users.find((u) => u.id === id));
+    });
+  }
+
+  function renderNewUserForm(source = null) {
     const el = body.querySelector("#ua-new-user");
     el.innerHTML = `
       <div class="v2-result">
         <h4>Новый пользователь</h4>
+        <label class="v2-field">Скопировать права пользователя
+          <select id="nu-copy-from">
+            <option value="">Не копировать</option>
+            ${state.users.map((u) => `<option value="${u.id}" ${source?.id === u.id ? "selected" : ""}>${escapeHtml(u.display_name)} (${escapeHtml(u.domain_login)})</option>`).join("")}
+          </select>
+        </label>
+        <p class="v2-note" id="nu-copy-note"></p>
         <div class="v2-fields">
           <label class="v2-field">Фамилия<input id="nu-last" required></label>
           <label class="v2-field">Имя<input id="nu-first"></label>
+          <label class="v2-field">Отчество<input id="nu-patr"></label>
+          <label class="v2-field">Должность<input id="nu-pos"></label>
+          <label class="v2-field">Подразделение<input id="nu-dept"></label>
           <label class="v2-field">Логин<input id="nu-login" required></label>
+          <label class="v2-field">Способ входа<select id="nu-auth-method">
+            <option value="local">Пароль сервиса</option><option value="domain">Домен</option>
+          </select></label>
           <label class="v2-field">Системная роль
             <select id="nu-role">
               <option value="user" selected>Пользователь</option>
@@ -545,10 +580,23 @@ export function mountUsersAccess(container, ctx) {
             </select>
           </label>
         </div>
-        <p class="v2-note">По умолчанию — обычный пользователь, без административных полномочий. Роль «Администратор» назначается явным выбором.</p>
         <div class="v2-auth-error" id="nu-error"></div>
         <div class="v2-inline" style="margin-top:12px">${btn("Создать", 'id="nu-submit"', true)}${btn("Отмена", 'id="nu-cancel"')}</div>
       </div>`;
+    function applySource() {
+      const u = state.users.find((u) => u.id === Number(el.querySelector("#nu-copy-from").value));
+      el.querySelector("#nu-role").value = u?.role || "user";
+      el.querySelector("#nu-role").disabled = !!u;
+      el.querySelector("#nu-pos").value = u?.position || "";
+      el.querySelector("#nu-dept").value = u?.department || "";
+      el.querySelector("#nu-auth-method").value = u?.auth_method || "local";
+      el.querySelector("#nu-copy-note").textContent = u
+        ? `При создании будут скопированы системная роль «${ROLE_LABELS[u.role] || u.role}» и все текущие доступы пользователя ${u.display_name}: на все проекты, проекты и объекты. Назначения по команде станут самостоятельными ручными правами. Укажите новые ФИО и логин; пароль задаётся отдельно после создания.`
+        : "По умолчанию — обычный пользователь. Можно выбрать существующего пользователя, чтобы перенести его системную роль и все доступы. Пароль задаётся после создания.";
+      markNewUserDirty(el);
+    }
+    el.querySelector("#nu-copy-from").addEventListener("change", applySource);
+    applySource();
     el.querySelectorAll("input, select").forEach((f) => {
       f.addEventListener(f.tagName === "SELECT" ? "change" : "input", () => markNewUserDirty(el));
     });
@@ -569,6 +617,8 @@ export function mountUsersAccess(container, ctx) {
         button.disabled = false;
       }
     });
+    el.scrollIntoView({ block: "start", behavior: "smooth" });
+    el.querySelector("#nu-last").focus({ preventScroll: true });
   }
 
   async function openUser(id, tab) {
@@ -763,7 +813,8 @@ export function mountUsersAccess(container, ctx) {
     body.innerHTML = `
       <div class="v2-bar"><div><button class="v2-link" data-back>← Все пользователи</button>
         <h3 style="margin-top:8px">${escapeHtml(u.display_name)}</h3></div>
-        <span class="v2-tag">${u.auth_method === "domain" ? "Домен" : "Пароль сервиса"}</span></div>
+        <div class="v2-inline"><span class="v2-tag">${u.auth_method === "domain" ? "Домен" : "Пароль сервиса"}</span>
+          ${canWriteUsers ? btn("Копировать пользователя", 'data-copy-current') : ""}</div></div>
       <div class="v2-cols">
         <aside class="v2-side">
           ${[["profile", "Профиль"], ["access", "Доступ к объектам"], ["security", "Вход и безопасность"]]
@@ -772,6 +823,7 @@ export function mountUsersAccess(container, ctx) {
         <section id="ua-edit-panel"></section>
       </div>`;
     body.querySelector("[data-back]").addEventListener("click", () => goto("users"));
+    body.querySelector("[data-copy-current]")?.addEventListener("click", () => copyUser(u.id));
     body.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", async () => {
       if (b.dataset.tab === state.editTab) return;
       await withNavGuard(async () => {
