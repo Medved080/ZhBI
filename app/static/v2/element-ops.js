@@ -130,7 +130,7 @@ export function createElementOps(ctx) {
 
   // Выбор контракта (тот же смысл, что в V1: контракты объекта, у каждого — числа по позиции изделия; без позиции и без остатка выбрать нельзя).
   // options: {element, currentId, leading: [{value,label}]} → значение: id | "none" | undefined (закрыто)
-  async function pickContract({ element, currentId, leading }) {
+  async function pickContract({ element, currentId, leading, reserved = () => 0 }) {
     let list, positions;
     try {
       list = (await askContracts()).filter((c) => !c.is_archived);
@@ -153,10 +153,11 @@ export function createElementOps(ctx) {
       for (const c of list) { const k = cGroup(c); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
       const rowHtml = (c) => {
         const p = byContract.get(c.id), own = c.id === currentId;
-        const blocked = !own && (!p || p.remaining <= 0);
-        const why = !p ? "нет позиции под эту марку" : `свободного количества нет (${nf(p.remaining)})`;
+        const available = p ? p.remaining - reserved(c.id) : 0;
+        const blocked = !own && (!p || available <= 0);
+        const why = !p ? "нет позиции под эту марку" : `свободного количества нет (${nf(available)})`;
         return `<button type="button" class="eo-crow${own ? " on" : ""}${blocked ? " eo-blocked" : ""}${p ? "" : " eo-nopos"}" data-c="${c.id}" ${blocked ? "disabled" : ""} title="${esc(c.name)}${blocked ? " — " + why : ""}">
-          <span class="eo-cname">${esc(cLabel(c))}</span>${p ? `<em title="Всего по позиции">${nf(p.quantity)}</em><em title="Уже разнесено">${nf(p.fact)}</em><em class="${p.remaining > 0 ? "ws-pos" : "ws-neg"}" title="Доступно">${nf(p.remaining)}</em>` : `<em class="eo-why">${esc(why)}</em>`}</button>`;
+          <span class="eo-cname">${esc(cLabel(c))}</span>${p ? `<em title="Всего по позиции">${nf(p.quantity)}</em><em title="Уже разнесено">${nf(p.fact)}</em><em class="${available > 0 ? "ws-pos" : "ws-neg"}" title="Доступно с учётом назначений в этой форме">${nf(available)}</em>` : `<em class="eo-why">${esc(why)}</em>`}</button>`;
       };
       const sorted = Array.from(groups).sort((a, b) => a[0].localeCompare(b[0], "ru"));
       const withPos = (cs) => cs.filter((c) => byContract.has(c.id)).sort((a, b) => cLabel(a).localeCompare(cLabel(b), "ru"));
@@ -825,19 +826,40 @@ export function createElementOps(ctx) {
     const res = await openModal({ title: `Плановая дата поставки по строкам (${rows.length})`, width: 640, mount(body, m) {
       function draw() {
         const changed = changedRows();
+        body.closest(".eo-dialog").querySelector(".eo-dlg-head strong").textContent = `Плановая дата поставки по строкам (${rows.length})`;
         body.innerHTML = `<p class="v2-muted eo-hint">У каждой строки своя дата (пусто — снять). Прежняя дата сверяется с сервером: если её успел изменить кто-то другой, пачка не применится.</p>
           <div class="v2-inline" style="margin-bottom:8px"><input type="date" id="eor-fill" value="${esc(st.fillDate)}" ${st.busy ? "disabled" : ""}>
             <button type="button" class="v2-btn" data-eor="fill" ${st.busy ? "disabled" : ""}>Заполнить пустые</button></div>
-          <div class="v2-read-table eo-clist" style="max-height:44vh"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Тип</th><th>Дата</th></tr></thead><tbody>
-            ${rows.map((r) => `<tr><td>${esc(r.mark || "—")}</td><td>${esc(r.type)}</td><td><input type="date" class="eor-date" data-id="${r.id}" value="${esc(r.value)}" ${st.busy ? "disabled" : ""}></td></tr>`).join("")}
+          <div class="v2-read-table eo-clist" style="max-height:44vh"><table class="v2-read-tbl"><thead><tr><th>ID</th><th>Марка</th><th>Тип</th><th>Дата</th><th></th></tr></thead><tbody>
+            ${rows.map((r) => `<tr data-eor-id="${r.id}"><td>${r.id}</td><td>${esc(r.mark || "—")}</td><td>${esc(r.type)}</td><td><input type="date" class="eor-date" data-id="${r.id}" value="${esc(r.value)}" ${st.busy ? "disabled" : ""}></td>
+              <td><button type="button" class="v2-btn" data-eor-remove="${r.id}" aria-label="Убрать изделие ${r.id} из выборки" ${st.busy ? "disabled" : ""}>✕</button></td></tr>`).join("")}
           </tbody></table></div>
-          <p class="v2-muted">Будет изменено: ${nf(changed.length)} из ${nf(rows.length)}.</p>
+          <p class="v2-muted" data-eor-count>Будет изменено: ${nf(changed.length)} из ${nf(rows.length)}.</p>
           ${st.prevHtml || ""}
           ${st.error ? `<p class="ws-err" role="alert">${esc(st.error)}</p>` : ""}
           <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-cancel>Отмена</button>
+            <button type="button" class="v2-btn" data-eor-single ${st.busy || rows.length < 2 ? "disabled" : ""}>Одно значение для всей группы…</button>
             <button type="button" class="v2-btn v2-primary" data-eor="preview" ${st.busy || !changed.length ? "disabled" : ""}>${st.busy ? "…" : st.prev ? "Обновить предпросмотр" : "Проверить последствия"}</button>
             ${st.prev ? `<button type="button" class="v2-btn v2-primary" data-eor="apply" ${st.busy ? "disabled" : ""}>Применить</button>` : ""}</div>`;
-        body.querySelectorAll(".eor-date").forEach((inp) => inp.addEventListener("input", (ev) => { const r = rows.find((x) => x.id === Number(ev.target.dataset.id)); r.value = ev.target.value; st.prev = null; draw(); }));
+        body.querySelectorAll(".eor-date").forEach((inp) => inp.addEventListener("input", (ev) => {
+          const r = rows.find((x) => x.id === Number(ev.target.dataset.id)); r.value = ev.target.value;
+          st.prev = null; st.prevHtml = "";
+          body.querySelectorAll('.eo-preview, [data-eor="apply"]').forEach((e) => e.remove());
+          body.querySelector("[data-eor-count]").textContent = `Будет изменено: ${nf(changedRows().length)} из ${nf(rows.length)}.`;
+          const preview = body.querySelector('[data-eor="preview"]');
+          preview.disabled = !changedRows().length; preview.textContent = "Проверить последствия";
+        }));
+        body.querySelectorAll("[data-eor-remove]").forEach((b) => b.addEventListener("click", () => {
+          const id = Number(b.dataset.eorRemove);
+          rows.splice(rows.findIndex((r) => r.id === id), 1);
+          st.prev = null; st.prevHtml = ""; send("removeFromSelection", { id });
+          if (!rows.length) { m.close(undefined); return; }
+          draw();
+        }));
+        body.querySelector("[data-eor-single]").addEventListener("click", async () => {
+          if (changedRows().length && !(await showConfirmDialog("Перейти к одному значению для всей группы? Введённые построчные даты будут отменены.", { confirmLabel: "Перейти" }))) return;
+          m.close({ switchMode: true });
+        });
         body.querySelector("#eor-fill")?.addEventListener("input", (ev) => { st.fillDate = ev.target.value; });
         body.querySelector('[data-eor="fill"]')?.addEventListener("click", () => { if (!st.fillDate) return; for (const r of rows) if (!r.value) r.value = st.fillDate; st.prev = null; draw(); });
         body.querySelector("[data-cancel]").addEventListener("click", () => { if (!st.busy) m.close(undefined); });
@@ -884,6 +906,7 @@ export function createElementOps(ctx) {
       }
       draw();
     } });
+    if (res?.switchMode) { await openGroupDialog("planned", { simple: true }); return; }
     if (!res || isDead()) return;
     if (res.applied) applyToScene(res.applied);
     if (res.banner) setBanner(res.banner.level, res.banner.text);
@@ -894,12 +917,16 @@ export function createElementOps(ctx) {
   async function openStatusRowsModal() {
     const s = sc();
     if (!R.status || !s?.multiItems) return;
-    const all = s.multiItems;
+    const all = s.multiItems.slice();
     const objectId = s.objectId ?? getObjectId();
     const allOrder = sc()?.statusOrder || [];
-    const st = { status: "", rows: null, busy: false, error: "", prev: null, prevHtml: "" };
+    const st = { status: "", rows: all.map((i) => {
+      const contract = i.contract_id ?? s.defaultContracts?.[i.element_type] ?? null;
+      return { id: i.id, mark: i.mark, type: i.element_type, curStatus: i.current_status,
+        expectedContract: i.contract_id ?? null, contractValue: contract, chosen: contract != null };
+    }), busy: false, error: "", prev: null, prevHtml: "" };
     const activeRows = () => (st.rows || []).filter((r) => r.curStatus !== st.status || (r.chosen && r.contractValue !== r.expectedContract));
-    const res = await openModal({ title: `Смена статуса по строкам (${all.length})`, width: 760, mount(body, m) {
+    const res = await openModal({ title: `Смена статуса по строкам (${all.length})`, width: 920, mount(body, m) {
       function itemsPayload() {
         const toPlanned = st.status === "planned";
         return activeRows().map((r) => ({ element_id: r.id, expected_status: r.curStatus, expected_contract_id: r.expectedContract, contract_id: toPlanned ? null : r.contractValue }));
@@ -907,6 +934,8 @@ export function createElementOps(ctx) {
       // «Распределение по марке» (перенос V1: renderBulkFillMarks/distributeBulkMark): один контракт на все строки позиции (тип + марка),
       // у которых он ещё не выбран, — не больше доступного по позиции контракта за вычетом уже расписанного в этой пачке.
       const markKey = (r) => `${r.type}\u0001${r.mark ?? ""}`;
+      const reserved = (key, contractId, excludeId = null) => st.rows.filter((r) => r.id !== excludeId && markKey(r) === key
+        && r.chosen && r.contractValue === contractId && r.expectedContract !== contractId).length;
       function byMarkHtml(rows) {
         const groups = new Map();
         for (const r of rows) { const k = markKey(r); const g = groups.get(k) || { type: r.type, mark: r.mark, n: 0, free: 0 }; g.n++; if (!r.chosen) g.free++; groups.set(k, g); }
@@ -919,16 +948,17 @@ export function createElementOps(ctx) {
       async function distributeMark(key) {
         const free = (st.rows || []).filter((r) => markKey(r) === key && !r.chosen);
         if (!free.length) return;
-        const v = await pickContract({ element: { mark: free[0].mark, element_type: free[0].type }, currentId: null, leading: [{ value: "none", label: "— без контракта —" }] });
+        const v = await pickContract({ element: { mark: free[0].mark, element_type: free[0].type }, currentId: null,
+          leading: [{ value: "none", label: "— без контракта —" }], reserved: (id) => reserved(key, id) });
         if (v === undefined || isDead()) return;
         let limit = free.length;
         if (v !== "none") {
           try {
             const pos = (await api.get(`/contracts/positions?element_type=${encodeURIComponent(free[0].type)}&object_id=${encodeURIComponent(getObjectId())}`)).filter((p) => p.contract_id === v && norm(p.mark) === norm(free[0].mark));
+            if (!pos.length) { st.markNote = "У контракта больше нет позиции под эту марку. Ничего не распределено."; draw(); return; }
             if (pos.length) {
               const remaining = pos.reduce((n, p) => n + p.quantity, 0) - Math.max(...pos.map((p) => p.fact)) - Math.max(...pos.map((p) => p.damaged));
-              const reserved = (st.rows || []).filter((r) => markKey(r) === key && r.chosen && r.contractValue === v && r.expectedContract !== v).length;
-              limit = Math.max(0, Math.min(free.length, remaining - reserved));
+              limit = Math.max(0, Math.min(free.length, Math.floor(remaining - reserved(key, v))));
             }
           } catch (e) { st.markNote = `Не удалось получить остаток позиции: ${errText(e, "нет ответа")}`; draw(); return; }
         }
@@ -942,34 +972,48 @@ export function createElementOps(ctx) {
         const changed = st.status ? activeRows() : [];
         const same = st.status ? all.length - changed.length : 0;
         const unresolved = st.status && !toPlanned && changed.some((r) => !r.chosen);
+        body.closest(".eo-dialog").querySelector(".eo-dlg-head strong").textContent = `Смена статуса по строкам (${all.length})`;
         body.innerHTML = `<label class="ws-fld">Новый статус <select id="eor-status" ${st.busy ? "disabled" : ""}>
             <option value="">— выберите —</option>${allOrder.map((k) => `<option value="${esc(k)}" ${st.status === k ? "selected" : ""}>${esc(statusLabel(k))}</option>`).join("")}</select></label>
           ${st.status ? `<p class="v2-muted">Изменится: ${nf(changed.length)} из ${nf(all.length)}${same ? `; без изменений: ${nf(same)}` : ""}. Изделию с прежним статусом можно сменить контракт без смены статуса.</p>` : ""}
           ${toPlanned ? `<p class="v2-muted ws-fnote">Возврат в «Запланирован» СНИМАЕТ контракт у всех строк — выбор контракта недоступен.</p>` : ""}
           ${st.status && !toPlanned ? byMarkHtml(rows) : ""}
-          ${st.status ? `<div class="v2-read-table eo-clist" style="max-height:40vh"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Тип</th><th>Было</th>${toPlanned ? "" : "<th>Контракт после</th>"}</tr></thead><tbody>
-            ${rows.map((r) => `<tr><td>${esc(r.mark || "—")}</td><td>${esc(r.type)}</td><td>${esc(statusLabel(r.curStatus))}</td>
-              ${toPlanned ? "" : `<td><button type="button" class="v2-btn eo-rowc" data-eor-c="${r.id}" ${st.busy ? "disabled" : ""}>${r.chosen ? esc(r.contractValue ? contractLabelById(r.contractValue) : "без контракта") : "— выбрать —"}</button></td>`}</tr>`).join("")}
-          </tbody></table></div>` : ""}
+          <div class="v2-read-table eo-clist" style="max-height:40vh"><table class="v2-read-tbl"><thead><tr><th>ID</th><th>Марка</th><th>Тип</th><th>Было</th>${toPlanned ? "" : "<th>Контракт после</th>"}<th></th></tr></thead><tbody>
+            ${rows.map((r) => `<tr data-eor-id="${r.id}"><td>${r.id}</td><td>${esc(r.mark || "—")}</td><td>${esc(r.type)}</td><td>${esc(statusLabel(r.curStatus))}</td>
+              ${toPlanned ? "" : `<td><button type="button" class="v2-btn eo-rowc" data-eor-c="${r.id}" ${st.busy ? "disabled" : ""}>${r.chosen ? esc(r.contractValue ? contractLabelById(r.contractValue) : "без контракта") : "— выбрать —"}</button></td>`}
+              <td><button type="button" class="v2-btn" data-eor-remove="${r.id}" aria-label="Убрать изделие ${r.id} из выборки" ${st.busy ? "disabled" : ""}>✕</button></td></tr>`).join("")}
+          </tbody></table></div>
           ${unresolved ? `<p class="v2-muted ws-fnote">У части строк не выбран контракт (обязательно для ухода с «Запланирован») — выберите «без контракта» или контракт явно.</p>` : ""}
           ${st.prevHtml || ""}
           ${st.error ? `<p class="ws-err" role="alert">${esc(st.error)}</p>` : ""}
           <div class="v2-dialog-actions"><button type="button" class="v2-btn" data-cancel>Отмена</button>
+            <button type="button" class="v2-btn" data-eor-single ${st.busy || rows.length < 2 ? "disabled" : ""}>Одно значение для всей группы…</button>
             <button type="button" class="v2-btn v2-primary" data-eor="preview" ${st.busy || !st.status || !changed.length || unresolved ? "disabled" : ""}>${st.busy ? "…" : st.prev ? "Обновить предпросмотр" : "Проверить последствия"}</button>
             ${st.prev ? `<button type="button" class="v2-btn v2-primary" data-eor="apply" ${st.busy ? "disabled" : ""}>Применить</button>` : ""}</div>`;
         body.querySelector("#eor-status")?.addEventListener("change", (ev) => {
           st.status = ev.target.value; st.prev = null; st.prevHtml = ""; st.error = "";
-          st.rows = st.status ? all.map((i) => ({ id: i.id, mark: i.mark, type: i.element_type, curStatus: i.current_status,
-            expectedContract: i.contract_id ?? null, contractValue: i.contract_id ?? null, chosen: i.contract_id != null })) : null;
           draw();
         });
         body.querySelectorAll("[data-eor-c]").forEach((b) => b.addEventListener("click", async () => {
           const rid = Number(b.dataset.eorC); const r = st.rows.find((x) => x.id === rid);
-          const v = await pickContract({ element: { mark: r.mark, element_type: r.type }, currentId: r.contractValue, leading: [{ value: "none", label: "— без контракта —" }] });
+          const v = await pickContract({ element: { mark: r.mark, element_type: r.type }, currentId: r.contractValue,
+            leading: [{ value: "none", label: "— без контракта —" }], reserved: (id) => reserved(markKey(r), id, r.id) });
           if (v === undefined || isDead()) return;
           r.contractValue = v === "none" ? null : v; r.chosen = true; st.prev = null; st.prevHtml = ""; draw();
         }));
         body.querySelectorAll("[data-eor-m]").forEach((b) => b.addEventListener("click", () => distributeMark(b.dataset.eorM)));
+        body.querySelectorAll("[data-eor-remove]").forEach((b) => b.addEventListener("click", () => {
+          const id = Number(b.dataset.eorRemove);
+          st.rows = st.rows.filter((r) => r.id !== id);
+          all.splice(all.findIndex((r) => r.id === id), 1);
+          st.prev = null; st.prevHtml = ""; st.error = ""; send("removeFromSelection", { id });
+          if (!all.length) { m.close(undefined); return; }
+          draw();
+        }));
+        body.querySelector("[data-eor-single]").addEventListener("click", async () => {
+          if (st.status && activeRows().length && !(await showConfirmDialog("Перейти к одному значению для всей группы? Введённые построчные назначения будут отменены.", { confirmLabel: "Перейти" }))) return;
+          m.close({ switchMode: true });
+        });
         body.querySelector("[data-cancel]").addEventListener("click", () => { if (!st.busy) m.close(undefined); });
         body.querySelector('[data-eor="preview"]')?.addEventListener("click", () => doPreview());
         body.querySelector('[data-eor="apply"]')?.addEventListener("click", () => doApply());
@@ -1020,6 +1064,7 @@ export function createElementOps(ctx) {
       }
       draw();
     } });
+    if (res?.switchMode) { await openGroupDialog("status", { simple: true }); return; }
     if (!res || isDead()) return;
     if (res.applied) applyToScene(res.applied);
     if (res.banner) setBanner(res.banner.level, res.banner.text);
@@ -1056,8 +1101,9 @@ export function createElementOps(ctx) {
     }));
     root.querySelectorAll('[data-eo="banner-x"]').forEach((b) => b.addEventListener("click", () => { setBanner("", ""); repaint(); }));
   }
-  async function openGroupDialog(kind) {
+  async function openGroupDialog(kind, { simple = false } = {}) {
     if (gdlg || !groupAvail()?.ok || !(kind === "status" ? R.status : R.plannedDate)) return;
+    if (!simple) return kind === "status" ? openStatusRowsModal() : openPlannedRowsModal();
     await openModal({ title: kind === "status" ? "Групповая смена статуса" : "Плановая дата поставки", width: 560, mount(body, m) {
       const draw = () => {
         const a = groupAvail();
@@ -1150,8 +1196,8 @@ export function createElementOps(ctx) {
       gp.addEventListener("submit", (ev) => { ev.preventDefault(); groupPlanned(false); });
     }
     on('[data-eo="gpd-clear"]', "click", () => groupPlanned(true));
-    on('[data-eo="rows-status"]', "click", () => openStatusRowsModal());
-    on('[data-eo="rows-planned"]', "click", () => openPlannedRowsModal());
+    on('[data-eo="rows-status"]', "click", () => { gdlg?.close(); openStatusRowsModal(); });
+    on('[data-eo="rows-planned"]', "click", () => { gdlg?.close(); openPlannedRowsModal(); });
   }
 
   // Фокус и позиция курсора переживают перерисовку панели (движок присылает снимки часто)

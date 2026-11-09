@@ -10,7 +10,7 @@ export async function renderLogin(root, { api, onSuccess }) {
   root.innerHTML = `
     <div class="v2-auth-screen">
       <div class="v2-auth-card">
-        <h2>ЖБИ — интерфейс V2</h2>
+        <h2>PM — интерфейс V2</h2>
         <small>Вход тем же паролем, что и в интерфейсе V1.</small>
         <form id="v2-login-form">
           <label class="v2-field">Логин

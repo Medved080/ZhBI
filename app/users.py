@@ -5,14 +5,14 @@ import json
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app import activity, impersonation, ldap_auth, team_access
 from app.access import is_system_admin, require_service_feature, role_keys
 from app.auth import (
     SESSION_COOKIE, SESSION_IDLE_HOURS, SESSION_TTL_DAYS, auth_method_of, create_session,
-    forget_session, format_display_name, get_current_user, hash_password, list_sessions,
+    forget_session, format_display_name, generate_password, get_current_user, hash_password, list_sessions,
     session_public_id, user_out, user_version, v2_shell_prefs_of, validate_password_strength, UserOut,
 )
 from app.db import begin_write, get_connection
@@ -41,6 +41,7 @@ class UserCreateIn(BaseModel):
     role: str
     auth_method: str = "local"
     copy_from_user_id: Optional[int] = Field(default=None, gt=0)
+    generate_password: bool = False
     # По умолчанию ВКЛЮЧЕНО при заведении: пароль новому человеку задаёт
     # администратор, то есть пароль знают двое, и до первой смены он не
     # является личным (2026-08-03).
@@ -88,6 +89,11 @@ class SetPasswordIn(BaseModel):
     # Администратор задал пароль другому человеку — тот же случай, что и при
     # заведении: пароль знают двое. По умолчанию требуем смену.
     must_change_password: bool = True
+
+
+class UserCredentialsOut(UserOut):
+    # Only create/generate responses can contain the one-time plaintext password.
+    generated_password: Optional[str] = None
 
 
 class SetLabelColorIn(BaseModel):
@@ -143,9 +149,14 @@ def list_users(admin: sqlite3.Row = Depends(require_service_feature("users", "re
         conn.close()
 
 
-@router.post("", response_model=UserOut)
-def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service_feature("users", "write"))):
+@router.post("", response_model=UserCredentialsOut)
+def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service_feature("users", "write")),
+                response: Response = None):
     _validate_role(body.role)
+    if body.generate_password and not is_system_admin(admin):
+        raise HTTPException(status_code=403, detail="Выдавать пароли может только администратор сервиса")
+    if body.generate_password and body.auth_method != "local":
+        raise HTTPException(status_code=422, detail="У доменной учётной записи пароль задаётся в домене")
     conn = get_connection()
     try:
         begin_write(conn)
@@ -168,17 +179,20 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service
         if existing:
             raise HTTPException(status_code=409, detail="Такое доменное имя уже занято")
         _validate_auth_method(conn, body.auth_method)
+        password = generate_password() if body.generate_password else None
+        password_hash, password_salt = hash_password(password) if password else (None, None)
         cursor = conn.execute(
             """
             INSERT INTO users (last_name, first_name, patronymic, position, department,
-                domain_login, role, auth_method, must_change_password)
+                domain_login, role, auth_method, must_change_password, password_hash, password_salt)
             VALUES (:last_name, :first_name, :patronymic, :position, :department,
-                :domain_login, :role, :auth_method, :must_change_password)
+                :domain_login, :role, :auth_method, :must_change_password, :password_hash, :password_salt)
             """,
-            {**body.model_dump(exclude={"copy_from_user_id"}), "role": role,
+            {**body.model_dump(exclude={"copy_from_user_id", "generate_password"}), "role": role,
+             "password_hash": password_hash, "password_salt": password_salt,
              # Доменной учётной записи требование смены бессмысленно: её
              # пароль живёт в домене (см. auth.must_change_password_of).
-             "must_change_password": int(body.must_change_password
+             "must_change_password": int((body.must_change_password or bool(password))
                                          and body.auth_method == "local")},
         )
         user_id = cursor.lastrowid
@@ -198,7 +212,9 @@ def create_user(body: UserCreateIn, admin: sqlite3.Row = Depends(require_service
                      new_value=f"{body.domain_login} ({role}, {body.auth_method})"
                      + (f"; права скопированы с {source['domain_login']} (id {source['id']}), "
                         f"назначений: {len(source_grants)}" if source is not None else ""))
-        return user_out(row)
+        if response is not None:
+            response.headers["Cache-Control"] = "no-store"
+        return UserCredentialsOut(**user_out(row).model_dump(), generated_password=password)
     finally:
         conn.close()
 
@@ -295,6 +311,17 @@ def update_user(user_id: int, body: UserUpdateIn, request: Request,
         return user_out(updated)
     finally:
         conn.close()
+
+
+@router.post("/{user_id}/generate-password", response_model=UserCredentialsOut)
+def generate_user_password(user_id: int, request: Request, response: Response,
+                           current: sqlite3.Row = Depends(get_current_user)):
+    if not is_system_admin(current):
+        raise HTTPException(status_code=403, detail="Выдавать пароли может только администратор сервиса")
+    password = generate_password()
+    updated = set_password(user_id, SetPasswordIn(password=password, must_change_password=True), request, current)
+    response.headers["Cache-Control"] = "no-store"
+    return UserCredentialsOut(**updated.model_dump(), generated_password=password)
 
 
 @router.post("/{user_id}/set-password", response_model=UserOut)

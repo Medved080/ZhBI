@@ -100,6 +100,7 @@ try {
   await page.locator('#nu-last').fill('Новый');
   await page.locator('#nu-first').fill('Николай');
   await page.locator('#nu-patr').fill('Петрович');
+  await page.locator('#nu-generate').uncheck();
   await page.locator('#nu-login').fill('QA.COPY.SOURCE');
   await page.locator('#nu-submit').click();
   await page.waitForFunction(() => document.querySelector('#nu-error')?.textContent.includes('занято'));
@@ -121,6 +122,7 @@ try {
   check('Removing source restores ordinary creation defaults', await page.locator('#nu-role').inputValue() === 'user' && await page.locator('#nu-role').isEnabled());
   await page.locator('#nu-last').fill('Обычный');
   await page.locator('#nu-login').fill('qa.copy.ordinary');
+  await page.locator('#nu-generate').uncheck();
   await page.locator('#nu-submit').click();
   await page.locator('[data-tab="profile"][aria-pressed="true"]').waitFor();
   const ordinary = await findUser('qa.copy.ordinary');
@@ -147,6 +149,7 @@ try {
   await checkLayout('#user-edit-backdrop [data-ue-panel="profile"]', 'v1-profile');
   await page.locator('#ue-last-name').fill('Второй');
   await page.locator('#ue-first-name').fill('Виктор');
+  await page.locator('#ue-generate').uncheck();
   await page.locator('#user-edit-backdrop [data-ue-tab="access"]').click();
   check('V1 shows copied access before creation', (await page.locator('#ue-access-summary').innerText()).includes('Команда'));
   await page.screenshot({ path: 'output/validation/user-copy/v1.png', fullPage: true });

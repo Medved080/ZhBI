@@ -984,7 +984,7 @@ function applyImpersonationBar(user) {
   const включён = !!user.impersonated_by;
   bar.style.display = включён ? "" : "none";
   if (!включён) {
-    document.title = "ЖБИ";
+    document.title = "PM";
     // Токен в вкладке есть, а режима нет — он истёк (или его оборвали), и
     // вкладка молча стала обычной вкладкой АДМИНИСТРАТОРА. Молчать здесь
     // нельзя: дальше он смотрел бы на свои права, считая их чужими.
@@ -999,7 +999,7 @@ function applyImpersonationBar(user) {
     + `«${user.display_name}». Все изменения записываются в журнал на ваше имя.`;
   // Заголовок вкладки — чтобы вкладка отличалась от своей и в списке вкладок,
   // а не только когда она открыта.
-  document.title = `ЖБИ · от имени ${user.display_name}`;
+  document.title = `PM · от имени ${user.display_name}`;
 }
 
 document.getElementById("impersonation-exit").addEventListener("click", async () => {
@@ -16471,7 +16471,7 @@ async function openUserEdit(user, opts) {
     const note = document.createElement("div");
     note.id = "ue-copy-note";
     note.className = "u-note";
-    note.textContent = `Системная роль и все текущие доступы будут скопированы с пользователя ${source.display_name} (${source.domain_login}). Укажите новые ФИО и логин. Пароль задаётся отдельно после создания.`;
+    note.textContent = `Системная роль и все текущие доступы будут скопированы с пользователя ${source.display_name} (${source.domain_login}). Укажите новые ФИО и логин.`;
     document.querySelector('#user-edit-backdrop [data-ue-panel="profile"]').prepend(note);
   }
   document.getElementById("ue-last-name").value = user ? user.last_name : "";
@@ -16487,6 +16487,7 @@ async function openUserEdit(user, opts) {
   // существующего — как есть: снять требование, забыв про галочку, хуже,
   // чем не поставить его лишний раз.
   document.getElementById("ue-must-change").checked = user ? !!user.must_change_password : true;
+  document.getElementById("ue-generate").checked = true;
   updateAuthMethodHint();
   updateFindInDomainButton();
   document.getElementById("user-edit-error").textContent = "";
@@ -16525,6 +16526,7 @@ function updateAuthMethodHint() {
   // Доменный пароль меняется в домене — требовать его смену нашей формой
   // нечем, и сервер такой признак всё равно не сохранит.
   document.getElementById("ue-must-change-row").style.display = доменный ? "none" : "";
+  document.getElementById("ue-generate-row").hidden = !!editingUserId || доменный || state.currentUser.role !== "admin";
   document.getElementById("ue-auth-method-hint").textContent = доменный
     ? "Вход проверяется у контроллера домена по доменному имени выше. Пароль сервиса у этой "
       + "учётной записи будет снят и перестанет подходить. Настройка подключения — "
@@ -16583,16 +16585,21 @@ document.getElementById("user-edit-save").addEventListener("click", async (e) =>
   };
   if (запретСервисОтАдминистраторов(body)) return;
   if (!editingUserId && copyingUserId) body.copy_from_user_id = copyingUserId;
+  if (!editingUserId) body.generate_password = body.auth_method === "local" && state.currentUser.role === "admin" && document.getElementById("ue-generate").checked;
   button.disabled = true;
+  let created = null, generatedPassword = null, showCredentials = null;
   try {
+    // Load the handoff UI before creating credentials: a failed import must not hide the only copy of a password.
+    if (!editingUserId) showCredentials = (await import("/static/user-credentials.js")).showUserCredentials;
     let userId = editingUserId;
-    let created = null;
     if (editingUserId) {
       await api(`/users/${editingUserId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     } else {
-      const создан = await api("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      created = создан;
-      userId = создан.id;
+      const { generated_password, ...создан } = await api("/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      created = создан; generatedPassword = generated_password;
+      userId = created.id;
+      // Any retry after a later access/refresh failure must update this record, not create it again.
+      editingUserId = userId; copyingUserId = null;
     }
     // Права — вторым запросом, ПОСЛЕ создания: у нового пользователя ещё нет
     // id, и выдать грант раньше физически нечему. Отправляем СОСТОЯНИЕ
@@ -16610,9 +16617,12 @@ document.getElementById("user-edit-save").addEventListener("click", async (e) =>
       tab: created.auth_method === "domain" ? "access" : "security",
     });
   } catch (e) {
-    document.getElementById("user-edit-error").textContent = e.message;
+    document.getElementById("user-edit-error").textContent = created
+      ? `Пользователь создан, но настройку доступа или обновление экрана завершить не удалось: ${e.message}` : e.message;
   } finally {
     button.disabled = false;
+    // Show even if the subsequent grant write or list refresh failed.
+    if (created && (generatedPassword || created.auth_method === "domain")) await showCredentials(created, generatedPassword);
   }
 });
 
@@ -16621,9 +16631,28 @@ function openUserPassword(userId) {
   document.getElementById("up-password-value").value = "";
   document.getElementById("up-must-change").checked = true;
   document.getElementById("user-password-error").textContent = "";
+  document.getElementById("user-password-generate").hidden = state.currentUser.role !== "admin";
   userPasswordBackdrop.classList.add("open");
 }
 document.getElementById("user-password-cancel").addEventListener("click", () => userPasswordBackdrop.classList.remove("open"));
+document.getElementById("user-password-generate").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  if (button.disabled) return;
+  const user = usersCache.find((u) => u.id === passwordTargetUserId);
+  if (user?.has_password && !confirm(`Сгенерировать новый пароль для «${user.display_name}»? Прежний пароль перестанет работать, остальные сеансы будут завершены.`)) return;
+  button.disabled = true;
+  try {
+    const { showUserCredentials } = await import("/static/user-credentials.js");
+    const { generated_password, ...updated } = await api(`/users/${passwordTargetUserId}/generate-password`, { method: "POST" });
+    userPasswordBackdrop.classList.remove("open");
+    await showUserCredentials(updated, generated_password, { reset: true });
+    await renderUsersTable();
+  } catch (err) {
+    document.getElementById("user-password-error").textContent = err.status === 0 || err.status >= 500
+      ? "Ответ не получен: пароль мог измениться. Повторите генерацию вручную, чтобы получить новый пароль."
+      : err.message;
+  } finally { button.disabled = false; }
+});
 document.getElementById("user-password-save").addEventListener("click", async () => {
   try {
     await api(`/users/${passwordTargetUserId}/set-password`, {

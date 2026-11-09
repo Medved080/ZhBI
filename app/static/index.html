@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8"/>
-<title>ЖБИ</title>
+<title>PM</title>
 <link rel="icon" type="image/png" sizes="512x512" href="/static/favicon-512.png"/>
 <link rel="icon" type="image/png" sizes="192x192" href="/static/favicon-192.png"/>
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png"/>
@@ -5198,7 +5198,7 @@
     <img id="toolbar-logo" src="/static/logo-digital.png" alt="МСУ-1 · Цифровая стройка"/>
     <!-- Название сервиса рядом со знаком: в логотипе его нет, а «ЖБИ»
          отличает этот сервис от остальных систем МСУ-1. -->
-    <h1>ЖБИ</h1>
+    <h1>PM</h1>
     <div class="dropdown toolbar-tile" id="settings-dropdown">
       <button class="btn" id="btn-settings-menu">Действия ▾</button>
       <!-- Группы меню (2026-07-29, живой запрос): "Настройки" — оформление и
@@ -7522,6 +7522,9 @@
     <div class="u-note">Системная роль — только про ведение сервиса: пользователи,
       проекты, объекты, резервные копии, журнал. Права на стройках — вкладка
       «Доступ к объектам».</div>
+      <label class="toggle" id="ue-generate-row" hidden style="margin-top:12px;">
+        <input type="checkbox" id="ue-generate" checked/> Сгенерировать временный пароль и показать данные для отправки
+      </label>
     </div>
 
     <div class="ue-panel" data-ue-panel="access" style="display:none;">
@@ -7592,6 +7595,7 @@
     <div class="error-text" id="user-password-error"></div>
     <div class="actions">
       <button class="btn btn-secondary" id="user-password-cancel">Отмена</button>
+      <button class="btn btn-secondary" id="user-password-generate">Сгенерировать пароль…</button>
       <button class="btn btn-primary" id="user-password-save">Сохранить</button>
     </div>
   </div>

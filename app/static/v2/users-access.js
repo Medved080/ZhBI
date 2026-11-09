@@ -13,6 +13,7 @@
 // объекта в «Проверке доступа» вместо плоского списка.
 import { resolveDirty as sharedResolveDirty, showConfirmDialog, showInfoDialog } from "./dialogs.js";
 import { setImpersonationToken } from "./api.js";
+import { showUserCredentials } from "../user-credentials.js";
 
 const ROLE_LABELS = { user: "Пользователь", view: "Просмотр", admin: "Администратор" };
 const LEVELS = ["none", "read", "write"];
@@ -502,7 +503,8 @@ export function mountUsersAccess(container, ctx) {
       .some((sel) => (el.querySelector(sel)?.value || "").trim());
     const roleChanged = !!el.querySelector("#nu-role") && el.querySelector("#nu-role").value !== "user"; // «Пользователь» — значение по умолчанию
     const authChanged = el.querySelector("#nu-auth-method").value !== "local";
-    if (!filled && !roleChanged && !authChanged) { clearDirtyState(); status.textContent = ""; return; }
+    const generationChanged = !!el.querySelector("#nu-generate") && !el.querySelector("#nu-generate").checked;
+    if (!filled && !roleChanged && !authChanged && !generationChanged) { clearDirtyState(); status.textContent = ""; return; }
     setDirty({
       message: "В форме нового пользователя есть введённые данные.",
       save: () => submitNewUser(el),
@@ -521,7 +523,7 @@ export function mountUsersAccess(container, ctx) {
       throw new Error("Заполните фамилию и логин");
     }
     const sourceId = Number(el.querySelector("#nu-copy-from").value) || null;
-    const created = await api.post("/users", {
+    const result = await api.post("/users", {
       last_name, first_name: el.querySelector("#nu-first").value.trim(),
       patronymic: el.querySelector("#nu-patr").value.trim() || null,
       position: el.querySelector("#nu-pos").value.trim() || null,
@@ -529,12 +531,15 @@ export function mountUsersAccess(container, ctx) {
       domain_login, role: el.querySelector("#nu-role").value,
       auth_method: el.querySelector("#nu-auth-method").value,
       copy_from_user_id: sourceId,
+      generate_password: el.querySelector("#nu-auth-method").value === "local" && !!el.querySelector("#nu-generate")?.checked,
     });
+    const { generated_password, ...created } = result;
     // Только что созданного пользователя добавляем в кэш НАПРЯМУЮ (сервер
     // уже вернул его целиком) — не полагаемся на перечитку списка: тогда
     // открыть карточку можно, даже если ensureUsers(true) ниже не удастся.
     state.users = state.users ? [...state.users, created] : [created];
     clearDirtyState();
+    if (generated_password || created.auth_method === "domain") await showUserCredentials(created, generated_password);
     await tryRefresh(() => ensureAccessMatrix(true), "accessMatrix");
     await openUser(created.id, sourceId ? (created.auth_method === "domain" ? "access" : "security") : undefined);
   }
@@ -580,6 +585,7 @@ export function mountUsersAccess(container, ctx) {
             </select>
           </label>
         </div>
+        ${currentUser.role === "admin" ? `<label class="v2-role-check" id="nu-generate-row" style="align-items:center"><input type="checkbox" id="nu-generate" style="margin:0" checked><span>Сгенерировать временный пароль и показать данные для отправки</span></label>` : ""}
         <div class="v2-auth-error" id="nu-error"></div>
         <div class="v2-inline" style="margin-top:12px">${btn("Создать", 'id="nu-submit"', true)}${btn("Отмена", 'id="nu-cancel"')}</div>
       </div>`;
@@ -591,10 +597,16 @@ export function mountUsersAccess(container, ctx) {
       el.querySelector("#nu-dept").value = u?.department || "";
       el.querySelector("#nu-auth-method").value = u?.auth_method || "local";
       el.querySelector("#nu-copy-note").textContent = u
-        ? `При создании будут скопированы системная роль «${ROLE_LABELS[u.role] || u.role}» и все текущие доступы пользователя ${u.display_name}: на все проекты, проекты и объекты. Назначения по команде станут самостоятельными ручными правами. Укажите новые ФИО и логин; пароль задаётся отдельно после создания.`
-        : "По умолчанию — обычный пользователь. Можно выбрать существующего пользователя, чтобы перенести его системную роль и все доступы. Пароль задаётся после создания.";
+        ? `При создании будут скопированы системная роль «${ROLE_LABELS[u.role] || u.role}» и все текущие доступы пользователя ${u.display_name}: на все проекты, проекты и объекты. Назначения по команде станут самостоятельными ручными правами. Укажите новые ФИО и логин.`
+        : "По умолчанию — обычный пользователь. Можно выбрать существующего пользователя, чтобы перенести его системную роль и все доступы.";
+      updateGeneration();
       markNewUserDirty(el);
     }
+    function updateGeneration() {
+      const row = el.querySelector("#nu-generate-row");
+      if (row) row.hidden = el.querySelector("#nu-auth-method").value !== "local";
+    }
+    el.querySelector("#nu-auth-method").addEventListener("change", updateGeneration);
     el.querySelector("#nu-copy-from").addEventListener("change", applySource);
     applySource();
     el.querySelectorAll("input, select").forEach((f) => {
@@ -1108,7 +1120,7 @@ export function mountUsersAccess(container, ctx) {
               </div>
               <label class="v2-role-check"><input type="checkbox" id="sec-pw-must" ${state.pendingPassword ? (state.pendingPassword.mustChange ? "checked" : "") : "checked"}><span>Потребовать смену при следующем входе</span></label>
               <div class="v2-auth-error" id="sec-error" role="alert"></div>
-              <div class="v2-inline">${btn("Задать пароль", 'id="sec-save"', true)}${u.has_password ? btn("Заблокировать вход по паролю", 'id="sec-block"') : ""}</div>
+              <div class="v2-inline">${btn("Задать пароль", 'id="sec-save"', true)}${btn("Сгенерировать пароль…", 'id="sec-generate"')}${u.has_password ? btn("Заблокировать вход по паролю", 'id="sec-block"') : ""}</div>
               <p class="v2-note">Смена пароля завершает все остальные сеансы человека. Заблокированный вход оживляется заданием нового пароля.</p>`
             : `<p class="v2-note">Задавать пароли других пользователей может только администратор сервиса.</p>`}
       </div>
@@ -1206,6 +1218,31 @@ export function mountUsersAccess(container, ctx) {
       }
     });
     const blockBtn = panel.querySelector("#sec-block");
+    const generateBtn = panel.querySelector("#sec-generate");
+    if (generateBtn) generateBtn.addEventListener("click", async () => {
+      if (generateBtn.disabled) return;
+      if (state.cardDirty || state.pendingPassword) {
+        await showInfoDialog("Сначала сохраните или отмените изменения карточки и введённого пароля.");
+        return;
+      }
+      if (u.has_password && !(await showConfirmDialog(
+        `Сгенерировать новый пароль для «${u.display_name}»? Прежний пароль перестанет работать, остальные сеансы будут завершены.`,
+        { confirmLabel: "Сгенерировать" }))) return;
+      generateBtn.disabled = true;
+      try {
+        const { generated_password, ...updated } = await api.post(`/users/${u.id}/generate-password`, {});
+        Object.assign(u, updated);
+        syncMustChangeFromServer();
+        await showUserCredentials(updated, generated_password, { reset: true });
+        state.status = "Пароль сгенерирован, остальные сеансы завершены";
+        await tryRefresh(() => ensureUsers(true), "users");
+        renderStatusRetry(); renderSecurity(panel, u);
+      } catch (err) {
+        panel.querySelector("#sec-error").textContent = err.status === 0 || err.status >= 500
+          ? "Ответ не получен: пароль мог измениться. Повторите генерацию вручную, чтобы получить новый пароль."
+          : err.detail || err.message || "Не удалось сгенерировать пароль";
+      } finally { generateBtn.disabled = false; }
+    });
     if (blockBtn) blockBtn.addEventListener("click", async () => {
       const errorEl = panel.querySelector("#sec-error");
       errorEl.textContent = "";

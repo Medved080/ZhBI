@@ -400,12 +400,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   }
 
   // Панель группового выделения над схемой (как в V1): «Выделено: N · Изменить статус · Плановая дата поставки · ✕»; кнопки открывают окна (element-ops.js).
-  // У комплектовщика и МФР её нет: там выделение служит распределению / другим операциям. Итог операции дублируется здесь, если правая панель его не покажет.
+  // У комплектовщика те же операции, что в V1, доступны рядом с распределением. У МФР свой набор действий.
+  // Итог операции дублируется здесь, если правая панель его не покажет.
   let multiBarHtml = "";
   function paintMultiBar() {
     const bar = $("#ws-multibar");
     if (!bar) return;
-    const html = picker || mfr ? "" : ops.multiBarHtml({ withBanner: panelHidden || tab !== "props" });
+    const html = mfr ? "" : ops.multiBarHtml({ withBanner: panelHidden || tab !== "props" });
     if (html === multiBarHtml) return;
     multiBarHtml = html;
     bar.hidden = !html;

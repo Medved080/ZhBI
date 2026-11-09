@@ -133,6 +133,7 @@
       shown: state.elements.length ? shownCount() : 0,
       selectedId: state.selectedId,
       multiIds: Array.from(state.multiSelectedIds),
+      defaultContracts: { ...state.defaultContracts },
       // состав выделения рамкой (для проверки перед распределением): только скаляры, не больше 3000 элементов
       multiItems: state.multiSelectedIds.size <= 3000 ? Array.from(state.multiSelectedIds).map((id) => {
         const e = state.byId.get(id);
@@ -613,6 +614,11 @@
       if (typeof passesPlacementFilters === "function" && !passesPlacementFilters(el)) showToast("Изделие скрыто текущим фильтром рабочей области", "warning");
     },
     clearSelection() { clearSelection(); clearMultiSelection(); scheduleState(); },
+    removeFromSelection(a) {
+      if (MFR || !isInt(a.id)) throw new Error("id");
+      const ids = new Set(state.multiSelectedIds);
+      ids.delete(a.id); setMultiSelection(ids); scheduleState();
+    },
     setFilter(a) {
       if (!Array.isArray(a.changes) || a.changes.length > 50) throw new Error("changes");
       const keys = filterKeys();

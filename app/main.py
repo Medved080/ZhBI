@@ -293,7 +293,7 @@ def _require_supported_python():
 # включаются явно для локальной разработки через ZHBI_ENABLE_DOCS=1.
 _ENABLE_DOCS = os.environ.get("ZHBI_ENABLE_DOCS") == "1"
 app = FastAPI(
-    title="ЖБИ",
+    title="PM",
     docs_url="/docs" if _ENABLE_DOCS else None,
     redoc_url="/redoc" if _ENABLE_DOCS else None,
     openapi_url="/openapi.json" if _ENABLE_DOCS else None,

@@ -311,7 +311,7 @@ async function renderShell(user, permissions) {
     </div>
     <header class="v2-head">
       <div class="v2-head-title">
-        <strong>ЖБИ</strong>
+        <strong>PM</strong>
         <span class="v2-head-section" id="v2-head-section"></span>
         <span class="v2-build" id="v2-build" hidden></span>
       </div>
@@ -743,190 +743,190 @@ async function renderShell(user, permissions) {
       // Для рабочих мест (v2-ws-mode) дублировать незачем: своя подпись уже есть в ws-top (workspace.js).
       headSection.textContent = key === "home" ? "Действия" : (target ? target.title : "");
       if (key === "home") {
-        document.title = "Действия — ЖБИ";
+        document.title = "Действия — PM";
         // Скрытое делится на две причины: раздел не относится к типу текущего объекта (ЖБИ ↔ МФР) и нет прав. Администратору
         // «скрыто по правам» не бывает — у него остаётся только первая причина.
         const hiddenAll = registry.screens.filter((s) => !allowedScreen(s));
         const hiddenByType = hiddenAll.filter((s) => !isModule(s) && screenNotApplicable(s, registry.structure[s.id], rights)).length;
         activeModule = mountHome(content, { registry, allowed: allowedScreen, hiddenByType, hiddenByRights: hiddenAll.length - hiddenByType, go: (k) => openSection(k), prefsStore, api, isAdmin: !!perms.isSystemAdmin });
       } else if (isModule(target)) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = MODULES[target.id](content, { ...moduleCtx, objectId });
       } else if (hasAdminScreen(target.adminExtra || target.impl)) {
         // Экраны области «администрирование» (admin-screens.js): смена своего пароля, «Мой доступ», служебные разделы.
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountAdminScreen(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, user, rights, perms, groupTitle: groupTitle(target.group),
         }, target.adminExtra || target.impl);
       } else if (target.impl === "appearance-edit") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountAppearanceEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, user, applyTheme: applyThemeFamily, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "revit-colors-edit" && target.revit) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountRevitColorsEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "access-view") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountAccessView(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "shape-edit" && target.shape) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountShapeEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "label-color-edit") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountLabelColorEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, user, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "subtypes-edit" && target.subtypes) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountSubtypesEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "zones-edit") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountZonesEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "visibility-edit") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountVisibilityEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "db-status-view") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountDbStatusView(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "admin-guide-view") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountAdminGuideView(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "db-transfer") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountDbTransfer(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "address-classifier") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountAddressClassifier(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "sessions-edit") {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountSessionsEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, user, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "exchange" && hasExchangeOp(target.exchange)) {
         // Импорт/экспорт файлов и связанные операции обмена данными (exchange*.js)
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountExchange(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, user, rights, objects: activeObjects, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "export-form" && target.export) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountExportForm(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, groupTitle: groupTitle(target.group),
           object: activeObjects.find((o) => o.id === objectId) || null,
         });
       } else if (target.impl === "card-edit" && target.card) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountProjectCardEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "notes-edit" && target.notes) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountReportNotesEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "prefix-edit" && target.prefix) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountPrefixEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "color-edit" && target.color) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountColorEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "setting-edit" && target.setting) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountSettingEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "dict-edit" && target.edit) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountDictEdit(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
         });
       } else if (target.impl === "workspace") {
         // Рабочее место со схемой: сцена V1 в кадре только для чтения + собственные панели V2 (workspace.js).
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = enterWorkspace(key, target, opts);
       } else if (target.impl === "contracts-list") {
         // Контракты: список и переход к работе с контрактом в карточке контрагента (там же создание и правка)
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountContractsList(content, { screen: target, objectId, api, rights, go: (k) => openSection(k) });
       } else if (target.impl === "supplier-docs") {
         // Документы контрактации (замена поставщика, обмен привязками): права и данные — по выбранному объекту
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountSupplierDocs(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
       } else if (target.impl === "schedule") {
         // График СМР: версии, исходные данные расчёта, расчёт с предпросмотром, диаграмма Ганта
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountSchedule(content, { screen: target, objectId, api, rights, groupTitle: groupTitle(target.group) });
       } else if (target.impl === "server-exchange") {
         // Обмен данными с другим сервером: общий с V1 модуль app/static/server-exchange.js (server-exchange-screen.js — рамка V2)
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         const { mountServerExchangeScreen } = await import("./server-exchange-screen.js");
         activeModule = mountServerExchangeScreen(content, { screen: target, api, rights, groupTitle: groupTitle(target.group) });
       } else if (target.impl === "work-classifier") {
         // Классификатор видов работ: общий с V1 модуль app/static/work-classifier.js (work-classifier-screen.js — рамка V2)
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         const { mountWorkClassifierScreen } = await import("./work-classifier-screen.js");
         activeModule = mountWorkClassifierScreen(content, { screen: target, api, rights, groupTitle: groupTitle(target.group) });
       } else if (target.impl === "calc-embed") {
         // Калькулятор: страница подсистемы /calc/ кадром внутри оболочки (calc-embed.js)
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         const { mountCalcEmbed } = await import("./calc-embed.js");
         activeModule = mountCalcEmbed(content, { screen: target });
       } else if (target.impl === "map-screen") {
         // Карта проектов: настоящая интерактивная карта (map-screen.js — своя раскладка вокруг общего
         // с V1 модуля app/static/map.js). Переход по клику на объект — той же функцией changeObject, что
         // и у кнопки выбора объекта в шапке; после неё go() переводит на рабочее место этого объекта.
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountMapScreen(content, {
           screen: target, objectId, api, go: (k) => openSection(k), switchObject: changeObject,
         });
       } else if (MFR_SCREENS[target.impl]) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         const mountMfr = await MFR_SCREENS[target.impl]();
         activeModule = mountMfr(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights: target.id === "procurement" ? permissions : rights, groupTitle: groupTitle(target.group), go: (k) => openSection(k),
         });
       } else if (target.impl === "element-catalog") {
         // «Элементы»: справочник изделий с отбором по колонкам и карточкой изделия (та же, что на схеме — element-ops.js)
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         const { mountElementCatalog } = await import("./element-catalog.js");
         activeModule = mountElementCatalog(content, {
           screen: target, objectId, api, rights, groupTitle: groupTitle(target.group),
           go: (k) => openSection(k), switchObject: changeObject, hasObject: (id) => activeObjects.some((o) => o.id === id),
         });
       } else if (target.impl === "read" && target.read) {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountReadScreen(content, {
           screen: target, structure: registry.structure[target.id], objectId, api, rights, groupTitle: groupTitle(target.group),
           // «Показать на схеме» из «Моей работы»: переход на рабочее место и смена объекта — теми же функциями, что у карты
           go: (k) => openSection(k), switchObject: changeObject, hasObject: (id) => activeObjects.some((o) => o.id === id),
         });
       } else {
-        document.title = `${target.title} — ЖБИ`;
+        document.title = `${target.title} — PM`;
         activeModule = mountScreenView(content, {
           screen: target, structure: registry.structure[target.id], objectId, rights, groupTitle: groupTitle(target.group),
         });

@@ -36,6 +36,16 @@ PBKDF2_ITERATIONS = 260_000
 # заданным паролем короче MIN_PASSWORD_LENGTH оказались бы заперты снаружи.
 MIN_PASSWORD_LENGTH = 8
 
+_GENERATED_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRTUVWXYZ2346789"
+
+
+def generate_password() -> str:
+    """Temporary password without ambiguous characters, satisfying the service policy."""
+    while True:
+        password = "".join(secrets.choice(_GENERATED_PASSWORD_ALPHABET) for _ in range(12))
+        if any(c.isalpha() for c in password) and any(c.isdigit() for c in password):
+            return password
+
 # По умолчанию выключено — деплой сейчас на чистом HTTP внутри локальной
 # сети (см. Docs/DEPLOYMENT_WINDOWS.md, там нигде нет TLS/reverse-proxy),
 # secure=True безусловно сломал бы вход. Включить переменной окружения
