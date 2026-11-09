@@ -8,28 +8,21 @@ again. Issued orders never change when dictionaries are edited.
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 
+from app.snz_catalogs import OPERATIONS, TEAMS, seed_catalogs
+
 
 def default_state():
-    operations = [
-        ("prepare", "Подготовка", "Разнорабочие", "preparation"),
-        ("scaffold", "Установка лесов", "Плотники", "element"),
-        ("install", "Монтаж изделия", "Монтажники", "element"),
-        ("rebar1", "Армирование 1 этап", "Арматурщики", "group"),
-        ("concrete1", "Бетонирование 1 этап", "Монтажники", "group"),
-        ("rebar2", "Армирование 2 этап", "Арматурщики", "group"),
-        ("concrete2", "Бетонирование 2 этап", "Монтажники", "group"),
-    ]
-    return {
+    state = {
         "crews": [{"id": "preparation", "name": "Подготовительная бригада", "foreman": "", "kind": "preparation"},
                   {"id": "install1", "name": "Монтажная бригада 1", "foreman": "", "kind": "installation"},
                   {"id": "install2", "name": "Монтажная бригада 2", "foreman": "", "kind": "installation"}],
-        "teams": [{"id": str(i), "name": name} for i, name in enumerate(dict.fromkeys(o[2] for o in operations), 1)],
-        "operations": [{"id": key, "name": title, "team": str(list(dict.fromkeys(o[2] for o in operations)).index(team) + 1), "scope": scope} for key, title, team, scope in operations],
-        # No fabricated norms: the responsible employee supplies minutes.
+        "teams": deepcopy(TEAMS),
+        "operations": deepcopy(OPERATIONS),
         "cards": [{"id": "base", "name": "Базовая карта — заполните нормативы", "element_type": "", "subtype": "",
-                   "steps": [{"operation_id": op[0], "minutes": None, "wait_after": 0} for op in operations]}],
+                   "steps": [{"operation_id": op["id"], "minutes": None, "wait_after": 0} for op in OPERATIONS]}],
         "assignments": [], "groups": [], "facts": {},
     }
+    return seed_catalogs(state)[0]
 
 
 def shift_start(day, shift):

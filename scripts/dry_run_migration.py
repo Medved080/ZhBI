@@ -55,6 +55,7 @@ OBJECT_SCOPED = ["allowed_subtypes", "label_visibility", "zone_colors", "report_
 # release_tasks/activity_log are attempt journals, so their expected retry
 # entries are intentionally outside this comparison.
 CONTENT_TABLES = [
+    "snz_state", "snz_orders",
     "marks",
     "zones", "zone_levels", "elements", "crane_zone_versions",
     "crane_zone_version_assignments", "crane_zone_import_arrivals",
@@ -267,7 +268,7 @@ def прогон_обработок(work):
     if изменилось_содержание:
         print("    ВНИМАНИЕ: изменилось содержимое: " + ", ".join(изменилось_содержание))
     else:
-        print("    содержимое зон, изделий, редакций, назначений и черновиков совпало")
+        print("    содержимое проверяемых таблиц, включая марки и СНЗ, совпало")
 
     conn = connect(work)
     print(f"\n  версия базы после обработок : {db_version(conn) or 'не проставлена'}"

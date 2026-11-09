@@ -79,6 +79,7 @@ from app.changelog import CHANGELOG
 from app.crane_zone_versions import ensure_baselines as _ensure_crane_zone_baselines
 from app.crane_zone_transition import transition_pending as _transition_crane_stances
 from app.db import get_connection
+from app.snz_catalogs import fill_initial_catalogs as _fill_snz_initial_catalogs
 
 router = APIRouter(tags=["release"])
 
@@ -1633,6 +1634,11 @@ RELEASE_TASKS = [
      "why": "контракты, добавленные после первоначального заполнения справочника, могли остаться без марки; "
             "пропуски восполняются при штатном обновлении, без переименования и замены существующих связей",
      "kind": KIND_DATA, "run": _fill_marks_catalog},
+    {"name": "2026-11-10-snz-initial-catalogs", "version": code_version(), "date": "2026-11-10",
+     "title": "Первичное заполнение справочников и операционных карт СНЗ",
+     "why": "Добавить согласованные операции, звенья и проверенные нормативы из операционных карт ЖБИ; "
+            "неоднозначные значения оставить для уточнения, сохранив ручные настройки и выданные СНЗ",
+     "kind": KIND_DATA, "run": _fill_snz_initial_catalogs},
 ]
 
 

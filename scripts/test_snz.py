@@ -189,6 +189,21 @@ class IntegrationTests(unittest.TestCase):
             self.snz.save_state(self.object_id,self.snz.StateIn(revision=0,**{k:v for k,v in s.items() if k!="facts"}),self.admin)
         self.assertEqual(e.exception.status_code,409)
 
+    def test_catalog_seed_marker_is_server_owned_and_notes_survive(self):
+        from app.snz_catalogs import SEED_VERSION
+        self.save_fixture()
+        data=self.snz.get_state(self.object_id,self.admin)
+        state=data["state"]
+        state["catalog_seed"]=""
+        card=next(c for c in state["cards"] if c["id"]=="ok_beam_12_25800")
+        card["steps"][3]["minutes"]=57
+        note=card["steps"][3]["source_note"]
+        self.snz.save_state(self.object_id,self.snz.StateIn(revision=data["revision"],**{k:v for k,v in state.items() if k!="facts"}),self.admin)
+        saved=self.snz.get_state(self.object_id,self.admin)["state"]
+        self.assertEqual(saved["catalog_seed"],SEED_VERSION)
+        step=next(c for c in saved["cards"] if c["id"]==card["id"])["steps"][3]
+        self.assertEqual((step["minutes"],step["source_note"]),(57,note))
+
     def test_issue_retry_scope_immutable_and_exports(self):
         from fastapi import HTTPException
         from openpyxl import load_workbook

@@ -46,6 +46,7 @@ class Step(Strict):
     operation_id: str = Field(pattern=KEY)
     minutes: int | None = Field(default=None, ge=1, le=43200)
     wait_after: int = Field(default=0, ge=0, le=43200)
+    source_note: str = Field(default="", max_length=4000)
 
 
 class Card(Strict):
@@ -55,6 +56,7 @@ class Card(Strict):
     subtype: str = Field(default="", max_length=120)
     elevation_mm: int | None = None
     axis_direction: Literal["", "letter", "numeric"] = ""
+    source_note: str = Field(default="", max_length=4000)
     steps: list[Step] = Field(min_length=1, max_length=100)
 
 
@@ -77,6 +79,7 @@ class Group(Strict):
 
 class StateIn(Strict):
     revision: int = Field(ge=0)
+    catalog_seed: str = Field(default="", max_length=100)
     crews: list[Crew] = Field(min_length=2, max_length=100)
     operations: list[Operation] = Field(min_length=1, max_length=100)
     teams: list[Team] = Field(min_length=1, max_length=100)
@@ -228,6 +231,7 @@ def save_state(object_id: int, body: StateIn, user=Depends(get_current_user)):
         _version(revision, body.revision)
         state = body.model_dump(mode="json", exclude={"revision"})
         state["facts"] = old["facts"]
+        state["catalog_seed"] = old.get("catalog_seed", "")
         elements = _elements(conn, object_id)
         _validate(state, elements, old, _history(conn, object_id))
         _write(conn, object_id, state, revision)

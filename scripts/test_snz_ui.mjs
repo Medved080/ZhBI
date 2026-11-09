@@ -21,11 +21,29 @@ try{
   if(process.argv.includes('--probe')){console.log((await page.locator('body').innerText()).slice(0,6000));await page.screenshot({path:new URL('initial.png',output).pathname});}
   else{
     await tab('cards');
+    await page.locator('[data-filter="card"]').selectOption('ok_beam_12_25800');
+    check('Initial source cards are available',await page.locator('[data-filter="card"] option').count()===13);
+    check('Reviewed beam installation norm is 34 minutes',await page.locator('[data-path="cards.6.steps.2.minutes"]').inputValue()==='34');
+    check('Ambiguous reinforcement norm remains empty',await page.locator('[data-path="cards.6.steps.3.minutes"]').inputValue()==='');
+    await page.getByText('Источник и уточнения по карте',{exact:true}).click();
+    await page.getByText('Уточнить норматив',{exact:true}).nth(2).click();
+    check('Manual clarification explains shared node norms',await page.locator('.snz-content').innerText().then(t=>t.includes('единый норматив звена на весь узел')));
+    const catalogAudit=await readFile(new URL('./ui_align_audit.js',import.meta.url),'utf8');
+    for(const size of [{width:1440,height:900},{width:2560,height:1440}]){
+      await page.setViewportSize(size);await page.evaluate(catalogAudit);
+      const issues=await page.evaluate(()=>({alignment:alignAudit(document.querySelector('.snz-dialog')),sizes:sizeAudit(document.querySelector('.snz-dialog'))}));
+      check(`Catalog alignment at ${size.width}`,issues.alignment.length===0 && issues.sizes.length===0);
+      await page.screenshot({path:new URL(`catalogs-${size.width}.png`,output).pathname});
+    }
+    await page.setViewportSize({width:1440,height:900});
+    await page.locator('[data-filter="card"]').selectOption('base');
     await page.locator('[data-path="cards.0.steps.2.minutes"]').fill('45');
     await page.locator('[data-path="cards.0.steps.2.minutes"]').press('Tab');
     check('Changing a norm enables Save',await page.locator('[data-action="save"]').isEnabled());
     await click('save');await settled();
-    check('Norm changes persist through the real API',(await(await page.request.get(base+'/objects/1/snz/state')).json()).state.cards[0].steps[2].minutes===45);
+    const savedCatalogs=(await(await page.request.get(base+'/objects/1/snz/state')).json()).state;
+    check('Norm changes persist through the real API',savedCatalogs.cards[0].steps[2].minutes===45);
+    check('Source notes and seed marker survive ordinary saving',savedCatalogs.catalog_seed==='2026-11-10-oper-cards-v1' && savedCatalogs.cards[6].steps[3].source_note.includes('D177'));
     await tab('plan');await click('page-all');
     await tab('groups');await page.locator('[data-group-name]').fill('Крест 1');await click('add-group');
     await page.locator('[data-path="groups.0.card_id"]').selectOption('base');
