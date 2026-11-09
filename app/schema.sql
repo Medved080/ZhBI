@@ -1,5 +1,27 @@
 -- Схема БД контроля поставки/монтажа ЖБИ.
 
+-- СНЗ хранит справочники, назначения и бинарный факт с общей ревизией.
+-- Выданный документ — самостоятельный неизменяемый снимок расчёта.
+CREATE TABLE IF NOT EXISTS snz_state (
+    object_id INTEGER PRIMARY KEY REFERENCES objects(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0,
+    data_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS snz_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    work_date TEXT NOT NULL,
+    shift TEXT NOT NULL CHECK(shift IN ('day','night')),
+    crew_id TEXT NOT NULL,
+    source_revision INTEGER NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    UNIQUE(object_id,work_date,shift,crew_id),
+    UNIQUE(object_id,request_id)
+);
+
 CREATE TABLE IF NOT EXISTS elements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_file TEXT NOT NULL,

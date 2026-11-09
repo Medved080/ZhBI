@@ -158,9 +158,28 @@
   }
 
   let stateTimer = null;
+  let snzLabels = [];
+  function drawSnzLabels() {
+    document.getElementById("snz-sequence-layer")?.remove();
+    if ((EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) !== "foreman" || !snzLabels.length) return;
+    const parent = document.getElementById("flip"), svg = document.getElementById("svg-root");
+    if (!parent || !svg || !state.view) return;
+    const size = 12 * Math.max(state.view.w / Math.max(1, svg.clientWidth), state.view.h / Math.max(1, svg.clientHeight));
+    const layer = el("g", { id: "snz-sequence-layer", "pointer-events": "none" });
+    for (const row of snzLabels) {
+      const item = state.byId.get(row.id);
+      if (!item || !passesPlacementFilters(item)) continue;
+      const text = `${row.priority ?? "—"} · ${item.mark || item.id}`;
+      const group = el("g", { transform: `translate(${item.x + size},${item.y + size}) scale(1,-1)` });
+      group.appendChild(el("rect", { x: -size*.3, y: -size, width: size*(text.length*.63+1), height:size*1.45, rx:size*.2, fill:"white", stroke:"#2563eb", "stroke-width":1, "vector-effect":"non-scaling-stroke" }));
+      const label = el("text", { x:0, y:0, fill:"#1d4ed8", "font-size":size, "font-family":"sans-serif", "font-weight":"bold" });
+      label.textContent = text;group.appendChild(label);layer.appendChild(group);
+    }
+    parent.appendChild(layer);
+  }
   function scheduleState() {
     if (stateTimer) return;
-    stateTimer = setTimeout(() => { stateTimer = null; post({ evt: "state", state: snapshot() }); }, 40);
+    stateTimer = setTimeout(() => { stateTimer = null; drawSnzLabels(); post({ evt: "state", state: snapshot() }); }, 40);
   }
 
 
@@ -565,8 +584,14 @@
   }
 
   const COMMANDS = {
+    snzLabels(a) {
+      if ((EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) !== "foreman" || !Array.isArray(a.items) || a.items.length > 20000
+        || a.items.some(r => !isInt(r.id) || !(r.priority === null || (Number.isInteger(r.priority) && r.priority > 0)))) throw new Error("подписи СНЗ");
+      snzLabels = a.items; drawSnzLabels();
+    },
     setObject(a) {
       if (!isInt(a.objectId)) throw new Error("objectId");
+      snzLabels = []; drawSnzLabels();
       const known = state.projects.flatMap((p) => p.objects || []).some((o) => o.id === a.objectId);
       if (!known) throw new Error("объект недоступен");
       return setObject(a.objectId);

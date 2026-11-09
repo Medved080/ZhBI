@@ -532,6 +532,8 @@ app.include_router(settings_router)
 app.include_router(attachments_router)
 app.include_router(external_models_router)
 app.include_router(headcount_router)
+from app.snz import router as snz_router
+app.include_router(snz_router)
 app.include_router(headcount_global_router)
 app.include_router(headcount_import_router)
 app.include_router(procurement_router)

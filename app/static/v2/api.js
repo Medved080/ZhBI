@@ -190,6 +190,7 @@ export const api = {
   // `/export.pdf?…` (GET); в счётчик записей не входит.
   async download(path, body, { method = "POST" } = {}) {
     const okPath = /^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path) || path === "/export.xlsx" || /^\/export\.pdf(\?|$)/.test(path)
+      || /^\/objects\/\d+\/snz\/orders\/\d+\/export\.(xlsx|pdf)$/.test(path)
       || /^\/objects\/\d+\/block-works\/bulk-edit\/export$/.test(path)                       // выгрузка ЗР в Excel для правки (учёт по блокам)
       || /^\/objects\/\d+\/blocks\/chess-flat-export\.(xlsx|pdf)$/.test(path)                // бланк обхода плоской шахматки
       || /^\/supplier-changes\/\d+\/changes\.xlsx$/.test(path)                              // протокол проведения документа контрактации

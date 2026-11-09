@@ -11,6 +11,7 @@
 // Выбор, фильтры и режим 2D/3D живут в движке (это его модель) — оболочка их отображает и меняет командами, своей копии не ведёт.
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
+import { createSnz } from "./snz.js";
 import { renderElementWorks } from "../mfr-element-works.js";
 import { createDetailPanelScroll } from "./detail-panel-scroll.js";
 import { ApiError } from "./api.js";
@@ -29,7 +30,7 @@ const PROTO = "zhbi-scene/1";
 const VIEWS = [["2d", "2D"], ["3d", "3D"], ["3d-light", "3D лёгкий"]];
 const TABS = [["props", "Свойства"], ["status", "Статус"], ["filters", "Фильтры"], ["view", "Вид"]];
 // У прораба фильтры — постоянная панель слева (как в V1), поэтому в правой панели вкладки «Фильтры» нет.
-const TABS_FOREMAN = TABS.filter(([k]) => k !== "filters");
+const TABS_FOREMAN = [...TABS.filter(([k]) => k !== "filters"), ["snz", "СНЗ"]];
 // МФР: свойства блока/элемента модели Revit, фильтры (этажи, секции, категории) и вид (слои, 2D/3D)
 const VIEWS_MFR = [["2d", "2D"], ["3d", "3D"]];
 const TABS_MFR = [["props", "Свойства"], ["filters", "Фильтры"], ["view", "Вид"]];
@@ -61,6 +62,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   let timeoutId = null;
   const queue = [];
   let sc = null;               // последний снимок сцены из кадра
+  const snz = foreman ? createSnz({ api, getObjectId: () => curObject,
+    getSelectedIds: () => [...new Set([...(sc?.multiIds || []), ...(sc?.selectedId ? [sc.selectedId] : [])])], send: (c, a) => send(c, a) }) : null;
   let assistantIds = null;
   let filters = null;          // модель фильтров
   let notice = "";             // последнее сообщение движка
@@ -377,6 +380,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
 
   function paintPanel() {
     if (dead) return;
+    if (foreman && tab !== "snz") snz.hideLabels();
     for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     const body = $("#ws-panel-body");
     const restoreFocus = ops.captureFocus(body);     // фокус и курсор переживают перерисовку (снимки сцены приходят часто)
@@ -390,8 +394,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       complete: elementProps && matchesDetail && !!detail.data && !detail.error,
     }, () => {
       body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml())
-        : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
+        : tab === "snz" ? snz.html() : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
       bindPanel(body);
+      if (tab === "snz") snz.bind(body);
       restoreFocus();
     });
     const left = $("#ws-left-body");
@@ -1096,8 +1101,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       selectedIds: sc?.loaded ? [...new Set([...(sc.multiIds || []), ...(sc.selectedId ? [sc.selectedId] : [])])].slice(0,100) : [],
       filters: JSON.stringify({ view:sc?.view,shown:sc?.shown,total:sc?.total,excluded:sc?.excluded }).slice(0,3000) }),
     openFbx: () => extm.open(),   // «Загрузить из FBX» из меню, когда это рабочее место уже открыто
-    hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved() || extm.isDirty(),
+    hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved() || extm.isDirty() || !!snz?.isDirty(),
     guardLeave: async () => {
+      if (snz && !snz.guardLeave()) return false;
       if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
       if (extm.isOpen() && !(await extm.close())) return false;   // окно внешних 3D-моделей: несохранённое положение
       return ops.guardLeave();
@@ -1106,6 +1112,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
+      if (snz && !snz.guardLeave()) return false;
+      snz?.reset();
       extm.close(true);
       assistantIds = null; curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       perfScene = window.zhbiPerf?.start(`V2 схема (${ws}): смена объекта`, "scene") || null;
@@ -1133,6 +1141,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // Годится ли спрятанное рабочее место для возврата: после ошибки или обрыва загрузки схемы показывать нечего — строим заново
     isReusable: () => !dead && !!frame && !sc?.error,
     destroy() {
+      snz?.destroy();
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
       clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();
       const side = shellSide(); if (side) side.hidden = navWasHidden;

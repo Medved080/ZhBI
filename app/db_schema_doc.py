@@ -1554,6 +1554,27 @@ TABLES.extend([
 ])
 FKS.extend([('cp_state', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_rd', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_rd', 'responsible_id', 'users', 'id', 'SET NULL'), ('cp_works', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_works', 'rd_id', 'cp_rd', 'id', 'RESTRICT'), ('cp_works', 'classifier_id', 'work_classifier', 'id', 'SET NULL'), ('cp_lots', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_lots', 'pto_id', 'users', 'id', 'SET NULL'), ('cp_lots', 'uploaded_tz_id', 'cp_documents', 'id', 'RESTRICT'), ('cp_assignments', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_assignments', 'lot_id', 'cp_lots', 'id', 'CASCADE'), ('cp_assignments', 'work_id', 'cp_works', 'id', 'RESTRICT'), ('cp_documents', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_documents', 'lot_id', 'cp_lots', 'id', 'CASCADE'), ('cp_document_work', 'document_id', 'cp_documents', 'id', 'CASCADE'), ('cp_document_work', 'work_id', 'cp_works', 'id', 'RESTRICT'), ('cp_tz_vor', 'tz_id', 'cp_documents', 'id', 'CASCADE'), ('cp_tz_vor', 'vor_id', 'cp_documents', 'id', 'RESTRICT'), ('cp_history', 'object_id', 'objects', 'id', 'CASCADE'), ('cp_history', 'user_id', 'users', 'id', 'SET NULL')])
 
+TABLES.extend([
+    ('snz_state', 'snz_state — Планирование СНЗ', C_ELEM, S_ELEM, [
+        ('object_id', 'INTEGER', 'PK,FK', 'Объект планирования СНЗ'),
+        ('revision', 'INTEGER', '', 'Общая ревизия для защиты от параллельной правки'),
+        ('data_json', 'TEXT', '', 'Справочники бригад, звеньев, операций и нормативов; назначения, узлы и бинарный факт выполнения'),
+    ]),
+    ('snz_orders', 'snz_orders — Выданные СНЗ', C_ELEM, S_ELEM, [
+        ('id', 'INTEGER', 'PK', 'Идентификатор выданного СНЗ'),
+        ('object_id', 'INTEGER', 'FK', 'Объект'),
+        ('work_date', 'TEXT', '', 'Дата начала смены, ISO'),
+        ('shift', 'TEXT', '', 'day — дневная, night — ночная с началом в 20:00 указанной даты'),
+        ('crew_id', 'TEXT', '', 'Стабильный идентификатор бригады в справочнике объекта'),
+        ('source_revision', 'INTEGER', '', 'Ревизия исходных данных расчёта'),
+        ('snapshot_json', 'TEXT', '', 'Неизменяемый снимок нормативов, назначений, изделий и временных отрезков'),
+        ('created_at', 'TEXT', '', 'Время выдачи UTC'),
+        ('created_by', 'TEXT', '', 'Имя выдавшего сотрудника на момент выдачи'),
+        ('request_id', 'TEXT', '', 'Ключ идемпотентности выдачи после потери ответа'),
+    ]),
+])
+FKS.extend([('snz_state', 'object_id', 'objects', 'id', 'CASCADE'), ('snz_orders', 'object_id', 'objects', 'id', 'CASCADE')])
+
 BY_NAME = {t[0]: t for t in TABLES}
 
 # Домен таблицы — по цвету заливки: чем окрашена в схеме, к той группе и
