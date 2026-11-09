@@ -55,6 +55,7 @@ OBJECT_SCOPED = ["allowed_subtypes", "label_visibility", "zone_colors", "report_
 # release_tasks/activity_log are attempt journals, so their expected retry
 # entries are intentionally outside this comparison.
 CONTENT_TABLES = [
+    "marks",
     "zones", "zone_levels", "elements", "crane_zone_versions",
     "crane_zone_version_assignments", "crane_zone_import_arrivals",
     "crane_zone_drafts", "crane_zone_transition", "schedule_flow",
@@ -417,12 +418,14 @@ def главное(src):
         print("\n  (уменьшение elements/zones/axis_lines ожидаемо, если сработала")
         print("   одноразовая чистка дообъектного наследия — сверьте со списком")
         print("   изменений выше)")
+        return 1
     else:
         print("  ✓ расхождений не обнаружено: данные на месте, ключи целы,")
         print("    повторный прогон пуст")
+        return 0
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         sys.exit(__doc__)
-    главное(sys.argv[1])
+    sys.exit(главное(sys.argv[1]))

@@ -154,8 +154,10 @@ def _fill_marks_catalog(conn) -> str:
     Текстовое `elements.mark` не трогается вовсе — правило релиза «только
     добавлять». Оба поля живут рядом, пока пользователь не сверит разложение.
 
-    Идемпотентность: записи справочника заводятся через INSERT OR IGNORE по
-    уникальному ключу, mark_id проставляется только там, где он ещё пуст.
+    Идемпотентность: выбираются только отсутствующие ключи, INSERT OR IGNORE
+    дополнительно защищает уникальность. Повтор не расходует AUTOINCREMENT
+    на уже существующие марки. mark_id проставляется только там, где он ещё
+    пуст и найдено точное соответствие; ручные связи не перезаписываются.
     """
     из_изделий = conn.execute(
         """
@@ -163,6 +165,10 @@ def _fill_marks_catalog(conn) -> str:
         SELECT DISTINCT object_id, element_type, mark FROM elements
         WHERE object_id IS NOT NULL AND element_type IS NOT NULL
           AND mark IS NOT NULL AND trim(mark) <> ''
+          AND NOT EXISTS (
+              SELECT 1 FROM marks m WHERE m.object_id = elements.object_id
+                AND m.element_type = elements.element_type AND m.name = elements.mark
+          )
         """
     ).rowcount
     из_контрактов = conn.execute(
@@ -175,6 +181,10 @@ def _fill_marks_catalog(conn) -> str:
         JOIN agreements a ON a.id = s.agreement_id
         WHERE a.object_id IS NOT NULL AND cl.element_type IS NOT NULL
           AND cl.mark IS NOT NULL AND trim(cl.mark) <> ''
+          AND NOT EXISTS (
+              SELECT 1 FROM marks m WHERE m.object_id = a.object_id
+                AND m.element_type = cl.element_type AND m.name = cl.mark
+          )
         """
     ).rowcount
     всего_записей = conn.execute("SELECT COUNT(*) AS n FROM marks").fetchone()["n"]
@@ -192,6 +202,10 @@ def _fill_marks_catalog(conn) -> str:
         )
         WHERE mark_id IS NULL AND object_id IS NOT NULL
           AND mark IS NOT NULL AND trim(mark) <> ''
+          AND EXISTS (
+              SELECT 1 FROM marks m WHERE m.object_id = elements.object_id
+                AND m.element_type = elements.element_type AND m.name = elements.mark
+          )
         """
     )
     if не_разложено := conn.execute(
@@ -1614,6 +1628,11 @@ RELEASE_TASKS = [
     {"name": "2026-11-03-calc-active-source-links", "version": code_version(), "date": "2026-11-03",
      "title": "Исправить ссылки КПВ10 на действующий лист", "why": "Исключить аннулированный лист из оснований калькулятора",
      "kind": KIND_DATA, "run": _repair_calc_source_links},
+    {"name": "2026-11-09-marks-catalog-catchup", "version": code_version(), "date": "2026-11-09",
+     "title": "Восполнить отсутствующие марки изделий и контрактов",
+     "why": "контракты, добавленные после первоначального заполнения справочника, могли остаться без марки; "
+            "пропуски восполняются при штатном обновлении, без переименования и замены существующих связей",
+     "kind": KIND_DATA, "run": _fill_marks_catalog},
 ]
 
 
