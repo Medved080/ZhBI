@@ -1,4 +1,5 @@
 import { esc } from "./screen-view.js";
+import { ELEMENT_STATUS_LABELS } from "./element-statuses.js";
 import { bindIssuedLayout } from "./snz-issued-layout.js";
 import { moveShiftItem, normalizeMontageAssignments } from "./snz-workspace-core.js";
 import { validateSteps, snzErrorIssue } from "./snz-validation.js";
@@ -19,6 +20,8 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
   let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", shiftFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
   let ordersDate = "", ignoreFact = false;
+  let factData=null,factDate=today(),factShift="",factCrew="",factSearch="",factPage=0,factBlocked=false;
+  const factEdits=new Map(),factDirty=()=>factEdits.size>0;
   const path = () => `/objects/${getObjectId()}/snz`;
   const canWrite = () => !!data?.can_write;
   const assignById = () => new Map(draft.assignments.map(a => [a.element_id, a]));
@@ -34,6 +37,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     data = result; draft = structuredClone(data.state); dirty = false; validationIssue = null;
     if (!draft.crews.some(c => c.id === crewId)) crewId = draft.crews.find(c => c.kind === "installation").id;
     if (!draft.cards.some(c => c.id === cardId)) cardId = draft.cards[0].id;
+    if(tab==='facts')await loadFacts();
     return true;
   }
   async function run(fn) {
@@ -59,6 +63,8 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     dialog.addEventListener("click", click);
     dialog.addEventListener("change", change);
     dialog.addEventListener("input", e => {
+      if(e.target.matches('[data-fact-search]')){factSearch=e.target.value;factPage=0;dialog.querySelector('[data-fact-rows]').innerHTML=factRowsHtml();}
+      if(e.target.dataset.montageTime){const id=Number(e.target.dataset.montageTime),initial=factData?.items.find(r=>r.id===id)?.completed_at||'';if(e.target.value===(initial.slice(0,19)))factEdits.delete(id);else factEdits.set(id,e.target.value);}
       if (e.target.matches("[data-filter=search]")) { filter = e.target.value; page = 0; renderItems(); }
       if(e.target.matches("[data-edit-search]")&&orderEdit){orderEdit.filter=e.target.value;orderEdit.page=0;render();}
       if (e.target.matches("[data-edit-reason]") && orderEdit) {
@@ -74,9 +80,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   }
   function close(force = false) {
     if (busy && !force) return false;
-    if ((dirty || editDirty()) && !force && !window.confirm("Закрыть СНЗ без сохранения изменений?")) return false;
+    if ((dirty || editDirty() || factDirty()) && !force && !window.confirm("Закрыть СНЗ без сохранения изменений?")) return false;
     const wasOpen=!!dialog;
-    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; orderEdit=null;revisions=null;generation++;
+    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; factEdits.clear();orderEdit=null;revisions=null;generation++;
     if(wasOpen)onChanged?.();
     return true;
   }
@@ -167,6 +173,30 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       <td>${t.segments.map(s=>`${timeText(s.start)}–${timeText(s.end)}`).join("<br>") || (t.norm_minutes==null?"Норматив не задан":"Не вошла в смену")}</td><td>${t.norm_minutes??"—"} / ${t.remaining_after??"—"} мин</td>
       <td>${facts[t.key]?.completed?'<span class="snz-done">100 % · завершено</span>':`<span>0 %</span> ${doc.id && !doc.editPreview && !doc.historical && data.can_fact?`<button data-action="complete" data-key="${esc(t.key)}">Завершить</button>`:""}`}</td></tr>`).join("") || '<tr><td colspan="6">Нет рассчитанных работ.</td></tr>'}</tbody></table></div></section>`;
   }
+  async function loadFacts(){
+    const object=getObjectId(),params=new URLSearchParams();
+    if(factDate)params.set('date',factDate);if(factShift)params.set('shift',factShift);if(factCrew)params.set('crew_id',factCrew);
+    const result=await api.get(path()+'/facts?'+params);
+    if(object!==getObjectId())return;
+    factData=result;factBlocked=false;
+  }
+  function factRowsHtml(){
+    if(!factData)return '<p>Загрузка факта монтажа…</p>';
+    const q=factSearch.trim().toLocaleLowerCase('ru'),rows=factData.items.filter(r=>!q||[r.mark,r.address,r.element_type,r.id].join(' ').toLocaleLowerCase('ru').includes(q));
+    const pages=Math.max(1,Math.ceil(rows.length/60));factPage=Math.min(factPage,pages-1);
+    return `<div class="snz-controls"><span>Изделий: ${rows.length} · смонтировано: ${rows.filter(r=>r.status_confirmed).length}</span><span class="snz-spacer"></span><button data-action="fact-prev" ${!factPage?'disabled':''}>Назад</button><span>${factPage+1} / ${pages}</span><button data-action="fact-next" ${factPage+1>=pages?'disabled':''}>Далее</button></div>
+      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>Изделие</th><th>Этаж / оси</th><th>СНЗ / дата / смена / бригада</th><th>Статус / факт монтажа</th><th>Дата и время монтажа (МСК)</th><th></th></tr></thead><tbody>${rows.slice(factPage*60,(factPage+1)*60).map(r=>`<tr data-montage-row="${r.id}">
+      <td><strong>${esc(r.mark||r.id)}</strong><small>${esc(r.element_type)} · ID ${r.id}</small></td><td>${esc(r.floor??'—')}<small>${esc(r.address||'—')}</small></td>
+      <td>${r.orders.map(o=>`№ ${o.id} · ${dayText(o.date)} · ${shiftText(o.shift)}<small>${esc(o.crew)}</small>`).join('<br>')}</td>
+      <td>${esc(ELEMENT_STATUS_LABELS[r.current_status]||r.current_status)}<small>${r.completed?'100 %':r.status_confirmed?'Время статуса отсутствует':'0 %'}</small></td>
+      <td><input type="datetime-local" step="1" data-montage-time="${r.id}" aria-label="Дата и время монтажа ${r.id}" value="${esc(factEdits.get(r.id)??r.completed_at?.slice(0,19)??'')}" ${r.status_confirmed||!factData.can_fact?'disabled':''}></td>
+      <td><button data-action="montage-complete" data-id="${r.id}" ${!r.task_key||r.status_confirmed||!factData.can_fact||factBlocked?'disabled':''}>${r.status_confirmed?'Подтверждено':r.completed?'Подтвердить статус':'Отметить монтаж'}</button></td></tr>`).join('')||'<tr><td colspan="6">Нет изделий с операцией монтажа в выданных СНЗ по выбранным условиям.</td></tr>'}</tbody></table></div>`;
+  }
+  function factsHtml(){
+    return `<div class="snz-controls"><label>Дата СНЗ<input type="date" data-fact-filter="date" value="${factDate}"></label><label>Смена<select data-fact-filter="shift">${options([{id:'',name:'Все смены'},{id:'day',name:'День'},{id:'night',name:'Ночь'}],factShift)}</select></label><label>Бригада<select data-fact-filter="crew">${options([{id:'',name:'Все бригады'},...draft.crews.filter(c=>c.kind==='installation')],factCrew)}</select></label><label>Поиск<input type="search" data-fact-search value="${esc(factSearch)}" placeholder="Марка, оси или ID"></label><button data-action="facts-refresh">Обновить факт</button><button data-action="facts-all">Все даты</button></div>
+      <p class="snz-muted">Факт монтажа изделий из выданных СНЗ связан со статусом «Смонтирован». Пустое время — текущий момент присвоения статуса. Армирование и бетонирование отмечаются отдельно. Уже установленное время берётся из истории статусов; исправляется там с прежними правами.</p>
+      ${factBlocked?'<p class="snz-error">Обновите факт перед повторной записью.</p>':''}<div data-fact-rows>${factRowsHtml()}</div>`;
+  }
   function cardsHtml() {
     const card = draft.cards.find(c=>c.id===cardId) || draft.cards[0], ci = draft.cards.indexOf(card);
     return `<div class="snz-controls"><label>Операционная карта<select data-filter="card">${options(draft.cards,card.id)}</select></label><button data-action="add-card">Добавить карту</button><button data-action="copy-card">Копировать карту</button></div>
@@ -237,9 +267,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     const searchFocus=active?.matches('[data-edit-search]')?active.selectionStart:null;
     dialog.innerHTML = `<header class="snz-head"><div><h2>Сменные наряд-задания</h2><p data-dirty>${dirty?"Есть несохранённые изменения":"Планирование, загрузка звеньев и выдача прорабам"}</p></div><span class="snz-spacer"></span>
       <button data-action="save" class="snz-primary" ${!dirty||busy||!canWrite()?"disabled":""}>Сохранить изменения</button><button data-action="reload" ${busy?"disabled":""}>Обновить</button><button data-action="close" ${busy?"disabled":""} aria-label="Закрыть СНЗ">Закрыть</button></header>
-      <nav class="snz-tabs" aria-label="Разделы СНЗ">${[["plan","Планирование"],["cards","Нормативы"],["operations","Операции"],["teams","Звенья"],["crews","Бригады"],["groups","Узлы ригелей"],["orders","Выданные СНЗ"]].map(([id,name])=>`<button data-tab="${id}" aria-pressed="${id===tab}" ${busy?"disabled":""}>${name}</button>`).join("")}</nav>
+      <nav class="snz-tabs" aria-label="Разделы СНЗ">${[["plan","Планирование"],["cards","Нормативы"],["operations","Операции"],["teams","Звенья"],["crews","Бригады"],["groups","Узлы ригелей"],["orders","Выданные СНЗ"],["facts","Факт"]].map(([id,name])=>`<button data-tab="${id}" aria-pressed="${id===tab}" ${busy?"disabled":""}>${name}</button>`).join("")}</nav>
       <div class="snz-content ${tab==="orders"?"snz-issued-content":""}" ${busy?'aria-busy="true"':""}>${error?`<p class="snz-error" role="alert">${esc(error)}</p>`:""}${message?`<p class="snz-message" role="status">${esc(message)}</p>`:""}
-      ${!draft?"<p>Загрузка данных СНЗ…</p>":`<fieldset ${busy?"disabled":""}>${tab==="plan"?plannerHtml():tab==="orders"?ordersHtml():`<fieldset ${!canWrite()?"disabled":""}>${tab==="cards"?cardsHtml():tab==="operations"?operationsHtml():tab==="teams"?teamsHtml():tab==="crews"?crewsHtml():groupsHtml()}</fieldset>`}</fieldset>`}</div>`;
+      ${!draft?"<p>Загрузка данных СНЗ…</p>":`<fieldset ${busy?"disabled":""}>${tab==="plan"?plannerHtml():tab==="orders"?ordersHtml():tab==="facts"?factsHtml():`<fieldset ${!canWrite()?"disabled":""}>${tab==="cards"?cardsHtml():tab==="operations"?operationsHtml():tab==="teams"?teamsHtml():tab==="crews"?crewsHtml():groupsHtml()}</fieldset>`}</fieldset>`}</div>`;
     bindIssuedLayout(dialog);
     dialog.querySelectorAll('.snz-orders-top,.snz-orders-bottom').forEach((el,i)=>{el.scrollTop=paneScroll[i]||0;});
     if(editScroll!=null)dialog.querySelector('.snz-content').scrollTop=editScroll;
@@ -264,6 +294,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       if(validationIssue?.path===target.dataset.path){validationIssue=null;error="";target.removeAttribute("aria-invalid");target.removeAttribute("title");dialog.querySelector(".snz-error")?.remove();}
       dirtyMark();
       if(assignment)renderItems();
+    } else if(target.dataset.factFilter){
+      if(factDirty()&&!window.confirm('Сбросить несохранённое время монтажа и изменить отбор?')){render();return;}
+      factEdits.clear();const k=target.dataset.factFilter;if(k==='date')factDate=target.value;if(k==='shift')factShift=target.value;if(k==='crew')factCrew=target.value;factPage=0;run(loadFacts);
     } else if (target.dataset.editExclude && orderEdit) {
       const id=Number(target.dataset.editExclude),group=orderEdit.order.tasks.find(t=>t.group_id&&t.element_ids.includes(id));
       for(const member of group?.element_ids||[id])target.checked?orderEdit.exclude.add(member):orderEdit.exclude.delete(member);
@@ -290,15 +323,36 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   }
   async function click(e) {
     const button = e.target.closest("button"); if (!button || button.disabled || busy) return;
-    if (button.dataset.tab) { if(editDirty()){error="Сначала сохраните исправление или нажмите «Отмена».";render();return;} tab=button.dataset.tab;error="";message="";render();return; }
+    if(button.dataset.tab){
+      if(editDirty()||factDirty()){error="Сначала сохраните введённые изменения или нажмите «Обновить».";render();return;}
+      if(button.dataset.tab==='facts'&&dirty){error="Сначала сохраните изменения планирования.";render();return;}
+      tab=button.dataset.tab;error="";message="";if(tab==='facts')await run(load);else render();return;
+    }
     const action = button.dataset.action;
+    if(['facts-refresh','facts-all'].includes(action)){
+      if(factDirty()&&!window.confirm('Сбросить несохранённое время монтажа?'))return;
+      factEdits.clear();if(action==='facts-all')factDate='';await run(load);return;
+    }
+    if(action==='fact-prev'||action==='fact-next'){factPage+=action==='fact-prev'?-1:1;render();return;}
+    if(action==='montage-complete'){
+      const id=Number(button.dataset.id),row=factData?.items.find(r=>r.id===id),input=dialog.querySelector(`[data-montage-time="${id}"]`);
+      if(!row||!factData.can_fact||factBlocked||!input.reportValidity())return;
+      await run(async()=>{
+        factBlocked=true;plan=null;
+        let confirmed=false;
+        try{
+          const result=await api.post(path()+'/facts',{revision:factData.revision,task_key:row.task_key,completed_at:input.value||null,expected_montage_rev:row.expected_rev});
+          confirmed=true;factEdits.delete(id);await load();send('poll');onChanged?.();message=result.warnings?.join(' ')||'Факт монтажа и статус изделия сохранены.';
+        }catch(e){factBlocked=confirmed||!e.status||e.status===409||e.status>=500;throw e;}
+      });return;
+    }
     if(action==="orders-all"){ordersDate="";render();return;}
     if(action==="registry-xlsx"&&ordersDate){
       await run(async()=>{const blob=await api.download(path()+`/registry.xlsx?date=${ordersDate}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`Реестр-СНЗ-${ordersDate}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
     }
     if (action==="close") { close();return; }
     if (action==="save") { await run(save);return; }
-    if (action==="reload") { if ((dirty||editDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{await load();plan=null;orderEdit=null;revisions=null;});return; }
+    if (action==="reload") { if ((dirty||editDirty()||factDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{factEdits.clear();await load();plan=null;orderEdit=null;revisions=null;});return; }
     if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId,ignore_fact:ignoreFact});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
     if(action==='sequence-up'||action==='sequence-down'){
       if(!plan||plan.id||!canWrite()||dirty)return;
@@ -397,9 +451,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     open,
     html: () => `<section class="ws-pad"><h3>Сменные наряд-задания</h3><p>Нормативы, назначения изделий, узлы ригелей и загрузка звеньев.</p><p>Выбрано на модели: ${getSelectedIds().length}</p><button type="button" data-snz-open>Открыть планирование СНЗ</button><p class="v2-muted">Выделенные на модели изделия будут выбраны в планировании.</p></section>`,
     bind: host => host.querySelector("[data-snz-open]")?.addEventListener("click",()=>open()),
-    isDirty: () => dirty || busy || editDirty(),
+    isDirty: () => dirty || busy || editDirty() || factDirty(),
     guardLeave: () => !dialog || close(),
-    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;selection.clear();},
+    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;factData=null;factEdits.clear();factBlocked=false;factDate=today();factShift='';factCrew='';factSearch='';factPage=0;selection.clear();},
     destroy: () => close(true),
     hideLabels: () => send("snzLabels", { items: [] }),
   };

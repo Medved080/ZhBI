@@ -232,7 +232,7 @@ class IntegrationTests(unittest.TestCase):
         pdf=self.snz.export_pdf(self.object_id,issued["id"],self.admin).body
         self.assertTrue(pdf.startswith(b"%PDF"));(out/"СНЗ.pdf").write_bytes(pdf)
 
-    def test_binary_fact_and_all_operations_install_group(self):
+    def test_binary_fact_and_montage_sets_status_without_completing_other_stages(self):
         self.save_fixture(grouped=True)
         oid=self.issue()["id"]
         order=self.snz.read_order(self.object_id,oid,self.admin)
@@ -242,7 +242,8 @@ class IntegrationTests(unittest.TestCase):
             result=self.snz.complete(self.object_id,self.snz.FactIn(revision=rev,task_key=task["key"]),self.admin)
             rev=result["revision"]
             installed_ids.update(result["installed"])
-            if task["operation_id"]=="rebar1":self.assertEqual(result["installed"],task["element_ids"])
+            if task["operation_id"]=="install":self.assertEqual(result["installed"],task["element_ids"])
+            else:self.assertEqual(result['installed'],[])
         self.assertEqual(installed_ids,set(self.ids))
         retry=self.snz.complete(self.object_id,self.snz.FactIn(revision=0,task_key=order["tasks"][-1]["key"]),self.admin)
         self.assertTrue(retry["already_completed"])

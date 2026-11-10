@@ -13,9 +13,10 @@ from app import activity
 from app.access import assert_object_feature, has_feature
 from app.auth import audit_display_name, get_current_user
 from app.db import begin_write, get_connection, touch_elements
-from app.snz_core import build_schedule, default_state, operation_steps, suggest_card
-from app.snz_policy import planning_state, order_items, step_fact
+from app.snz_core import build_schedule, default_state, suggest_card
+from app.snz_policy import planning_state, order_items
 from app.snz_ordering import normalize_montage
+from app.snz_montage import status_montage, project_montage, fact_rows
 
 router = APIRouter(prefix="/objects/{object_id}/snz", tags=["snz"])
 KEY = r"^[a-zA-Z0-9_-]{1,64}$"
@@ -118,6 +119,8 @@ class EditOrderIn(EditPreviewIn):
 class FactIn(Strict):
     revision: int = Field(ge=0)
     task_key: str = Field(min_length=1, max_length=160)
+    completed_at: datetime | None = None
+    expected_montage_rev: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class DeleteOrderIn(Strict):
@@ -128,7 +131,9 @@ class DeleteOrderIn(Strict):
 
 def _load(conn, object_id):
     row = conn.execute("SELECT revision,data_json FROM snz_state WHERE object_id=?", (object_id,)).fetchone()
-    return (planning_state(json.loads(row["data_json"])), row["revision"]) if row else (default_state(), 0)
+    state,revision = (planning_state(json.loads(row["data_json"])), row["revision"]) if row else (default_state(), 0)
+    project_montage(state,status_montage(conn,object_id))
+    return state,revision
 
 
 def _write(conn, object_id, state, revision):
@@ -492,6 +497,19 @@ def read_order_revision(object_id: int, order_id: int, revision: int, user=Depen
         conn.close()
 
 
+@router.get("/facts")
+def montage_facts(object_id: int, date: date | None = None, shift: Literal["day","night"] | None = None,
+                  crew_id: str | None = None, user=Depends(get_current_user)):
+    conn=get_connection()
+    try:
+        assert_object_feature(conn,user,object_id,"plan","read")
+        state,revision=_load(conn,object_id)
+        return {"revision":revision,"items":fact_rows(conn,object_id,state,status_montage(conn,object_id),
+                    date.isoformat() if date else None,shift,crew_id),
+                "can_fact":has_feature(conn,user,"status","write",object_id)}
+    finally:conn.close()
+
+
 @router.post("/facts")
 def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
     conn = get_connection()
@@ -500,17 +518,28 @@ def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
         begin_write(conn)
         assert_object_feature(conn, user, object_id, "status", "write")
         state, revision = _load(conn, object_id)
-        if state["facts"].get(body.task_key, {}).get("completed"):
-            return {"revision": revision, "already_completed": True}
-        _version(revision, body.revision)
         history = _history(conn, object_id)
         task = next((t for order in reversed(history) for t in order["tasks"] if t["key"] == body.task_key), None)
         if not task:
             raise HTTPException(422, "Отметить можно только операцию из выданного СНЗ.")
-        now = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
-        # Violations warn in the planning process; the actual completed fact is recorded
-        # even when execution differed from the prescribed sequence.
-        state["facts"][body.task_key] = {"completed": True, "completed_at": now.isoformat(timespec="minutes"), "completed_by": audit_display_name(user)}
+        statuses=status_montage(conn,object_id)
+        if any(eid not in statuses for eid in task['element_ids']):
+            raise HTTPException(409,'Изделие из СНЗ больше не принадлежит этому объекту. Обновите данные.')
+        prior=state["facts"].get(body.task_key,{})
+        montage=task['operation_id']=='install'
+        status_done=all(statuses.get(eid,{}).get('current_status') in ('installed','accepted') for eid in task['element_ids'])
+        supplied=body.completed_at
+        if supplied and supplied.tzinfo:supplied=supplied.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+        if prior.get('completed') and (not montage or status_done):
+            if supplied and supplied.isoformat(timespec='seconds') != datetime.fromisoformat(prior['completed_at']).isoformat(timespec='seconds'):
+                raise HTTPException(409,"Монтаж уже подтверждён. Время существующего статуса исправляется в истории изделия.")
+            return {"revision": revision, "already_completed": True,"installed":[],"warnings":[]}
+        _version(revision, body.revision)
+        if body.expected_montage_rev and (not montage or len(task['element_ids'])!=1 or statuses[task['element_ids'][0]]['expected_rev']!=body.expected_montage_rev):
+            raise HTTPException(409,"Статус или время монтажа изменились. Обновите вкладку «Факт».")
+        now = body.completed_at or datetime.now(ZoneInfo("Europe/Moscow"))
+        if now.tzinfo:now=now.astimezone(ZoneInfo("Europe/Moscow"))
+        now=now.replace(tzinfo=None,microsecond=0)
         warnings = []
         for dep in task.get("dependencies", []):
             fact = state["facts"].get(dep, {})
@@ -521,32 +550,25 @@ def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
                 predecessor = next((t for order in reversed(history) for t in order["tasks"] if t["key"] == dep), None)
                 if predecessor and datetime.fromisoformat(fact["completed_at"]) + timedelta(minutes=predecessor["wait_after"]) > now:
                     warnings.append("Факт записан: технологический перерыв после предшествующей операции ещё не истёк.")
-        elements = _elements(conn, object_id)
-        by_id = {e["id"]: e for e in elements}
-        group_map = {eid: g for g in state["groups"] for eid in g["element_ids"]}
-        frozen_steps = {}
-        for order in history:
-            frozen_steps.update(order.get("assignment_steps", {}))
-        installed = []
-        for eid in task["element_ids"]:
-            a = next((a for a in state["assignments"] if a["element_id"] == eid), None)
-            if not a or eid not in by_id or by_id[eid]["current_status"] in ("installed", "accepted"):
-                continue
-            steps = frozen_steps.get(str(eid)) or operation_steps(state, a)
-            keys = []
-            for s in steps:
-                g = group_map.get(eid)
-                keys.append(f"g:{g['id']}:{s['id']}" if s["scope"] == "group" and g else f"e:{eid}:{s['id']}")
-            if keys and all(step_fact(state, eid, s["id"], k).get("completed") for s,k in zip(steps,keys)):
-                from app.contracts import apply_status_change
-                apply_status_change(conn, eid, "installed", False, None, None, "Выполнены все операции СНЗ", audit_display_name(user), user["id"])
+        installed=[]
+        if montage:
+            from app.contracts import apply_status_change
+            for eid in task['element_ids']:
+                if statuses[eid]['current_status'] in ('installed','accepted'):continue
+                apply_status_change(conn,eid,'installed',False,None,now.isoformat(sep=' ',timespec='seconds'),
+                    'Факт монтажа из СНЗ',audit_display_name(user),user['id'])
+                effective=conn.execute('SELECT current_status FROM elements WHERE id=?',(eid,)).fetchone()[0]
+                if effective not in ('installed','accepted'):
+                    raise HTTPException(409,"После указанного времени есть другой статус. Проверьте историю изделия и время монтажа.")
                 installed.append(eid)
-        _write(conn, object_id, state, revision)
-        touch_elements(conn, installed)
+        state['facts'][body.task_key]={'completed':True,'completed_at':now.isoformat(timespec='seconds'),'completed_by':audit_display_name(user)}
+        project_montage(state,status_montage(conn,object_id))
+        _write(conn,object_id,state,revision)
+        touch_elements(conn,installed)
         conn.commit()
         activity.defer_flush(events)
-        activity.log("snz_fact", user=user, entity_type="object", entity_id=object_id, details={"task_key": body.task_key, "installed": installed})
-        return {"revision": revision + 1, "installed": installed, "warnings": list(dict.fromkeys(warnings))}
+        activity.log("snz_fact",user=user,entity_type="object",entity_id=object_id,details={"task_key":body.task_key,"installed":installed,"completed_at":now.isoformat(timespec='seconds')})
+        return {"revision":revision+1,"installed":installed,"warnings":list(dict.fromkeys(warnings))}
     finally:
         activity.defer_end(events)
         conn.close()

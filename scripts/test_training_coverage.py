@@ -46,11 +46,12 @@ class HelpCoverageTests(unittest.TestCase):
         plan=' '.join(p.text for p in by_key['planned_date'].paragraphs if p.level==WRITE)
         for phrase in ('12 карт','60 минут','40','Узлы ригелей','Выдать СНЗ','Спорные нормы'):
             self.assertIn(phrase,plan)
+        self.assertIn('вкладка «Факт»',' '.join(p.text for p in by_key['planned_date'].paragraphs))
         self.assertIn('Не учитывать факт',' '.join(p.text for p in by_key['planned_date'].paragraphs))
         fact=[p for p in by_key['status'].paragraphs if 'Факт СНЗ ставят' in p.text]
         self.assertEqual(len(fact),1);self.assertEqual(fact[0].level,WRITE)
         self.assertFalse(any('Факт СНЗ ставят' in p.text for _,ps,_ in content.blocks_for({'status':READ}) for p in ps))
-        self.assertEqual(content.CONTENT_VERSION,'2026-11-10.8')
+        self.assertEqual(content.CONTENT_VERSION,'2026-11-10.9')
 
     def test_a_future_section_without_help_fails_the_gate(self):
         new=FEATURES[0]._replace(key='future_help_regression',title='Тестовый новый раздел')

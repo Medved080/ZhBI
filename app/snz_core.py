@@ -168,12 +168,12 @@ def _build_schedule(state, elements, history, day, shift, crew_id, montage_times
     preparation = next((c["id"] for c in state["crews"] if c["kind"] == "preparation"), None)
     for eid, a in assignments.items():
         e = by_id[eid]
-        if e["current_status"] in ("installed", "accepted"):
+        if e["current_status"] in ("installed", "accepted") and not facts.get(f"e:{eid}:install", {}).get("completed"):
             continue
         if not e.get("is_current", 1):
             warnings.append(f"{e.get('mark') or eid}: изделие отсутствует в актуальном чертеже; работы не назначены.")
             continue
-        if e["current_status"] != "ready_for_installation":
+        if e["current_status"] not in ("ready_for_installation", "installed", "accepted"):
             warnings.append(f"{e.get('mark') or eid}: статус не «Готов к монтажу»; работы не назначены.")
             continue
         release = shift_start(a["date"], a["shift"])
