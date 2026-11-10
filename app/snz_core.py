@@ -101,13 +101,37 @@ def suggest_card(state, element):
 
 
 def build_schedule(state, elements, history, day, shift, crew_id):
+    from app.snz_ordering import normalize_montage
+    state = planning_state(state)
+    normalize_montage(state, {eid for order in history for eid in order_items(order)})
+    preparation = next((c['id'] for c in state['crews'] if c['kind'] == 'preparation'), None)
+    if crew_id == preparation:
+        # Forecast next shift without depending on this shift's preparation.
+        # All installation crews are scheduled together, on their own resources.
+        following = shift_start(day, shift) + timedelta(hours=12)
+        next_day, next_shift = following.date().isoformat(), 'day' if following.hour == 8 else 'night'
+        montage_times = {}
+        _build_schedule(state, elements, history, next_day, next_shift, crew_id, montage_times)
+        for order in history:
+            if datetime.fromisoformat(order['start']) == following:
+                for task in order['tasks']:
+                    if task['operation_id'] == 'install' and task['segments']:
+                        for eid in task['element_ids']:
+                            montage_times[eid] = datetime.fromisoformat(task['segments'][0]['start'])
+        due = [a for a in state['assignments'] if shift_start(*previous_shift(a['date'], a['shift'])) <= shift_start(day, shift)]
+        due.sort(key=lambda a: (shift_start(a['date'], a['shift']), montage_times.get(a['element_id'], datetime.max), a['priority'] or 10**9))
+        for index, assignment in enumerate(due, 1):
+            assignment['prep_priority'] = index
+    return _build_schedule(state, elements, history, day, shift, crew_id)
+
+
+def _build_schedule(state, elements, history, day, shift, crew_id, montage_times=None):
     """Schedule the entire object's crews, then select one foreman's document.
 
     Standard reinforcement and concreting stages are individual tasks.
     List scheduling considers earliest feasible start before priority so another
     profession can start immediately while the previous one moves to the next item.
     """
-    state = planning_state(state)
     start = shift_start(day, shift)
     windows = work_windows(day, shift)
     crews = {c["id"]: c for c in state["crews"]}
@@ -230,12 +254,19 @@ def build_schedule(state, elements, history, day, shift, crew_id):
                 # Installed members need no remaining task but still belong to the group document.
                 node["element_ids"] = list(group["element_ids"])
     finished = {key: datetime.fromisoformat(fact["completed_at"]) for key, fact in facts.items() if fact.get("completed") and key not in nodes}
-    resource, pending, completed_ready = {}, set(nodes), {}
+    resource, pending, completed_ready, montage_finish = {}, set(nodes), {}, {}
+    montage_previous = {}
+    for owner in crews:
+        queue = [key for key,n in nodes.items() if n['operation_id']=='install' and n['crew_id']==owner and n['norm_minutes'] and n['release']<=start]
+        queue.sort(key=lambda key:(0 if nodes[key]['carry'] else 1,nodes[key]['priority'] if nodes[key]['priority'] is not None else 10**9))
+        montage_previous.update(zip(queue[1:],queue[:-1]))
     for key, node in nodes.items():
         fact = step_fact(state, node["element_ids"][0], node["operation_id"], key, groups)
         if fact and fact.get("completed"):
             finished[key] = datetime.fromisoformat(fact["completed_at"]) + timedelta(minutes=node["wait_after"])
             completed_ready[key] = finished[key].isoformat(timespec="minutes")
+            if node['operation_id']=='install':
+                montage_finish[key]=datetime.fromisoformat(fact['completed_at'])
             pending.remove(key)
         elif not node["norm_minutes"]:
             warnings.append(f"«{node['operation']}»: не заполнен норматив; операция и зависимые работы не рассчитаны.")
@@ -244,10 +275,14 @@ def build_schedule(state, elements, history, day, shift, crew_id):
         candidates = []
         for key in pending:
             n = nodes[key]
+            previous_montage=montage_previous.get(key)
+            if previous_montage and previous_montage not in montage_finish:
+                continue
             if not n["norm_minutes"] or n["release"] > windows[-1][1] or not n["dependencies"].issubset(finished):
                 continue
             earliest = max([windows[0][0], n["release"], resource.get((n["crew_id"], n["team_id"]), windows[0][0])]
-                           + [finished[d] for d in n["dependencies"]])
+                           + [finished[d] for d in n["dependencies"]]
+                           + ([montage_finish[previous_montage]] if previous_montage else []))
             segs, remaining = fragments(earliest, n["remaining_before"], windows)
             if segs:
                 candidates.append((datetime.fromisoformat(segs[0]["start"]), 0 if n["carry"] else 1,
@@ -262,6 +297,8 @@ def build_schedule(state, elements, history, day, shift, crew_id):
         resource[node["crew_id"], node["team_id"]] = end
         if not remaining:
             finished[key] = end + timedelta(minutes=node["wait_after"])
+            if node['operation_id']=='install':
+                montage_finish[key]=end
         pending.remove(key)
         result.append(node)
     tasks = []
@@ -293,9 +330,20 @@ def build_schedule(state, elements, history, day, shift, crew_id):
         if selected:
             item_ids.add(eid)
     items = [deepcopy(by_id[eid]) for eid in sorted(item_ids)]
+    if montage_times is not None:
+        for n in nodes.values():
+            if n['operation_id'] == 'install' and n.get('segments'):
+                montage_times[n['element_ids'][0]] = datetime.fromisoformat(n['segments'][0]['start'])
+    # Each newly calculated document has its own sequence, including carry.
+    carried = {eid for t in tasks if t['carry'] for eid in t['element_ids']}
+    order = sorted(item_ids, key=lambda eid: (0 if eid in carried else 1,
+        (assignments[eid]['prep_priority'] if crew_id == preparation else assignments[eid]['priority']) or 10**9))
+    item_priorities = {str(eid): index for index, eid in enumerate(order, 1)}
+    for task in tasks:
+        task['priorities'] = {str(eid): item_priorities[str(eid)] for eid in task['element_ids'] if eid in item_ids}
     warnings = montage_warnings(tasks, len(items), sum(int((b-a).total_seconds()/60) for a,b in windows)) + warnings
     return {"planning_policy": POLICY, "items": items, "completed_ready": completed_ready,
-            "item_priorities": {str(eid): assignments[eid]['priority'] for eid in item_ids},
+            "item_priorities": item_priorities,
             "date": str(day), "shift": shift, "start": start.isoformat(timespec="minutes"),
             "end": (start + timedelta(hours=12)).isoformat(timespec="minutes"), "crew": deepcopy(crews[crew_id]),
             "tasks": tasks, "warnings": list(dict.fromkeys(warnings)), "assignment_steps": steps_by_id,

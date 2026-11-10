@@ -15,6 +15,7 @@ from app.auth import audit_display_name, get_current_user
 from app.db import begin_write, get_connection, touch_elements
 from app.snz_core import build_schedule, default_state, operation_steps, suggest_card
 from app.snz_policy import planning_state, order_items, step_fact
+from app.snz_ordering import normalize_montage
 
 router = APIRouter(prefix="/objects/{object_id}/snz", tags=["snz"])
 KEY = r"^[a-zA-Z0-9_-]{1,64}$"
@@ -225,6 +226,7 @@ def get_state(object_id: int, user=Depends(get_current_user)):
         from app.snz_registry import registry
         register = registry(conn, object_id)
         locked = sorted({eid for order in _history(conn, object_id) for eid in order_items(order)})
+        normalize_montage(state, locked)
         elements = _elements(conn, object_id)
         grouped = {eid: g for g in state["groups"] for eid in g["element_ids"]}
         for element in elements:
@@ -251,7 +253,9 @@ def save_state(object_id: int, body: StateIn, user=Depends(get_current_user)):
         state["facts"] = old["facts"]
         state["catalog_seed"] = old.get("catalog_seed", "")
         elements = _elements(conn, object_id)
-        _validate(state, elements, old, _history(conn, object_id))
+        history = _history(conn, object_id)
+        _validate(state, elements, old, history)
+        normalize_montage(state, {eid for order in history for eid in order_items(order)})
         _write(conn, object_id, state, revision)
         # Keep the existing model's planned date in sync; no status or contract changes.
         before = {a["element_id"]: a for a in old["assignments"]}
@@ -552,7 +556,7 @@ def export_registry(object_id: int, date: date, user=Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
-        report = registry(conn, object_id, date.isoformat())
+        report = registry(conn, object_id, date.isoformat(), include_snapshots=True)
         data = build_registry_xlsx(report, date)
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="SNZ-register-{date.isoformat()}.xlsx"'})

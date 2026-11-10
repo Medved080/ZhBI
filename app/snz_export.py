@@ -65,6 +65,9 @@ def build_registry_xlsx(report, day):
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.print_title_rows = "1:4"
+    if 'snapshots' in report:
+        from app.snz_daily_export import add_daily_details
+        add_daily_details(wb, report['snapshots'], day)
     output = BytesIO()
     wb.save(output)
     return output.getvalue()

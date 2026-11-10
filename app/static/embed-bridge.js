@@ -392,8 +392,8 @@
   // An extra, temporary foreground scope. The underlying left-hand filters
   // remain intact, including their date, GUID and hierarchical controls.
   if (SNZ_FOREMAN) wrap("passesPlacementFilters", (orig) => function (element) {
-    return orig.apply(this, arguments) && (!snzScope.mode ||
-      (element.current_status === "ready_for_installation" && (!snzScope.ids || snzScope.ids.has(element.id))));
+    return orig.apply(this, arguments) && (!snzScope.mode || element.current_status === "ready_for_installation")
+      && (!snzScope.ids || snzScope.ids.has(element.id));
   });
 
   wrap("setStageLoading", (orig) => function (on, text) { loading = !!on; scheduleState(); return orig.apply(this, arguments); });

@@ -1,5 +1,6 @@
 import { esc } from "./screen-view.js";
 import { bindIssuedLayout } from "./snz-issued-layout.js";
+import { moveShiftItem, normalizeMontageAssignments } from "./snz-workspace-core.js";
 import { validateSteps, snzErrorIssue } from "./snz-validation.js";
 
 const uid = () => crypto.randomUUID().replaceAll("-", "");
@@ -21,10 +22,10 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   const path = () => `/objects/${getObjectId()}/snz`;
   const canWrite = () => !!data?.can_write;
   const assignById = () => new Map(draft.assignments.map(a => [a.element_id, a]));
-  const selected = () => data.elements.filter(e => selection.has(e.id));
+  const selected = () => {const byId=new Map(data.elements.map(e=>[e.id,e]));return [...selection].map(id=>byId.get(id)).filter(Boolean);};
   const locked = (id) => data.locked_element_ids.includes(id);
   const crewName = (id) => draft.crews.find(c => c.id === id)?.name || id;
-  const dirtyMark = () => { dirty = true; plan = null; const el = dialog?.querySelector("[data-dirty]"); if (el) el.textContent = "Есть несохранённые изменения"; const saveButton=dialog?.querySelector('[data-action="save"]');if(saveButton)saveButton.disabled=!canWrite();for(const b of dialog?.querySelectorAll('[data-action="preview"],[data-action="issue"]')||[])b.disabled=true; };
+  const dirtyMark = () => { normalizeMontageAssignments(draft.assignments,data.locked_element_ids); dirty = true; plan = null; const el = dialog?.querySelector("[data-dirty]"); if (el) el.textContent = "Есть несохранённые изменения"; const saveButton=dialog?.querySelector('[data-action="save"]');if(saveButton)saveButton.disabled=!canWrite();for(const b of dialog?.querySelectorAll('[data-action="preview"],[data-action="issue"]')||[])b.disabled=true; };
 
   async function load() {
     const object = getObjectId(), ticket = ++generation;
@@ -116,7 +117,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
           <td><select data-path="${prefix}.shift" aria-label="Смена ${e.id}" ${disabled}>${options([{id:"day",name:"День"},{id:"night",name:"Ночь"}], a.shift)}</select></td>
           <td><select data-path="${prefix}.crew_id" aria-label="Бригада ${e.id}" ${disabled}>${options(draft.crews.filter(c => c.kind === "installation"), a.crew_id)}</select></td>
           <td>${textInput(prefix + ".priority", a.priority, `type="number" min="1" aria-label="Очередь монтажа ${e.id}" ${disabled}`)}</td>
-          <td>${textInput(prefix + ".prep_priority", a.prep_priority, `type="number" min="1" aria-label="Очередь подготовки ${e.id}" ${disabled}`)}</td>
+          <td title="Рассчитывается по времени начала монтажа следующей смены">Автоматически</td>
           <td><select data-path="${prefix}.card_id" aria-label="Карта ${e.id}" ${disabled}>${options(draft.cards, a.card_id)}</select></td>
           <td><button data-action="remove-assignment" data-id="${e.id}" ${disabled}>Снять</button></td>` : `<td colspan="7" class="snz-muted">Не запланировано</td>`}</tr>`;
       }).join("") || '<tr><td colspan="10">Изделий по выбранным условиям нет.</td></tr>'}</tbody></table></div>`;
@@ -136,7 +137,14 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       <button data-action="assign" ${draft.crews.find(c=>c.id===crewId)?.kind!=="installation"?"disabled title='Выберите монтажную бригаду в поле СНЗ бригады'":""}>Назначить выбранные</button>
       <button data-action="show-sequence" ${dirty?"disabled":""}>Показать очередность на модели</button>
       </div><div data-items>${itemsHtml()}</div></fieldset>
-      ${planHtml()}`;
+      ${sequenceHtml(plan)}${planHtml()}`;
+  }
+  function sequenceHtml(doc){
+    if(!doc||doc.id||!canWrite()||draft.crews.find(c=>c.id===doc.crew.id)?.kind==='preparation')return '';
+    const rows=draft.assignments.filter(a=>a.date===doc.date&&a.shift===doc.shift&&a.crew_id===doc.crew.id)
+      .map((a,index)=>({...a,index})).sort((a,b)=>(a.priority??1e9)-(b.priority??1e9)||a.index-b.index);
+    const byId=new Map(data.elements.map(e=>[e.id,e])),protectedOrder=rows.some(a=>locked(a.element_id));
+    return `<section class="snz-sequence"><h3>Очередность монтажа</h3><p class="snz-muted">Перемещайте изделия целиком. Очередность сохраняется сразу, расписание пересчитывается.${protectedOrder?' Есть изделия выданного СНЗ — их очередность защищена.':''}</p><table class="snz-table"><thead><tr><th>№</th><th>Изделие</th><th>Перемещение</th></tr></thead><tbody>${rows.map((a,i)=>`<tr data-sequence-item="${a.element_id}"><td>${i+1}</td><td>${esc(byId.get(a.element_id)?.mark||a.element_id)}</td><td><button data-action="sequence-up" data-id="${a.element_id}" ${!i||protectedOrder?'disabled':''}>↑ Выше</button> <button data-action="sequence-down" data-id="${a.element_id}" ${i===rows.length-1||protectedOrder?'disabled':''}>↓ Ниже</button></td></tr>`).join('')}</tbody></table></section>`;
   }
   function planHtml(doc = plan) {
     if (!doc) return "";
@@ -244,10 +252,16 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     if (target.dataset.path) {
       const parts = target.dataset.path.split("."), key = parts.pop();
       let holder = draft; for (const part of parts) holder = holder[part];
-      holder[key] = target.type === "number" ? (target.value === "" ? (key==="wait_after"?0:null) : Number(target.value)) : target.value;
+      const assignment=parts[0]==='assignments';
+      if(assignment&&key==='priority')normalizeMontageAssignments(draft.assignments,data.locked_element_ids,{id:holder.element_id,position:target.value===''?null:Number(target.value)});
+      else holder[key] = target.type === "number" ? (target.value === "" ? (key==="wait_after"?0:null) : Number(target.value)) : target.value;
+      if(assignment&&['date','shift','crew_id'].includes(key)){
+        holder.priority=Math.max(0,...draft.assignments.filter(a=>a!==holder&&a.date===holder.date&&a.shift===holder.shift&&a.crew_id===holder.crew_id).map(a=>a.priority||0))+1;
+      }
       if (key==="card_id" && target.dataset.path.startsWith("groups.") && !target.value) holder[key]=null;
       if(validationIssue?.path===target.dataset.path){validationIssue=null;error="";target.removeAttribute("aria-invalid");target.removeAttribute("title");dialog.querySelector(".snz-error")?.remove();}
       dirtyMark();
+      if(assignment)renderItems();
     } else if (target.dataset.editExclude && orderEdit) {
       const id=Number(target.dataset.editExclude),group=orderEdit.order.tasks.find(t=>t.group_id&&t.element_ids.includes(id));
       for(const member of group?.element_ids||[id])target.checked?orderEdit.exclude.add(member):orderEdit.exclude.delete(member);
@@ -283,6 +297,19 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     if (action==="save") { await run(save);return; }
     if (action==="reload") { if ((dirty||editDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{await load();plan=null;orderEdit=null;revisions=null;});return; }
     if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
+    if(action==='sequence-up'||action==='sequence-down'){
+      if(!plan||plan.id||!canWrite()||dirty)return;
+      await run(async()=>{
+        const scope={date:plan.date,shift:plan.shift,crewId:plan.crew.id};
+        const body=moveShiftItem(data,scope,Number(button.dataset.id),action==='sequence-up'?-1:1);
+        // Invalidate before writing: an unknown outcome must never leave an
+        // old fingerprint available for issuing a stale schedule.
+        plan=null;
+        await api.put(path()+'/state',body);await load();
+        plan=await api.post(path()+'/preview',{revision:data.revision,date:scope.date,shift:scope.shift,crew_id:scope.crewId});
+        message='Очередность сохранена, смена пересчитана.';
+      });return;
+    }
     if (action==="issue") { const requestId=uid(); await run(async()=>{const r=await api.post(path()+"/orders",{revision:data.revision,date,shift,crew_id:crewId,request_id:requestId,expected_hash:plan.fingerprint});await load();plan=await api.get(path()+`/orders/${r.id}`);message="СНЗ выдан и сохранён";});return; }
     if (["delete-order","edit-order","order-revisions","open-revision","open-order"].includes(action) && editDirty()) {
       error="Сначала сохраните исправление или нажмите «Отмена».";render();return;
@@ -342,9 +369,8 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       if(chosen.some(e=>e.current_status!=="ready_for_installation")){error="Назначать можно только изделия «Готов к монтажу».";render();return;}
       if(assignmentCard==="auto" && dirty){error="Сначала сохраните справочники для автоматического подбора карты.";render();return;}
       if(assignmentCard==="auto" && chosen.some(e=>!e.suggested_card_id)){error="Для части изделий нет однозначного соответствия карте. Уточните справочник или выберите карту вручную.";render();return;}
-      let priority=Math.max(0,...draft.assignments.filter(a=>a.crew_id===crewId).map(a=>a.priority||0));
-      let prepPriority=Math.max(0,...draft.assignments.map(a=>a.prep_priority||0));
-      for(const el of chosen){if(locked(el.id))continue;const a=draft.assignments.find(a=>a.element_id===el.id);const v={element_id:el.id,crew_id:crewId,card_id:assignmentCard==="auto"?el.suggested_card_id:assignmentCard,date,shift,priority:a?.priority||++priority,prep_priority:a?.prep_priority||++prepPriority};if(a)Object.assign(a,v);else draft.assignments.push(v);}
+      let priority=Math.max(0,...draft.assignments.filter(a=>a.crew_id===crewId&&a.date===date&&a.shift===shift).map(a=>a.priority||0));
+      for(const el of chosen){if(locked(el.id))continue;const a=draft.assignments.find(a=>a.element_id===el.id);const v={element_id:el.id,crew_id:crewId,card_id:assignmentCard==="auto"?el.suggested_card_id:assignmentCard,date,shift,priority:a?.crew_id===crewId&&a.date===date&&a.shift===shift&&a.priority!=null?a.priority:++priority,prep_priority:a?.prep_priority??null};if(a)Object.assign(a,v);else draft.assignments.push(v);}
       dirtyMark();
     }
     if(action==="remove-assignment"){draft.assignments=draft.assignments.filter(a=>a.element_id!==Number(button.dataset.id));dirtyMark();}

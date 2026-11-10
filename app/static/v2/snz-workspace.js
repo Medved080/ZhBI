@@ -8,7 +8,7 @@ const options=(rows,key)=>rows.map(x=>`<option value="${esc(x.id)}" ${x.id===key
 export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionCount,getScene,send,register,openAdvanced,statusHtml,bindStatus,captureStatusFocus}) {
   let alive=true,active=false,data=null,object=null,root=null,ticket=0,loading=false,saving=false,error='',message='',writeBlocked=false;
   let scopeTicket=0,dataVersion=0,visibleVersion=0;
-  let mode='',filterDate=today(),date=today(),shift='day',crewId='install1',page=0,statusOpen=false;
+  let mode='',filterDate=today(),date=today(),shift='day',crewId='install1',page=0,statusOpen=false,filterOpen=true,planningOpen=true,filterCrew='',filterShift='';
   let picked=[],holdSelection=false,sceneKey='',statusKey='',visible=null,scopeKey='',rowsKey='',refreshTimer=null;
   if(!document.querySelector('link[data-snz-workspace]')){
     const css=document.createElement('link');css.rel='stylesheet';css.href='/static/v2/snz-workspace.css';css.dataset.snzWorkspace='';document.head.append(css);
@@ -21,7 +21,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
 
   function applyScope(force=false){
     if(!active||!data||object!==getObjectId()||!getScene()?.loaded||getScene()?.objectId!==object)return;
-    const scope=scopeFor({elements:data.elements,assignments:data.state.assignments},{mode,date:filterDate,shift,crewId});
+    const scope=scopeFor({elements:data.elements,assignments:data.state.assignments},{mode,date:filterDate,shift:filterShift,crewId:filterCrew});
     const key=JSON.stringify([object,scope.mode,scope.ids]);
     if(!force&&key===scopeKey)return;
     scopeKey=key;visible=null;rowsKey='';
@@ -55,19 +55,20 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
   }
   function render(){
     if(!isOpen()){renderRegister();return;}
-    syncSelect('[data-snzi="crew"]','<option value="">Все бригады</option>'+options(installationCrews(),crewId),crewId);
-    for(const[key,value]of Object.entries({mode,date,filterDate,shift})){
+    syncSelect('[data-snzi="crew"]',options(installationCrews(),crewId),crewId);
+    syncSelect('[data-snzi="filterCrew"]','<option value="">Все</option><option value="none">Не назначено</option>'+options(installationCrews(),filterCrew),filterCrew);
+    for(const[key,value]of Object.entries({mode,date,filterDate,shift,filterShift})){
       const el=root.querySelector(`[data-snzi="${key}"]`);if(el&&document.activeElement!==el)el.value=value;
     }
     root.querySelector('[data-snzi-filter-date]').hidden=mode!=='date';
-    const count=getSelectionCount(),extra=holdSelection&&picked.length?' Выбор сохранён при смене отбора.':'';
+    const byId=allById(),lockedIds=new Set(data?.locked_element_ids||[]),count=getSelectionCount(),blocked=picked.some(id=>lockedIds.has(id)||byId.get(id)?.current_status!==READY),extra=holdSelection&&picked.length?' Выбор сохранён при смене отбора.':'';
     root.querySelector('[data-snzi-count]').textContent=`Выбрано: ${picked.length}.${extra}${visible?` Показано в реестре: ${visible.size}.`:''}`;
-    root.querySelector('[data-snzi-hint]').textContent=mode==='date'?'Отбор модели и реестра: готовые к монтажу на дату отбора, смену и бригаду.':mode==='unplanned'?'Отбор: готовые к монтажу без назначения даты. Дата ниже задаёт планирование.':mode==='all'?'Отбор: все готовые к монтажу, независимо от даты, смены и бригады.':'Отбор СНЗ снят; действуют фильтры слева. Назначения сохраняются.';
+    root.querySelector('[data-snzi-hint]').textContent='Отбор дополняет фильтры слева. Бригада и смена отбирают существующие назначения. Пустая дата снимает только отбор по дате СНЗ.';
     root.querySelectorAll('[data-snzi]').forEach(el=>el.disabled=saving);
     root.querySelector('[data-snzi-status]').disabled=saving;
     const text=error||message||(loading?'Загрузка СНЗ…':''),result=root.querySelector('[data-snzi-result]');
     result.hidden=!text;result.textContent=text;result.setAttribute('role',error?'alert':'status');
-    root.querySelector('[data-snzi-action="plan"]').disabled=!data?.can_write||loading||saving||writeBlocked||!isDay(date)||!shift||!crewId||!picked.length||count>picked.length;
+    root.querySelector('[data-snzi-action="plan"]').disabled=!data?.can_write||loading||saving||writeBlocked||!isDay(date)||!shift||!crewId||!picked.length||count>picked.length||blocked;
     root.querySelector('[data-snzi-action="refresh"]').disabled=loading||saving;
     root.querySelector('[data-snzi-action="clear"]').disabled=!picked.length||saving;
     root.querySelector('[data-snzi-action="plan"]').textContent=saving?'Сохранение…':'Запланировать';
@@ -85,7 +86,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
       <td>${rowInput('date',a?.date,'type="date"')}</td>
       <td>${rowSelect('shift',[{id:'day',name:'День'},{id:'night',name:'Ночь'}],a?.shift||shift||'day','Смена')}</td>
       <td>${rowSelect('crew_id',installationCrews(),a?.crew_id||crewId||installationCrews()[0]?.id,'Бригада')}</td>
-      <td>${rowInput('priority',a?.priority,'type="number" min="1" max="1000000" step="1"')}</td><td>${a?.prep_priority??'—'}</td></tr>`;
+      <td>${rowInput('priority',a?.priority,'type="number" min="1" max="1000000" step="1"')}</td><td>${a?'Авто':'—'}</td></tr>`;
   }
   function renderRegister(){
     if(!register)return;register.hidden=!active;if(!active)return;
@@ -159,24 +160,32 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
       host.innerHTML=`<section class="snzi-panel" data-snzi-root>
         <h3>Сменные наряд-задания</h3><button type="button" class="snzi-button" data-snz-open>Открыть планирование СНЗ</button>
         <details class="snzi-section snzi-status" data-snzi-fold ${statusOpen?'open':''}><summary>Изменить статус</summary><fieldset data-snzi-status></fieldset></details>
-        <section class="snzi-section"><h4>Планирование и отбор</h4><p data-snzi-count></p><div class="snzi-fields">
-        <label class="snzi-wide">Дата (отбор)<select data-snzi="mode" aria-label="Дата (отбор)"><option value="">Удалить фильтр (пусто)</option><option value="unplanned">Без даты</option><option value="all">Все</option><option value="date">Конкретная дата</option></select></label>
+        <details class="snzi-section" data-snzi-filter-fold ${filterOpen?'open':''}><summary>Отбор</summary><div class="snzi-fields">
+        <label class="snzi-wide">Дата<select data-snzi="mode" aria-label="Дата отбора СНЗ"><option value="">Удалить фильтр (пусто)</option><option value="unplanned">Без даты</option><option value="all">Все</option><option value="date">Конкретная дата</option></select></label>
         <label class="snzi-wide" data-snzi-filter-date>Дата отбора<input type="date" data-snzi="filterDate" aria-label="Дата отбора" value="${filterDate}"></label>
-        <p class="snzi-wide" data-snzi-hint></p>
+        <label>Бригада<select data-snzi="filterCrew" aria-label="Бригада (отбор)"></select></label>
+        <label>Смена<select data-snzi="filterShift" aria-label="Смена (отбор)"><option value="">Все</option><option value="none">Не назначено</option><option value="day">День</option><option value="night">Ночь</option></select></label>
+        </div><p data-snzi-hint></p></details>
+        <details class="snzi-section" data-snzi-planning-fold ${planningOpen?'open':''}><summary>Планирование</summary><p data-snzi-count></p><div class="snzi-fields">
         <label class="snzi-wide">Дата<input type="date" data-snzi="date" aria-label="Дата" value="${date}"></label>
-        <label>Смена<select data-snzi="shift"><option value="">Все смены</option><option value="day">День</option><option value="night">Ночь</option></select></label>
-        <label>Бригада<select data-snzi="crew"></select></label></div>
+        <label>Смена<select data-snzi="shift" aria-label="Смена планирования"><option value="day">День</option><option value="night">Ночь</option></select></label>
+        <label>Бригада<select data-snzi="crew" aria-label="Бригада планирования"></select></label></div>
         <button type="button" class="snzi-button snzi-primary" data-snzi-action="plan">Запланировать</button>
         <div class="snzi-inline-actions"><button type="button" class="snzi-button" data-snzi-action="clear">Снять выбор</button><button type="button" class="snzi-button" data-snzi-action="refresh">Обновить</button></div>
         <div class="snzi-result" data-snzi-result hidden></div><p data-snzi-rights hidden>Нет права изменять плановые даты на этом объекте.</p>
         <p class="snzi-subtle">Дата, смена, бригада и очередность в строках реестра сохраняются при изменении. Для нового назначения сначала укажите дату. Неоднозначную карту уточните в расширенном планировании.</p>
-        </section></section>`;
+        </details></section>`;
       root=host.querySelector('[data-snzi-root]');statusKey='';
       root.querySelector('[data-snzi-fold]').addEventListener('toggle',e=>{statusOpen=e.target.open;});
+      root.querySelector('[data-snzi-filter-fold]').addEventListener('toggle',e=>{filterOpen=e.target.open;});
+      root.querySelector('[data-snzi-planning-fold]').addEventListener('toggle',e=>{planningOpen=e.target.open;});
       root.addEventListener('change',e=>{
-        const k=e.target.dataset.snzi;if(!k)return;const value=e.target.value;if(picked.length&&k!=='date')holdSelection=true;
-        if(k==='mode')mode=value;if(k==='filterDate')filterDate=value;if(k==='date')date=value;if(k==='shift')shift=value;if(k==='crew')crewId=value;
-        if(!writeBlocked)error='';message='';if(k!=='date'){page=0;applyScope();}render();
+        const k=e.target.dataset.snzi;if(!k)return;const value=e.target.value;
+        const filtering=['mode','filterDate','filterCrew','filterShift'].includes(k);
+        if(picked.length&&filtering)holdSelection=true;
+        if(k==='mode')mode=value;if(k==='filterDate')filterDate=value;if(k==='filterCrew')filterCrew=value;if(k==='filterShift')filterShift=value;
+        if(k==='date')date=value;if(k==='shift')shift=value;if(k==='crew')crewId=value;
+        if(!writeBlocked)error='';message='';if(filtering){page=0;applyScope();}render();
       });
       root.addEventListener('click',e=>{
         if(e.target.closest('[data-snz-open]')){openAdvanced();return;}
@@ -196,7 +205,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     },
     onScene(scene){
       if(scene.objectId!==getObjectId())return;
-      const ids=getSelectedIds(),key=ids.join(',');if(key!==sceneKey){sceneKey=key;picked=[...ids];holdSelection=false;}
+      const ids=getSelectedIds(),key=ids.join(',');if(key!==sceneKey){sceneKey=key;picked=[...ids];holdSelection=false;const a=data?.state.assignments.find(a=>ids.length===1&&a.element_id===ids[0]);if(a){date=a.date;shift=a.shift;crewId=a.crew_id;}}
       if(data){const map=allById();for(const e of[scene.selected,...(scene.multiItems||[])])if(e&&map.has(e.id)){const old=map.get(e.id);if(Object.entries(e).some(([k,v])=>old[k]!==v)){Object.assign(old,e);dataVersion++;}}}
       if(active){applyScope();render();}
     },
@@ -209,7 +218,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
       if(data){const map=allById();for(const x of items)if(map.has(x.id))Object.assign(map.get(x.id),x);dataVersion++;scopeKey='';applyScope();rowsKey='';render();}
     },
     reload,refreshSoon,selectedIds:()=>[...picked],clearSelection(){setPicked([],false);},isBusy:()=>saving,
-    reset(){active=false;ticket++;clearTimeout(refreshTimer);refreshTimer=null;data=null;object=null;picked=[];holdSelection=false;sceneKey='';statusKey='';visible=null;scopeKey='';rowsKey='';error='';message='';loading=false;writeBlocked=false;mode='';date=today();filterDate=today();shift='day';crewId='install1';root=null;if(register){register.innerHTML='';register.hidden=true;}},
+    reset(){active=false;ticket++;clearTimeout(refreshTimer);refreshTimer=null;data=null;object=null;picked=[];holdSelection=false;sceneKey='';statusKey='';visible=null;scopeKey='';rowsKey='';error='';message='';loading=false;writeBlocked=false;mode='';filterCrew='';filterShift='';date=today();filterDate=today();shift='day';crewId='install1';root=null;if(register){register.innerHTML='';register.hidden=true;}},
     destroy(){alive=false;ticket++;clearTimeout(refreshTimer);},
   };
 }

@@ -124,7 +124,7 @@ class SchedulerTests(unittest.TestCase):
     def test_preparation_previous_shift_and_separate_order(self):
         s,es=fixture((1,2),(("prepare",30,0),("install",60,0)))
         r=schedule(s,es,day="2026-11-09",shift="night",crew="preparation")
-        self.assertEqual([t["element_ids"] for t in r["tasks"]],[[2],[1]])
+        self.assertEqual([t["element_ids"] for t in r["tasks"]],[[1],[2]])
         self.assertEqual({t["operation_id"] for t in r["tasks"]},{"prepare"})
 
     def test_issued_norm_frozen_and_unfinished_full_cycle_repeats(self):

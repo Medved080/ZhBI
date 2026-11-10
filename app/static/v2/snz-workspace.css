@@ -35,3 +35,5 @@
 .snzi-empty{padding:14px;font-size:13px;color:#64748b}
 @media(max-height:760px){.snz-register{flex-basis:180px}.ws-center>.ws-stage{min-height:140px}}
 @media(max-width:900px){.snzi-fields{grid-template-columns:1fr}.snzi-wide{grid-column:auto}}
+
+.snzi-section>summary{font-size:14px;font-weight:600;cursor:pointer;margin-bottom:10px}

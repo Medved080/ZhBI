@@ -20,7 +20,7 @@ try{
  check('Registry starts with all elements and left filters stay visible',await page.locator('#ws-left').isVisible());
  check('Old registry toolbar and card selector are removed',await page.locator('.snzi-head,[data-snzi="card"]').count()===0);
  check('Expanded planner button is directly below the title',await page.locator('.snzi-panel h3 + [data-snz-open]').count()===1);
- check('Planning date and date filter are separate fields',await page.getByLabel('Дата (отбор)',{exact:true}).count()===1&&await page.getByLabel('Дата',{exact:true}).isVisible());
+ check('Planning date and date filter are separate fields',await page.getByLabel('Дата отбора СНЗ',{exact:true}).count()===1&&await page.getByLabel('Дата',{exact:true}).isVisible());
  check('Chronology control is hidden in foreman workspace',!await page.frameLocator('iframe.ws-frame').locator('#timeline-bar').isVisible());
  check('Status starts collapsed',await page.locator('[data-snzi-fold]').getAttribute('open')===null);
  await page.locator('[data-snzi-page]').check();await page.waitForFunction(()=>document.querySelector('[data-snzi-count]').textContent.startsWith('Выбрано: 8.'));
@@ -53,10 +53,10 @@ try{
  await page.locator('[data-snzi="date"]').fill('2026-11-13');await page.locator('[data-snzi="date"]').press('Tab');await waitRows(2);
  check('Planning date does not change the date filter',await page.locator('[data-snzi="filterDate"]').inputValue()==='2026-11-12');
  await page.reload();await page.locator('.ws-tabs [data-tab="snz"]').click();await waitRows(8);
- await field('mode','date');await page.locator('[data-snzi="filterDate"]').fill('2026-11-10');await page.locator('[data-snzi="filterDate"]').press('Tab');await waitRows(1);
- await field('shift','night');await waitRows(1);await field('crew','install2');await waitRows(0);await field('crew','');await waitRows(1);
+ await field('mode','date');await page.locator('[data-snzi="filterDate"]').fill('2026-11-10');await page.locator('[data-snzi="filterDate"]').press('Tab');await field('filterShift','day');await field('filterCrew','install1');await waitRows(1);
+ await field('filterShift','night');await waitRows(1);await field('filterCrew','install2');await waitRows(0);await field('filterCrew','');await waitRows(1);
  check('Date day/night and crew filters intersect',await rows.count()===1);
- await field('shift','');await waitRows(3);await field('crew','install2');await waitRows(1);
+ await field('filterShift','');await waitRows(3);await field('filterCrew','install2');await waitRows(1);await field('filterCrew','');
  await field('mode','all');await waitRows(6);
  const floor=page.locator('#ws-left [data-group="floor"]');await floor.click();
  const floorChecks=page.locator('#ws-left input[data-g="floor"]');
@@ -82,9 +82,9 @@ try{
    assert.equal((await response).status(),200);
    await page.waitForFunction(()=>!document.querySelector('[data-snzi-action="refresh"]').disabled);
  };
- await rowSave(5,'date','2026-11-14');await rowSave(6,'shift','day');await rowSave(6,'crew_id','install1');await rowSave(6,'priority','17');
+ await rowSave(5,'date','2026-11-14');await rowSave(6,'shift','day');await rowSave(6,'crew_id','install1');await rowSave(6,'date','2026-11-10');
  const edited=await(await page.request.get(base+'/objects/1/snz/state')).json();
- check('Row date, shift, crew and order save to the real API',edited.state.assignments.find(a=>a.element_id===5).date==='2026-11-14'&&edited.state.assignments.find(a=>a.element_id===6).priority===17&&edited.state.assignments.find(a=>a.element_id===6).crew_id==='install1'&&edited.state.assignments.find(a=>a.element_id===6).shift==='day');
+ check('Row date, shift, crew and order save to the real API',edited.state.assignments.find(a=>a.element_id===5).date==='2026-11-14'&&edited.state.assignments.find(a=>a.element_id===6).priority===2&&edited.state.assignments.find(a=>a.element_id===6).crew_id==='install1'&&edited.state.assignments.find(a=>a.element_id===6).shift==='day');
  check('Order replaces the old mounting column',await page.locator('.snzi-table th').allTextContents().then(headers=>headers.includes('Очередность')&&!headers.includes('Монтаж')));
  check('Delivered items have read-only appointment fields',!await rowField(8,'date').isEnabled());
  await page.locator('#snz-register').evaluate(el=>el.scrollTop=120);
@@ -98,9 +98,9 @@ try{
    if(route.request().method()==='PUT')await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({detail:'Назначения изменились. Обновите СНЗ.'})});else await route.continue();
  });
  const conflict=page.waitForResponse(r=>r.request().method()==='PUT'&&r.url().endsWith('/snz/state'));
- await rowField(6,'priority').fill('18');await rowField(6,'priority').press('Tab');assert.equal((await conflict).status(),409);
+ await rowField(6,'priority').fill('1');await rowField(6,'priority').press('Tab');assert.equal((await conflict).status(),409);
  await page.locator('[data-snzi-result][role="alert"]').waitFor();
- check('Conflict preserves the row and blocks repeated writes',await rowField(6,'priority').inputValue()==='17'&&!await rowField(6,'priority').isEnabled());
+ check('Conflict preserves the row and blocks repeated writes',await rowField(6,'priority').inputValue()==='2'&&!await rowField(6,'priority').isEnabled());
  await page.unrouteAll({behavior:'wait'});await page.locator('[data-snzi-action="refresh"]').click();
  await page.waitForFunction(()=>!document.querySelector('[data-snzi-action="refresh"]').disabled);
  check('Refresh restores row editing after conflict',await rowField(6,'priority').isEnabled());
@@ -110,11 +110,11 @@ try{
    else if(failFollowingRead){failFollowingRead=false;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({detail:'Учебный отказ обновления'})});}
    else await route.continue();
  });
- await rowSave(6,'priority','18');
+ await rowSave(6,'priority','1');
  const committedAfterReadFailure=await(await page.request.get(base+'/objects/1/snz/state')).json();
- check('Confirmed save remains visible if subsequent reading fails',await rowField(6,'priority').inputValue()==='18'&&!await rowField(6,'priority').isEnabled()&&committedAfterReadFailure.state.assignments.find(a=>a.element_id===6).priority===18);
+ check('Confirmed save remains visible if subsequent reading fails',await rowField(6,'priority').inputValue()==='1'&&!await rowField(6,'priority').isEnabled()&&committedAfterReadFailure.state.assignments.find(a=>a.element_id===6).priority===1);
  await page.unrouteAll({behavior:'wait'});await page.locator('[data-snzi-action="refresh"]').click();await page.waitForFunction(()=>!document.querySelector('[data-snzi-action="refresh"]').disabled);
- await rowSave(6,'priority','17');
+ await rowSave(6,'priority','2');
 
  await page.route('**/objects/1/snz/state',async route=>{const response=await route.fetch(),body=await response.json();body.locked_element_ids=[...body.locked_element_ids,5];await route.fulfill({response,json:body});});
  await page.locator('[data-snzi-action="refresh"]').click();await page.waitForFunction(()=>!document.querySelector('[data-snzi-action="refresh"]').disabled);
