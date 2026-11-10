@@ -39,6 +39,20 @@ CREATE TABLE IF NOT EXISTS snz_order_revisions (
     UNIQUE(object_id,request_id)
 );
 
+-- Архив удалённых СНЗ независим от активного документа и каскада его редакций.
+CREATE TABLE IF NOT EXISTS snz_deleted_orders (
+    order_id INTEGER PRIMARY KEY,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    order_json TEXT NOT NULL,
+    revisions_json TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    UNIQUE(object_id,request_id)
+);
+
 CREATE TABLE IF NOT EXISTS elements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_file TEXT NOT NULL,

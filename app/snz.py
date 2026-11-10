@@ -117,6 +117,12 @@ class FactIn(Strict):
     task_key: str = Field(min_length=1, max_length=160)
 
 
+class DeleteOrderIn(Strict):
+    revision: int = Field(ge=0)
+    order_revision: int = Field(ge=1)
+    request_id: str = Field(pattern=KEY)
+
+
 def _load(conn, object_id):
     row = conn.execute("SELECT revision,data_json FROM snz_state WHERE object_id=?", (object_id,)).fetchone()
     return (json.loads(row["data_json"]), row["revision"]) if row else (default_state(), 0)
@@ -435,6 +441,22 @@ def _order_revision(conn, object_id, order_id, revision):
     if not row:
         raise HTTPException(404, "Редакция СНЗ не найдена.")
     return json.loads(row[0])
+
+
+@router.post("/orders/{order_id}/delete")
+def delete_issued_order(object_id: int, order_id: int, body: DeleteOrderIn, user=Depends(get_current_user)):
+    from app.snz_delete import delete_order
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        assert_object_feature(conn, user, object_id, "planned_date", "write")
+        result = delete_order(conn, object_id, order_id, body, audit_display_name(user), _load, _write, _version)
+        conn.commit()
+        if not result.get("already_deleted"):
+            activity.log("snz_delete", user=user, entity_type="object", entity_id=object_id, details=result)
+        return result
+    finally:
+        conn.close()
 
 
 @router.get("/orders/{order_id}/revisions")

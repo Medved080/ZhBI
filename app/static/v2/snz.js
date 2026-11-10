@@ -212,7 +212,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     return `<div class="snz-issued-layout"><section class="snz-orders-top" aria-label="Реестр выданных СНЗ">
       <div class="snz-controls"><label>Дата СНЗ (отбор)<input type="date" data-filter="ordersDate" value="${esc(ordersDate)}"></label><button data-action="orders-all">Все даты</button><button data-action="registry-xlsx" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Реестр за день в Excel</button></div>
       <p class="snz-muted">Дата — начало смены. Ночь: 20:00 выбранного дня — 08:00 следующего.</p>
-      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Прораб</th><th>Количество шт</th><th>Выдал</th><th>Действия</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${o.id}${o.order_revision>1?` · ред. ${o.order_revision}`:""}</td><td>${dayText(o.work_date)}</td><td title="${dayText(o.start)} ${timeText(o.start)} — ${dayText(o.end)} ${timeText(o.end)}">${shiftText(o.shift)}</td><td>${esc(o.crew_name)}</td><td>${esc(o.foreman||"Не назначен")}</td><td>${o.quantity}</td><td>${esc(o.created_by)}</td><td><div class="snz-order-actions"><button data-action="open-order" data-id="${o.id}">Открыть</button>${canWrite()?`<button data-action="edit-order" data-id="${o.id}">Редактировать</button>`:""}<button data-action="order-revisions" data-id="${o.id}">Редакции</button></div></td></tr>`).join("")||'<tr><td colspan="8">За выбранную дату СНЗ не выдавались.</td></tr>'}</tbody></table></div>
+      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Прораб</th><th>Количество шт</th><th>Выдал</th><th>Действия</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${o.id}${o.order_revision>1?` · ред. ${o.order_revision}`:""}</td><td>${dayText(o.work_date)}</td><td title="${dayText(o.start)} ${timeText(o.start)} — ${dayText(o.end)} ${timeText(o.end)}">${shiftText(o.shift)}</td><td>${esc(o.crew_name)}</td><td>${esc(o.foreman||"Не назначен")}</td><td>${o.quantity}</td><td>${esc(o.created_by)}</td><td><div class="snz-order-actions"><button data-action="open-order" data-id="${o.id}">Открыть</button>${canWrite()?`<button data-action="edit-order" data-id="${o.id}">Редактировать</button><button data-action="delete-order" data-id="${o.id}">Удалить СНЗ</button>`:""}<button data-action="order-revisions" data-id="${o.id}">Редакции</button></div></td></tr>`).join("")||'<tr><td colspan="8">За выбранную дату СНЗ не выдавались.</td></tr>'}</tbody></table></div>
       <p class="snz-registry-total"><strong>Итого по документам: ${total.quantity} шт.</strong> Уникальных изделий: ${total.unique_quantity} шт. · СНЗ: ${rows.length}</p></section>
       <div class="snz-issued-splitter" data-snz-splitter role="separator" aria-label="Высота реестра и открытого СНЗ" aria-orientation="horizontal" aria-valuemin="15" aria-valuemax="80" tabindex="0" title="Перетащите для изменения высоты; стрелки вверх и вниз — с клавиатуры"></div>
       <section class="snz-orders-bottom" aria-label="Открытый СНЗ">${orderEditHtml()}${revisionsHtml()}${!orderEdit?planHtml():""}${!orderEdit&&!revisions&&!plan?'<p class="snz-muted">Откройте СНЗ в реестре сверху. Высоту частей можно изменить разделителем.</p>':""}</section></div>`;
@@ -282,10 +282,24 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     if (action==="reload") { if ((dirty||editDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{await load();plan=null;orderEdit=null;revisions=null;});return; }
     if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
     if (action==="issue") { const requestId=uid(); await run(async()=>{const r=await api.post(path()+"/orders",{revision:data.revision,date,shift,crew_id:crewId,request_id:requestId,expected_hash:plan.fingerprint});await load();plan=await api.get(path()+`/orders/${r.id}`);message="СНЗ выдан и сохранён";});return; }
-    if (["edit-order","order-revisions","open-revision","open-order"].includes(action) && editDirty()) {
+    if (["delete-order","edit-order","order-revisions","open-revision","open-order"].includes(action) && editDirty()) {
       error="Сначала сохраните исправление или нажмите «Отмена».";render();return;
     }
-    if(["edit-order","edit-preview","edit-apply"].includes(action)&&!canWrite())return;
+    if(["delete-order","edit-order","edit-preview","edit-apply"].includes(action)&&!canWrite())return;
+    if(action==="delete-order"){
+      if(dirty){error="Сначала сохраните изменения планирования.";render();return;}
+      const id=Number(button.dataset.id),order=data.orders.find(o=>o.id===id);
+      if(!order)return;
+      if(!window.confirm(`Удалить СНЗ № ${id} · ${dayText(order.work_date)} · ${shiftText(order.shift)} · ${order.crew_name}?\n\nДокумент и его редакции сохранятся в архиве. Назначения этой смены будут сняты с изделий, которых нет в других выданных СНЗ. Смену можно будет выдать заново.`))return;
+      await run(async()=>{
+        const result=await api.post(path()+`/orders/${id}/delete`,{revision:data.revision,order_revision:order.order_revision,request_id:uid()});
+        plan=null;orderEdit=null;revisions=null;
+        await load();
+        const held=[...new Set(Object.values(result.kept_in_orders).flat())];
+        message=`СНЗ № ${id} удалён. Снято назначений: ${result.cleared_element_ids.length}. Можно назначить изделия и выдать новый СНЗ.`+(held.length?` Часть изделий остаётся в выданных СНЗ № ${held.join(", ")}; их назначения сохранены.`:"");
+        send("poll");onChanged?.();
+      });return;
+    }
     if(action==="edit-order"){
       if(dirty){error="Сначала сохраните изменения планирования.";render();return;}
       await run(async()=>{await load();const order=await api.get(path()+`/orders/${Number(button.dataset.id)}`);orderEdit={order,exclude:new Set(),reason:"",preview:null,filter:"",page:0};plan=null;revisions=null;scrollToEdit=true;});return;

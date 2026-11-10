@@ -8,7 +8,7 @@ POST-чтение отчётов (`/reports/*`), выгрузки (`/export.xlsx
 (гамма, цвет подписей, «Ознакомился») помечены как «личная» — они видны и в V1 у того же пользователя. Серверная авторизация действует
 на все операции, разрешённые и нет; шлюз её не заменяет.
 
-## Разрешено (265)
+## Разрешено (266)
 
 | Экран | Действие | Запрос | Риск | Доказательство проверки |
 | --- | --- | --- | --- | --- |
@@ -17,6 +17,7 @@ POST-чтение отчётов (`/reports/*`), выгрузки (`/export.xlsx
 | workspace | СНЗ: выдать неизменяемый документ на смену | `POST /objects/{id}/snz/orders` (только поля: revision, date, shift, crew_id, request_id, expected_hash) | выдача документа; защита повтора и ревизии | scripts/test_snz.py, scripts/test_snz_ui.mjs |
 | workspace | СНЗ: проверить исключение изделий из выданного документа | `POST /objects/{id}/snz/orders/{id}/edit-preview` (только поля: revision, order_revision, exclude_element_ids, reason) |  | scripts/test_snz_order_edit.py, scripts/test_snz_order_edit_ui.mjs |
 | workspace | СНЗ: сохранить исправленную редакцию с историей | `POST /objects/{id}/snz/orders/{id}/revisions` (только поля: revision, order_revision, exclude_element_ids, reason, request_id, expected_hash) | новая редакция выданного СНЗ; исходный снимок и факты сохраняются | scripts/test_snz_order_edit.py, scripts/test_snz_order_edit_ui.mjs |
+| workspace | СНЗ: удалить документ и освободить его назначения с сохранением архива | `POST /objects/{id}/snz/orders/{id}/delete` (только поля: revision, order_revision, request_id) | удаление выданного СНЗ; ревизии, архив, защита факта и связанных документов | scripts/test_snz_delete.py, scripts/test_snz_delete_ui.mjs |
 | workspace | СНЗ: завершение операции и монтаж после всех операций | `POST /objects/{id}/snz/facts` (только поля: revision, task_key) | факт выполнения; общий обработчик статуса | scripts/test_snz.py, scripts/test_snz_ui.mjs |
 | procurement | Разобрать ЗВП, ЗП и оплаты без записи | `POST /procurement/import/analyze` |  | scripts/test_procurement.py, scripts/test_procurement_ui.mjs |
 | procurement | Сохранить отдельную загрузку закупок и оплат | `POST /procurement/import/apply` |  | scripts/test_procurement.py, scripts/test_procurement_ui.mjs |

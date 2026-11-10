@@ -1590,6 +1590,19 @@ TABLES.append(('snz_order_revisions', 'snz_order_revisions — Редакции 
 ]))
 FKS.extend([('snz_order_revisions', 'object_id', 'objects', 'id', 'CASCADE'), ('snz_order_revisions', 'order_id', 'snz_orders', 'id', 'CASCADE')])
 
+TABLES.append(('snz_deleted_orders', 'snz_deleted_orders — Архив удалённых СНЗ', C_ELEM, S_ELEM, [
+    ('order_id', 'INTEGER', 'PK', 'Исходный номер удалённого СНЗ; не связан каскадом с активными документами'),
+    ('object_id', 'INTEGER', 'FK', 'Объект ЖБИ'),
+    ('order_json', 'TEXT', '', 'Все поля активного документа до удаления, включая сохранённый снимок'),
+    ('revisions_json', 'TEXT', '', 'Все строки истории редакций до удаления документа'),
+    ('result_json', 'TEXT', '', 'Сохранённый результат удаления: освобождённые изделия, снятые назначения, связанные документы'),
+    ('created_at', 'TEXT', '', 'Время удаления, UTC'),
+    ('created_by', 'TEXT', '', 'Кто удалил СНЗ'),
+    ('request_id', 'TEXT', '', 'Ключ идемпотентности запроса удаления'),
+    ('request_hash', 'TEXT', '', 'Отпечаток тела запроса для защиты повторной отправки'),
+]))
+FKS.append(('snz_deleted_orders', 'object_id', 'objects', 'id', 'CASCADE'))
+
 BY_NAME = {t[0]: t for t in TABLES}
 
 # Домен таблицы — по цвету заливки: чем окрашена в схеме, к той группе и
