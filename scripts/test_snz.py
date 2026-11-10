@@ -85,34 +85,35 @@ class SchedulerTests(unittest.TestCase):
             segments=sorted((x["start"],x["end"]) for t in result["tasks"] if t["team_id"]==team for x in t["segments"])
             self.assertTrue(all(a[1]<=b[0] for a,b in zip(segments,segments[1:])))
 
-    def test_shared_group_barrier_three_and_four(self):
+    def test_reinforcement_is_individual_for_three_and_four_beams(self):
         for count in (3,4):
             with self.subTest(count=count):
                 s,es=fixture(tuple(range(1,count+1)), (("install",30,0),("rebar1",40,0),("concrete1",20,0),("rebar2",30,0),("concrete2",20,0)))
                 s["groups"]=[{"id":"cross","name":"Крест","element_ids":list(range(1,count+1))}]
                 r=schedule(s,es)
-                self.assertEqual(len(r["tasks"]),count+4)
-                group=next(t for t in r["tasks"] if t["operation_id"]=="rebar1")
-                end=max(t["segments"][-1]["end"] for t in r["tasks"] if t["operation_id"]=="install")
-                self.assertGreaterEqual(group["segments"][0]["start"],end)
-                self.assertEqual(len(group["element_ids"]),count)
+                self.assertEqual(len(r["tasks"]),count*5)
+                first=next(t for t in r["tasks"] if t["key"]=="e:1:rebar1")
+                last=next(t for t in r["tasks"] if t["key"]==f"e:{count}:install")
+                self.assertLess(first["segments"][0]["start"],last["segments"][-1]["end"])
+                self.assertTrue(all(len(t["element_ids"])==1 and not t["group_id"] for t in r["tasks"]))
 
-    def test_mixed_beam_cards_require_explicit_group_norm(self):
+    def test_mixed_beam_cards_keep_each_individual_norm(self):
         s,es=fixture((1,2,3),(("install",30,0),("rebar1",40,0)))
         other=deepcopy(s["cards"][0]);other["id"]="other";other["steps"][1]["minutes"]=75;s["cards"].append(other)
         s["assignments"][1]["card_id"]="other"
-        s["groups"]=[{"id":"cross","name":"Крайний узел","element_ids":[1,2,3]}]
-        self.assertEqual(len(schedule(s,es)["tasks"]),3)
-        s["groups"][0]["card_id"]="base"
-        group=next(t for t in schedule(s,es)["tasks"] if t["group_id"])
-        self.assertEqual(group["norm_minutes"],40)
-
-    def test_missing_group_and_norm_block_dependents(self):
-        s,es=fixture((1,),(("install",30,0),("rebar1",40,0),("concrete1",20,0)))
+        s["groups"]=[{"id":"cross","name":"Крайний узел","element_ids":[1,2,3],"card_id":"base"}]
         r=schedule(s,es)
-        self.assertEqual([t["operation_id"] for t in r["tasks"]],["install"])
+        self.assertEqual(len(r["tasks"]),6)
+        self.assertEqual(next(t for t in r["tasks"] if t["key"]=="e:2:rebar1")["norm_minutes"],75)
+
+    def test_missing_norm_retains_items_and_unscheduled_operations(self):
+        s,es=fixture((1,),(("install",30,0),("rebar1",40,0),("concrete1",20,0)))
+        self.assertEqual(len(schedule(s,es)["tasks"]),3)
         s["cards"][0]["steps"][0]["minutes"]=None
-        self.assertFalse(schedule(s,es)["tasks"])
+        r=schedule(s,es)
+        self.assertEqual(len(r["tasks"]),3)
+        self.assertTrue(all(not t["segments"] for t in r["tasks"]))
+        self.assertEqual([e["id"] for e in r["items"]],[1])
 
     def test_technological_wait_runs_during_lunch(self):
         s,es=fixture((1,),(("install",250,120),("scaffold",10,0)))
@@ -236,11 +237,13 @@ class IntegrationTests(unittest.TestCase):
         oid=self.issue()["id"]
         order=self.snz.read_order(self.object_id,oid,self.admin)
         rev=2
+        installed_ids=set()
         for i,task in enumerate(order["tasks"]):
             result=self.snz.complete(self.object_id,self.snz.FactIn(revision=rev,task_key=task["key"]),self.admin)
             rev=result["revision"]
-            if i<len(order["tasks"])-1:self.assertFalse(result["installed"])
-        self.assertEqual(set(result["installed"]),set(self.ids))
+            installed_ids.update(result["installed"])
+            if task["operation_id"]=="rebar1":self.assertEqual(result["installed"],task["element_ids"])
+        self.assertEqual(installed_ids,set(self.ids))
         retry=self.snz.complete(self.object_id,self.snz.FactIn(revision=0,task_key=order["tasks"][-1]["key"]),self.admin)
         self.assertTrue(retry["already_completed"])
         c=self.db.get_connection();self.assertEqual(c.execute("SELECT COUNT(*) FROM elements WHERE object_id=? AND current_status='installed'",(self.object_id,)).fetchone()[0],4);c.close()

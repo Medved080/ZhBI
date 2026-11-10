@@ -140,25 +140,27 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   }
   function planHtml(doc = plan) {
     if (!doc) return "";
+    const members=new Map(doc.tasks.flatMap(t=>t.elements).concat(doc.items||[]).map(e=>[e.id,e]));
     const origin = new Date(doc.start).getTime(), offset = s => Math.max(0, Math.min(100, (new Date(s).getTime()-origin)/432000));
     const teams = [...new Set(doc.tasks.map(t=>t.team))], facts = doc.facts || draft.facts;
     return `<section class="snz-result"><div class="snz-controls"><h3>${doc.editPreview ? "Предпросмотр исправления СНЗ № "+doc.id : doc.id ? "Выданный СНЗ № "+doc.id : "Расчёт смены"}${doc.order_revision ? " · ред. "+doc.order_revision : ""}${doc.historical ? " · архив" : ""} · ${dayText(doc.date)} · ${shiftText(doc.shift)} · ${esc(doc.crew.name)}</h3>
       ${doc.id && !doc.editPreview ? `<button data-action="xlsx">Excel</button><button data-action="pdf">Поэтажные планы PDF</button>` : ""}</div>
       ${doc.warnings.length ? `<details class="snz-warnings"><summary>Предупреждения: ${doc.warnings.length}</summary><ul>${doc.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
-      <p class="snz-muted">План: ${doc.tasks.length} операций · ${doc.tasks.reduce((n,t)=>n+t.segments.reduce((m,s)=>m+s.minutes,0),0)} минут работы звеньев. Факт: только 0 или 100 %.</p>
+      <p class="snz-muted">Изделий в СНЗ: ${members.size}. План: ${doc.tasks.length} операций · ${doc.tasks.reduce((n,t)=>n+t.segments.reduce((m,s)=>m+s.minutes,0),0)} минут работы звеньев. Факт: только 0 или 100 %.</p>
       <div class="snz-gantt" role="img" aria-label="Загрузка звеньев в течение смены"><div class="snz-gantt-row"><strong>Звено</strong><div class="snz-hours">${Array.from({length:13},(_,i)=>`<span style="left:${i/12*100}%">${String((Number(doc.start.slice(11,13))+i)%24).padStart(2,"0")}:00</span>`).join("")}</div></div>
       ${teams.map(team=>`<div class="snz-gantt-row"><strong>${esc(team)}</strong><div class="snz-track">
       ${[[0,20],...(doc.shift==="day"?[[300,360]]:[[240,300]]),[700,720]].map(([a,b])=>`<span class="snz-break" style="left:${a/720*100}%;width:${(b-a)/720*100}%"></span>`).join("")}
       ${doc.tasks.flatMap((t,i)=>t.team!==team?[]:t.segments.map(s=>`<span class="snz-bar snz-color-${i%5}" style="left:${offset(s.start)}%;width:${offset(s.end)-offset(s.start)}%" title="${esc(t.operation)} · ${esc(t.elements.map(e=>e.mark||e.id).join(', '))} · ${timeText(s.start)}–${timeText(s.end)}">${i+1}</span>`)).join("")}</div></div>`).join("")}</div>
+      <details class="snz-warnings"><summary>Состав СНЗ: ${members.size} изделий</summary><ul>${[...members.values()].map(e=>`<li>${esc(e.mark||e.id)} · ID ${e.id} · ${esc(e.element_type)} · ${esc(e.address||"—")}</li>`).join("")}</ul></details>
       <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Операция / изделие</th><th>Звено</th><th>Время</th><th>Норматив / остаток</th><th>Факт</th></tr></thead><tbody>
       ${doc.tasks.map((t,i)=>`<tr><td>${i+1}</td><td><strong>${esc(t.operation)}</strong><small>${esc(t.group_name || t.elements.map(e=>e.mark||e.id).join(', '))}${t.group_name?" · "+esc(t.elements.map(e=>e.mark||e.id).join(', ')):""}${t.carry?" · перенос":""}</small></td><td>${esc(t.team)}</td>
-      <td>${t.segments.map(s=>`${timeText(s.start)}–${timeText(s.end)}`).join("<br>")}</td><td>${t.norm_minutes} / ${t.remaining_after} мин</td>
+      <td>${t.segments.map(s=>`${timeText(s.start)}–${timeText(s.end)}`).join("<br>") || (t.norm_minutes==null?"Норматив не задан":"Не вошла в смену")}</td><td>${t.norm_minutes??"—"} / ${t.remaining_after??"—"} мин</td>
       <td>${facts[t.key]?.completed?'<span class="snz-done">100 % · завершено</span>':`<span>0 %</span> ${doc.id && !doc.editPreview && !doc.historical && data.can_fact?`<button data-action="complete" data-key="${esc(t.key)}">Завершить</button>`:""}`}</td></tr>`).join("") || '<tr><td colspan="6">Нет рассчитанных работ.</td></tr>'}</tbody></table></div></section>`;
   }
   function cardsHtml() {
     const card = draft.cards.find(c=>c.id===cardId) || draft.cards[0], ci = draft.cards.indexOf(card);
     return `<div class="snz-controls"><label>Операционная карта<select data-filter="card">${options(draft.cards,card.id)}</select></label><button data-action="add-card">Добавить карту</button><button data-action="copy-card">Копировать карту</button></div>
-      <p class="snz-muted">Минуты задаются на звено и не зависят от численности. Пустой норматив требует заполнения. Задержка после операции — календарные минуты, включая обед; звено на это время освобождается.</p>
+      <p class="snz-muted">Минуты задаются на звено и не зависят от численности. Армирование и бетонирование — на одно изделие; прежние значения сохранены, проверьте их для этой области. Пустой норматив требует заполнения. Задержка после операции — календарные минуты, включая обед; звено на это время освобождается.</p>
       ${card.source_note ? `<details class="snz-warnings"><summary>Источник и уточнения по карте</summary><p>${esc(card.source_note)}</p></details>` : ""}
       <div class="snz-controls"><label>Название${textInput(`cards.${ci}.name`,card.name,'maxlength="160"')}</label><label>Тип изделия${textInput(`cards.${ci}.element_type`,card.element_type)}</label><label>Подтип${textInput(`cards.${ci}.subtype`,card.subtype)}</label></div>
       <div class="snz-controls"><label>Отметка, мм${textInput(`cards.${ci}.elevation_mm`,card.elevation_mm,'type="number" aria-label="Отметка карты"')}</label><label>Направление ригеля<select data-path="cards.${ci}.axis_direction">${options([{id:"",name:"Любое"},{id:"letter",name:"Вдоль буквенных осей · 9 м"},{id:"numeric",name:"Вдоль цифровых осей · 12 м"}],card.axis_direction||"")}</select></label><span class="snz-muted">Отметки +15.000 и +15.800 считаются соответствующими.</span></div>
@@ -169,9 +171,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       <div class="snz-controls"><label>Добавить операцию<select data-new-step>${options(draft.operations.filter(o=>!card.steps.some(s=>s.operation_id===o.id)),"")}</select></label><button data-action="add-step">Добавить в карту</button></div>`;
   }
   function operationsHtml() {
-    return `<p class="snz-muted">Состав операций можно расширять. Область «Узел» создаёт одну общую работу для вручную объединённых ригелей.</p>
+    return `<p class="snz-muted">Состав операций можно расширять. Армирование и бетонирование обоих этапов рассчитываются отдельно для каждого изделия; нормы задаются на одно изделие. Подготовка предыдущей смены не блокирует монтаж.</p>
       <table class="snz-table"><thead><tr><th>Операция</th><th>Звено</th><th>Область выполнения</th></tr></thead><tbody>${draft.operations.map((o,i)=>`<tr><td>${textInput(`operations.${i}.name`,o.name)}</td>
-      <td><select data-path="operations.${i}.team">${options(draft.teams,o.team)}</select></td><td><select data-path="operations.${i}.scope">${options(scopes.map(([id,name])=>({id,name})),o.scope)}</select></td></tr>`).join("")}</tbody></table><button data-action="add-operation">Добавить операцию</button>`;
+      <td><select data-path="operations.${i}.team">${options(draft.teams,o.team)}</select></td><td><select data-path="operations.${i}.scope" ${["rebar1","concrete1","rebar2","concrete2"].includes(o.id)?"disabled":""}>${options(scopes.map(([id,name])=>({id,name})),o.scope)}</select></td></tr>`).join("")}</tbody></table><button data-action="add-operation">Добавить операцию</button>`;
   }
   function crewsHtml() {
     return `<p class="snz-muted">Одна подготовительная бригада обслуживает монтажные потоки. Укажите прораба для каждого потока.</p><table class="snz-table"><thead><tr><th>Бригада / поток</th><th>Прораб</th><th>Назначение</th></tr></thead><tbody>
@@ -183,19 +185,19 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   function groupsHtml() {
     return `<p>Выберите в планировании три или четыре ригеля одного этажа, затем создайте общий узел. Сейчас выбрано: ${selection.size}.</p>
       <div class="snz-controls"><label>Название узла<input data-group-name placeholder="Например, крест в осях 7/Е"></label><button data-action="add-group">Создать из выбранных</button></div>
-      <p class="snz-muted">Если ригели имеют разные нормативы общих операций, выберите для узла отдельную карту — например, для трёх или четырёх ригелей.</p>
+      <p class="snz-muted">Армирование и бетонирование считаются по каждому изделию и его карте, независимо от узла. Группы сохранены для старых документов и пользовательских общих операций.</p>
       <table class="snz-table"><thead><tr><th>Узел</th><th>Ригели</th><th>Карта общих операций</th><th></th></tr></thead><tbody>${draft.groups.map((g,i)=>`<tr><td>${textInput(`groups.${i}.name`,g.name, g.element_ids.some(locked)?"disabled":"")}</td><td>${g.element_ids.map(id=>esc(data.elements.find(e=>e.id===id)?.mark||id)+" ("+id+")").join(", ")}</td><td><select data-path="groups.${i}.card_id" ${g.element_ids.some(locked)?"disabled":""}><option value="">Из карт изделий</option>${options(draft.cards,g.card_id)}</select></td><td><button data-action="remove-group" data-id="${g.id}" ${g.element_ids.some(locked)?"disabled":""}>Удалить</button></td></tr>`).join("")||'<tr><td colspan="4">Узлы пока не заданы.</td></tr>'}</tbody></table>`;
   }
   function orderEditHtml(){
     if(!orderEdit)return "";
-    const order=orderEdit.order, members=new Map(order.tasks.flatMap(t=>t.elements.map(e=>[e.id,e])));
+    const order=orderEdit.order, members=new Map(order.tasks.flatMap(t=>t.elements).concat(order.items||[]).map(e=>[e.id,e]));
     const protectedIds=new Set(order.tasks.filter(t=>order.facts[t.key]?.completed).flatMap(t=>t.element_ids));
     const assignments=assignById(),query=orderEdit.filter.trim().toLocaleLowerCase("ru");
     const rows=[...members.values()].filter(e=>!query||[e.mark,e.id,e.element_type,e.address].join(" ").toLocaleLowerCase("ru").includes(query));
     const pages=Math.max(1,Math.ceil(rows.length/60));orderEdit.page=Math.min(orderEdit.page,pages-1);
     const pageRows=rows.slice(orderEdit.page*60,(orderEdit.page+1)*60);
     return `<section class="snz-edit"><h3>Редактирование состава СНЗ № ${order.id} · ${dayText(order.date)} · ${shiftText(order.shift)}</h3>
-      <p>Отметьте изделия для исключения. Изменяется только этот СНЗ; назначения и внесённый факт сохраняются. Исходная редакция останется в истории. Ригели с общей операцией исключаются всем узлом.</p>
+      <p>Отметьте изделия для исключения. Изменяется только этот СНЗ; назначения и внесённый факт сохраняются. Исходная редакция останется в истории. В старых документах ригели с сохранённой общей операцией исключаются всем узлом.</p>
       <div class="snz-controls"><label>Поиск изделия<input type="search" data-edit-search value="${esc(orderEdit.filter)}" placeholder="Марка, тип или ID"></label><span>Найдено: ${rows.length} · исключить: ${orderEdit.exclude.size}</span><button data-action="edit-prev" ${orderEdit.page===0?"disabled":""}>Назад</button><span>${orderEdit.page+1} / ${pages}</span><button data-action="edit-next" ${orderEdit.page+1>=pages?"disabled":""}>Далее</button></div>
       <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>Исключить</th><th>Изделие</th><th>Назначено на</th><th>Состояние</th></tr></thead><tbody>${pageRows.map(e=>{const a=assignments.get(e.id);return `<tr><td><input type="checkbox" data-edit-exclude="${e.id}" ${orderEdit.exclude.has(e.id)?"checked":""} ${protectedIds.has(e.id)?"disabled":""} aria-label="Исключить ${esc(e.mark||e.id)}"></td><td>${esc(e.mark||e.id)}<small>${esc(e.element_type)} · ID ${e.id}</small></td><td>${dayText(a?.date)} · ${a?shiftText(a.shift):"—"}</td><td>${protectedIds.has(e.id)?"Есть завершённые операции":"Можно исключить"}</td></tr>`}).join("")||'<tr><td colspan="4">В документе нет изделий.</td></tr>'}</tbody></table></div>
       <label class="snz-edit-reason">Причина исправления<textarea data-edit-reason rows="2" maxlength="1000" placeholder="Например, изделие относится к дневной смене">${esc(orderEdit.reason)}</textarea></label>

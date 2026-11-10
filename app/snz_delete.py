@@ -4,6 +4,7 @@ import json
 from fastapi import HTTPException
 from app.db import touch_elements
 from app.snz_order_edit import revise_order
+from app.snz_policy import order_items
 
 
 def delete_order(conn, object_id, order_id, body, author, load, write, version):
@@ -24,7 +25,7 @@ def delete_order(conn, object_id, order_id, body, author, load, write, version):
     if order.get('order_revision', 1) != body.order_revision:
         raise HTTPException(409, 'Редакция СНЗ изменилась. Обновите реестр перед удалением.')
     history = [(r['id'], json.loads(r['snapshot_json'])) for r in conn.execute('SELECT id,snapshot_json FROM snz_orders WHERE object_id=?', (object_id,))]
-    current_ids = {eid for task in order['tasks'] for eid in task['element_ids']}
+    current_ids = set(order_items(order))
     if current_ids:
         try:
             revise_order(order, state['facts'], sorted(current_ids), [snapshot for _, snapshot in history])
@@ -36,15 +37,14 @@ def delete_order(conn, object_id, order_id, body, author, load, write, version):
     members = current_ids | set(order.get('excluded_element_ids', []))
     for item in revisions:
         snapshot = json.loads(item['snapshot_json'])
-        members.update(eid for task in snapshot['tasks'] for eid in task['element_ids'])
+        members.update(order_items(snapshot))
         members.update(snapshot.get('excluded_element_ids', []))
     kept_in_orders = {}
     for oid, snapshot in history:
         if oid == order_id:
             continue
-        for task in snapshot['tasks']:
-            for eid in members.intersection(task['element_ids']):
-                kept_in_orders.setdefault(str(eid), set()).add(oid)
+        for eid in members.intersection(order_items(snapshot)):
+            kept_in_orders.setdefault(str(eid), set()).add(oid)
     released_ids = members - {int(eid) for eid in kept_in_orders}
     released = sorted(released_ids)
     # An item excluded earlier may already have a new, unissued assignment.

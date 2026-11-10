@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from app.snz_policy import order_items
 
 
 def build_registry_xlsx(report, day):
@@ -86,13 +87,13 @@ def build_xlsx(order):
     headers = ["№", "Операция", "Звено", "Узел", "ID изделий", "Марки", "Этажи", "Адреса", "Начало", "Окончание", "Минут в интервале", "Норматив, мин", "Остаток после смены, мин", "Перенос"]
     ws.append(headers)
     for index, task in enumerate(order["tasks"], 1):
-        for seg in task["segments"]:
+        for seg in task["segments"] or [{"start": None, "end": None, "minutes": 0}]:
             es = task["elements"]
             ws.append([index, task["operation"], task["team"], task.get("group_name") or "",
                        ", ".join(str(e["id"]) for e in es), ", ".join(e.get("mark") or "—" for e in es),
                        ", ".join(str(f) for f in dict.fromkeys(e.get("floor") for e in es)),
                        "; ".join(dict.fromkeys(e.get("address") or "—" for e in es)),
-                       datetime.fromisoformat(seg["start"]), datetime.fromisoformat(seg["end"]), seg["minutes"],
+                       datetime.fromisoformat(seg["start"]) if seg["start"] else None, datetime.fromisoformat(seg["end"]) if seg["end"] else None, seg["minutes"],
                        task["norm_minutes"], task["remaining_after"], "Да" if task["carry"] else "Нет"])
     if len(order["tasks"]):
         table = Table(displayName="SNZOperations", ref=f"A3:N{ws.max_row}")
@@ -106,12 +107,12 @@ def build_xlsx(order):
 
     items = wb.create_sheet("Изделия")
     items.append(["ID изделия", "Тип элемента", "Подтип", "Марка", "Отметка, мм", "Этаж", "Адрес по осям", "Контрагент (справочно)", "Захватка", "Кран", "Стоянка", "Бригада", "Очередность", "Смена", "Дата", "Время монтажа"])
-    elements = {e["id"]: e for task in order["tasks"] for e in task["elements"]}
+    elements = order_items(order)
     for eid, e in sorted(elements.items()):
         install = next((t for t in order["tasks"] if t["operation_id"] == "install" and eid in t["element_ids"]), None)
-        related = next(t for t in order["tasks"] if eid in t["element_ids"])
+        related = next((t for t in order["tasks"] if eid in t["element_ids"]), {})
         items.append([eid, e["element_type"], e.get("subtype"), e.get("mark"), e.get("elevation_mm"), e.get("floor"), e.get("address"),
-                      e.get("counterparty"), e.get("zakhvatka"), e.get("crane"), e.get("stance"), crew["name"], related["priorities"].get(str(eid)),
+                      e.get("counterparty"), e.get("zakhvatka"), e.get("crane"), e.get("stance"), crew["name"], order.get("item_priorities", related.get("priorities", {})).get(str(eid)),
                       "День" if order["shift"] == "day" else "Ночь", datetime.fromisoformat(order["date"]),
                       datetime.fromisoformat(install["segments"][0]["start"]) if install and install["segments"] else None])
     if elements:
@@ -234,7 +235,7 @@ def build_pdf(order, context, axes):
     w, h = landscape(A3)
     pdf = canvas.Canvas(output, pagesize=(w, h))
     pdf.setTitle("СНЗ — поэтажные планы")
-    selected = {e["id"]: e for t in order["tasks"] for e in t["elements"]}
+    selected = order_items(order)
     if not selected:
         pdf.setFont("SNZ-Bold", 18)
         pdf.drawString(35, h - 45, "СНЗ без работ после исправления состава")
@@ -303,8 +304,8 @@ def build_pdf(order, context, axes):
             pdf.restoreState()
         placed = []
         for eid, e in sorted(active.items()):
-            task = next(t for t in order["tasks"] if eid in t["element_ids"])
-            priority = task.get("priorities", {}).get(str(eid))
+            task = next((t for t in order["tasks"] if eid in t["element_ids"]), {})
+            priority = order.get("item_priorities", task.get("priorities", {})).get(str(eid))
             label = f"{priority if priority is not None else '—'} · {e.get('mark') or eid}"
             font_size = 8
             text_w = pdfmetrics.stringWidth(label, "SNZ-Bold", font_size) + 8

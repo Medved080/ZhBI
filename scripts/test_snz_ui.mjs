@@ -62,7 +62,7 @@ try{
     await page.locator('[data-filter="date"]').fill('2026-11-10');await page.locator('[data-filter="date"]').press('Tab');
     await page.locator('[data-filter="shift"]').selectOption('day');await page.locator('[data-filter="crew"]').selectOption('install1');
     await click('preview');await settled();
-    check('Group stages appear once and four installations remain',await page.locator('.snz-result tbody tr').count()===12);
+    check('Each item has its own reinforcement and concreting stages',await page.locator('.snz-result tbody tr').count()===24);
     check('Gantt contains profession resource rows',await page.locator('.snz-track').count()===3);
     await click('issue');await settled();
     const orderState=await(await page.request.get(base+'/objects/1/snz/state')).json();

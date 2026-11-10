@@ -108,7 +108,14 @@ class EditTests(unittest.TestCase):
         with self.assertRaises(HTTPException):self.snz.edit_order(self.object_id,oid,other,self.admin)
 
     def test_group_and_completed_exclusion_rejected(self):
-        self.h.save_fixture(grouped=True);oid=self.h.issue()['id']
+        # Reproduce a legacy shared snapshot, while the new default is individual.
+        from unittest.mock import patch
+        with patch('app.snz_policy.INDIVIDUAL_OPERATIONS',frozenset()):
+            self.h.save_fixture(grouped=True)
+            d=self.snz.get_state(self.object_id,self.admin)
+            next(o for o in d['state']['operations'] if o['id']=='rebar1')['scope']='group'
+            self.snz.save_state(self.object_id,self.snz.StateIn(revision=d['revision'],**{k:v for k,v in d['state'].items() if k!='facts'}),self.admin)
+            oid=self.h.issue(revision=d['revision']+1)['id']
         with self.assertRaises(HTTPException):self.snz.preview_order_edit(self.object_id,oid,self.proposal(oid,[self.ids[0]]),self.admin)
         self.h.setUp();oid,original=self.prepare()
         d=self.snz.get_state(self.object_id,self.admin)

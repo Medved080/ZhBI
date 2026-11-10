@@ -6,6 +6,7 @@ spreadsheet evaluator. Only norms with a clear macro-operation mapping are used.
 import json
 from copy import deepcopy
 from pathlib import Path
+from app.snz_policy import INDIVIDUAL_OPERATIONS
 
 SEED_VERSION = "2026-11-10-oper-cards-v1"
 TEAMS = [
@@ -18,10 +19,10 @@ OPERATIONS = [
     {"id": "prepare", "name": "Подготовка", "team": "1", "scope": "preparation"},
     {"id": "scaffold", "name": "Установка лесов", "team": "2", "scope": "element"},
     {"id": "install", "name": "Монтаж изделия", "team": "3", "scope": "element"},
-    {"id": "rebar1", "name": "Армирование 1 этап", "team": "4", "scope": "group"},
-    {"id": "concrete1", "name": "Бетонирование 1 этап", "team": "3", "scope": "group"},
-    {"id": "rebar2", "name": "Армирование 2 этап", "team": "4", "scope": "group"},
-    {"id": "concrete2", "name": "Бетонирование 2 этап", "team": "3", "scope": "group"},
+    {"id": "rebar1", "name": "Армирование 1 этап", "team": "4", "scope": "element"},
+    {"id": "concrete1", "name": "Бетонирование 1 этап", "team": "3", "scope": "element"},
+    {"id": "rebar2", "name": "Армирование 2 этап", "team": "4", "scope": "element"},
+    {"id": "concrete2", "name": "Бетонирование 2 этап", "team": "3", "scope": "element"},
 ]
 
 
@@ -42,7 +43,8 @@ def seed_catalogs(state):
         return deepcopy(state), ""
     existing_ops = {o["id"]: o for o in state["operations"]}
     conflicts = [o["id"] for o in OPERATIONS
-                 if o["id"] in existing_ops and existing_ops[o["id"]]["scope"] != o["scope"]]
+                 if o["id"] in existing_ops and existing_ops[o["id"]]["scope"] != o["scope"]
+                 and not (o["id"] in INDIVIDUAL_OPERATIONS and existing_ops[o["id"]]["scope"] == "group")]
     if conflicts:
         return deepcopy(state), "область операций требует уточнения: " + ", ".join(conflicts)
     result = deepcopy(state)

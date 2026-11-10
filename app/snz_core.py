@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 
 from app.snz_catalogs import OPERATIONS, TEAMS, seed_catalogs
+from app.snz_policy import POLICY, planning_state, planning_steps, step_fact, order_items, montage_warnings
 
 
 def default_state():
@@ -60,8 +61,8 @@ def operation_steps(state, assignment):
     operations = {o["id"]: o for o in state["operations"]}
     teams = {t["id"]: t["name"] for t in state["teams"]}
     card = next((c for c in state["cards"] if c["id"] == assignment["card_id"]), None)
-    return [{**deepcopy(operations[s["operation_id"]]), **deepcopy(s),
-             "team_id": operations[s["operation_id"]]["team"], "team": teams[operations[s["operation_id"]]["team"]]} for s in (card or {}).get("steps", [])]
+    return planning_steps([{**deepcopy(operations[s["operation_id"]]), **deepcopy(s),
+             "team_id": operations[s["operation_id"]]["team"], "team": teams[operations[s["operation_id"]]["team"]]} for s in (card or {}).get("steps", [])])
 
 
 def suggest_card(state, element):
@@ -102,10 +103,11 @@ def suggest_card(state, element):
 def build_schedule(state, elements, history, day, shift, crew_id):
     """Schedule the entire object's crews, then select one foreman's document.
 
-    A shared group task has one identity, resource and set of predecessors.
+    Standard reinforcement and concreting stages are individual tasks.
     List scheduling considers earliest feasible start before priority so another
     profession can start immediately while the previous one moves to the next item.
     """
+    state = planning_state(state)
     start = shift_start(day, shift)
     windows = work_windows(day, shift)
     crews = {c["id"]: c for c in state["crews"]}
@@ -117,8 +119,9 @@ def build_schedule(state, elements, history, day, shift, crew_id):
     for order in sorted(history, key=lambda h: h["start"]):
         if datetime.fromisoformat(order["start"]) >= start:
             continue
+        issued_elements.update(order_items(order))
         for eid, steps in order.get("assignment_steps", {}).items():
-            issued_steps.setdefault(int(eid), steps)
+            issued_steps.setdefault(int(eid), planning_steps(steps))
         for task in order["tasks"]:
             issued_elements.update(task["element_ids"])
             key = task["key"]
@@ -147,7 +150,14 @@ def build_schedule(state, elements, history, day, shift, crew_id):
         # work may continue, and preparation is due one shift before mounting.
         if release != start and shift_start(prep_day, prep_shift) != start and not (release < start and eid in started_elements):
             continue
-        steps = deepcopy(issued_steps.get(eid) or operation_steps(state, a))
+        current_steps = operation_steps(state, a)
+        steps = planning_steps(issued_steps.get(eid) or current_steps)
+        # A previously unknown norm is not a frozen numeric allocation. A later
+        # manual clarification may fill it without changing any defined norm.
+        current_by_id = {step['id']: step for step in current_steps}
+        for step in steps:
+            if step['minutes'] is None and step['id'] in current_by_id:
+                step['minutes'] = current_by_id[step['id']]['minutes']
         steps_by_id[str(eid)] = steps
         chain = []
         for index, step in enumerate(steps):
@@ -172,19 +182,23 @@ def build_schedule(state, elements, history, day, shift, crew_id):
             task_release = shift_start(prep_day, prep_shift) if step["scope"] == "preparation" else release
             if key not in nodes:
                 old = frozen.get(key, {})
-                normative = old.get("norm_minutes", step["minutes"])
+                legacy_group = groups.get(eid)
+                legacy_key = f"g:{legacy_group['id']}:{step['id']}" if legacy_group else ''
+                completed_legacy = facts.get(legacy_key, {}).get('completed')
+                legacy_wait = frozen.get(legacy_key, {}).get('wait_after', step.get('wait_after', 0)) if completed_legacy else step.get('wait_after', 0)
+                normative = old.get("norm_minutes") or step["minutes"]
                 total_used = used.get(key, 0)
                 remaining = normative - total_used % normative if normative else None
                 nodes[key] = {"key": key, "operation_id": step["id"], "operation": old.get("operation", step["name"]),
                               "scope": step["scope"],
                               "team": old.get("team", step["team"]), "team_id": old.get("team_id", step["team_id"]), "crew_id": owner,
                               "norm_minutes": normative, "remaining_before": remaining,
-                              "wait_after": old.get("wait_after", step.get("wait_after", 0)),
+                              "wait_after": old.get("wait_after", legacy_wait),
                               "element_ids": [], "group_id": group["id"] if group else None,
                               "group_name": group["name"] if group else None,
                               "priority": a["prep_priority"] if step["scope"] == "preparation" else a["priority"],
                               "carry": bool(total_used) or task_release < start, "release": task_release,
-                              "dependencies": set(), "segments": [], "step_index": index}
+                              "dependencies": set(), "segments": [], "remaining_after": remaining, "step_index": index}
             node = nodes[key]
             if group and key not in frozen and (node["norm_minutes"], node["wait_after"]) != (step["minutes"], step.get("wait_after", 0)):
                 warnings.append(f"Узел «{group['name']}»: нормативы общих операций в картах изделий различаются; выберите карту узла.")
@@ -192,7 +206,11 @@ def build_schedule(state, elements, history, day, shift, crew_id):
             node["release"] = max(node["release"], task_release)
             node["element_ids"].append(eid)
             if chain:
-                node["dependencies"].add(chain[-1])
+                previous = nodes.get(chain[-1])
+                # Preparation belongs to the previous shift and another crew.
+                # Its unrecorded fact cannot block the current mounting crew.
+                if previous is None or previous['crew_id'] == owner:
+                    node["dependencies"].add(chain[-1])
             chain.append(key)
         chains[eid] = chain
     # Group reinforcement/concreting is possible only after every member's installation.
@@ -212,11 +230,12 @@ def build_schedule(state, elements, history, day, shift, crew_id):
                 # Installed members need no remaining task but still belong to the group document.
                 node["element_ids"] = list(group["element_ids"])
     finished = {key: datetime.fromisoformat(fact["completed_at"]) for key, fact in facts.items() if fact.get("completed") and key not in nodes}
-    resource, pending = {}, set(nodes)
+    resource, pending, completed_ready = {}, set(nodes), {}
     for key, node in nodes.items():
-        fact = facts.get(key)
+        fact = step_fact(state, node["element_ids"][0], node["operation_id"], key, groups)
         if fact and fact.get("completed"):
             finished[key] = datetime.fromisoformat(fact["completed_at"]) + timedelta(minutes=node["wait_after"])
+            completed_ready[key] = finished[key].isoformat(timespec="minutes")
             pending.remove(key)
         elif not node["norm_minutes"]:
             warnings.append(f"«{node['operation']}»: не заполнен норматив; операция и зависимые работы не рассчитаны.")
@@ -246,8 +265,11 @@ def build_schedule(state, elements, history, day, shift, crew_id):
         pending.remove(key)
         result.append(node)
     tasks = []
-    for n in result:
-        if n["crew_id"] == crew_id:
+    # Keep tasks that did not receive a time interval: capacity and missing
+    # norms affect the schedule, never the composition of the issued order.
+    ordered = result + [nodes[key] for key in sorted(pending, key=lambda key: (nodes[key]['priority'] or 10**9, nodes[key]['step_index'], key))]
+    for n in ordered:
+        if n["crew_id"] == crew_id and n["release"] <= start:
             task = {k: v for k, v in n.items() if k not in ("dependencies", "release")}
             task["dependencies"] = sorted(n["dependencies"])
             task["release"] = n["release"].isoformat(timespec="minutes")
@@ -257,10 +279,24 @@ def build_schedule(state, elements, history, day, shift, crew_id):
     for key in sorted(pending):
         n = nodes[key]
         if n["crew_id"] == crew_id and n["release"] <= start:
-            warnings.append(f"«{n['operation']}» ({', '.join(str(i) for i in n['element_ids'])}): не вошла в смену или ожидает предшествующие работы.")
+            warnings.append(f"«{n['operation']}» ({', '.join(str(i) for i in n['element_ids'])}): не вошла в рабочее время или ожидает операции этого изделия в текущей смене.")
     if any(n["crew_id"] == crew_id and n["release"] < start and n["scope"] == "preparation" for n in result):
         warnings.append("Есть просроченная подготовка: она должна выполняться за одну смену до монтажа.")
-    return {"date": str(day), "shift": shift, "start": start.isoformat(timespec="minutes"),
+    item_ids = {eid for task in tasks for eid in task['element_ids']}
+    for eid, assignment in assignments.items():
+        due = shift_start(assignment['date'], assignment['shift'])
+        if crew_id == preparation:
+            prep_day, prep_shift = previous_shift(assignment['date'], assignment['shift'])
+            selected = shift_start(prep_day, prep_shift) == start and any(step['scope'] == 'preparation' for step in operation_steps(state, assignment))
+        else:
+            selected = assignment['crew_id'] == crew_id and due == start
+        if selected:
+            item_ids.add(eid)
+    items = [deepcopy(by_id[eid]) for eid in sorted(item_ids)]
+    warnings = montage_warnings(tasks, len(items), sum(int((b-a).total_seconds()/60) for a,b in windows)) + warnings
+    return {"planning_policy": POLICY, "items": items, "completed_ready": completed_ready,
+            "item_priorities": {str(eid): assignments[eid]['priority'] for eid in item_ids},
+            "date": str(day), "shift": shift, "start": start.isoformat(timespec="minutes"),
             "end": (start + timedelta(hours=12)).isoformat(timespec="minutes"), "crew": deepcopy(crews[crew_id]),
             "tasks": tasks, "warnings": list(dict.fromkeys(warnings)), "assignment_steps": steps_by_id,
             "completed": [key for key in nodes if facts.get(key, {}).get("completed")],

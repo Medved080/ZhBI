@@ -14,6 +14,7 @@ from app.access import assert_object_feature, has_feature
 from app.auth import audit_display_name, get_current_user
 from app.db import begin_write, get_connection, touch_elements
 from app.snz_core import build_schedule, default_state, operation_steps, suggest_card
+from app.snz_policy import planning_state, order_items, step_fact
 
 router = APIRouter(prefix="/objects/{object_id}/snz", tags=["snz"])
 KEY = r"^[a-zA-Z0-9_-]{1,64}$"
@@ -125,7 +126,7 @@ class DeleteOrderIn(Strict):
 
 def _load(conn, object_id):
     row = conn.execute("SELECT revision,data_json FROM snz_state WHERE object_id=?", (object_id,)).fetchone()
-    return (json.loads(row["data_json"]), row["revision"]) if row else (default_state(), 0)
+    return (planning_state(json.loads(row["data_json"])), row["revision"]) if row else (default_state(), 0)
 
 
 def _write(conn, object_id, state, revision):
@@ -201,8 +202,7 @@ def _validate(state, elements, old, history):
         grouped.update(g["element_ids"])
     # Definitions already issued are retained. History remains an immutable snapshot;
     # changing a norm only affects tasks which have never been issued.
-    locked = {int(eid) for order in history for eid in order.get("assignment_steps", {})
-              if any(int(eid) in t["element_ids"] for t in order["tasks"])}
+    locked = {eid for order in history for eid in order_items(order)}
     old_assignments = {a["element_id"]: a for a in old["assignments"]}
     new_assignments = {a["element_id"]: a for a in state["assignments"]}
     for eid in locked:
@@ -224,7 +224,7 @@ def get_state(object_id: int, user=Depends(get_current_user)):
         state, revision = _load(conn, object_id)
         from app.snz_registry import registry
         register = registry(conn, object_id)
-        locked = sorted({eid for order in _history(conn, object_id) for task in order["tasks"] for eid in task["element_ids"]})
+        locked = sorted({eid for order in _history(conn, object_id) for eid in order_items(order)})
         elements = _elements(conn, object_id)
         grouped = {eid: g for g in state["groups"] for eid in g["element_ids"]}
         for element in elements:
@@ -247,7 +247,7 @@ def save_state(object_id: int, body: StateIn, user=Depends(get_current_user)):
         assert_object_feature(conn, user, object_id, "planned_date", "write")
         old, revision = _load(conn, object_id)
         _version(revision, body.revision)
-        state = body.model_dump(mode="json", exclude={"revision"})
+        state = planning_state(body.model_dump(mode="json", exclude={"revision"}))
         state["facts"] = old["facts"]
         state["catalog_seed"] = old.get("catalog_seed", "")
         elements = _elements(conn, object_id)
@@ -324,11 +324,11 @@ def issue(object_id: int, body: IssueIn, user=Depends(get_current_user)):
         snapshot = _calculate(conn, object_id, body)
         if snapshot["fingerprint"] != body.expected_hash:
             raise HTTPException(409, "Расписание или данные модели изменились после предпросмотра. Рассчитайте смену заново перед выдачей.")
-        if not snapshot["tasks"]:
+        if not order_items(snapshot):
             raise HTTPException(422, "Нет рассчитанных работ для выдачи. Проверьте нормативы, назначения и предупреждения.")
         name = audit_display_name(user)
         snapshot["issued_by"] = name
-        task_ids = {eid for t in snapshot["tasks"] for eid in t["element_ids"]}
+        task_ids = set(order_items(snapshot))
         snapshot["assignment_steps"] = {eid: steps for eid, steps in snapshot["assignment_steps"].items() if int(eid) in task_ids}
         oid = conn.execute("INSERT INTO snz_orders(object_id,work_date,shift,crew_id,source_revision,snapshot_json,created_by,request_id) "
                            "VALUES (?,?,?,?,?,?,?,?)", (object_id, body.date.isoformat(), body.shift, body.crew_id, body.revision,
@@ -530,7 +530,7 @@ def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
             for s in steps:
                 g = group_map.get(eid)
                 keys.append(f"g:{g['id']}:{s['id']}" if s["scope"] == "group" and g else f"e:{eid}:{s['id']}")
-            if keys and all(state["facts"].get(k, {}).get("completed") for k in keys):
+            if keys and all(step_fact(state, eid, s["id"], k).get("completed") for s,k in zip(steps,keys)):
                 from app.contracts import apply_status_change
                 apply_status_change(conn, eid, "installed", False, None, None, "Выполнены все операции СНЗ", audit_display_name(user), user["id"])
                 installed.append(eid)

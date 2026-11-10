@@ -37,7 +37,7 @@ class CatalogTests(unittest.TestCase):
         StateIn(revision=0, **{k: v for k, v in s.items() if k != 'facts'})
         s['cards'][1]['steps'][0]['minutes'] = 888
         self.assertIsNone(default_state()['cards'][1]['steps'][0]['minutes'])
-        self.assertEqual([o['scope'] for o in OPERATIONS[3:]], ['group'] * 4)
+        self.assertEqual([o['scope'] for o in OPERATIONS[3:]], ['element'] * 4)
 
     def test_only_reviewed_macro_norms_and_literal_waits_are_imported(self):
         cards = manifest()['cards']

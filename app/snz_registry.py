@@ -1,5 +1,6 @@
 """Registry metadata is derived from issued snapshots, never live dictionaries."""
 import json
+from app.snz_policy import order_items
 
 
 def registry(conn, object_id, work_date=None):
@@ -12,7 +13,7 @@ def registry(conn, object_id, work_date=None):
     for row in conn.execute(sql + " ORDER BY work_date DESC,id DESC", args):
         record = dict(row)
         snapshot = json.loads(record.pop("snapshot_json"))
-        ids = {eid for task in snapshot["tasks"] for eid in task["element_ids"]}
+        ids = set(order_items(snapshot))
         record.update(order_revision=snapshot.get("order_revision", 1),
                       crew_name=snapshot["crew"]["name"], foreman=snapshot["crew"].get("foreman", ""),
                       quantity=len(ids), start=snapshot["start"], end=snapshot["end"])

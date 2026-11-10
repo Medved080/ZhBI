@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta
 from app.snz_core import fragments
+from app.snz_policy import POLICY, order_items, montage_warnings
 
 
 def free_windows(windows, occupied):
@@ -21,7 +22,7 @@ def free_windows(windows, occupied):
 def revise_order(order, facts, exclude_ids, history):
     """Only remove explicit members; never add other shifts or change dictionaries."""
     removed=set(exclude_ids)
-    all_ids={eid for task in order['tasks'] for eid in task['element_ids']}
+    all_ids=set(order_items(order))
     if not removed or not removed<=all_ids:
         raise ValueError('Выберите для исключения изделия, входящие в этот СНЗ.')
     for task in order['tasks']:
@@ -44,7 +45,11 @@ def revise_order(order, facts, exclude_ids, history):
     windows=[(datetime.fromisoformat(a),datetime.fromisoformat(b)) for a,b in order['windows']]
     known={t['key']:t for item in history for t in item['tasks']}
     known.update({t['key']:t for t in order['tasks']})
-    ready={key:datetime.fromisoformat(fact['completed_at'])+timedelta(minutes=known.get(key,{}).get('wait_after',0)) for key,fact in facts.items() if fact.get('completed')}
+    for eid,steps in order.get('assignment_steps',{}).items():
+        for step in steps:
+            known.setdefault(f"e:{eid}:{step['id']}",step)
+    ready={key:datetime.fromisoformat(value) for key,value in order.get('completed_ready',{}).items()}
+    ready.update({key:datetime.fromisoformat(fact['completed_at'])+timedelta(minutes=known.get(key,{}).get('wait_after',0)) for key,fact in facts.items() if fact.get('completed')})
     occupied={}
     pending={t['key']:t for t in kept if not facts.get(t['key'],{}).get('completed')}
     for task in kept:
@@ -60,6 +65,8 @@ def revise_order(order, facts, exclude_ids, history):
     while pending:
         candidates=[]
         for key,task in pending.items():
+            if not task.get('norm_minutes') or not task.get('remaining_before'):
+                continue
             deps=[dep for dep in task.get('dependencies',[]) if dep in kept_keys or dep in ready]
             if any(dep not in ready for dep in deps):continue
             earliest=max([windows[0][0],datetime.fromisoformat(task['release']),task['_floor']]+[ready[d] for d in deps])
@@ -76,7 +83,12 @@ def revise_order(order, facts, exclude_ids, history):
         task.pop('_floor',None)
         if not task['segments']:warnings.append(f"«{task['operation']}»: работа не вошла в смену или ожидает выполнения предшественников.")
     kept.sort(key=lambda t:(t['segments'][0]['start'] if t['segments'] else order['end'],t['key']))
-    remaining_ids={eid for task in kept for eid in task['element_ids']}
+    remaining_ids=all_ids-removed
+    if 'items' in order:
+        result['items']=[e for e in order['items'] if e['id'] in remaining_ids]
+        result['item_priorities']={key:value for key,value in order.get('item_priorities',{}).items() if int(key) in remaining_ids}
+    if order.get('planning_policy') == POLICY:
+        warnings.extend(montage_warnings(kept, len(remaining_ids), sum(int((b-a).total_seconds()/60) for a,b in windows)))
     result.update(tasks=kept,warnings=warnings,assignment_steps={key:value for key,value in order.get('assignment_steps',{}).items() if int(key) in remaining_ids},completed=[t['key'] for t in kept if facts.get(t['key'],{}).get('completed')],
                   excluded_element_ids=sorted(set(order.get('excluded_element_ids',[]))|removed),order_revision=order.get('order_revision',1)+1)
     result.pop('fingerprint',None)
