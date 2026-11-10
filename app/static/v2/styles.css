@@ -1139,6 +1139,7 @@ textarea:disabled { opacity: .6; cursor: not-allowed; background: var(--surface)
 .ws-dfield > .ws-btitle { font-size: 0.75rem; text-transform: none; letter-spacing: 0; color: var(--ink); font-weight: 600; padding-bottom: 5px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
 .ws-drow { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 0.75rem; color: var(--muted); }
 .ws-drow > span { flex: 0 0 18px; }
+.ws-single-date > span { flex-basis: 32px; }
 .ws-drow input[type="date"] { flex: 1; min-width: 0; font-size: 0.75rem; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .ws-drow input[type="date"]:disabled { opacity: .5; }
 .ws-err { color: var(--bad, #b42318); font-size: 0.75rem; margin: 4px 0; }

@@ -527,8 +527,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   function datesGroupHtml(g) {
     const open = openGroups.has(g.id);
     const body = !open ? "" : `<div class="ws-fbody">${g.fields.map((f) => `<div class="ws-dfield" data-dfield="${esc(f.key)}"><div class="ws-btitle">${esc(f.title)}</div>
-      ${[["from", "с"], ["to", "по"]].map(([b, cap]) => `<label class="ws-drow"><span>${cap}</span><input type="date" data-bound="${b}" value="${esc(f[b])}" ${f.empty === "only" ? "disabled" : ""} aria-label="${esc(f.title)}: ${cap}"></label>`).join("")}
-      ${EMPTY_MODES.map(([m, t]) => `<label class="ws-check"><input type="radio" name="wsd-${esc(f.key)}" data-empty="${m}" ${f.empty === m ? "checked" : ""}> <span>${t}</span></label>`).join("")}</div>`).join("")}
+      ${(f.singleDate ? [["from", "Дата"]] : [["from", "с"], ["to", "по"]]).map(([b, cap]) => `<label class="ws-drow${f.singleDate ? " ws-single-date" : ""}"><span>${cap}</span><input type="date" data-bound="${b}" value="${esc(f[b])}" ${f.empty === "only" ? "disabled" : ""} aria-label="${esc(f.title)}: ${cap}"></label>`).join("")}
+      ${(f.singleDate ? [] : EMPTY_MODES).map(([m, t]) => `<label class="ws-check"><input type="radio" name="wsd-${esc(f.key)}" data-empty="${m}" ${f.empty === m ? "checked" : ""}> <span>${t}</span></label>`).join("")}</div>`).join("")}
       ${(g.lags || []).map((l) => `<div class="ws-dfield"><div class="ws-btitle">${esc(l.title)}</div>
         <label class="ws-check"><input type="checkbox" data-lag="${esc(l.key)}" ${l.on ? "checked" : ""}> <span>Отстающие (прогноз позже плана)</span></label></div>`).join("")}
       <div class="ws-factions"><button type="button" data-dreset="${esc(g.key)}" ${g.active ? "" : "disabled"}>Сбросить</button></div></div>`;
@@ -541,7 +541,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       : !g.on ? "" : g.loading ? `<p class="v2-muted">Запрашиваю изменения…</p>` : g.loaded ? `<p class="v2-muted">Изменённых изделий: ${g.count}</p>` : "";
     const body = !open ? "" : `<div class="ws-fbody" data-chgbox>
       <label class="ws-check"><input type="checkbox" data-chg="on" ${g.on ? "checked" : ""}> <span>отбирать изменённые за период</span></label>
-      ${[["from", "с"], ["to", "по"]].map(([b, cap]) => `<label class="ws-drow"><span>${cap}</span><input type="date" data-chg="${b}" value="${esc(g[b])}" ${g.on ? "" : "disabled"} aria-label="Изменения: ${cap}"></label>`).join("")}
+      ${[["from", "с"], ["to", "по"]].map(([b, cap]) => `<label class="ws-drow${f.singleDate ? " ws-single-date" : ""}"><span>${cap}</span><input type="date" data-chg="${b}" value="${esc(g[b])}" ${g.on ? "" : "disabled"} aria-label="Изменения: ${cap}"></label>`).join("")}
       ${scopes.map(([m, t]) => `<label class="ws-check"><input type="radio" name="wsd-chg-scope" data-chg="scope" value="${m}" ${g.scope === m ? "checked" : ""} ${g.on ? "" : "disabled"}> <span>${t}</span></label>`).join("")}
       ${g.on && g.scope === "some" && g.canChoose ? `<div class="ws-branch">${g.users.length ? g.users.map((u) => `<label class="ws-check"><input type="checkbox" data-chg-user="${u.id}" ${u.on ? "checked" : ""}> <span>${esc(u.name)}</span></label>`).join("") : `<p class="v2-muted">Список пользователей объекта пуст</p>`}</div>` : ""}
       ${status}
@@ -710,7 +710,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
 
   const elemDelta = (u) => ({ id: u.id, current_status: u.current_status, contract_id: u.contract_id ?? null, counterparty_code: u.counterparty_code ?? null,
     planned_delivery_date: u.planned_delivery_date ?? null, actual_delivery_date: u.actual_delivery_date ?? null, project_delivery_date: u.project_delivery_date ?? null,
-    project_smr_start_date: u.project_smr_start_date ?? null });
+    project_smr_start_date: u.project_smr_start_date ?? null,
+    ...(Object.hasOwn(u, "actual_installation_date") ? { actual_installation_date: u.actual_installation_date } : {}) });
   async function allocSubmit() {
     const plan = allocPlan(), c = curContract();
     if (al.busy || !c || !plan.line || !plan.ok.length || plan.badN || plan.over || !allocEnabled()) return;
@@ -823,7 +824,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   // Панели «Отбор» и «Контракты» (срезы «модель / контракт / Δ», остатки, разворот по маркам) — picker-panels.js; здесь только связка с состоянием
   const panels = createPickerPanels({ esc, nf, send, sw, loadingHtml: pkLoading, getPk: () => pk,
     ui: { openGroups, closedGroups, groupSearch, repaint: () => paintPanel(), onlyRemainder: () => onlyRemainder, total: () => sc?.total ?? 0 } });
-  function pickHtml() { return panels.pickHtml(); }
+  function pickHtml() {
+    const g = filters?.groups.find(g => g.kind === "dates" && g.key === "smr");
+    const fields = g?.fields.filter(f => f.key === "montageFact") || [];
+    return (g ? datesGroupHtml({ ...g, fields, lags: [], active: fields.some(f => f.active) }) : "") + panels.pickHtml();
+  }
   function metricsHtml() {
     if (!pk) return pkLoading();
     return `<div class="ws-pad"><p class="v2-muted">Числа считаются по элементам выбранного среза. Плитку можно нажать — на схеме и в срезах останутся только подходящие элементы.</p>
@@ -932,7 +937,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     body.querySelectorAll("input[data-indet]").forEach((c) => { c.indeterminate = true; });
     // диапазоны дат: любая правка подгруппы отправляет её состояние целиком
     body.querySelectorAll("[data-dfield]").forEach((box) => box.querySelectorAll("input").forEach((i) => i.addEventListener("change", () => {
-      const val = (b) => box.querySelector(`[data-bound="${b}"]`).value || "";
+      const val = (b) => box.querySelector(`[data-bound="${b}"]`)?.value || "";
       const empty = box.querySelector("input[data-empty]:checked")?.dataset.empty || "show";
       send("setDateFilter", { key: box.dataset.dfield, from: val("from"), to: val("to"), empty });
     })));

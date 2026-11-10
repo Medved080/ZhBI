@@ -11,6 +11,14 @@
 from typing import Iterable
 
 
+def actual_installation_date(conn, element_id: int, current_status: str):
+    """Read-only montage day, identical to report/forecast semantics."""
+    if current_status not in ("installed", "accepted"):
+        return None
+    sql = last_run_day_sql(("installed", "accepted"), element_ref="?")
+    return conn.execute(f"SELECT {sql}", (element_id,)).fetchone()[0]
+
+
 def last_run_day_sql(statuses: Iterable[str], element_ref: str = "e.id") -> str:
     """SQL-подзапрос: дата (YYYY-MM-DD) начала последней серии статусов из набора у изделия `element_ref`; NULL — записей из
     набора нет. Статусы вставляются литералами (это внутренние коды, не ввод пользователя), поэтому подзапрос не меняет

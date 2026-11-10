@@ -362,7 +362,7 @@
         inSlice: rows.some((r) => r.inSlice), over: rows.some((r) => r.over) };
     });
     // Срез сужен свойством изделия — «привязано» и «остаток» считаются внутри среза, «всего» остаётся документальным (V1: оговорка в шапке области)
-    const narrowed = PICKER_SLICERS.some((d) => d.key !== "contract" && P.sel[d.key].size) || P.metrics.size > 0;
+    const narrowed = PICKER_SLICERS.some((d) => d.key !== "contract" && P.sel[d.key].size) || P.metrics.size > 0 || dateFilterIsActive("montageFact");
     return {
       slicers, metrics, contracts, unlinked, unlinkedOn: sel.has(PLACEMENT_NONE), contractSelected: sel.size,
       selectionActive: pickerSelectionActive(), base: base.length,
@@ -372,7 +372,7 @@
         .map((m) => ({ ...m, on: m.mark ? P.sel.mark.has(m.mark) : P.sel.elementType.has(m.type) })),
     };
   }
-  const pickerSelCount = () => PICKER_SLICERS.reduce((n, d) => n + state.picker.sel[d.key].size, 0) + state.picker.metrics.size;
+  const pickerSelCount = () => PICKER_SLICERS.reduce((n, d) => n + state.picker.sel[d.key].size, 0) + state.picker.metrics.size + Number(dateFilterIsActive("montageFact"));
   let pickerTimer = null;
   function sendPicker() {
     if (!PICKER || pickerTimer) return;
@@ -537,7 +537,7 @@
     return DATE_FILTER_GROUPS.map((gd) => {
       const fields = DATE_FILTER_DEFS.filter((d) => d.group === gd.key).map((d) => {
         const f = state.dateFilters[d.key];
-        return { key: d.key, title: d.title, from: f.from, to: f.to, empty: f.empty, active: dateFilterIsActive(d.key) };
+        return { key: d.key, title: d.title, from: f.from, to: f.to, empty: f.empty, singleDate: !!d.singleDate, active: dateFilterIsActive(d.key) };
       });
       // «Отставание» — галочки только в группе «СМР»
       const lags = gd.key === "smr" ? LAG_FILTER_DEFS.map((d) => ({ key: d.key, title: d.title, on: !!state.lagFilters[d.key] })) : [];
@@ -694,8 +694,8 @@
       const okDate = (x) => x === "" || (typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x));
       if (!def || !okDate(a.from) || !okDate(a.to) || !["show", "hide", "only"].includes(a.empty)) throw new Error("параметры даты");
       const f = state.dateFilters[def.key];
-      f.from = a.from; f.to = a.to; f.empty = a.empty;
-      onPlacementFilterChange();
+      f.from = a.from; f.to = def.singleDate ? a.from : a.to; f.empty = def.singleDate ? "show" : a.empty;
+      if (PICKER) onPickerChange(); else onPlacementFilterChange();
       scheduleState(); sendFilters();
     },
     // «Отставание» (прогноз позже плана): on — включить/выключить признак по началу или окончанию СМР
@@ -708,9 +708,9 @@
     resetDateFilters(a) {
       const g = DATE_FILTER_GROUPS.find((x) => x.key === a.group);
       if (!g) throw new Error("группа дат");
-      for (const d of DATE_FILTER_DEFS) if (d.group === g.key) resetDateFilter(d.key);
-      if (g.key === "smr") for (const d of LAG_FILTER_DEFS) state.lagFilters[d.key] = false;
-      onPlacementFilterChange();
+      for (const d of DATE_FILTER_DEFS) if (d.group === g.key && (!PICKER || d.key === "montageFact")) resetDateFilter(d.key);
+      if (!PICKER && g.key === "smr") for (const d of LAG_FILTER_DEFS) state.lagFilters[d.key] = false;
+      if (PICKER) onPickerChange(); else onPlacementFilterChange();
       scheduleState(); sendFilters();
     },
     // «Изменения»: набор изменённых изделий спрашивается у сервера (POST /elements/changed — чтение), право выбирать чужие изменения решает сервер
@@ -1068,7 +1068,7 @@
       onPickerChange();
     },
     pickerClear(a) {
-      if (a.key === null || a.key === undefined) { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); }
+      if (a.key === null || a.key === undefined) { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); resetDateFilter("montageFact"); sendFilters(); }
       else if (PICKER_KEYS().includes(a.key)) state.picker.sel[a.key].clear();
       else throw new Error("key");
       onPickerChange();
@@ -1119,8 +1119,8 @@
       scheduleState(); sendFilters(); sendPicker();
       post({ evt: "refreshed", changed });
     },
-    resetFilters() { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); onPickerChange(); },
-    getFilters() { sendPicker(); scheduleState(); },
+    resetFilters() { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); resetDateFilter("montageFact"); onPickerChange(); sendFilters(); },
+    getFilters() { sendFilters(); sendPicker(); scheduleState(); },
   });
   function viewMode2() { return (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d"; }
 

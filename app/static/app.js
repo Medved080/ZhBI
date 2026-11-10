@@ -227,6 +227,7 @@ let state = {
   // «остальные значения» — непрерывный диапазон, и «только пустые»
   // выразить иначе нечем (живой запрос 2026-07-31). См. DATE_FILTER_DEFS.
   dateFilters: {
+    montageFact: { from: "", to: "", empty: "show" },
     smrStart: { from: "", to: "", empty: "show" },
     smrEnd: { from: "", to: "", empty: "show" },
     deliveryPlanned: { from: "", to: "", empty: "show" },
@@ -611,7 +612,7 @@ function describeActiveFilters() {
   }
   for (const def of DATE_FILTER_DEFS) {
     if (!dateFilterIsActive(def.key)) continue;
-    parts.push(`${def.title}: ${dateFilterSummary(state.dateFilters[def.key])}`);
+    parts.push(`${def.title}: ${dateFilterSummary(state.dateFilters[def.key], def.singleDate)}`);
   }
   for (const def of LAG_FILTER_DEFS) if (state.lagFilters[def.key]) parts.push(`${def.title}: только отстающие`);
   if (state.changeFilter.on) parts.push(`Изменения: ${changeFilterSummary()}`);
@@ -2478,6 +2479,7 @@ const PLACEMENT_FILTER_DEFS = [
 // в карточке) показываются отдельными свёрнутыми группами, но фильтруются
 // одним и тем же циклом в elementPassesDateFilters.
 const DATE_FILTER_DEFS = [
+  { key: "montageFact", title: "Факт монтажа", shortTitle: "факт монтажа", field: "actual_installation_date", group: "smr", singleDate: true },
   { key: "smrStart", title: "Дата начала СМР", shortTitle: "начало", field: "project_smr_start_date", group: "smr" },
   { key: "smrEnd", title: "Дата окончания СМР", shortTitle: "окончание", field: "project_delivery_date", group: "smr" },
   { key: "deliveryPlanned", title: "Плановая дата поставки", shortTitle: "поставка", field: "planned_delivery_date", group: "delivery" },
@@ -2521,12 +2523,25 @@ const DATE_FILTER_GROUPS = [
 
 function dateFilterIsActive(key) {
   const f = state.dateFilters[key];
+  if (DATE_FILTER_DEFS.find(d => d.key === key)?.singleDate) return !!f.from;
   return !!(f.from || f.to || f.empty !== "show");
 }
 
+// Initial plan-data already carries the report date as the factual forecast end.
+// Deltas carry an explicit date (including null on rollback), which supersedes that snapshot.
+function elementPassesMontageFactFilter(element) {
+  const day = state.dateFilters.montageFact.from;
+  if (!day) return true;
+  if (!["installed", "accepted"].includes(element.current_status)) return false;
+  const raw = Object.hasOwn(element, "actual_installation_date")
+    ? element.actual_installation_date : element.forecast_smr_is_fact ? element.forecast_smr_end_date : null;
+  return !!raw && String(raw).slice(0, 10) === day;
+}
+
 function elementPassesDateFilters(element) {
+  if (!elementPassesMontageFactFilter(element)) return false;
   for (const def of DATE_FILTER_DEFS) {
-    if (!dateFilterIsActive(def.key)) continue;
+    if (def.singleDate || !dateFilterIsActive(def.key)) continue;
     const f = state.dateFilters[def.key];
     const raw = element[def.field];
     // Обе даты хранятся как ГГГГ-ММ-ДД (импорт графика MS Project), но
@@ -3043,7 +3058,8 @@ const DATE_EMPTY_MODES = [
 // «СМР», потому что группа по умолчанию свёрнута
 // (state.topFilterCollapsed): иначе заданный диапазон никак не виден, и
 // «часть элементов пропала со схемы» выглядело бы необъяснимо.
-function dateFilterSummary(f) {
+function dateFilterSummary(f, singleDate = false) {
+  if (singleDate && f.from) return formatDateRu(f.from);
   if (f.empty === "only") return "только без даты"; // границы при этом не действуют
   const parts = [];
   if (f.from) parts.push(`с ${formatDateRu(f.from)}`);
@@ -3052,14 +3068,14 @@ function dateFilterSummary(f) {
   return parts.join(", ");
 }
 
-function buildDateRangeFilterGroup(groupDef, onChange) {
-  const defs = DATE_FILTER_DEFS.filter(d => d.group === groupDef.key);
+function buildDateRangeFilterGroup(groupDef, onChange, onlyKeys = null) {
+  const defs = DATE_FILTER_DEFS.filter(d => d.group === groupDef.key && (!onlyKeys || onlyKeys.includes(d.key)));
   // «Отставание» — только в группе «СМР»
-  const lagDefs = groupDef.key === "smr" ? LAG_FILTER_DEFS : [];
+  const lagDefs = groupDef.key === "smr" && !onlyKeys ? LAG_FILTER_DEFS : [];
   const active = defs.some(d => dateFilterIsActive(d.key)) || lagDefs.some(d => state.lagFilters[d.key]);
   const summary = defs
     .filter(d => dateFilterIsActive(d.key))
-    .map(d => `${d.shortTitle}: ${dateFilterSummary(state.dateFilters[d.key])}`)
+    .map(d => `${d.shortTitle}: ${dateFilterSummary(state.dateFilters[d.key], d.singleDate)}`)
     .concat(lagDefs.filter(d => state.lagFilters[d.key]).map(d => d.shortTitle))
     .join(" · ");
   const { wrap, header, body } = filterGroupShell(
@@ -3121,10 +3137,10 @@ function buildDateFilterSubgroup(def, onChange) {
   // При "только без даты" границы диапазона ни на что не влияют — поля
   // выключаются (не прячутся: то же правило "недоступные, а не скрытые",
   // что и у чекбоксов значений, см. applyEnabledState).
-  const boundsDisabled = f.empty === "only";
-  for (const [bound, caption] of [["from", "с"], ["to", "по"]]) {
+  const boundsDisabled = !def.singleDate && f.empty === "only";
+  for (const [bound, caption] of (def.singleDate ? [["from", "Дата"]] : [["from", "с"], ["to", "по"]])) {
     const row = document.createElement("label");
-    row.className = "filter-date-row";
+    row.className = "filter-date-row" + (def.singleDate ? " filter-single-date" : "");
     if (boundsDisabled) row.classList.add("filter-disabled");
     const cap = document.createElement("span");
     cap.className = "filter-date-cap";
@@ -3135,11 +3151,13 @@ function buildDateFilterSubgroup(def, onChange) {
     input.value = f[bound];
     input.disabled = boundsDisabled;
     input.dataset.dateFilter = `${def.key}:${bound}`;
+    input.setAttribute("aria-label", `${def.title}: ${caption}`);
     // change, а не input: у <input type=date> событие input прилетает и на
     // промежуточных состояниях (введён только год), перерисовка фильтров на
     // каждое такое состояние — лишняя работа на 9000+ элементов.
     input.addEventListener("change", () => {
       f[bound] = input.value;
+      if (def.singleDate) { f.to = f.from; f.empty = "show"; }
       pendingDateFilterFocus = input.dataset.dateFilter;
       onChange();
     });
@@ -3150,7 +3168,7 @@ function buildDateFilterSubgroup(def, onChange) {
   // Радиокнопки, а не галочка "показывать без даты": вариантов стало три,
   // и "только без даты" (живой запрос 2026-07-31) галочкой не выражается —
   // это не включение/выключение одного значения, а взаимоисключающий выбор.
-  for (const [mode, label] of DATE_EMPTY_MODES) {
+  for (const [mode, label] of (def.singleDate ? [] : DATE_EMPTY_MODES)) {
     const row = document.createElement("label");
     row.className = "toggle";
     const input = document.createElement("input");
@@ -4269,6 +4287,7 @@ function applyStatusInk(el, status) {
 // нули, и сравнить их между собой было бы нельзя). "__metric__" —
 // игнорировать выбранную плитку: сами плитки себя не фильтруют.
 function pickerElementPasses(element, exceptKey = null) {
+  if (!elementPassesMontageFactFilter(element)) return false;
   // exceptKey — один ключ или НЕСКОЛЬКО (массив): разворот контракта по
   // маркам считается без учёта выбранных марок и типов, иначе выбор одной
   // марки обнулял бы и прятал все остальные строки разворота — и добавить
@@ -4301,7 +4320,7 @@ function pickerElementPasses(element, exceptKey = null) {
 const РАЗВОРОТ_БЕЗ = ["contract", "mark", "elementType"];
 
 function pickerSelectionActive() {
-  return state.picker.metrics.size > 0 || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
+  return dateFilterIsActive("montageFact") || state.picker.metrics.size > 0 || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
 }
 
 // «Законтрактовано» — сумма contract_lines.quantity (см.
@@ -4320,6 +4339,7 @@ const PICKER_CONTRACT_BLOCKERS = [
 function pickerContracted() {
   const blocked = PICKER_CONTRACT_BLOCKERS.filter(([key]) => state.picker.sel[key].size).map(([, word]) => word);
   if (state.picker.metrics.size) blocked.push("показателю");
+  if (dateFilterIsActive("montageFact")) blocked.push("дате факта монтажа");
   if (blocked.length) {
     return { value: null, reason: `Позиция контракта не делится по ${blocked.join(", ")} — числа в этом разрезе не существует` };
   }
@@ -4361,7 +4381,7 @@ function pickerContracted() {
 // pickerElementPasses): строки блока должны быть сравнимы между собой.
 function pickerContractedFor(key, value) {
   if (key !== "elementType" && key !== "mark") return null;
-  if (state.picker.metrics.size) return null;
+  if (state.picker.metrics.size || dateFilterIsActive("montageFact")) return null;
   if (PICKER_CONTRACT_BLOCKERS.some(([k]) => state.picker.sel[k].size)) return null;
   const types = state.picker.sel.elementType;
   const marks = state.picker.sel.mark;
@@ -5484,10 +5504,13 @@ function renderPicker() {
     reset.addEventListener("click", () => {
       for (const def of PICKER_SLICERS) state.picker.sel[def.key].clear();
       state.picker.metrics.clear();
+      resetDateFilter("montageFact");
       onPickerChange();
     });
     panel.appendChild(reset);
   }
+
+  panel.appendChild(buildDateRangeFilterGroup({ key: "smr", title: "СМР" }, onPickerChange, ["montageFact"]));
 
   // Срезы со своей областью (контракты) в левой панели не рисуются.
   for (const def of PICKER_SLICERS) if (!def.pane) panel.appendChild(buildPickerSlicer(def));
@@ -5513,6 +5536,7 @@ function onPickerChange() {
 // приёмом и с теми же подписями, что describeActiveFilters у «Модели».
 function describePickerSelection() {
   const parts = [];
+  if (dateFilterIsActive("montageFact")) parts.push(`Факт монтажа: ${dateFilterSummary(state.dateFilters.montageFact, true)}`);
   for (const def of PICKER_SLICERS) {
     const sel = state.picker.sel[def.key];
     if (!sel.size) continue;
@@ -7514,7 +7538,7 @@ let pollInFlight = false;
 const DELTA_FIELDS = [
   "current_status", "contract_id", "counterparty_code",
   "planned_delivery_date", "planned_installation_date", "actual_delivery_date",
-  "project_delivery_date", "project_smr_start_date",
+  "project_delivery_date", "project_smr_start_date", "actual_installation_date",
 ];
 
 function applyElementDelta(fresh) {

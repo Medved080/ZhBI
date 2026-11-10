@@ -64,6 +64,7 @@ STATUS_LABELS_RU = {
 
 
 class ElementOut(BaseModel):
+    actual_installation_date: Optional[str] = None
     planned_installation_date: Optional[str] = None
     # Поля, правленные РУКАМИ в справочнике элементов (этап 3, решение Э4).
     # Объявлены в модели явно: без этого pydantic срезал их из ответа, и

@@ -982,6 +982,9 @@ def enrich_element_row(conn, row_dict: dict) -> dict:
             except ValueError:
                 row_dict["manual_fields"] = None
 
+    from app.status_facts import actual_installation_date
+    row_dict["actual_installation_date"] = actual_installation_date(
+        conn, row_dict["id"], row_dict.get("current_status"))
     contract_id = row_dict.get("contract_id")
     row_dict["counterparty_code"] = None
     if contract_id is not None:

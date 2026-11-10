@@ -100,7 +100,7 @@ def _element_out(conn, element_id: int) -> dict:
     row = conn.execute("SELECT * FROM elements WHERE id = ?", (element_id,)).fetchone()
     d = enrich_element_row(conn, dict(row))
     keep = ("id", "current_status", "contract_id", "counterparty_code", "planned_delivery_date", "actual_delivery_date",
-            "project_delivery_date", "project_smr_start_date", "comment")
+            "project_delivery_date", "project_smr_start_date", "actual_installation_date", "comment")
     return {k: d.get(k) for k in keep}
 
 
