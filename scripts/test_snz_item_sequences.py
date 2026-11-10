@@ -98,6 +98,15 @@ class SequenceTests(unittest.TestCase):
         result=fixtures.schedule(state,elements,[old])
         self.assertEqual(next(t for t in result['tasks'] if t['key']=='e:1:concrete1')['segments'][0]['start'],'2026-11-10T11:00')
 
+    def test_unknown_norm_can_be_clarified_without_replacing_defined_issued_norms(self):
+        state,elements=fixtures.fixture((1,),(("install",None,0),("rebar1",40,0)))
+        old=fixtures.schedule(state,elements)
+        state['cards'][0]['steps'][0]['minutes']=30
+        state['cards'][0]['steps'][1]['minutes']=999
+        result=fixtures.schedule(state,elements,[old],shift='night')
+        self.assertEqual([t['norm_minutes'] for t in result['tasks']],[30,40])
+        self.assertEqual(result['tasks'][0]['segments'][0]['start'],'2026-11-10T20:20')
+
 
 class IntegrationTests(unittest.TestCase):
     @classmethod
