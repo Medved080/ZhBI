@@ -17,6 +17,15 @@ state,_=fixture(tuple(cls.ids),(("prepare",20,0),("scaffold",10,0),("install",40
 state["crews"][1]["foreman"]="Тестовый прораб"
 cls.snz.save_state(cls.object_id,cls.snz.StateIn(revision=0,**{k:v for k,v in state.items() if k!="facts"}),cls.admin)
 
+# Facts must precede the demo mounting shift regardless of the wall clock.
+# This override exists only in this disposable loopback fixture process.
+from datetime import datetime
+class FixtureClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026,11,10,7,40,tzinfo=tz)
+cls.snz.datetime=FixtureClock
+
 from app import auth,main,activity
 main.app.dependency_overrides[auth.get_current_user]=lambda:cls.admin
 activity.start_worker()

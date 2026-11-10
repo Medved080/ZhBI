@@ -23,6 +23,8 @@
   const ORIGIN = window.origin && window.origin !== "null" ? window.origin : location.origin;
   const parentWin = window.parent;
   if (parentWin === window) return;
+  const SNZ_FOREMAN = (EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) === "foreman";
+  let snzScope = { mode: "", ids: null, ticket: 0 };
 
   const post = (msg) => { try { parentWin.postMessage({ proto: PROTO, ...msg }, ORIGIN); } catch (e) { /* родитель ушёл */ } };
 
@@ -54,7 +56,7 @@
 
   // Поля выбранного элемента для панели V2 — только скаляры (строки/числа/даты), ровно те, что движок показывает в своей карточке.
   const ELEMENT_FIELDS = ["id", "element_type", "subtype", "mark", "address", "layer", "current_status", "floor", "elevation_mm", "source_file",
-    "planned_delivery_date", "actual_delivery_date", "project_smr_start_date", "project_delivery_date", "contract_id", "comment", "x", "y", "object_id",
+    "planned_delivery_date", "planned_installation_date", "actual_delivery_date", "project_smr_start_date", "project_delivery_date", "contract_id", "comment", "x", "y", "object_id",
     "element_uid"];   // GUID изделия — строка «GUID» в «Размещении» панели V2 (2026-10-09: «в свойствах изделия не нашёл GUID»)
   function elementInfo(e) {
     if (!e) return null;
@@ -382,6 +384,13 @@
     globalThis[name] = make(orig);
   };
 
+  // An extra, temporary foreground scope. The underlying left-hand filters
+  // remain intact, including their date, GUID and hierarchical controls.
+  if (SNZ_FOREMAN) wrap("passesPlacementFilters", (orig) => function (element) {
+    return orig.apply(this, arguments) && (!snzScope.mode ||
+      (element.current_status === "ready_for_installation" && (!snzScope.ids || snzScope.ids.has(element.id))));
+  });
+
   wrap("setStageLoading", (orig) => function (on, text) { loading = !!on; scheduleState(); return orig.apply(this, arguments); });
   wrap("loadPlanInner", (orig) => async function () {
     loadError = null;
@@ -584,6 +593,22 @@
   }
 
   const COMMANDS = {
+    snzScope(a) {
+      if (!SNZ_FOREMAN || !isInt(a.objectId) || a.objectId !== state.objectId
+        || !["", "date", "unplanned", "all"].includes(a.mode)
+        || !Number.isSafeInteger(a.ticket) || a.ticket < 0
+        || !(a.ids === null || (Array.isArray(a.ids) && a.ids.length <= 20000 && a.ids.every(isInt)))) throw new Error("отбор СНЗ");
+      snzScope = { mode: a.mode, ids: a.ids === null ? null : new Set(a.ids), ticket: a.ticket };
+      applyPlacementFilters(); scheduleState(); sendFilters();
+      COMMANDS.getFilteredIds();
+    },
+    snzSelect(a) {
+      if (!SNZ_FOREMAN || a.objectId !== state.objectId || !Array.isArray(a.ids)
+        || a.ids.length > 20000 || !a.ids.every(isInt)) throw new Error("выбор СНЗ");
+      clearSelection();
+      setMultiSelection(new Set(a.ids.filter(id => state.byId.has(id) && passesPlacementFilters(state.byId.get(id)))));
+      scheduleState();
+    },
     snzLabels(a) {
       if ((EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) !== "foreman" || !Array.isArray(a.items) || a.items.length > 20000
         || a.items.some(r => !isInt(r.id) || !(r.priority === null || (Number.isInteger(r.priority) && r.priority > 0)))) throw new Error("подписи СНЗ");
@@ -591,6 +616,7 @@
     },
     setObject(a) {
       if (!isInt(a.objectId)) throw new Error("objectId");
+      snzScope = { mode: "", ids: null, ticket: 0 };
       snzLabels = []; drawSnzLabels();
       const known = state.projects.flatMap((p) => p.objects || []).some((o) => o.id === a.objectId);
       if (!known) throw new Error("объект недоступен");
@@ -776,7 +802,7 @@
     getFilteredIds() {
       const ids = [];
       for (const e of state.elements) { if (passesPlacementFilters(e)) { ids.push(e.id); if (ids.length >= 20000) break; } }
-      post({ evt: "filtered-ids", ids, objectId: state.objectId });
+      post({ evt: "filtered-ids", ids, objectId: state.objectId, snzTicket: snzScope.ticket });
     },
     // Мини-отчёты вкладки «Статус» считают только изделия, показанные в
     // текущем рабочем месте. У комплектовщика своя модель среза, поэтому

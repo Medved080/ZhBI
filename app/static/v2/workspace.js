@@ -12,6 +12,7 @@
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
 import { createSnz } from "./snz.js";
+import { createSnzWorkspace } from "./snz-workspace.js";
 import { renderElementWorks } from "../mfr-element-works.js";
 import { createDetailPanelScroll } from "./detail-panel-scroll.js";
 import { ApiError } from "./api.js";
@@ -62,8 +63,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   let timeoutId = null;
   const queue = [];
   let sc = null;               // последний снимок сцены из кадра
+  let inlineSnz = null;
+  const modelSelection = () => !sc?.loaded || sc.objectId !== curObject ? [] : sc?.multiIds?.length ? [...sc.multiIds] : sc?.selectedId ? [sc.selectedId] : [];
   const snz = foreman ? createSnz({ api, getObjectId: () => curObject,
-    getSelectedIds: () => [...new Set([...(sc?.multiIds || []), ...(sc?.selectedId ? [sc.selectedId] : [])])], send: (c, a) => send(c, a) }) : null;
+    getSelectedIds: () => inlineSnz?.selectedIds().length ? inlineSnz.selectedIds() : modelSelection(),
+    onChanged: () => inlineSnz?.refreshSoon(), send: (c, a) => send(c, a) }) : null;
   let assistantIds = null;
   let filters = null;          // модель фильтров
   let notice = "";             // последнее сообщение движка
@@ -87,7 +91,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     api, send: (c, a) => send(c, a), getScene: () => sc, getObjectId: () => curObject, statusLabel: (k) => stLabel(k), statusColor: (k) => sw(k),
     repaint: () => paintPanel(), reloadDetail: (id) => loadDetail(id), isDead: () => dead, getDetail: (id) => (detail.id === id ? detail.data : null),
     // групповые операции есть и у комплектовщика (как панель группового выделения V1); Ctrl + щелчок там только убирает из рамки (мост его не расширяет)
-    groupOps: true, ctrlAdds: !picker,
+    groupOps: true, ctrlAdds: !picker, onUpdated: (items) => inlineSnz?.onElements(items),
   });
   let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте (распределение комплектовщика)
   const openGroups = new Set(["status", "pk:elementType"]);
@@ -113,6 +117,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     ${foreman ? `<div class="ws-strip" id="ws-strip" role="status" aria-label="Показатели по показанным элементам"></div>` : ""}
     <div class="ws-main">
       ${foreman || sideSwitchable ? `<aside class="ws-left" id="ws-left" aria-label="Фильтры" ${foreman || filtersSide === "left" ? "" : "hidden"}><div class="ws-left-head">${mfr ? "Фильтры" : "Отбор элементов"}</div><div class="ws-panel-body" id="ws-left-body"></div></aside>` : ""}
+      ${foreman ? `<div class="ws-center">` : ""}
       <div class="ws-stage" id="ws-stage">
         <div class="ws-tools" role="toolbar" aria-label="Инструменты схемы">
           <button type="button" data-tool="fit" title="Вписать схему в экран" aria-label="Вписать схему в экран">⤢</button>
@@ -123,6 +128,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
         <div class="ws-multibar" id="ws-multibar" hidden></div>
         <div class="ws-overlay" id="ws-overlay" role="status" aria-live="polite"></div>
       </div>
+      ${foreman ? `<section class="snz-register" id="snz-register" aria-label="Реестр изделий СНЗ" hidden></section></div>` : ""}
       <div class="ws-resize" id="ws-resize" role="separator" aria-orientation="vertical" aria-label="Ширина правой панели" tabindex="0"></div>
       <aside class="ws-panel" id="ws-panel" aria-label="Панель рабочего места">
         <div class="ws-tabs" role="tablist">${tabs.map(([k, t]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="false">${t}</button>`).join("")}</div>
@@ -134,6 +140,13 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   const $ = (s) => el.querySelector(s);
   const stage = $("#ws-stage");
   const panel = $("#ws-panel");
+  if (foreman) inlineSnz = createSnzWorkspace({
+    api, getObjectId: () => curObject, getSelectedIds: modelSelection,
+    getSelectionCount: () => sc?.multi?.count || modelSelection().length, getScene: () => sc, send,
+    register: $("#snz-register"), openAdvanced: () => snz.open(),
+    statusHtml: () => ops.selectionStatusHtml(), bindStatus: (body) => ops.bind(body),
+    captureStatusFocus: (body) => ops.captureFocus(body),
+  });
 
   // ------------------------------------------------------------ связь с кадром
   function send(cmd, args = {}) {
@@ -182,7 +195,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       // следующий отклик sendFilters на СТОРОНЕ V1 (он приходит, но лишний пустой снимок между ними вводит в
       // заблуждение, если отчёт откроют именно в эту секунду).
       if (!mfr && !picker && m.model.groups.length) send("getFilteredIds");
+    } else if (m.evt === "refreshed") {
+      if (m.changed) inlineSnz?.refreshSoon();
     } else if (m.evt === "filtered-ids" && Array.isArray(m.ids)) {
+      if (m.objectId !== curObject) return;
+      inlineSnz?.onVisible(m.ids, m.objectId, m.snzTicket);
       // sc.loaded — сцена ДЕЙСТВИТЕЛЬНО показывает данные (не «идёт загрузка»): тот же счётчик total, что видит
       // человек на панели, а не промежуточный ноль.
       if (sc?.loaded) assistantIds = m.ids;
@@ -272,6 +289,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   function onScene(s) {
     const prevSel = selKey(sc);
     sc = s;
+    inlineSnz?.onScene(s);
     mbp?.onScene(s);
     mfrStartView(s);
     if (perfScene && s.loaded && !s.loading) { perfScene({ elements: s.total }); perfScene = null; }
@@ -380,6 +398,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
 
   function paintPanel() {
     if (dead) return;
+    inlineSnz?.activate(tab === "snz");
     if (foreman && tab !== "snz") snz.hideLabels();
     for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
     const body = $("#ws-panel-body");
@@ -393,10 +412,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       loading: elementProps && (!matchesDetail || (!detail.data && !detail.error)),
       complete: elementProps && matchesDetail && !!detail.data && !detail.error,
     }, () => {
-      body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml())
-        : tab === "snz" ? snz.html() : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
-      bindPanel(body);
-      if (tab === "snz") snz.bind(body);
+      if (tab === "snz") inlineSnz.mount(body);
+      else {
+        body.innerHTML = tab === "props" ? (mfr ? mfrPropsHtml() : propsHtml()) : tab === "status" ? statusHtml() : tab === "filters" ? sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml())
+          : tab === "alloc" ? allocHtml() : tab === "pick" ? pickHtml() : tab === "metrics" ? metricsHtml() : tab === "contracts" ? contractsHtml() : viewHtml();
+        bindPanel(body);
+      }
       restoreFocus();
     });
     const left = $("#ws-left-body");
@@ -968,7 +989,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     if (t === "fit") send("fit");
     else if (t === "in") send("zoom", { factor: 1 / 1.1 });
     else if (t === "out") send("zoom", { factor: 1.1 });
-    else if (t === "clear") send("clearSelection");
+    else if (t === "clear") { inlineSnz?.clearSelection(); send("clearSelection"); }
   }
 
   // Что человеку реально доступно на этом рабочем месте (а не постоянное «только просмотр»)
@@ -1101,8 +1122,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       selectedIds: sc?.loaded ? [...new Set([...(sc.multiIds || []), ...(sc.selectedId ? [sc.selectedId] : [])])].slice(0,100) : [],
       filters: JSON.stringify({ view:sc?.view,shown:sc?.shown,total:sc?.total,excluded:sc?.excluded }).slice(0,3000) }),
     openFbx: () => extm.open(),   // «Загрузить из FBX» из меню, когда это рабочее место уже открыто
-    hasUnsavedChanges: () => anyModalDirty() || ops.hasUnsaved() || extm.isDirty() || !!snz?.isDirty(),
+    hasUnsavedChanges: () => !!inlineSnz?.isBusy() || anyModalDirty() || ops.hasUnsaved() || extm.isDirty() || !!snz?.isDirty(),
     guardLeave: async () => {
+      if (inlineSnz?.isBusy()) return false;
       if (snz && !snz.guardLeave()) return false;
       if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
       if (extm.isOpen() && !(await extm.close())) return false;   // окно внешних 3D-моделей: несохранённое положение
@@ -1113,7 +1135,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
       if (snz && !snz.guardLeave()) return false;
-      snz?.reset();
+      if (inlineSnz?.isBusy()) return false;
+      inlineSnz?.reset(); snz?.reset();
       extm.close(true);
       assistantIds = null; curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       perfScene = window.zhbiPerf?.start(`V2 схема (${ws}): смена объекта`, "scene") || null;
@@ -1141,7 +1164,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // Годится ли спрятанное рабочее место для возврата: после ошибки или обрыва загрузки схемы показывать нечего — строим заново
     isReusable: () => !dead && !!frame && !sc?.error,
     destroy() {
-      snz?.destroy();
+      inlineSnz?.destroy(); snz?.destroy();
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
       clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();
       const side = shellSide(); if (side) side.hidden = navWasHidden;

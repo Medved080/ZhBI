@@ -1,4 +1,5 @@
 import { esc } from "./screen-view.js";
+import { validateSteps, snzErrorIssue } from "./snz-validation.js";
 
 const uid = () => crypto.randomUUID().replaceAll("-", "");
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -9,7 +10,8 @@ const scopes = [["preparation", "Подготовка"], ["element", "Издел
 const options = (rows, value, key = "id", title = "name") => rows.map(r => `<option value="${esc(r[key])}" ${r[key] === value ? "selected" : ""}>${esc(r[title])}</option>`).join("");
 const textInput = (path, value, extra = "") => `<input data-path="${path}" value="${esc(value ?? "")}" ${extra}>`;
 
-export function createSnz({ api, getObjectId, getSelectedIds, send }) {
+export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged }) {
+  let validationIssue = null;
   let data = null, draft = null, dialog = null, dirty = false, busy = false, error = "", message = "";
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
   let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
@@ -25,7 +27,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send }) {
     const object = getObjectId(), ticket = ++generation;
     const result = await api.get(path() + "/state");
     if (ticket !== generation || object !== getObjectId()) return false;
-    data = result; draft = structuredClone(data.state); dirty = false;
+    data = result; draft = structuredClone(data.state); dirty = false; validationIssue = null;
     if (!draft.crews.some(c => c.id === crewId)) crewId = draft.crews.find(c => c.kind === "installation").id;
     if (!draft.cards.some(c => c.id === cardId)) cardId = draft.cards[0].id;
     return true;
@@ -33,10 +35,11 @@ export function createSnz({ api, getObjectId, getSelectedIds, send }) {
   async function run(fn) {
     if (busy) return;
     busy = true; error = ""; message = ""; render();
-    try { await fn(); } catch (e) { error = e.message || "Не удалось выполнить действие"; }
+    try { await fn(); } catch (e) { validationIssue=e.snzIssue||snzErrorIssue(e,draft||{}); error=validationIssue?.message||e.message||"Не удалось выполнить действие";if(validationIssue){tab="cards";cardId=validationIssue.cardId;} }
     finally { busy = false; render(); }
   }
   async function save() {
+    validateSteps(draft);
     const { facts, ...body } = draft;
     const result = await api.put(path() + "/state", { revision: data.revision, ...body });
     data.revision = result.revision;
@@ -62,7 +65,10 @@ export function createSnz({ api, getObjectId, getSelectedIds, send }) {
   function close(force = false) {
     if (busy && !force) return false;
     if (dirty && !force && !window.confirm("Закрыть СНЗ без сохранения изменений?")) return false;
-    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; generation++; return true;
+    const wasOpen=!!dialog;
+    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; generation++;
+    if(wasOpen)onChanged?.();
+    return true;
   }
   function planHeader() {
     return `<div class="snz-controls">
@@ -181,7 +187,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send }) {
       <nav class="snz-tabs" aria-label="Разделы СНЗ">${[["plan","Планирование"],["cards","Нормативы"],["operations","Операции"],["teams","Звенья"],["crews","Бригады"],["groups","Узлы ригелей"],["orders","Выданные СНЗ"]].map(([id,name])=>`<button data-tab="${id}" aria-pressed="${id===tab}" ${busy?"disabled":""}>${name}</button>`).join("")}</nav>
       <div class="snz-content" ${busy?'aria-busy="true"':""}>${error?`<p class="snz-error" role="alert">${esc(error)}</p>`:""}${message?`<p class="snz-message" role="status">${esc(message)}</p>`:""}
       ${!draft?"<p>Загрузка данных СНЗ…</p>":`<fieldset ${busy?"disabled":""}>${tab==="plan"?plannerHtml():tab==="orders"?ordersHtml():`<fieldset ${!canWrite()?"disabled":""}>${tab==="cards"?cardsHtml():tab==="operations"?operationsHtml():tab==="teams"?teamsHtml():tab==="crews"?crewsHtml():groupsHtml()}</fieldset>`}</fieldset>`}</div>`;
-    if (focusKey) dialog.querySelector(`[data-path="${CSS.escape(focusKey)}"]`)?.focus();
+    const invalid=validationIssue&&dialog.querySelector(`[data-path="${CSS.escape(validationIssue.path)}"]`);
+    if(invalid){invalid.setAttribute("aria-invalid","true");invalid.title=validationIssue.message;if(!busy){invalid.focus();invalid.scrollIntoView({block:"nearest"});}}
+    else if (focusKey) dialog.querySelector(`[data-path="${CSS.escape(focusKey)}"]`)?.focus();
   }
   function change(e) {
     const target = e.target;
@@ -190,6 +198,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send }) {
       let holder = draft; for (const part of parts) holder = holder[part];
       holder[key] = target.type === "number" ? (target.value === "" ? (key==="wait_after"?0:null) : Number(target.value)) : target.value;
       if (key==="card_id" && target.dataset.path.startsWith("groups.") && !target.value) holder[key]=null;
+      if(validationIssue?.path===target.dataset.path){validationIssue=null;error="";target.removeAttribute("aria-invalid");target.removeAttribute("title");dialog.querySelector(".snz-error")?.remove();}
       dirtyMark();
     } else if (target.dataset.select) {
       const id = Number(target.dataset.select); if (target.checked) selection.add(id); else selection.delete(id); renderItems();
@@ -259,6 +268,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send }) {
     render();
   }
   return {
+    open,
     html: () => `<section class="ws-pad"><h3>Сменные наряд-задания</h3><p>Нормативы, назначения изделий, узлы ригелей и загрузка звеньев.</p><p>Выбрано на модели: ${getSelectedIds().length}</p><button type="button" data-snz-open>Открыть планирование СНЗ</button><p class="v2-muted">Выделенные на модели изделия будут выбраны в планировании.</p></section>`,
     bind: host => host.querySelector("[data-snz-open]")?.addEventListener("click",()=>open()),
     isDirty: () => dirty || busy,

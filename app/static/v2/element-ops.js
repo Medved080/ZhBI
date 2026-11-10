@@ -181,6 +181,7 @@ export function createElementOps(ctx) {
     const items = (list || []).filter((u) => u && Number.isInteger(u.id));
     if (items.length) send("applyElements", { items: items.map(delta) });
     for (const u of items) if ("comment" in u) send("patchComment", { id: u.id, comment: u.comment ?? null });
+    ctx.onUpdated?.(items);
   }
   const refreshDetailIfSelected = (id) => { const s = sc(); if (s?.selected?.id === id) reloadDetail(id); };
 
@@ -1229,5 +1230,19 @@ export function createElementOps(ctx) {
   }
   const canStatus = () => (R.loaded ? R.status : null);
 
-  return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, bannerHtml, multiBarHtml, bindMultiBar, bind, captureFocus, hasUnsaved, guardLeave, canStatus, rights: R };
+  function selectionStatusHtml() {
+    const s = sc();
+    if (!s?.loaded) return '<p class="v2-muted">Схема загружается…</p>';
+    if (!R.loaded) return '<p class="v2-muted">Проверка прав на смену статуса…</p>';
+    if (!R.status) return '<p class="v2-muted">Нет права изменять статусы на этом объекте.</p>';
+    if (s.multi?.count) {
+      const items = s.multiItems;
+      if (!items || s.multi.count > items.length || items.length > MAX_BATCH) return `<p class="ws-err">Для смены статуса выберите не больше ${nf(MAX_BATCH)} изделий.</p>`;
+      return `<h4>Выбрано изделий: ${nf(items.length)}</h4>${groupStatusHtml(items)}`;
+    }
+    if (s.selected) return statusFormHtml(s.selected, F(s.selected.id));
+    return '<h4>Изменить статус</h4><p class="v2-muted">Выберите изделие щелчком на модели. Ctrl (⌘) + щелчок или Shift + перетаскивание добавляют изделия к выбору.</p>';
+  }
+
+  return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, selectionStatusHtml, bannerHtml, multiBarHtml, bindMultiBar, bind, captureFocus, hasUnsaved, guardLeave, canStatus, rights: R };
 }
