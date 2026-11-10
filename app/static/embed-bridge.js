@@ -25,6 +25,11 @@
   if (parentWin === window) return;
   const SNZ_FOREMAN = (EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) === "foreman";
   let snzScope = { mode: "", ids: null, ticket: 0 };
+  if (SNZ_FOREMAN) {
+    const style=document.createElement("style");
+    style.textContent="#timeline-bar{display:none!important}";
+    document.head.append(style);
+  }
 
   const post = (msg) => { try { parentWin.postMessage({ proto: PROTO, ...msg }, ORIGIN); } catch (e) { /* родитель ушёл */ } };
 

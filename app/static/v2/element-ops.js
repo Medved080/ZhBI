@@ -562,14 +562,14 @@ export function createElementOps(ctx) {
   }
 
   // ---- смена статуса одного изделия
-  function statusFormHtml(e, f) {
+  function statusFormHtml(e, f, snz = false) {
     if (!R.loaded) return "";
     if (!R.status) return `<p class="v2-muted ws-ro">Смена статуса недоступна: нет права изменять статусы на этом объекте.</p>`;
     const w = f.st;
-    const opts = (sc()?.statusOrder || []).filter((k) => k !== e.current_status);
+    const opts = statusOptions(snz).filter((k) => snz || k !== e.current_status);
     const leavingPlanned = e.current_status === "planned" && w.status && w.status !== "planned";
     const toPlanned = w.status === "planned";
-    return `<h4>Изменить статус</h4>
+    return `${snz ? "" : "<h4>Изменить статус</h4>"}
       <form class="ws-form" id="ws-sform" autocomplete="off" novalidate>
         <label class="ws-fld">Новый статус
           <select name="status" ${w.busy ? "disabled" : ""}><option value="">— выберите —</option>${opts.map((k) => `<option value="${esc(k)}" ${w.status === k ? "selected" : ""}>${esc(statusLabel(k))}</option>`).join("")}</select></label>
@@ -659,9 +659,16 @@ export function createElementOps(ctx) {
   }
   const sigOf = (items, extra) => items.map((i) => `${i.id}:${i.current_status}:${i.contract_id ?? ""}`).join(",") + "|" + extra;
 
-  function groupStatusHtml(items) {
+  function statusOptions(withReady = false) {
+    const all=[...(sc()?.statusOrder||[])];
+    if(withReady&&!all.includes("ready_for_installation")){
+      const index=all.indexOf("installed");all.splice(index<0?all.length:index,0,"ready_for_installation");
+    }
+    return all;
+  }
+  function groupStatusHtml(items, snz = false) {
     const g = G.st;
-    const all = sc()?.statusOrder || [];
+    const all = statusOptions(snz);
     const same = g.status ? items.filter((i) => i.current_status === g.status).length : 0;
     const pv = g.prev && g.prev.sig === sigOf(items, `${g.status}|${g.at}|${g.comment}`) ? g.prev : null;
     let prevHtml = "";
@@ -1238,10 +1245,10 @@ export function createElementOps(ctx) {
     if (s.multi?.count) {
       const items = s.multiItems;
       if (!items || s.multi.count > items.length || items.length > MAX_BATCH) return `<p class="ws-err">Для смены статуса выберите не больше ${nf(MAX_BATCH)} изделий.</p>`;
-      return `<h4>Выбрано изделий: ${nf(items.length)}</h4>${groupStatusHtml(items)}`;
+      return `<h4>Выбрано изделий: ${nf(items.length)}</h4>${groupStatusHtml(items, true)}`;
     }
-    if (s.selected) return statusFormHtml(s.selected, F(s.selected.id));
-    return '<h4>Изменить статус</h4><p class="v2-muted">Выберите изделие щелчком на модели. Ctrl (⌘) + щелчок или Shift + перетаскивание добавляют изделия к выбору.</p>';
+    if (s.selected) return statusFormHtml(s.selected, F(s.selected.id), true);
+    return '<p class="v2-muted">Выберите изделие щелчком на модели. Ctrl (⌘) + щелчок или Shift + перетаскивание добавляют изделия к выбору.</p>';
   }
 
   return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, selectionStatusHtml, bannerHtml, multiBarHtml, bindMultiBar, bind, captureFocus, hasUnsaved, guardLeave, canStatus, rights: R };

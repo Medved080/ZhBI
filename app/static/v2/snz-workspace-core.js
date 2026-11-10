@@ -38,7 +38,7 @@ export function makeAssignmentState(state, ids, {date, shift, crewId, cardId='au
   for (const id of chosen) {
     const old=map.get(id), e=elements.get(id);
     const card=cardId==='auto' ? old?.card_id||e.suggested_card_id : cardId;
-    if (!card || !cards.has(card)) throw new Error('Для части изделий нет однозначной карты. Выберите карту вручную или уточните справочник.');
+    if (!card || !cards.has(card)) throw new Error('Для части изделий нет однозначной карты. Укажите карту в расширенном планировании СНЗ.');
     const next={element_id:id,crew_id:crewId,card_id:card,date,shift,
       priority:old?.crew_id===crewId&&old.priority!=null?old.priority:++priority,
       prep_priority:old?.prep_priority??++prep};
@@ -46,4 +46,18 @@ export function makeAssignmentState(state, ids, {date, shift, crewId, cardId='au
   }
   validateSteps(body);
   return {revision:state.revision,...body};
+}
+
+// A row edit keeps the card and other assignments, with the same revision guard.
+export function editAssignmentState(data, id, field, value, defaults={}) {
+  if(!['date','shift','crew_id','priority'].includes(field))throw new Error('Недопустимое поле назначения.');
+  const old=data.state.assignments.find(a=>a.element_id===id);
+  const date=field==='date'?value:old?.date;
+  if(!isDay(date))throw new Error('Укажите дату в строке изделия. Для снятия назначения откройте расширенное планирование СНЗ.');
+  if(field==='priority'&&value!==null&&(!Number.isInteger(value)||value<1||value>1000000))throw new Error('Очередность — целое число от 1 до 1 000 000 или пустое поле.');
+  const body=makeAssignmentState(data,[id],{date,
+    shift:field==='shift'?value:old?.shift||defaults.shift||'day',
+    crewId:field==='crew_id'?value:old?.crew_id||defaults.crewId||data.state.crews.find(c=>c.kind==='installation')?.id});
+  if(field==='priority')body.assignments.find(a=>a.element_id===id).priority=value;
+  return body;
 }

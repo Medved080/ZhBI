@@ -23,3 +23,16 @@ for(const ids of [[],[0],[99],[1,5],[1,6],[1,7],[1,8]])assert.throws(()=>makeAss
 for(const arg of [{date:'2026-02-30'},{shift:''},{crewId:'p'},{cardId:'missing'}])assert.throws(()=>makeAssignmentState(data,[1],{...args,...arg}));
 assert.equal(makeAssignmentState(data,[8],{...args,cardId:'manual'}).assignments.at(-1).card_id,'manual');
 console.log('PASS SNZ date scopes, atomic validation, manual cards, priorities, immutable input');
+
+const {editAssignmentState}=await import('../app/static/v2/snz-workspace-core.js');
+const changedDate=editAssignmentState(data,1,'date','2026-11-20');
+assert.equal(changedDate.assignments[0].date,'2026-11-20');assert.equal(changedDate.assignments[0].card_id,'manual');
+assert.equal(changedDate.assignments[0].prep_priority,8);
+assert.equal(editAssignmentState(data,1,'shift','night').assignments[0].shift,'night');
+assert.equal(editAssignmentState(data,1,'crew_id','b').assignments[0].priority,6);
+assert.equal(editAssignmentState(data,1,'priority',22).assignments[0].priority,22);
+assert.equal(editAssignmentState(data,1,'priority',null).assignments[0].priority,null);
+assert.equal(editAssignmentState(data,4,'date','2026-11-20',{crewId:'b',shift:'night'}).assignments.at(-1).shift,'night');
+for(const [id,field,value]of [[1,'date',''],[1,'date','2026-02-30'],[1,'priority',0],[1,'priority',1.2],[1,'priority',1000001],[1,'crew_id','p'],[1,'shift','bad'],[5,'date','2026-11-20'],[4,'shift','night'],[1,'card_id','manual']])assert.throws(()=>editAssignmentState(data,id,field,value));
+assert.deepEqual(data,before);
+console.log('PASS row dates, shift, crew, priorities, protected assignments and immutable input');
