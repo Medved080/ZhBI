@@ -1,5 +1,6 @@
 from decimal import Decimal,ROUND_CEILING,ROUND_HALF_UP
 import json
+import re
 from copy import deepcopy
 from uuid import uuid4
 from pydantic import BaseModel,Field,model_validator
@@ -11,17 +12,96 @@ ESTIMATE_ID='steelEstimate'
 ESTIMATE_NAME='Арматура (оценка по нормативу расхода на м³)'
 
 
+LEGACY_RESOURCE_KEYS={('A500C',8):'steel8',('A240',10):'steel10a240',
+                      ('A500C',10):'steel10a500',('A240',25):'steel25a240',
+                      ('A500C',25):'steel25a500'}
+
+
+def reinforcement_spec(resource):
+    """Класс и диаметр, независимо от старого кода материала и порядка слов."""
+    name=resource['name']
+    diameter=re.search(r'Ø\s*(\d+)\b',name)
+    if not diameter:return None
+    grade=re.search(r'\b[АA](\d{3})([СC]?)\b',name)
+    if grade:steel_class='A'+grade[1]+('C' if grade[2] else '')
+    elif re.search(r'\b(?:Вр|Vr)-?1\b',name):steel_class='Vr1'
+    elif re.search(r'\b[КK]7\b',name):steel_class='K7'
+    else:return None
+    return steel_class,int(diameter[1])
+
+
+def resource_key(spec):
+    steel_class,diameter=spec
+    return 'steel%s%s'%(diameter,steel_class)
+
+
+def resource_name(spec):
+    steel_class,diameter=spec
+    if steel_class=='Vr1':return 'Проволока Ø%s Вр-1'%diameter
+    if steel_class=='K7':return 'Канат К7 Ø%s'%diameter
+    return 'Арматура Ø%s %s'%(diameter,steel_class.replace('A','А').replace('C','С'))
+
+
+def complete_norms(parameters):
+    """Полный набор норм по классу и диаметру без записи в БД и смены расхода.
+
+    Сохранённые настройки диаметра имеют приоритет. Общая прежняя норма
+    остаётся основанием для новых диаметров, но отдельной строкой не служит.
+    """
+    params=deepcopy(parameters)
+    models=catalog()
+    if not models:return params       # пакет с каталогом ещё не установлен
+    resources=params['resources']
+    defaults=params.setdefault('resourceDefaults',{})
+    for key,steel_class in [('mainsteel','A600C'),('wire','Vr1')]:
+        if key in resources:defaults[steel_class]=deepcopy(resources[key])
+    resources.pop('mainsteel',None)
+    # Старые коды и коды каталога одной марки относятся к одной строке норм.
+    for key,entry in list(resources.items()):
+        spec=reinforcement_spec(entry)
+        if spec is None:continue
+        canonical=resource_key(spec)
+        if key!=canonical:
+            resources.pop(key)
+            resources.setdefault(canonical,{**entry,'name':resource_name(spec)})
+    specs={spec for doc in models.values() for r in doc.get('resources',[]) if (spec:=reinforcement_spec(r)) is not None}
+    basis={}
+    for model_id in ('1KS1-r1','2KS3-r1'):
+        for r in models.get(model_id,{}).get('resources',[]):
+            spec=reinforcement_spec(r)
+            if spec is None:continue
+            project,production=basis.get(spec,(D(0),D(0)))
+            basis[spec]=(project+D(r['projectQty']),production+D(r['qty']))
+    for spec in sorted(specs):
+        steel_class,_=spec
+        inherited=defaults.get(steel_class)
+        project,production=basis.get(spec,(None,None))
+        resources.setdefault(resource_key(spec),{
+            'name':resource_name(spec),'unit':'т',
+            'factor':inherited['factor'] if inherited else '1',
+            'rate':inherited.get('rate','0') if inherited else '0',
+            'factorBasis':'inherited' if inherited else 'project',
+            'roundUp':bool(inherited),
+            'projectTotal':str(project) if project is not None else None,
+            'productionTotal':str(production) if production is not None else None})
+    def order(item):
+        spec=reinforcement_spec(item[1])
+        return (0,*spec) if spec else (1,item[0],0)
+    params['resources']=dict(sorted(resources.items(),key=order))
+    return params
+
+
 def initial_norms():
     models=catalog();a=models['1KS1-r1'];b=models['2KS3-r1']
     resources={}
     for ra,rb in zip(a['resources'],b['resources']):
         project=D(ra['projectQty'])+D(rb['projectQty']);production=D(ra['qty'])+D(rb['qty'])
         resources[ra['id']]={'name':ra['name'] if ra['id']!='mainsteel' else 'Продольная арматура А600С','unit':ra['unit'],'factor':str(production/project),'rate':ra['rate'],'projectTotal':str(project),'productionTotal':str(production)}
-    return {'concreteFactor':str((D('5.7')+D('4.59'))/(D('5.53')+D('4.46'))),'hoursPerM3':str((D('20.645856')+D('19.432224'))/(D('5.7')+D('4.59'))),'labourRate':PROFILE['labourRate'],'concreteRate':PROFILE['defaultConcreteRate'],'resources':resources,'basis':[
+    return complete_norms({'concreteFactor':str((D('5.7')+D('4.59'))/(D('5.53')+D('4.46'))),'hoursPerM3':str((D('20.645856')+D('19.432224'))/(D('5.7')+D('4.59'))),'labourRate':PROFILE['labourRate'],'concreteRate':PROFILE['defaultConcreteRate'],'resources':resources,'basis':[
       {'name':'Колонна 1КС1','projectVolume':'5.53','productionVolume':'5.7','hours':'20.645856','hoursPerM3':str(D('20.645856')/D('5.7'))},
       {'name':'Колонна 2КС3','projectVolume':'4.46','productionVolume':'4.59','hours':'19.432224','hoursPerM3':str(D('19.432224')/D('4.59'))}],
       'method':'Средневзвешенные нормы: сумма производственного расхода / сумма проектного расхода; труд — сумма часов / сумма производственного объёма бетона. Округления исходного Excel входят в коэффициенты.',
-      'limitation':'Основание — только две колонны. Применение к другим группам является предварительной оценкой до утверждения технологом.'}
+      'limitation':'Основание — только две колонны. Применение к другим группам является предварительной оценкой до утверждения технологом.'})
 
 
 def get_norms(conn):
@@ -29,7 +109,7 @@ def get_norms(conn):
     if not row:
         params=initial_norms();conn.execute('INSERT INTO production_norms VALUES(?,?,?,?,?)',('msu-1-columns',1,dumps(params),now(),'system'))
         return {'version':1,'parameters':params}
-    return {'version':row['version'],'parameters':json.loads(row['parameters_json']),'updatedAt':row['updated_at']}
+    return {'version':row['version'],'parameters':complete_norms(json.loads(row['parameters_json'])),'updatedAt':row['updated_at']}
 
 
 class ResourceNorm(BaseModel):
@@ -78,7 +158,10 @@ def update_norms(conn,body,actor):
     params=deepcopy(current['parameters'])
     if set(body.resources)!=set(params['resources']):raise HTTPException(422,'Изменился состав нормативных ресурсов')
     for key in ['concreteFactor','hoursPerM3']:params[key]=str(getattr(body,key))      # цены (труд, бетон, материалы) — в прайс-листе, не в нормах
-    for key,value in body.resources.items():params['resources'][key].update(factor=str(value.factor))
+    for key,value in body.resources.items():
+        entry=params['resources'][key]
+        if D(entry['factor'])!=value.factor:entry['factorBasis']='manual'
+        entry.update(factor=str(value.factor))
     if body.groups is not None:
         groups=params.setdefault('groups',{})
         for family,g in body.groups.items():
@@ -98,17 +181,11 @@ def update_norms(conn,body,actor):
 
 
 def match_resource(resource,params):
-    name=resource['name'];diameter=__import__('re').search(r'Ø(\d+)',name)
-    if not diameter:return None
-    d=int(diameter.group(1));key=None
-    if 'Вр' in name:key='wire'
-    elif 'А600С' in name:key='mainsteel'
-    elif d==8 and 'А500С' in name:key='steel8'
-    elif d==10 and 'А240' in name:key='steel10a240'
-    elif d==10 and 'А500С' in name:key='steel10a500'
-    elif d==25 and 'А240' in name:key='steel25a240'
-    elif d==25 and 'А500С' in name:key='steel25a500'
-    return params['resources'].get(key) if key else None
+    spec=reinforcement_spec(resource)
+    if spec is None:return None
+    # Старые пакеты и начальный прайс могут содержать прежние коды ресурсов.
+    legacy='mainsteel' if spec[0]=='A600C' else 'wire' if spec[0]=='Vr1' else LEGACY_RESOURCE_KEYS.get(spec)
+    return params['resources'].get(resource_key(spec)) or params['resources'].get(legacy)
 
 
 def parameters_for(doc,norms,prices,volume=None,concrete_class=None,concrete_price=None):
@@ -127,7 +204,9 @@ def parameters_for(doc,norms,prices,volume=None,concrete_class=None,concrete_pri
     hours=volume*hours_per_m3;resources=[]
     for r in doc['resources']:
         norm=match_resource(r,p);qty=D(r['projectQty'])*(D(norm['factor']) if norm else D(1))
-        if norm:qty=qty.quantize(D('.001'),rounding=ROUND_CEILING)
+        # Новая строка с коэффициентом 1 сохраняет точный проектный расход.
+        # Для прежних норм и при надбавке действует производственное округление.
+        if norm and (norm.get('roundUp',True) or D(norm['factor'])!=1):qty=qty.quantize(D('.001'),rounding=ROUND_CEILING)
         resources.append({**r,'qty':str(qty),'rate':str(material_rate(prices,r['id'],r['rate']))})
     estimate=group.get('steelKgPerM3')
     if estimate not in (None,'') and D(estimate)>0 and volume>0 and not any(r['id'].startswith(('steel','mainsteel','wire')) for r in resources):

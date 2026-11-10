@@ -195,8 +195,11 @@ function matchesProductName(product, query){
   q('#pc-selected-count').textContent='Выбрано: '+state.selected.length;
   q('#pc-export').disabled=state.selected.length===0||state.exporting;
   q('#pc-export').textContent='XLSX · '+state.selected.length;
+  q('#pc-export-materials').disabled=state.selected.length===0||state.exporting;
+  q('#pc-export-materials').textContent='Материалы XLSX · '+state.selected.length;
   {const vb=q('#pc-verify-selected');vb.disabled=state.selected.length===0;vb.textContent='Проверено · '+state.selected.length;}
   q('#pc-export-one').disabled=state.exporting;
+  q('#pc-export-materials-one').disabled=state.exporting;
   root.dataset.batch=String(state.batch);
   q('.pc-select-all').hidden=!state.batch;
   q('.pc-export-actions').hidden=!state.batch;
@@ -277,7 +280,7 @@ function matchesProductName(product, query){
   q('#pc-baseline').textContent=money(products[state.product].price)+' ₽';q('#pc-effective').textContent=money(total)+' ₽';
   const rawDiff=total-products[state.product].price;const diff=Math.abs(rawDiff)<.005?0:rawDiff;q('#pc-delta').textContent=(diff>0?'+':'')+money(diff)+' ₽';q('#pc-vat').textContent='Моя цена с НДС '+profile.vatPercent+'%: '+money(total*(1+profile.vatPercent/100))+' ₽';
  }
- async function exportSelected(single=false){
+ async function exportSelected(single=false,format='calculation'){
   const indices=single?[state.product]:[...state.selected];
   const status=(message,error=false)=>{const el=q(single?'#pc-export-one-status':'#pc-export-status');el.textContent=message;el.dataset.error=String(error);};
   if(state.exporting||indices.length===0)return;
@@ -285,9 +288,13 @@ function matchesProductName(product, query){
   state.exporting=true;updateSelection();q('#pc-export').textContent='Формирую книгу…';status('');
   try{
    await flushSaves();
-   const snapshots=await Promise.all(indices.map(i=>api.request('/calc/api/products/'+products[i].id+'/calculation')));
-   await window.CalcZhBIExport.download(snapshots);
-   status('Книга сформирована. Листов: '+snapshots.length+'.');
+   const [snapshots,quantities]=await Promise.all([
+    Promise.all(indices.map(i=>api.request('/calc/api/products/'+products[i].id+'/calculation'))),
+    format==='materials'?api.request('/calc/api/project-quantities'):null
+   ]);
+   if(quantities)for(const snapshot of snapshots){const entry=quantities.products[snapshot.product.id];snapshot.projectQuantity=entry?.quantity??null;snapshot.projectQuantityStatus=entry?.status;snapshot.quantityProjectName=quantities.project?.name;snapshot.exportReference=entry;}
+   await window.CalcZhBIExport.download(snapshots,format);
+   status(format==='materials'?'Ведомость материалов сформирована. Изделий: '+snapshots.length+'.':'Книга сформирована. Листов: '+snapshots.length+'.');
   }catch(error){status(error.message||'Не удалось сформировать XLSX. Повторите выгрузку.',true);}
   finally{state.exporting=false;q('#pc-export').textContent='Выгрузить XLSX';updateSelection();}
  }
@@ -352,6 +359,8 @@ function matchesProductName(product, query){
   if(b.id==='pc-add'){const i=state.extra[state.product].length+1;state.extra[state.product].push({id:'extra'+i,name:'Дополнительная статья '+i,unit:'компл.',qty:1,rate:0,detail:'Пользовательская статья включена в затраты и в базу прибыли. В полном сервисе можно выбрать группу и основание.'});render();persist();}
   if(b.id==='pc-export')void exportSelected();
   if(b.id==='pc-export-one')void exportSelected(true);
+  if(b.id==='pc-export-materials')void exportSelected(false,'materials');
+  if(b.id==='pc-export-materials-one')void exportSelected(true,'materials');
   if(b.id==='pc-edit-product'||b.id==='pc-edit-calculation')openProductForm(state.product);
   if(b.id==='pc-verify-product')void toggleVerification();
   if(b.id==='pc-verify-selected')void verifySelected();

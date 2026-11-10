@@ -43,6 +43,7 @@ html{scrollbar-gutter:auto}
 #precast-concept #pc-reveal-product{font-size:12px;border:0;background:transparent;color:var(--pc-accent);padding:4px 5px}
 #precast-concept .pc-export-actions{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:5px;margin:0}
 #precast-concept .pc-export-actions button{font-size:12px;padding:7px 8px}
+#precast-concept #pc-export-materials{grid-column:1/-1}
 #precast-concept #pc-selected-count{font-size:12px;line-height:1.3}
 #precast-concept #pc-export-status{grid-column:1/-1;max-height:44px;overflow:auto}
 #precast-concept .pc-main{grid-column:2;grid-row:2;padding:16px 20px;display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:12px;min-height:0;min-width:0}

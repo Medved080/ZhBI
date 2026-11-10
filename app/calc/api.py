@@ -476,6 +476,22 @@ def build_router(settings):
         finally:
             conn.close()
 
+    @router.get("/api/project-quantities")
+    def project_quantities(user=Depends(auth.current_user)):
+        from app.db import get_connection
+        from .project_quantities import project_quantities as count_products
+        from .export_reference import export_references
+        conn, zhbi = connect(settings.database_path), get_connection()
+        try:
+            result = count_products(conn, zhbi)
+            references = export_references(conn)
+            for product_id, quantity in result['products'].items():
+                quantity.update(references.get(product_id, {}))
+            return result
+        finally:
+            conn.close()
+            zhbi.close()
+
     @router.get("/api/calculation-export-template")
     def calculation_export_template(user=Depends(auth.current_user)):
         # Reference titles/quotes belong to the project, never public static assets.

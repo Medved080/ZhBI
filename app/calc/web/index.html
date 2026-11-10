@@ -8,22 +8,22 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23165d98'/%3E%3Cpath d='M9 6h14v20H9zM9 12h14M9 19h14M16 6v20' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="theme.css?v=20261004-skin-1">
   <link rel="stylesheet" href="styles.css?v=20261103-settings-1">
-  <link rel="stylesheet" href="workspace.css?v=20261005-workspace-4">
+  <link rel="stylesheet" href="workspace.css?v=20261105-materials-1">
   <script defer src="vendor/exceljs.min.js"></script>
   <script defer src="money-format.js?v=20261002-money-1"></script>
-  <script defer src="export-xlsx.js?v=20261020-missing-1"></script>
+  <script defer src="export-xlsx.js?v=20261106-all-source-columns-1"></script>
   <script defer src="api-client.js?v=20261004-probe-1"></script>
   <script defer src="workspace-ui.js?v=20261005-workspace-1"></script>
   <script defer src="project-files.js"></script>
   <script defer src="history.js?v=20261002-money-1"></script>
-  <script defer src="norms.js?v=20261005-excel-2-workspace-1"></script>
+  <script defer src="norms.js?v=20261110-all-diameters-1"></script>
   <script defer src="source-sheets.js?v=20261004-calc-path-1"></script>
   <script defer src="commercial-reference.js?v=20261003-workspace-2"></script>
   <script defer src="project-report.js?v=20261004-lite-1-workspace-1"></script>
   <script defer src="collisions.js?v=20261004-collisions-4"></script>
-  <script defer src="app.js?v=20261020-missing-3"></script>
+  <script defer src="app.js?v=20261106-project-quantity-1"></script>
   <script defer src="home.js?v=20261013-rf-2"></script>
-  <script defer src="tooltips.js?v=20261005-tips-7"></script>
+  <script defer src="tooltips.js?v=20261105-materials-1"></script>
   <script defer src="buttons.js?v=20261005-roles-3"></script>
   <script defer src="sync-panel.js?v=20261004-sync-3"></script>
   <script defer src="recovery.js?v=20261005-ai-settings-1"></script>
@@ -58,11 +58,11 @@
         <label class="pc-select-all" hidden><input id="pc-select-all" type="checkbox"> Выбрать найденные</label>
       </div>
       <div id="pc-products" class="pc-product-list"></div>
-      <div class="pc-catalog-footer"><div id="pc-active-context"><span id="pc-catalog-active" class="pc-context"></span><button id="pc-reveal-product" type="button">Показать</button></div><div class="pc-export-actions" hidden><span id="pc-selected-count" class="pc-context">Выбрано: 0</span><button id="pc-selection-clear" type="button">Снять</button><button id="pc-verify-selected" type="button" disabled title="Отметить выбранные изделия как проверенные по чертежу (запись останется в истории)">Проверено · 0</button><button id="pc-export" class="pc-export-button cursor-interaction" type="button" disabled>XLSX · 0</button><span id="pc-export-status" class="pc-context" role="status" aria-live="polite"></span></div></div>
+      <div class="pc-catalog-footer"><div id="pc-active-context"><span id="pc-catalog-active" class="pc-context"></span><button id="pc-reveal-product" type="button">Показать</button></div><div class="pc-export-actions" hidden><span id="pc-selected-count" class="pc-context">Выбрано: 0</span><button id="pc-selection-clear" type="button">Снять</button><button id="pc-verify-selected" type="button" disabled title="Отметить выбранные изделия как проверенные по чертежу (запись останется в истории)">Проверено · 0</button><button id="pc-export" class="pc-export-button cursor-interaction" type="button" disabled>XLSX · 0</button><button id="pc-export-materials" class="pc-export-button" type="button" disabled>Материалы XLSX · 0</button><span id="pc-export-status" class="pc-context" role="status" aria-live="polite"></span></div></div>
     </aside>
     <main class="pc-main">
       <section id="pc-home-panel" class="pc-home" hidden aria-label="Готовность калькуляций"></section>
-      <header class="pc-header"><div><span id="pc-card-context" class="pc-context">Карточка изделия</span><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><button id="pc-catalog-open" type="button">Выбрать изделие</button><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-export-one" class="pc-export-button" type="button" disabled>XLSX изделия</button><span id="pc-export-one-status" class="pc-context" role="status" aria-live="polite"></span></div></header>
+      <header class="pc-header"><div><span id="pc-card-context" class="pc-context">Карточка изделия</span><h2 id="pc-title">Загрузка изделий…</h2></div><div class="pc-header-actions"><button id="pc-catalog-open" type="button">Выбрать изделие</button><span id="pc-save-status" class="pc-context" role="status" aria-live="polite">Загрузка…</span><button id="pc-save-retry" type="button" hidden>Повторить</button><button id="pc-export-one" class="pc-export-button" type="button" disabled>XLSX изделия</button><button id="pc-export-materials-one" class="pc-export-button" type="button" disabled>Материалы XLSX</button><span id="pc-export-one-status" class="pc-context" role="status" aria-live="polite"></span></div></header>
       <div class="pc-tabs">
         <nav class="pc-primary-tabs" role="tablist" aria-label="Разделы изделия"><button id="pc-tab-calculation" type="button" role="tab" data-view="calculation" aria-pressed="true" aria-selected="true" aria-controls="pc-calculation-panel">Калькуляция</button><button id="pc-tab-model" type="button" role="tab" data-view="model" aria-pressed="false" aria-selected="false" aria-controls="pc-model-panel" tabindex="-1">Модель</button><button id="pc-tab-documents" type="button" role="tab" data-tab-group="documents" aria-selected="false" aria-controls="pc-sheets-panel" tabindex="-1">Документы</button><button id="pc-tab-review" type="button" role="tab" data-tab-group="review" aria-selected="false" aria-controls="pc-issues-panel" tabindex="-1">Проверка</button></nav>
         <details class="pc-more-menu"><summary>Ещё ▾</summary><div class="pc-menu-content"><button type="button" data-view="tech" aria-pressed="false" aria-controls="pc-tech-panel">Технология</button><button type="button" data-view="history" aria-pressed="false" aria-controls="pc-history-panel">История</button></div></details>
