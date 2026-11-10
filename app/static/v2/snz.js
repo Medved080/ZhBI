@@ -18,7 +18,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   let data = null, draft = null, dialog = null, dirty = false, busy = false, error = "", message = "";
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
   let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", shiftFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
-  let ordersDate = "";
+  let ordersDate = "", ignoreFact = false;
   const path = () => `/objects/${getObjectId()}/snz`;
   const canWrite = () => !!data?.can_write;
   const assignById = () => new Map(draft.assignments.map(a => [a.element_id, a]));
@@ -87,7 +87,8 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       <label>СНЗ бригады<select data-filter="crew">${options(draft.crews, crewId)}</select></label>
       <button data-action="preview" ${dirty ? "disabled title='Сначала сохраните изменения'" : ""}>Рассчитать смену</button>
       <button data-action="issue" class="snz-primary" ${!plan || plan.id || dirty || !plan.tasks.length || !canWrite() ? "disabled" : ""}>Выдать СНЗ</button>
-    </div>`;
+      <label class="snz-check"><input type="checkbox" data-filter="ignoreFact" ${ignoreFact?'checked':''}>Не учитывать факт</label>
+    </div>${ignoreFact?'<p class="snz-muted">Расчёт по плану: только назначения выбранной смены, без переноса остатка и учёта завершения. Порядок операций и технологические перерывы сохраняются.</p>':''}`;
   }
   function filtered() {
     const assignments = assignById(), q = filter.trim().toLocaleLowerCase("ru");
@@ -153,6 +154,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     const teams = [...new Set(doc.tasks.map(t=>t.team))], facts = doc.facts || draft.facts;
     return `<section class="snz-result"><div class="snz-controls"><h3>${doc.editPreview ? "Предпросмотр исправления СНЗ № "+doc.id : doc.id ? "Выданный СНЗ № "+doc.id : "Расчёт смены"}${doc.order_revision ? " · ред. "+doc.order_revision : ""}${doc.historical ? " · архив" : ""} · ${dayText(doc.date)} · ${shiftText(doc.shift)} · ${esc(doc.crew.name)}</h3>
       ${doc.id && !doc.editPreview ? `<button data-action="xlsx">Excel</button><button data-action="pdf">Поэтажные планы PDF</button>` : ""}</div>
+      ${doc.ignore_fact?'<p class="snz-muted" data-snz-mode>Режим расчёта: не учитывать факт. Рассчитаны назначения выбранной смены без автоматического переноса остатка.</p>':''}
       ${doc.warnings.length ? `<details class="snz-warnings"><summary>Предупреждения: ${doc.warnings.length}</summary><ul>${doc.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
       <p class="snz-muted">Изделий в СНЗ: ${members.size}. План: ${doc.tasks.length} операций · ${doc.tasks.reduce((n,t)=>n+t.segments.reduce((m,s)=>m+s.minutes,0),0)} минут работы звеньев. Факт: только 0 или 100 %.</p>
       <div class="snz-gantt" role="img" aria-label="Загрузка звеньев в течение смены"><div class="snz-gantt-row"><strong>Звено</strong><div class="snz-hours">${Array.from({length:13},(_,i)=>`<span style="left:${i/12*100}%">${String((Number(doc.start.slice(11,13))+i)%24).padStart(2,"0")}:00</span>`).join("")}</div></div>
@@ -270,6 +272,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       const id = Number(target.dataset.select); if (target.checked) selection.add(id); else selection.delete(id); renderItems();
     } else if (target.dataset.filter) {
       const k = target.dataset.filter, v = target.value;
+      if (k==="ignoreFact") { ignoreFact=target.checked;plan=null;message="";error=""; }
       if (k==="ordersDate") ordersDate=v;
       if (k==="date") { date=v;plan=null; }
       if (k==="shift") { shift=v;plan=null; }
@@ -296,21 +299,21 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     if (action==="close") { close();return; }
     if (action==="save") { await run(save);return; }
     if (action==="reload") { if ((dirty||editDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{await load();plan=null;orderEdit=null;revisions=null;});return; }
-    if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
+    if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId,ignore_fact:ignoreFact});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
     if(action==='sequence-up'||action==='sequence-down'){
       if(!plan||plan.id||!canWrite()||dirty)return;
       await run(async()=>{
-        const scope={date:plan.date,shift:plan.shift,crewId:plan.crew.id};
+        const scope={date:plan.date,shift:plan.shift,crewId:plan.crew.id,ignoreFact:!!plan.ignore_fact};
         const body=moveShiftItem(data,scope,Number(button.dataset.id),action==='sequence-up'?-1:1);
         // Invalidate before writing: an unknown outcome must never leave an
         // old fingerprint available for issuing a stale schedule.
         plan=null;
         await api.put(path()+'/state',body);await load();
-        plan=await api.post(path()+'/preview',{revision:data.revision,date:scope.date,shift:scope.shift,crew_id:scope.crewId});
+        plan=await api.post(path()+'/preview',{revision:data.revision,date:scope.date,shift:scope.shift,crew_id:scope.crewId,ignore_fact:scope.ignoreFact});
         message='Очередность сохранена, смена пересчитана.';
       });return;
     }
-    if (action==="issue") { const requestId=uid(); await run(async()=>{const r=await api.post(path()+"/orders",{revision:data.revision,date,shift,crew_id:crewId,request_id:requestId,expected_hash:plan.fingerprint});await load();plan=await api.get(path()+`/orders/${r.id}`);message="СНЗ выдан и сохранён";});return; }
+    if (action==="issue") { const requestId=uid(); await run(async()=>{const r=await api.post(path()+"/orders",{revision:data.revision,date,shift,crew_id:crewId,ignore_fact:ignoreFact,request_id:requestId,expected_hash:plan.fingerprint});await load();plan=await api.get(path()+`/orders/${r.id}`);message="СНЗ выдан и сохранён";});return; }
     if (["delete-order","edit-order","order-revisions","open-revision","open-order"].includes(action) && editDirty()) {
       error="Сначала сохраните исправление или нажмите «Отмена».";render();return;
     }
@@ -396,7 +399,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     bind: host => host.querySelector("[data-snz-open]")?.addEventListener("click",()=>open()),
     isDirty: () => dirty || busy || editDirty(),
     guardLeave: () => !dialog || close(),
-    reset: () => {close(true);data=null;draft=null;plan=null;selection.clear();},
+    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;selection.clear();},
     destroy: () => close(true),
     hideLabels: () => send("snzLabels", { items: [] }),
   };

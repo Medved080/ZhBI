@@ -95,6 +95,7 @@ class PlanIn(Strict):
     date: date
     shift: Literal["day", "night"]
     crew_id: str = Field(pattern=KEY)
+    ignore_fact: bool = Field(default=False, strict=True)
 
 
 class IssueIn(PlanIn):
@@ -283,7 +284,7 @@ def _calculate(conn, object_id, body):
     _version(revision, body.revision)
     if body.crew_id not in {c["id"] for c in state["crews"]}:
         raise HTTPException(422, "Бригада не найдена.")
-    snapshot = build_schedule(state, _elements(conn, object_id), _history(conn, object_id), body.date.isoformat(), body.shift, body.crew_id)
+    snapshot = build_schedule(state, _elements(conn, object_id), _history(conn, object_id), body.date.isoformat(), body.shift, body.crew_id, ignore_fact=body.ignore_fact)
     snapshot["revision"] = revision
     snapshot["object_name"] = conn.execute("SELECT name FROM objects WHERE id=?", (object_id,)).fetchone()[0]
     snapshot["fingerprint"] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -312,10 +313,12 @@ def issue(object_id: int, body: IssueIn, user=Depends(get_current_user)):
     try:
         begin_write(conn)
         assert_object_feature(conn, user, object_id, "planned_date", "write")
-        existing = conn.execute("SELECT id,work_date,shift,crew_id FROM snz_orders WHERE object_id=? AND request_id=?", (object_id, body.request_id)).fetchone()
+        existing = conn.execute("SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=? AND request_id=?", (object_id, body.request_id)).fetchone()
         if existing:
             if (existing["work_date"], existing["shift"], existing["crew_id"]) != (body.date.isoformat(), body.shift, body.crew_id):
                 raise HTTPException(409, "Этот запрос уже использован для другого СНЗ.")
+            if bool(json.loads(existing['snapshot_json']).get('ignore_fact')) != body.ignore_fact:
+                raise HTTPException(409, "Этот запрос уже использован с другим режимом учёта факта.")
             return {"id": existing["id"], "already_issued": True}
         if conn.execute("SELECT 1 FROM snz_orders WHERE object_id=? AND work_date=? AND shift=? AND crew_id=?",
                         (object_id, body.date.isoformat(), body.shift, body.crew_id)).fetchone():

@@ -100,10 +100,16 @@ def suggest_card(state, element):
     return choices[0] if len(choices) == 1 else None
 
 
-def build_schedule(state, elements, history, day, shift, crew_id):
+def build_schedule(state, elements, history, day, shift, crew_id, *, ignore_fact=False):
     from app.snz_ordering import normalize_montage
     state = planning_state(state)
     normalize_montage(state, {eid for order in history for eid in order_items(order)})
+    if ignore_fact:
+        # A planning projection only. Never clear real facts, statuses or orders.
+        state['facts'] = {}
+        history = []
+        elements = [dict(e, current_status='ready_for_installation')
+                    if e['current_status'] in ('installed', 'accepted') else e for e in elements]
     preparation = next((c['id'] for c in state['crews'] if c['kind'] == 'preparation'), None)
     if crew_id == preparation:
         # Forecast next shift without depending on this shift's preparation.
@@ -122,7 +128,9 @@ def build_schedule(state, elements, history, day, shift, crew_id):
         due.sort(key=lambda a: (shift_start(a['date'], a['shift']), montage_times.get(a['element_id'], datetime.max), a['priority'] or 10**9))
         for index, assignment in enumerate(due, 1):
             assignment['prep_priority'] = index
-    return _build_schedule(state, elements, history, day, shift, crew_id)
+    result = _build_schedule(state, elements, history, day, shift, crew_id)
+    result['ignore_fact'] = ignore_fact
+    return result
 
 
 def _build_schedule(state, elements, history, day, shift, crew_id, montage_times=None):
