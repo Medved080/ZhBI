@@ -22,6 +22,23 @@ CREATE TABLE IF NOT EXISTS snz_orders (
     UNIQUE(object_id,request_id)
 );
 
+
+-- Сохранённые редакции выданного СНЗ; исходный снимок сохраняется при первой правке.
+CREATE TABLE IF NOT EXISTS snz_order_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+    order_id INTEGER NOT NULL REFERENCES snz_orders(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    snapshot_json TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT NOT NULL,
+    request_id TEXT,
+    request_hash TEXT,
+    UNIQUE(order_id,revision),
+    UNIQUE(object_id,request_id)
+);
+
 CREATE TABLE IF NOT EXISTS elements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_file TEXT NOT NULL,

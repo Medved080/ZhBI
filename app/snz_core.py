@@ -113,16 +113,21 @@ def build_schedule(state, elements, history, day, shift, crew_id):
     assignments = {a["element_id"]: a for a in state["assignments"] if a["element_id"] in by_id}
     groups = {eid: g for g in state["groups"] for eid in g["element_ids"]}
     facts = state["facts"]
-    used, frozen, issued_steps = {}, {}, {}
+    used, frozen, issued_steps, issued_elements = {}, {}, {}, set()
     for order in sorted(history, key=lambda h: h["start"]):
         if datetime.fromisoformat(order["start"]) >= start:
             continue
         for eid, steps in order.get("assignment_steps", {}).items():
             issued_steps.setdefault(int(eid), steps)
         for task in order["tasks"]:
+            issued_elements.update(task["element_ids"])
             key = task["key"]
             frozen.setdefault(key, task)
             used[key] = used.get(key, 0) + sum(s["minutes"] for s in task["segments"])
+    started_elements = issued_elements | {int(key.split(":")[1]) for key, fact in facts.items()
+                                           if key.startswith("e:") and len(key.split(":")) >= 3 and key.split(":")[1].isdigit() and fact.get("completed")}
+    started_groups = {key.split(":")[1] for key, fact in facts.items() if key.startswith("g:") and len(key.split(":")) >= 3 and fact.get("completed")}
+    started_elements.update(eid for g in state["groups"] if g["id"] in started_groups for eid in g["element_ids"])
     warnings = []
     nodes, chains, steps_by_id = {}, {}, {}
     preparation = next((c["id"] for c in state["crews"] if c["kind"] == "preparation"), None)
@@ -138,6 +143,10 @@ def build_schedule(state, elements, history, day, shift, crew_id):
             continue
         release = shift_start(a["date"], a["shift"])
         prep_day, prep_shift = previous_shift(a["date"], a["shift"])
+        # Fresh work belongs to exactly its assigned shift. Historical issued
+        # work may continue, and preparation is due one shift before mounting.
+        if release != start and shift_start(prep_day, prep_shift) != start and not (release < start and eid in started_elements):
+            continue
         steps = deepcopy(issued_steps.get(eid) or operation_steps(state, a))
         steps_by_id[str(eid)] = steps
         chain = []

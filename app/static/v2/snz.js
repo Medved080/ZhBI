@@ -1,4 +1,5 @@
 import { esc } from "./screen-view.js";
+import { bindIssuedLayout } from "./snz-issued-layout.js";
 import { validateSteps, snzErrorIssue } from "./snz-validation.js";
 
 const uid = () => crypto.randomUUID().replaceAll("-", "");
@@ -11,10 +12,12 @@ const options = (rows, value, key = "id", title = "name") => rows.map(r => `<opt
 const textInput = (path, value, extra = "") => `<input data-path="${path}" value="${esc(value ?? "")}" ${extra}>`;
 
 export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged }) {
-  let validationIssue = null;
+  let validationIssue = null, orderEdit = null, revisions = null, scrollToEdit = false;
+  const editDirty = () => !!orderEdit && (orderEdit.exclude.size > 0 || !!orderEdit.reason.trim());
   let data = null, draft = null, dialog = null, dirty = false, busy = false, error = "", message = "";
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
-  let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
+  let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", shiftFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
+  let ordersDate = "";
   const path = () => `/objects/${getObjectId()}/snz`;
   const canWrite = () => !!data?.can_write;
   const assignById = () => new Map(draft.assignments.map(a => [a.element_id, a]));
@@ -56,6 +59,12 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     dialog.addEventListener("change", change);
     dialog.addEventListener("input", e => {
       if (e.target.matches("[data-filter=search]")) { filter = e.target.value; page = 0; renderItems(); }
+      if(e.target.matches("[data-edit-search]")&&orderEdit){orderEdit.filter=e.target.value;orderEdit.page=0;render();}
+      if (e.target.matches("[data-edit-reason]") && orderEdit) {
+        orderEdit.reason=e.target.value;orderEdit.preview=null;
+        dialog.querySelector('[data-action="edit-apply"]')?.setAttribute("disabled", "");
+        const button=dialog.querySelector('[data-action="edit-preview"]');if(button)button.disabled=!orderEdit.exclude.size||!orderEdit.reason.trim();
+      }
     });
     dialog.showModal(); busy = true; render();
     try { if (await load()) { if (orderId) plan = await api.get(path() + `/orders/${orderId}`); } }
@@ -64,9 +73,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   }
   function close(force = false) {
     if (busy && !force) return false;
-    if (dirty && !force && !window.confirm("Закрыть СНЗ без сохранения изменений?")) return false;
+    if ((dirty || editDirty()) && !force && !window.confirm("Закрыть СНЗ без сохранения изменений?")) return false;
     const wasOpen=!!dialog;
-    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; generation++;
+    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; orderEdit=null;revisions=null;generation++;
     if(wasOpen)onChanged?.();
     return true;
   }
@@ -86,6 +95,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       && (!dateFilter || assignments.get(e.id)?.date === dateFilter)
       && (!noDate || !assignments.get(e.id)?.date)
       && (!crewFilter || assignments.get(e.id)?.crew_id === crewFilter)
+      && (!shiftFilter || assignments.get(e.id)?.shift === shiftFilter)
       && (!noPriority || assignments.get(e.id)?.priority == null));
   }
   function itemsHtml() {
@@ -119,6 +129,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       <label>Статус<select data-filter="status">${options([{id:"ready_for_installation",name:"Готов к монтажу"},{id:"installed",name:"Смонтирован"},{id:"",name:"Все статусы"}],status)}</select></label>
       <label>Дата монтажа<input type="date" data-filter="dateFilter" value="${dateFilter}"></label>
       <label>Поток<select data-filter="crewFilter"><option value="">Все потоки</option>${options(draft.crews.filter(c=>c.kind==="installation"),crewFilter)}</select></label>
+      <label>Смена (отбор)<select data-filter="shiftFilter" aria-label="Смена позиций"><option value="">Все смены</option>${options([{id:"day",name:"День"},{id:"night",name:"Ночь"}],shiftFilter)}</select></label>
       <label class="snz-check"><input type="checkbox" data-filter="noPriority" ${noPriority?"checked":""}>Без очередности</label><label class="snz-check"><input type="checkbox" data-filter="noDate" ${noDate?"checked":""}>Без даты монтажа</label></div>
       <fieldset ${!canWrite() ? "disabled" : ""}><div class="snz-controls">
       <label>Карта для назначения<select data-filter="assignmentCard"><option value="auto" ${assignmentCard==="auto"?"selected":""}>По справочнику автоматически</option>${options(draft.cards,assignmentCard)}</select></label>
@@ -127,22 +138,22 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       </div><div data-items>${itemsHtml()}</div></fieldset>
       ${planHtml()}`;
   }
-  function planHtml() {
-    if (!plan) return "";
-    const origin = new Date(plan.start).getTime(), offset = s => Math.max(0, Math.min(100, (new Date(s).getTime()-origin)/432000));
-    const teams = [...new Set(plan.tasks.map(t=>t.team))], facts = plan.facts || draft.facts;
-    return `<section class="snz-result"><div class="snz-controls"><h3>${plan.id ? "Выданный СНЗ № "+plan.id : "Расчёт смены"} · ${dayText(plan.date)} · ${shiftText(plan.shift)} · ${esc(plan.crew.name)}</h3>
-      ${plan.id ? `<button data-action="xlsx">Excel</button><button data-action="pdf">Поэтажные планы PDF</button>` : ""}</div>
-      ${plan.warnings.length ? `<details class="snz-warnings"><summary>Предупреждения: ${plan.warnings.length}</summary><ul>${plan.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
-      <p class="snz-muted">План: ${plan.tasks.length} операций · ${plan.tasks.reduce((n,t)=>n+t.segments.reduce((m,s)=>m+s.minutes,0),0)} минут работы звеньев. Факт: только 0 или 100 %.</p>
-      <div class="snz-gantt" role="img" aria-label="Загрузка звеньев в течение смены"><div class="snz-gantt-row"><strong>Звено</strong><div class="snz-hours">${Array.from({length:13},(_,i)=>`<span style="left:${i/12*100}%">${String((Number(plan.start.slice(11,13))+i)%24).padStart(2,"0")}:00</span>`).join("")}</div></div>
+  function planHtml(doc = plan) {
+    if (!doc) return "";
+    const origin = new Date(doc.start).getTime(), offset = s => Math.max(0, Math.min(100, (new Date(s).getTime()-origin)/432000));
+    const teams = [...new Set(doc.tasks.map(t=>t.team))], facts = doc.facts || draft.facts;
+    return `<section class="snz-result"><div class="snz-controls"><h3>${doc.editPreview ? "Предпросмотр исправления СНЗ № "+doc.id : doc.id ? "Выданный СНЗ № "+doc.id : "Расчёт смены"}${doc.order_revision ? " · ред. "+doc.order_revision : ""}${doc.historical ? " · архив" : ""} · ${dayText(doc.date)} · ${shiftText(doc.shift)} · ${esc(doc.crew.name)}</h3>
+      ${doc.id && !doc.editPreview ? `<button data-action="xlsx">Excel</button><button data-action="pdf">Поэтажные планы PDF</button>` : ""}</div>
+      ${doc.warnings.length ? `<details class="snz-warnings"><summary>Предупреждения: ${doc.warnings.length}</summary><ul>${doc.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
+      <p class="snz-muted">План: ${doc.tasks.length} операций · ${doc.tasks.reduce((n,t)=>n+t.segments.reduce((m,s)=>m+s.minutes,0),0)} минут работы звеньев. Факт: только 0 или 100 %.</p>
+      <div class="snz-gantt" role="img" aria-label="Загрузка звеньев в течение смены"><div class="snz-gantt-row"><strong>Звено</strong><div class="snz-hours">${Array.from({length:13},(_,i)=>`<span style="left:${i/12*100}%">${String((Number(doc.start.slice(11,13))+i)%24).padStart(2,"0")}:00</span>`).join("")}</div></div>
       ${teams.map(team=>`<div class="snz-gantt-row"><strong>${esc(team)}</strong><div class="snz-track">
-      ${[[0,20],...(plan.shift==="day"?[[300,360]]:[[240,300]]),[700,720]].map(([a,b])=>`<span class="snz-break" style="left:${a/720*100}%;width:${(b-a)/720*100}%"></span>`).join("")}
-      ${plan.tasks.flatMap((t,i)=>t.team!==team?[]:t.segments.map(s=>`<span class="snz-bar snz-color-${i%5}" style="left:${offset(s.start)}%;width:${offset(s.end)-offset(s.start)}%" title="${esc(t.operation)} · ${esc(t.elements.map(e=>e.mark||e.id).join(', '))} · ${timeText(s.start)}–${timeText(s.end)}">${i+1}</span>`)).join("")}</div></div>`).join("")}</div>
+      ${[[0,20],...(doc.shift==="day"?[[300,360]]:[[240,300]]),[700,720]].map(([a,b])=>`<span class="snz-break" style="left:${a/720*100}%;width:${(b-a)/720*100}%"></span>`).join("")}
+      ${doc.tasks.flatMap((t,i)=>t.team!==team?[]:t.segments.map(s=>`<span class="snz-bar snz-color-${i%5}" style="left:${offset(s.start)}%;width:${offset(s.end)-offset(s.start)}%" title="${esc(t.operation)} · ${esc(t.elements.map(e=>e.mark||e.id).join(', '))} · ${timeText(s.start)}–${timeText(s.end)}">${i+1}</span>`)).join("")}</div></div>`).join("")}</div>
       <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Операция / изделие</th><th>Звено</th><th>Время</th><th>Норматив / остаток</th><th>Факт</th></tr></thead><tbody>
-      ${plan.tasks.map((t,i)=>`<tr><td>${i+1}</td><td><strong>${esc(t.operation)}</strong><small>${esc(t.group_name || t.elements.map(e=>e.mark||e.id).join(', '))}${t.group_name?" · "+esc(t.elements.map(e=>e.mark||e.id).join(', ')):""}${t.carry?" · перенос":""}</small></td><td>${esc(t.team)}</td>
+      ${doc.tasks.map((t,i)=>`<tr><td>${i+1}</td><td><strong>${esc(t.operation)}</strong><small>${esc(t.group_name || t.elements.map(e=>e.mark||e.id).join(', '))}${t.group_name?" · "+esc(t.elements.map(e=>e.mark||e.id).join(', ')):""}${t.carry?" · перенос":""}</small></td><td>${esc(t.team)}</td>
       <td>${t.segments.map(s=>`${timeText(s.start)}–${timeText(s.end)}`).join("<br>")}</td><td>${t.norm_minutes} / ${t.remaining_after} мин</td>
-      <td>${facts[t.key]?.completed?'<span class="snz-done">100 % · завершено</span>':`<span>0 %</span> ${plan.id && data.can_fact?`<button data-action="complete" data-key="${esc(t.key)}">Завершить</button>`:""}`}</td></tr>`).join("") || '<tr><td colspan="6">Нет рассчитанных работ.</td></tr>'}</tbody></table></div></section>`;
+      <td>${facts[t.key]?.completed?'<span class="snz-done">100 % · завершено</span>':`<span>0 %</span> ${doc.id && !doc.editPreview && !doc.historical && data.can_fact?`<button data-action="complete" data-key="${esc(t.key)}">Завершить</button>`:""}`}</td></tr>`).join("") || '<tr><td colspan="6">Нет рассчитанных работ.</td></tr>'}</tbody></table></div></section>`;
   }
   function cardsHtml() {
     const card = draft.cards.find(c=>c.id===cardId) || draft.cards[0], ci = draft.cards.indexOf(card);
@@ -175,18 +186,53 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       <p class="snz-muted">Если ригели имеют разные нормативы общих операций, выберите для узла отдельную карту — например, для трёх или четырёх ригелей.</p>
       <table class="snz-table"><thead><tr><th>Узел</th><th>Ригели</th><th>Карта общих операций</th><th></th></tr></thead><tbody>${draft.groups.map((g,i)=>`<tr><td>${textInput(`groups.${i}.name`,g.name, g.element_ids.some(locked)?"disabled":"")}</td><td>${g.element_ids.map(id=>esc(data.elements.find(e=>e.id===id)?.mark||id)+" ("+id+")").join(", ")}</td><td><select data-path="groups.${i}.card_id" ${g.element_ids.some(locked)?"disabled":""}><option value="">Из карт изделий</option>${options(draft.cards,g.card_id)}</select></td><td><button data-action="remove-group" data-id="${g.id}" ${g.element_ids.some(locked)?"disabled":""}>Удалить</button></td></tr>`).join("")||'<tr><td colspan="4">Узлы пока не заданы.</td></tr>'}</tbody></table>`;
   }
+  function orderEditHtml(){
+    if(!orderEdit)return "";
+    const order=orderEdit.order, members=new Map(order.tasks.flatMap(t=>t.elements.map(e=>[e.id,e])));
+    const protectedIds=new Set(order.tasks.filter(t=>order.facts[t.key]?.completed).flatMap(t=>t.element_ids));
+    const assignments=assignById(),query=orderEdit.filter.trim().toLocaleLowerCase("ru");
+    const rows=[...members.values()].filter(e=>!query||[e.mark,e.id,e.element_type,e.address].join(" ").toLocaleLowerCase("ru").includes(query));
+    const pages=Math.max(1,Math.ceil(rows.length/60));orderEdit.page=Math.min(orderEdit.page,pages-1);
+    const pageRows=rows.slice(orderEdit.page*60,(orderEdit.page+1)*60);
+    return `<section class="snz-edit"><h3>Редактирование состава СНЗ № ${order.id} · ${dayText(order.date)} · ${shiftText(order.shift)}</h3>
+      <p>Отметьте изделия для исключения. Изменяется только этот СНЗ; назначения и внесённый факт сохраняются. Исходная редакция останется в истории. Ригели с общей операцией исключаются всем узлом.</p>
+      <div class="snz-controls"><label>Поиск изделия<input type="search" data-edit-search value="${esc(orderEdit.filter)}" placeholder="Марка, тип или ID"></label><span>Найдено: ${rows.length} · исключить: ${orderEdit.exclude.size}</span><button data-action="edit-prev" ${orderEdit.page===0?"disabled":""}>Назад</button><span>${orderEdit.page+1} / ${pages}</span><button data-action="edit-next" ${orderEdit.page+1>=pages?"disabled":""}>Далее</button></div>
+      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>Исключить</th><th>Изделие</th><th>Назначено на</th><th>Состояние</th></tr></thead><tbody>${pageRows.map(e=>{const a=assignments.get(e.id);return `<tr><td><input type="checkbox" data-edit-exclude="${e.id}" ${orderEdit.exclude.has(e.id)?"checked":""} ${protectedIds.has(e.id)?"disabled":""} aria-label="Исключить ${esc(e.mark||e.id)}"></td><td>${esc(e.mark||e.id)}<small>${esc(e.element_type)} · ID ${e.id}</small></td><td>${dayText(a?.date)} · ${a?shiftText(a.shift):"—"}</td><td>${protectedIds.has(e.id)?"Есть завершённые операции":"Можно исключить"}</td></tr>`}).join("")||'<tr><td colspan="4">В документе нет изделий.</td></tr>'}</tbody></table></div>
+      <label class="snz-edit-reason">Причина исправления<textarea data-edit-reason rows="2" maxlength="1000" placeholder="Например, изделие относится к дневной смене">${esc(orderEdit.reason)}</textarea></label>
+      <div class="snz-controls"><button data-action="edit-preview" ${!orderEdit.exclude.size||!orderEdit.reason.trim()?"disabled":""}>Проверить исправление</button><button class="snz-primary" data-action="edit-apply" ${!orderEdit.preview?"disabled":""}>Сохранить редакцию</button><button data-action="edit-cancel">Отмена</button></div>
+      ${orderEdit.preview?planHtml({...orderEdit.preview,id:order.id,editPreview:true,facts:order.facts}):""}</section>`;
+  }
+  function revisionsHtml(){
+    if(!revisions)return "";
+    return `<section class="snz-edit"><h3>Редакции СНЗ № ${revisions.id}</h3><table class="snz-table"><thead><tr><th>Редакция</th><th>Дата</th><th>Автор</th><th>Причина</th><th></th></tr></thead><tbody>${revisions.rows.map(r=>`<tr><td>${r.revision}</td><td>${esc(r.created_at)}</td><td>${esc(r.created_by)}</td><td>${esc(r.reason)}</td><td><button data-action="open-revision" data-id="${revisions.id}" data-revision="${r.revision}">Открыть редакцию</button></td></tr>`).join("")}</tbody></table></section>`;
+  }
   function ordersHtml() {
-    return `<p class="snz-muted">Один выданный документ относится к одному прорабу и одной смене. Его состав и расписание сохраняются без последующих изменений.</p>
-      <table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Выдал</th><th></th></tr></thead><tbody>${data.orders.map(o=>`<tr><td>${o.id}</td><td>${dayText(o.work_date)}</td><td>${shiftText(o.shift)}</td><td>${esc(crewName(o.crew_id))}</td><td>${esc(o.created_by)}</td><td><button data-action="open-order" data-id="${o.id}">Открыть</button></td></tr>`).join("")||'<tr><td colspan="6">Выданных СНЗ пока нет.</td></tr>'}</tbody></table>${planHtml()}`;
+    const rows=data.orders.filter(o=>!ordersDate||o.work_date===ordersDate);
+    const total=(ordersDate?data.registry_by_date?.[ordersDate]:data.registry_total)||{quantity:0,unique_quantity:0};
+    return `<div class="snz-issued-layout"><section class="snz-orders-top" aria-label="Реестр выданных СНЗ">
+      <div class="snz-controls"><label>Дата СНЗ (отбор)<input type="date" data-filter="ordersDate" value="${esc(ordersDate)}"></label><button data-action="orders-all">Все даты</button><button data-action="registry-xlsx" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Реестр за день в Excel</button></div>
+      <p class="snz-muted">Дата — начало смены. Ночь: 20:00 выбранного дня — 08:00 следующего.</p>
+      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Прораб</th><th>Количество шт</th><th>Выдал</th><th>Действия</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${o.id}${o.order_revision>1?` · ред. ${o.order_revision}`:""}</td><td>${dayText(o.work_date)}</td><td title="${dayText(o.start)} ${timeText(o.start)} — ${dayText(o.end)} ${timeText(o.end)}">${shiftText(o.shift)}</td><td>${esc(o.crew_name)}</td><td>${esc(o.foreman||"Не назначен")}</td><td>${o.quantity}</td><td>${esc(o.created_by)}</td><td><div class="snz-order-actions"><button data-action="open-order" data-id="${o.id}">Открыть</button>${canWrite()?`<button data-action="edit-order" data-id="${o.id}">Редактировать</button>`:""}<button data-action="order-revisions" data-id="${o.id}">Редакции</button></div></td></tr>`).join("")||'<tr><td colspan="8">За выбранную дату СНЗ не выдавались.</td></tr>'}</tbody></table></div>
+      <p class="snz-registry-total"><strong>Итого по документам: ${total.quantity} шт.</strong> Уникальных изделий: ${total.unique_quantity} шт. · СНЗ: ${rows.length}</p></section>
+      <div class="snz-issued-splitter" data-snz-splitter role="separator" aria-label="Высота реестра и открытого СНЗ" aria-orientation="horizontal" aria-valuemin="15" aria-valuemax="80" tabindex="0" title="Перетащите для изменения высоты; стрелки вверх и вниз — с клавиатуры"></div>
+      <section class="snz-orders-bottom" aria-label="Открытый СНЗ">${orderEditHtml()}${revisionsHtml()}${!orderEdit?planHtml():""}${!orderEdit&&!revisions&&!plan?'<p class="snz-muted">Откройте СНЗ в реестре сверху. Высоту частей можно изменить разделителем.</p>':""}</section></div>`;
   }
   function render() {
     if (!dialog) return;
     const active = document.activeElement, focusKey = active?.dataset?.path;
+    const paneScroll=[...dialog.querySelectorAll('.snz-orders-top,.snz-orders-bottom')].map(el=>el.scrollTop);
+    const editScroll=orderEdit?dialog.querySelector('.snz-content')?.scrollTop:null;
+    const searchFocus=active?.matches('[data-edit-search]')?active.selectionStart:null;
     dialog.innerHTML = `<header class="snz-head"><div><h2>Сменные наряд-задания</h2><p data-dirty>${dirty?"Есть несохранённые изменения":"Планирование, загрузка звеньев и выдача прорабам"}</p></div><span class="snz-spacer"></span>
       <button data-action="save" class="snz-primary" ${!dirty||busy||!canWrite()?"disabled":""}>Сохранить изменения</button><button data-action="reload" ${busy?"disabled":""}>Обновить</button><button data-action="close" ${busy?"disabled":""} aria-label="Закрыть СНЗ">Закрыть</button></header>
       <nav class="snz-tabs" aria-label="Разделы СНЗ">${[["plan","Планирование"],["cards","Нормативы"],["operations","Операции"],["teams","Звенья"],["crews","Бригады"],["groups","Узлы ригелей"],["orders","Выданные СНЗ"]].map(([id,name])=>`<button data-tab="${id}" aria-pressed="${id===tab}" ${busy?"disabled":""}>${name}</button>`).join("")}</nav>
-      <div class="snz-content" ${busy?'aria-busy="true"':""}>${error?`<p class="snz-error" role="alert">${esc(error)}</p>`:""}${message?`<p class="snz-message" role="status">${esc(message)}</p>`:""}
+      <div class="snz-content ${tab==="orders"?"snz-issued-content":""}" ${busy?'aria-busy="true"':""}>${error?`<p class="snz-error" role="alert">${esc(error)}</p>`:""}${message?`<p class="snz-message" role="status">${esc(message)}</p>`:""}
       ${!draft?"<p>Загрузка данных СНЗ…</p>":`<fieldset ${busy?"disabled":""}>${tab==="plan"?plannerHtml():tab==="orders"?ordersHtml():`<fieldset ${!canWrite()?"disabled":""}>${tab==="cards"?cardsHtml():tab==="operations"?operationsHtml():tab==="teams"?teamsHtml():tab==="crews"?crewsHtml():groupsHtml()}</fieldset>`}</fieldset>`}</div>`;
+    bindIssuedLayout(dialog);
+    dialog.querySelectorAll('.snz-orders-top,.snz-orders-bottom').forEach((el,i)=>{el.scrollTop=paneScroll[i]||0;});
+    if(editScroll!=null)dialog.querySelector('.snz-content').scrollTop=editScroll;
+    if(searchFocus!=null){const input=dialog.querySelector('[data-edit-search]');input?.focus();input?.setSelectionRange(searchFocus,searchFocus);}
+    if(scrollToEdit&&!busy){dialog.querySelector('.snz-edit')?.scrollIntoView({block:'start'});scrollToEdit=false;}
     const invalid=validationIssue&&dialog.querySelector(`[data-path="${CSS.escape(validationIssue.path)}"]`);
     if(invalid){invalid.setAttribute("aria-invalid","true");invalid.title=validationIssue.message;if(!busy){invalid.focus();invalid.scrollIntoView({block:"nearest"});}}
     else if (focusKey) dialog.querySelector(`[data-path="${CSS.escape(focusKey)}"]`)?.focus();
@@ -200,10 +246,15 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       if (key==="card_id" && target.dataset.path.startsWith("groups.") && !target.value) holder[key]=null;
       if(validationIssue?.path===target.dataset.path){validationIssue=null;error="";target.removeAttribute("aria-invalid");target.removeAttribute("title");dialog.querySelector(".snz-error")?.remove();}
       dirtyMark();
+    } else if (target.dataset.editExclude && orderEdit) {
+      const id=Number(target.dataset.editExclude),group=orderEdit.order.tasks.find(t=>t.group_id&&t.element_ids.includes(id));
+      for(const member of group?.element_ids||[id])target.checked?orderEdit.exclude.add(member):orderEdit.exclude.delete(member);
+      orderEdit.preview=null;render();
     } else if (target.dataset.select) {
       const id = Number(target.dataset.select); if (target.checked) selection.add(id); else selection.delete(id); renderItems();
     } else if (target.dataset.filter) {
       const k = target.dataset.filter, v = target.value;
+      if (k==="ordersDate") ordersDate=v;
       if (k==="date") { date=v;plan=null; }
       if (k==="shift") { shift=v;plan=null; }
       if (k==="crew") { crewId=v;plan=null; }
@@ -212,6 +263,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
       if (k==="status") status=v;
       if (k==="dateFilter") dateFilter=v;
       if (k==="crewFilter") crewFilter=v;
+      if (k==="shiftFilter") shiftFilter=v;
       if (k==="noPriority") noPriority=target.checked;
       if (k==="noDate") noDate=target.checked;
       page=0; render();
@@ -219,17 +271,46 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
   }
   async function click(e) {
     const button = e.target.closest("button"); if (!button || button.disabled || busy) return;
-    if (button.dataset.tab) { tab=button.dataset.tab;error="";message="";render();return; }
+    if (button.dataset.tab) { if(editDirty()){error="Сначала сохраните исправление или нажмите «Отмена».";render();return;} tab=button.dataset.tab;error="";message="";render();return; }
     const action = button.dataset.action;
+    if(action==="orders-all"){ordersDate="";render();return;}
+    if(action==="registry-xlsx"&&ordersDate){
+      await run(async()=>{const blob=await api.download(path()+`/registry.xlsx?date=${ordersDate}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`Реестр-СНЗ-${ordersDate}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
+    }
     if (action==="close") { close();return; }
     if (action==="save") { await run(save);return; }
-    if (action==="reload") { if (dirty&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{await load();plan=null;});return; }
-    if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId});});return; }
+    if (action==="reload") { if ((dirty||editDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{await load();plan=null;orderEdit=null;revisions=null;});return; }
+    if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
     if (action==="issue") { const requestId=uid(); await run(async()=>{const r=await api.post(path()+"/orders",{revision:data.revision,date,shift,crew_id:crewId,request_id:requestId,expected_hash:plan.fingerprint});await load();plan=await api.get(path()+`/orders/${r.id}`);message="СНЗ выдан и сохранён";});return; }
-    if (action==="open-order") { if(dirty){error="Сначала сохраните изменения или обновите данные.";render();return;} await run(async()=>{plan=await api.get(path()+`/orders/${Number(button.dataset.id)}`);});return; }
+    if (["edit-order","order-revisions","open-revision","open-order"].includes(action) && editDirty()) {
+      error="Сначала сохраните исправление или нажмите «Отмена».";render();return;
+    }
+    if(["edit-order","edit-preview","edit-apply"].includes(action)&&!canWrite())return;
+    if(action==="edit-order"){
+      if(dirty){error="Сначала сохраните изменения планирования.";render();return;}
+      await run(async()=>{await load();const order=await api.get(path()+`/orders/${Number(button.dataset.id)}`);orderEdit={order,exclude:new Set(),reason:"",preview:null,filter:"",page:0};plan=null;revisions=null;scrollToEdit=true;});return;
+    }
+    if(["edit-prev","edit-next"].includes(action)&&orderEdit){orderEdit.page+=action==="edit-next"?1:-1;render();return;}
+    if(action==="edit-cancel"){if(editDirty()&&!window.confirm("Отменить исправление состава СНЗ?"))return;orderEdit=null;error="";render();return;}
+    if(action==="edit-preview"&&orderEdit){
+      await run(async()=>{orderEdit.preview=await api.post(path()+`/orders/${orderEdit.order.id}/edit-preview`,{revision:data.revision,order_revision:orderEdit.order.order_revision,exclude_element_ids:[...orderEdit.exclude],reason:orderEdit.reason});});return;
+    }
+    if(action==="edit-apply"&&orderEdit?.preview){
+      if(!window.confirm(`Сохранить новую редакцию СНЗ № ${orderEdit.order.id}? Исключается изделий: ${orderEdit.exclude.size}. Исходная редакция останется в истории.`))return;
+      const id=orderEdit.order.id,body={revision:data.revision,order_revision:orderEdit.order.order_revision,exclude_element_ids:[...orderEdit.exclude],reason:orderEdit.reason,request_id:uid(),expected_hash:orderEdit.preview.fingerprint};
+      await run(async()=>{try{await api.post(path()+`/orders/${id}/revisions`,body);}catch(e){orderEdit.preview=null;throw e;}orderEdit=null;revisions=null;await load();plan=await api.get(path()+`/orders/${id}`);message="Исправленная редакция СНЗ сохранена. Исходная доступна в «Редакциях».";});return;
+    }
+    if(action==="order-revisions"){
+      if(dirty){error="Сначала сохраните изменения планирования.";render();return;}
+      await run(async()=>{const id=Number(button.dataset.id);revisions={id,rows:await api.get(path()+`/orders/${id}/revisions`)};orderEdit=null;});return;
+    }
+    if(action==="open-revision"){
+      await run(async()=>{plan=await api.get(path()+`/orders/${Number(button.dataset.id)}/revisions/${Number(button.dataset.revision)}`);});return;
+    }
+    if (action==="open-order") { if(dirty){error="Сначала сохраните изменения или обновите данные.";render();return;} await run(async()=>{plan=await api.get(path()+`/orders/${Number(button.dataset.id)}`);orderEdit=null;revisions=null;});return; }
     if (action==="complete") { const key=button.dataset.key; await run(async()=>{const r=await api.post(path()+"/facts",{revision:data.revision,task_key:key});await load();plan=await api.get(path()+`/orders/${plan.id}`);message=r.warnings?.join(" ")||"Операция завершена";send("poll");});return; }
     if (action==="xlsx" || action==="pdf") {
-      await run(async()=>{const blob=await api.download(path()+`/orders/${plan.id}/export.${action}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`СНЗ-${plan.id}.${action}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
+      await run(async()=>{const blob=await api.download(path()+`/orders/${plan.id}/export.${action}${plan.historical?"?revision="+plan.order_revision:""}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`СНЗ-${plan.id}${plan.order_revision?"-ред-"+plan.order_revision:""}.${action}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
     }
     if (action==="show-sequence") { const items=draft.assignments.filter(a=>a.date===date&&a.shift===shift&&a.crew_id===crewId).map(a=>({id:a.element_id,priority:a.priority}));if(close()){send("setView",{mode:"2d"});send("snzLabels",{items});}return; }
     if (action==="clear") selection.clear();
@@ -271,7 +352,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged })
     open,
     html: () => `<section class="ws-pad"><h3>Сменные наряд-задания</h3><p>Нормативы, назначения изделий, узлы ригелей и загрузка звеньев.</p><p>Выбрано на модели: ${getSelectedIds().length}</p><button type="button" data-snz-open>Открыть планирование СНЗ</button><p class="v2-muted">Выделенные на модели изделия будут выбраны в планировании.</p></section>`,
     bind: host => host.querySelector("[data-snz-open]")?.addEventListener("click",()=>open()),
-    isDirty: () => dirty || busy,
+    isDirty: () => dirty || busy || editDirty(),
     guardLeave: () => !dialog || close(),
     reset: () => {close(true);data=null;draft=null;plan=null;selection.clear();},
     destroy: () => close(true),

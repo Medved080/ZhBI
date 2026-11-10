@@ -1,4 +1,4 @@
-"""СНЗ в АРМ прораба: справочники, назначения, расчёт, неизменяемая выдача и факт."""
+"""СНЗ: справочники, расчёт, выдача, версии исправлений, реестр и факт."""
 import json
 import hashlib
 from datetime import date, datetime
@@ -100,6 +100,18 @@ class IssueIn(PlanIn):
     expected_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class EditPreviewIn(Strict):
+    revision: int = Field(ge=0)
+    order_revision: int = Field(ge=1)
+    exclude_element_ids: list[int] = Field(min_length=1, max_length=20000)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class EditOrderIn(EditPreviewIn):
+    request_id: str = Field(pattern=KEY)
+    expected_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class FactIn(Strict):
     revision: int = Field(ge=0)
     task_key: str = Field(min_length=1, max_length=160)
@@ -190,7 +202,7 @@ def _validate(state, elements, old, history):
     for eid in locked:
         before, after = old_assignments.get(eid), new_assignments.get(eid)
         if before != after:
-            raise HTTPException(409, "Изделие уже включено в выданный СНЗ. Изменение выданных назначений не предусмотрено.")
+            raise HTTPException(409, "Изделие включено в выданный СНЗ. Сначала исправьте состав связанных документов кнопкой «Редактировать».")
     old_groups = {g["id"]: g for g in old["groups"]}
     new_groups = {g["id"]: g for g in state["groups"]}
     for gid, g in old_groups.items():
@@ -204,8 +216,8 @@ def get_state(object_id: int, user=Depends(get_current_user)):
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
         state, revision = _load(conn, object_id)
-        orders = [dict(r) for r in conn.execute(
-            "SELECT id,work_date,shift,crew_id,created_at,created_by FROM snz_orders WHERE object_id=? ORDER BY work_date DESC,id DESC", (object_id,))]
+        from app.snz_registry import registry
+        register = registry(conn, object_id)
         locked = sorted({eid for order in _history(conn, object_id) for task in order["tasks"] for eid in task["element_ids"]})
         elements = _elements(conn, object_id)
         grouped = {eid: g for g in state["groups"] for eid in g["element_ids"]}
@@ -214,7 +226,7 @@ def get_state(object_id: int, user=Depends(get_current_user)):
             element["completed_operations"] = [op["name"] for op in state["operations"]
                 if state["facts"].get(f"e:{element['id']}:{op['id']}", {}).get("completed")
                 or (element["id"] in grouped and state["facts"].get(f"g:{grouped[element['id']]['id']}:{op['id']}", {}).get("completed"))]
-        return {"revision": revision, "state": state, "elements": elements, "orders": orders, "locked_element_ids": locked,
+        return {"revision": revision, "state": state, "elements": elements, **register, "locked_element_ids": locked,
                 "can_write": has_feature(conn, user, "planned_date", "write", object_id),
                 "can_fact": has_feature(conn, user, "status", "write", object_id)}
     finally:
@@ -273,6 +285,12 @@ def preview(object_id: int, body: PlanIn, user=Depends(get_current_user)):
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
+        state, revision = _load(conn, object_id)
+        _version(revision, body.revision)
+        issued = conn.execute("SELECT id FROM snz_orders WHERE object_id=? AND work_date=? AND shift=? AND crew_id=?", (object_id, body.date.isoformat(), body.shift, body.crew_id)).fetchone()
+        if issued:
+            snapshot = _order(conn, object_id, issued["id"])
+            return {**snapshot, "id": issued["id"], "order_revision": snapshot.get("order_revision", 1), "facts": state["facts"], "current_revision": revision}
         return _calculate(conn, object_id, body)
     finally:
         conn.close()
@@ -332,7 +350,115 @@ def read_order(object_id: int, order_id: int, user=Depends(get_current_user)):
         assert_object_feature(conn, user, object_id, "plan", "read")
         result = _order(conn, object_id, order_id)
         state, revision = _load(conn, object_id)
-        return {**result, "id": order_id, "facts": state["facts"], "current_revision": revision}
+        return {**result, "id": order_id, "order_revision": result.get("order_revision", 1), "facts": state["facts"], "current_revision": revision}
+    finally:
+        conn.close()
+
+
+def _edit_preview(conn, object_id, order_id, body):
+    from app.snz_order_edit import revise_order
+    state, revision = _load(conn, object_id)
+    _version(revision, body.revision)
+    old = _order(conn, object_id, order_id)
+    if old.get("order_revision", 1) != body.order_revision:
+        raise HTTPException(409, "Редакция СНЗ изменилась. Откройте документ заново.")
+    if not body.reason.strip():
+        raise HTTPException(422, "Укажите причину исправления СНЗ.")
+    if len(set(body.exclude_element_ids)) != len(body.exclude_element_ids) or any(eid <= 0 for eid in body.exclude_element_ids):
+        raise HTTPException(422, "Недопустимый список исключаемых изделий.")
+    try:
+        snapshot = revise_order(old, state["facts"], body.exclude_element_ids, _history(conn, object_id))
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    snapshot["revision"] = revision
+    snapshot["edit_reason"] = body.reason.strip()
+    snapshot["fingerprint"] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return snapshot
+
+
+@router.post("/orders/{order_id}/edit-preview")
+def preview_order_edit(object_id: int, order_id: int, body: EditPreviewIn, user=Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "planned_date", "write")
+        return _edit_preview(conn, object_id, order_id, body)
+    finally:
+        conn.close()
+
+
+@router.post("/orders/{order_id}/revisions")
+def edit_order(object_id: int, order_id: int, body: EditOrderIn, user=Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        begin_write(conn)
+        assert_object_feature(conn, user, object_id, "planned_date", "write")
+        payload = body.model_dump(mode="json")
+        request_hash = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        existing = conn.execute("SELECT order_id,revision,request_hash FROM snz_order_revisions WHERE object_id=? AND request_id=?", (object_id, body.request_id)).fetchone()
+        if existing:
+            if existing["order_id"] != order_id or existing["request_hash"] != request_hash:
+                raise HTTPException(409, "Этот запрос исправления уже использован для другого действия.")
+            return {"id": order_id, "order_revision": existing["revision"], "revision": _load(conn, object_id)[1], "already_applied": True}
+        row = conn.execute("SELECT * FROM snz_orders WHERE object_id=? AND id=?", (object_id, order_id)).fetchone()
+        if not row:
+            raise HTTPException(404, "СНЗ не найден.")
+        snapshot = _edit_preview(conn, object_id, order_id, body)
+        if snapshot["fingerprint"] != body.expected_hash:
+            raise HTTPException(409, "Данные СНЗ изменились после предпросмотра. Проверьте исправление заново.")
+        state, revision = _load(conn, object_id)
+        name = audit_display_name(user)
+        old = json.loads(row["snapshot_json"])
+        old_revision = old.get("order_revision", 1)
+        # The original legacy row is archived lazily, inside this same transaction.
+        conn.execute("INSERT OR IGNORE INTO snz_order_revisions(object_id,order_id,revision,snapshot_json,created_at,created_by,reason) VALUES (?,?,?,?,?,?,?)",
+                     (object_id, order_id, old_revision, row["snapshot_json"], row["created_at"], old.get("edited_by", row["created_by"]), old.get("edit_reason", "Первоначальная выдача")))
+        snapshot["edited_by"] = name
+        snapshot["edited_at"] = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+        raw = json.dumps(snapshot, ensure_ascii=False)
+        conn.execute("INSERT INTO snz_order_revisions(object_id,order_id,revision,snapshot_json,created_by,reason,request_id,request_hash) VALUES (?,?,?,?,?,?,?,?)",
+                     (object_id, order_id, snapshot["order_revision"], raw, name, body.reason.strip(), body.request_id, request_hash))
+        conn.execute("UPDATE snz_orders SET snapshot_json=?,source_revision=? WHERE object_id=? AND id=?", (raw, revision, object_id, order_id))
+        _write(conn, object_id, state, revision)
+        conn.commit()
+        activity.log("snz_issue", user=user, entity_type="object", entity_id=object_id,
+                     details={"order_id": order_id, "order_revision": snapshot["order_revision"], "excluded_element_ids": body.exclude_element_ids, "reason": body.reason.strip()})
+        return {"id": order_id, "order_revision": snapshot["order_revision"], "revision": revision + 1}
+    finally:
+        conn.close()
+
+
+def _order_revision(conn, object_id, order_id, revision):
+    current = _order(conn, object_id, order_id)
+    if revision is None or revision == current.get("order_revision", 1):
+        return current
+    row = conn.execute("SELECT snapshot_json FROM snz_order_revisions WHERE object_id=? AND order_id=? AND revision=?", (object_id, order_id, revision)).fetchone()
+    if not row:
+        raise HTTPException(404, "Редакция СНЗ не найдена.")
+    return json.loads(row[0])
+
+
+@router.get("/orders/{order_id}/revisions")
+def list_order_revisions(object_id: int, order_id: int, user=Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "plan", "read")
+        _order(conn, object_id, order_id)
+        rows = [dict(row) for row in conn.execute("SELECT revision,reason,created_at,created_by FROM snz_order_revisions WHERE object_id=? AND order_id=? ORDER BY revision DESC", (object_id, order_id))]
+        if not rows:
+            row = conn.execute("SELECT created_at,created_by FROM snz_orders WHERE id=?", (order_id,)).fetchone()
+            rows = [{"revision": 1, "reason": "Первоначальная выдача", **dict(row)}]
+        return rows
+    finally:
+        conn.close()
+
+
+@router.get("/orders/{order_id}/revisions/{revision}")
+def read_order_revision(object_id: int, order_id: int, revision: int, user=Depends(get_current_user)):
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "plan", "read")
+        snapshot = _order_revision(conn, object_id, order_id, revision)
+        return {**snapshot, "id": order_id, "order_revision": revision, "historical": True, "facts": _load(conn, object_id)[0]["facts"]}
     finally:
         conn.close()
 
@@ -397,13 +523,28 @@ def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
         conn.close()
 
 
+@router.get("/registry.xlsx")
+def export_registry(object_id: int, date: date, user=Depends(get_current_user)):
+    from app.snz_registry import registry
+    from app.snz_export import build_registry_xlsx
+    conn = get_connection()
+    try:
+        assert_object_feature(conn, user, object_id, "plan", "read")
+        report = registry(conn, object_id, date.isoformat())
+        data = build_registry_xlsx(report, date)
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="SNZ-register-{date.isoformat()}.xlsx"'})
+    finally:
+        conn.close()
+
+
 @router.get("/orders/{order_id}/export.xlsx")
-def export_xlsx(object_id: int, order_id: int, user=Depends(get_current_user)):
+def export_xlsx(object_id: int, order_id: int, user=Depends(get_current_user), revision: int | None = None):
     from app.snz_export import build_xlsx
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
-        order = _order(conn, object_id, order_id)
+        order = _order_revision(conn, object_id, order_id, revision)
         data = build_xlsx(order)
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="SNZ-{order_id}.xlsx"'})
@@ -412,12 +553,12 @@ def export_xlsx(object_id: int, order_id: int, user=Depends(get_current_user)):
 
 
 @router.get("/orders/{order_id}/export.pdf")
-def export_pdf(object_id: int, order_id: int, user=Depends(get_current_user)):
+def export_pdf(object_id: int, order_id: int, user=Depends(get_current_user), revision: int | None = None):
     from app.snz_export import build_pdf
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
-        order = _order(conn, object_id, order_id)
+        order = _order_revision(conn, object_id, order_id, revision)
         sources = {e["source_file"] for task in order["tasks"] for e in task["elements"]}
         axes = [dict(r) for source in sources for r in conn.execute("SELECT * FROM axis_lines WHERE source_file=?", (source,))]
         return Response(build_pdf(order, _elements(conn, object_id), axes), media_type="application/pdf",

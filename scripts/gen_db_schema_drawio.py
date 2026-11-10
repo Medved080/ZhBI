@@ -132,6 +132,14 @@ COLUMNS = [
      "supplier_change_docs", "supplier_change_items", "supplier_change_history_moves"],
 ]
 
+# Newer subsystems retain their metadata order in separate lanes. Keep the
+# hand-tuned legacy layout; never silently omit a table added to TABLES.
+_placed = {name for column in COLUMNS for name in column}
+for _color in dict.fromkeys(table[2] for table in TABLES):
+    _extra = [table[0] for table in TABLES if table[0] not in _placed and table[2] == _color]
+    if _extra:
+        COLUMNS.append(_extra)
+
 
 # Цвет связи — по таблице, НА КОТОРУЮ она ссылается: все линии, ведущие в
 # objects, одного цвета, в contracts — другого. Так пучок из десятка ссылок

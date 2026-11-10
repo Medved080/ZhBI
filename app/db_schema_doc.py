@@ -1567,13 +1567,28 @@ TABLES.extend([
         ('shift', 'TEXT', '', 'day — дневная, night — ночная с началом в 20:00 указанной даты'),
         ('crew_id', 'TEXT', '', 'Стабильный идентификатор бригады в справочнике объекта'),
         ('source_revision', 'INTEGER', '', 'Ревизия исходных данных расчёта'),
-        ('snapshot_json', 'TEXT', '', 'Неизменяемый снимок нормативов, назначений, изделий и временных отрезков'),
+        ('snapshot_json', 'TEXT', '', 'Текущая редакция снимка нормативов, назначений, изделий и временных отрезков; история в snz_order_revisions'),
         ('created_at', 'TEXT', '', 'Время выдачи UTC'),
         ('created_by', 'TEXT', '', 'Имя выдавшего сотрудника на момент выдачи'),
         ('request_id', 'TEXT', '', 'Ключ идемпотентности выдачи после потери ответа'),
     ]),
 ])
 FKS.extend([('snz_state', 'object_id', 'objects', 'id', 'CASCADE'), ('snz_orders', 'object_id', 'objects', 'id', 'CASCADE')])
+
+
+TABLES.append(('snz_order_revisions', 'snz_order_revisions — Редакции выданных СНЗ', C_ELEM, S_ELEM, [
+    ('id', 'INTEGER', 'PK', 'ID редакции'),
+    ('object_id', 'INTEGER', 'FK', 'Объект ЖБИ'),
+    ('order_id', 'INTEGER', 'FK', 'Выданный СНЗ'),
+    ('revision', 'INTEGER', '', 'Номер редакции документа; исходная — 1'),
+    ('snapshot_json', 'TEXT', '', 'Полный сохранённый снимок редакции расчёта'),
+    ('reason', 'TEXT', '', 'Причина исправления состава'),
+    ('created_at', 'TEXT', '', 'Время создания редакции, UTC'),
+    ('created_by', 'TEXT', '', 'Автор редакции'),
+    ('request_id', 'TEXT', '', 'Ключ повтора запроса исправления; NULL у исходной редакции'),
+    ('request_hash', 'TEXT', '', 'Отпечаток параметров запроса для защиты от повтора с другим содержимым'),
+]))
+FKS.extend([('snz_order_revisions', 'object_id', 'objects', 'id', 'CASCADE'), ('snz_order_revisions', 'order_id', 'snz_orders', 'id', 'CASCADE')])
 
 BY_NAME = {t[0]: t for t in TABLES}
 

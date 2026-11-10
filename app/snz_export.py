@@ -5,6 +5,70 @@ from io import BytesIO
 from pathlib import Path
 
 
+def build_registry_xlsx(report, day):
+    """A frozen daily register; quantities count physical items within each order."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Реестр СНЗ"
+    ws.append([f"Реестр выданных СНЗ за {day.strftime('%d.%m.%Y')}"])
+    ws.merge_cells("A1:J1")
+    ws.append(["Дата относится к началу смены. Ночь: 20:00 выбранной даты — 08:00 следующего дня."])
+    ws.merge_cells("A2:J2")
+    ws.append([])
+    ws.append(["№ СНЗ", "Дата", "Смена", "Начало", "Окончание", "Бригада", "Прораб", "Количество шт", "Выдал", "Редакция"])
+    for row in report["orders"]:
+        ws.append([row["id"], datetime.fromisoformat(row["work_date"]), "День" if row["shift"] == "day" else "Ночь",
+                   datetime.fromisoformat(row["start"]), datetime.fromisoformat(row["end"]), row["crew_name"],
+                   row["foreman"] or "Не назначен", row["quantity"], row["created_by"], row["order_revision"]])
+    end = ws.max_row
+    if report["orders"]:
+        table = Table(displayName="SNZDailyRegister", ref=f"A4:J{end}")
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        ws.add_table(table)
+    else:
+        ws.append(["За выбранную дату СНЗ не выдавались."])
+        ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=10)
+    ws.append([])
+    ws.append(["Итого по документам, шт", None, None, None, None, None, None, report["registry_total"]["quantity"]])
+    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=7)
+    ws.append(["Уникальных изделий, шт", None, None, None, None, None, None, report["registry_total"]["unique_quantity"]])
+    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=7)
+    ws.append(["Перенос одного изделия между сменами учитывается в каждом СНЗ; уникальные изделия — один раз за день."])
+    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=10)
+    for row in ws:
+        ws.row_dimensions[row[0].row].height = 36
+        for cell in row:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+            cell.font = Font(name="Calibri", size=11)
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+    for cell in ws[4]:
+        cell.fill = PatternFill("solid", fgColor="17365D")
+        cell.font = Font(name="Calibri", size=11, color="FFFFFF", bold=True)
+    ws["A1"].font = Font(name="Calibri", size=16, bold=True, color="17365D")
+    for row in ws.iter_rows(min_row=5, max_row=end):
+        row[1].number_format = "dd.mm.yyyy"
+        row[3].number_format = row[4].number_format = "dd.mm.yyyy hh:mm"
+        row[7].number_format = "#,##0"
+    for i, width in enumerate([9, 15, 11, 23, 23, 37, 29, 17, 29, 12], 1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "D5"
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A3
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = "1:4"
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
 def build_xlsx(order):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
@@ -15,7 +79,7 @@ def build_xlsx(order):
     ws = wb.active
     ws.title = "СНЗ"
     crew = order["crew"]
-    ws.append([f"Сменное наряд-задание · {order['object_name']}"])
+    ws.append([f"Сменное наряд-задание · {order['object_name']}" + (f" · редакция {order['order_revision']}" if order.get("order_revision", 1) > 1 else "")])
     ws.append([f"{order['date']} · {'День' if order['shift'] == 'day' else 'Ночь'} · {crew['name']} · Прораб: {crew['foreman'] or 'не назначен'}"])
     ws.merge_cells("A1:N1")
     ws.merge_cells("A2:N2")
@@ -49,7 +113,7 @@ def build_xlsx(order):
         items.append([eid, e["element_type"], e.get("subtype"), e.get("mark"), e.get("elevation_mm"), e.get("floor"), e.get("address"),
                       e.get("counterparty"), e.get("zakhvatka"), e.get("crane"), e.get("stance"), crew["name"], related["priorities"].get(str(eid)),
                       "День" if order["shift"] == "day" else "Ночь", datetime.fromisoformat(order["date"]),
-                      datetime.fromisoformat(install["segments"][0]["start"]) if install else None])
+                      datetime.fromisoformat(install["segments"][0]["start"]) if install and install["segments"] else None])
     if elements:
         table = Table(displayName="SNZElements", ref=f"A1:P{items.max_row}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
@@ -171,6 +235,13 @@ def build_pdf(order, context, axes):
     pdf = canvas.Canvas(output, pagesize=(w, h))
     pdf.setTitle("СНЗ — поэтажные планы")
     selected = {e["id"]: e for t in order["tasks"] for e in t["elements"]}
+    if not selected:
+        pdf.setFont("SNZ-Bold", 18)
+        pdf.drawString(35, h - 45, "СНЗ без работ после исправления состава")
+        pdf.setFont("SNZ", 11)
+        pdf.drawString(35, h - 70, f"{order['date']} · {'День' if order['shift'] == 'day' else 'Ночь'} · редакция {order.get('order_revision', 1)}")
+        pdf.drawString(35, h - 92, "Исходный состав сохранён в истории редакций СНЗ.")
+        pdf.showPage()
     floors = sorted({e.get("floor") for e in selected.values()}, key=lambda f: (f is None, f or 0))
     for page, floor in enumerate(floors, 1):
         active = {eid: e for eid, e in selected.items() if e.get("floor") == floor}
@@ -189,8 +260,12 @@ def build_pdf(order, context, axes):
         oy = bottom + (height - (ymax - ymin) * scale) / 2
         def xy(x, y):
             return ox + (x - xmin) * scale, oy + (y - ymin) * scale
-        pdf.setFont("SNZ-Bold", 15)
-        pdf.drawString(35, h - 32, f"СНЗ · {order['object_name']} · Этаж {floor if floor is not None else 'не задан'}")
+        title = f"СНЗ · {order['object_name']} · Этаж {floor if floor is not None else 'не задан'}" + (f" · ред. {order['order_revision']}" if order.get("order_revision", 1) > 1 else "")
+        title_size = 15
+        while pdf.stringWidth(title, "SNZ-Bold", title_size) > w - 70 and title_size > 8:
+            title_size -= .5
+        pdf.setFont("SNZ-Bold", title_size)
+        pdf.drawString(35, h - 32, title)
         pdf.setFont("SNZ", 10)
         pdf.drawString(35, h - 51, f"{order['date']} · {'Дневная' if order['shift'] == 'day' else 'Ночная'} смена · {order['crew']['name']} · Прораб: {order['crew']['foreman'] or 'не назначен'}")
         pdf.setStrokeColor(HexColor("#CBD5E1")); pdf.setLineWidth(.5)
