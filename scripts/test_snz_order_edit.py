@@ -127,7 +127,10 @@ class EditTests(unittest.TestCase):
     def test_later_issued_order_protects_history(self):
         oid,_=self.prepare();data=self.snz.get_state(self.object_id,self.admin)
         plan=self.snz.preview(self.object_id,self.snz.PlanIn(revision=data['revision'],date='2026-11-10',shift='night',crew_id='install1'),self.admin)
-        self.snz.issue(self.object_id,self.snz.IssueIn(revision=data['revision'],date='2026-11-10',shift='night',crew_id='install1',expected_hash=plan['fingerprint'],request_id='later'),self.admin)
+        # Historical overlapping carry snapshots remain readable/editable under their original rules.
+        from unittest.mock import patch
+        with patch('app.snz_closure.assert_previous_orders_closed'):
+            self.snz.issue(self.object_id,self.snz.IssueIn(revision=data['revision'],date='2026-11-10',shift='night',crew_id='install1',expected_hash=plan['fingerprint'],request_id='later'),self.admin)
         with self.assertRaises(HTTPException):self.snz.preview_order_edit(self.object_id,oid,self.proposal(oid,[self.ids[0]]),self.admin)
 
     def test_other_object_unknown_member_and_no_permission(self):
@@ -189,7 +192,10 @@ class EditTests(unittest.TestCase):
         oid,_=self.prepare()
         data=self.snz.get_state(self.object_id,self.admin)
         plan=self.snz.preview(self.object_id,self.snz.PlanIn(revision=data['revision'],date='2026-11-10',shift='night',crew_id='install1'),self.admin)
-        self.snz.issue(self.object_id,self.snz.IssueIn(revision=data['revision'],date='2026-11-10',shift='night',crew_id='install1',expected_hash=plan['fingerprint'],request_id='night'),self.admin)
+        # Historical overlapping carry snapshots remain readable/editable under their original rules.
+        from unittest.mock import patch
+        with patch('app.snz_closure.assert_previous_orders_closed'):
+            self.snz.issue(self.object_id,self.snz.IssueIn(revision=data['revision'],date='2026-11-10',shift='night',crew_id='install1',expected_hash=plan['fingerprint'],request_id='night'),self.admin)
         data=self.snz.get_state(self.object_id,self.admin)
         self.assertEqual(data['registry_by_date']['2026-11-10'],{'quantity':8,'unique_quantity':4})
         self.assertEqual(data['orders'][0]['quantity'],4)

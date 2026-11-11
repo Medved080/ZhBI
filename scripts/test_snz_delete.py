@@ -89,7 +89,10 @@ class DeleteTests(unittest.TestCase):
         self.setUp();oid=self.prepare();d=self.snz.get_state(self.object_id,self.admin)
         p=self.snz.PlanIn(revision=d['revision'],date='2026-11-10',shift='night',crew_id='install1')
         preview=self.snz.preview(self.object_id,p,self.admin)
-        night=self.snz.issue(self.object_id,self.snz.IssueIn(**p.model_dump(),request_id='night',expected_hash=preview['fingerprint']),self.admin)['id']
+        # Historical overlapping carry snapshots remain readable/editable under their original rules.
+        from unittest.mock import patch
+        with patch('app.snz_closure.assert_previous_orders_closed'):
+            night=self.snz.issue(self.object_id,self.snz.IssueIn(**p.model_dump(),request_id='night',expected_hash=preview['fingerprint']),self.admin)['id']
         with self.assertRaises(HTTPException):self.delete(oid)
         r=self.delete(night)
         self.assertEqual(r['released_element_ids'],[]);self.assertTrue(all(ids==[oid] for ids in r['kept_in_orders'].values()))

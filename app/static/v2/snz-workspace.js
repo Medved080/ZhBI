@@ -81,7 +81,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     const rowSelect=(field,rows,value,label)=>`<select data-snzi-row="${field}" data-id="${e.id}" aria-label="${label} ${esc(e.mark||e.id)}" ${disabled}>${options(rows,value)}</select>`;
     return `<tr aria-selected="${selected.has(e.id)}">
       <td><input type="checkbox" data-snzi-check="${e.id}" ${selected.has(e.id)?'checked':''} aria-label="Выбрать ${esc(e.mark||e.id)}"></td>
-      <td><button class="snzi-locate" data-snzi-locate="${e.id}">${esc(e.mark||'ID '+e.id)}</button>${locked.has(e.id)?' · выдано':''}</td>
+      <td><button class="snzi-locate" data-snzi-locate="${e.id}">${esc(e.mark||'ID '+e.id)}</button>${locked.has(e.id)?' · выдано':''}${e.transfer_from?`<small>Перенос с ${esc(e.transfer_from.split('-').reverse().join('.'))}</small>`:''}</td>
       <td>${esc(e.element_type)}</td><td>${esc(e.floor??'—')} / ${esc(e.address||'—')}</td><td>${esc(getScene()?.statusLabels?.[e.current_status]||e.current_status)}</td>
       <td>${rowInput('date',a?.date,'type="date"')}</td>
       <td>${rowSelect('shift',[{id:'day',name:'День'},{id:'night',name:'Ночь'}],a?.shift||shift||'day','Смена')}</td>

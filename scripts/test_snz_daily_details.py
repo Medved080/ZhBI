@@ -20,7 +20,10 @@ class DailyDetailsTests(unittest.TestCase):
         d=self.snz.get_state(self.object_id,self.admin)
         body=self.snz.PlanIn(revision=d['revision'],date=day,shift=shift,crew_id='install1')
         preview=self.snz.preview(self.object_id,body,self.admin)
-        return self.snz.issue(self.object_id,self.snz.IssueIn(**body.model_dump(),request_id=request,expected_hash=preview['fingerprint']),self.admin)['id']
+        # Historical overlapping carry snapshots remain readable/editable under their original rules.
+        from unittest.mock import patch
+        with patch('app.snz_closure.assert_previous_orders_closed'):
+            return self.snz.issue(self.object_id,self.snz.IssueIn(**body.model_dump(),request_id=request,expected_hash=preview['fingerprint']),self.admin)['id']
 
     def test_all_daily_sheets_include_both_shifts_and_exclude_next_start_date(self):
         from openpyxl import load_workbook

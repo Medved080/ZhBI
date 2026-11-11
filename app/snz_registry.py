@@ -9,6 +9,8 @@ def registry(conn, object_id, work_date=None, include_snapshots=False):
     if work_date is not None:
         sql += " AND work_date=?"
         args.append(work_date)
+    from app.snz_closure import closed_orders
+    closed=closed_orders(conn,object_id)
     records, by_date, all_ids, snapshots = [], {}, set(), []
     for row in conn.execute(sql + " ORDER BY work_date DESC,id DESC", args):
         record = dict(row)
@@ -16,9 +18,11 @@ def registry(conn, object_id, work_date=None, include_snapshots=False):
         if include_snapshots:
             snapshots.append({**snapshot,'id':record['id'],'order_revision':snapshot.get('order_revision',1)})
         ids = set(order_items(snapshot))
-        record.update(order_revision=snapshot.get("order_revision", 1),
+        record.update(crew_kind=snapshot["crew"].get("kind","installation"),order_revision=snapshot.get("order_revision", 1),
                       crew_name=snapshot["crew"]["name"], foreman=snapshot["crew"].get("foreman", ""),
                       quantity=len(ids), start=snapshot["start"], end=snapshot["end"])
+        closure=closed.get(str(record["id"]))
+        record.update(closed_at=closure["closed_at"] if closure else None,closed_by=closure["closed_by"] if closure else None)
         records.append(record)
         summary = by_date.setdefault(record["work_date"], {"quantity": 0, "ids": set()})
         summary["quantity"] += len(ids)

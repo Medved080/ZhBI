@@ -8,7 +8,7 @@ POST-чтение отчётов (`/reports/*`), выгрузки (`/export.xlsx
 (гамма, цвет подписей, «Ознакомился») помечены как «личная» — они видны и в V1 у того же пользователя. Серверная авторизация действует
 на все операции, разрешённые и нет; шлюз её не заменяет.
 
-## Разрешено (266)
+## Разрешено (269)
 
 | Экран | Действие | Запрос | Риск | Доказательство проверки |
 | --- | --- | --- | --- | --- |
@@ -18,7 +18,10 @@ POST-чтение отчётов (`/reports/*`), выгрузки (`/export.xlsx
 | workspace | СНЗ: проверить исключение изделий из выданного документа | `POST /objects/{id}/snz/orders/{id}/edit-preview` (только поля: revision, order_revision, exclude_element_ids, reason) |  | scripts/test_snz_order_edit.py, scripts/test_snz_order_edit_ui.mjs |
 | workspace | СНЗ: сохранить исправленную редакцию с историей | `POST /objects/{id}/snz/orders/{id}/revisions` (только поля: revision, order_revision, exclude_element_ids, reason, request_id, expected_hash) | новая редакция выданного СНЗ; исходный снимок и факты сохраняются | scripts/test_snz_order_edit.py, scripts/test_snz_order_edit_ui.mjs |
 | workspace | СНЗ: удалить документ и освободить его назначения с сохранением архива | `POST /objects/{id}/snz/orders/{id}/delete` (только поля: revision, order_revision, request_id) | удаление выданного СНЗ; ревизии, архив, защита факта и связанных документов | scripts/test_snz_delete.py, scripts/test_snz_delete_ui.mjs |
-| workspace | СНЗ: завершение операции и монтаж после всех операций | `POST /objects/{id}/snz/facts` (только поля: revision, task_key, completed_at, expected_montage_rev) | факт выполнения; общий обработчик статуса | scripts/test_snz.py, scripts/test_snz_ui.mjs |
+| workspace | СНЗ: закрыть задания по дате, смене и бригаде | `POST /objects/{id}/snz/facts/close` (только поля: revision, date, shift, crew_id, expected_hash, request_id) | фиксация факта и возврат несмонтированных изделий в доступный отбор | scripts/test_snz_closure.py, scripts/test_snz_fact_reporting_ui.mjs |
+| workspace | СНЗ: сохранить примечание к факту | `PUT /objects/{id}/snz/facts/note` (только поля: revision, element_id, note_key, text) |  | scripts/test_snz_fact_reporting.py, scripts/test_snz_fact_reporting_ui.mjs |
+| workspace | СНЗ: дополнительный факт монтажа вне плана | `POST /objects/{id}/snz/facts/extra` (только поля: revision, date, crew_id, completed_at, request_id, items) | смена статуса; транзакция, ревизия и защита повтора | scripts/test_snz_fact_reporting.py, scripts/test_snz_fact_reporting_ui.mjs |
+| workspace | СНЗ: завершение операции и отдельный факт монтажа | `POST /objects/{id}/snz/facts` (только поля: revision, task_key, completed_at, expected_montage_rev, order_id) | факт выполнения; общий обработчик статуса | scripts/test_snz.py, scripts/test_snz_ui.mjs |
 | procurement | Разобрать ЗВП, ЗП и оплаты без записи | `POST /procurement/import/analyze` |  | scripts/test_procurement.py, scripts/test_procurement_ui.mjs |
 | procurement | Сохранить отдельную загрузку закупок и оплат | `POST /procurement/import/apply` |  | scripts/test_procurement.py, scripts/test_procurement_ui.mjs |
 | procurement | Сопоставить позиции ЗП с исходной потребностью | `PUT /procurement/snapshots/{id}/allocations/[a-f0-9]{24}` (только поля: expected_revision, allocations, reset) |  | scripts/test_procurement.py, scripts/test_procurement_ui.mjs |

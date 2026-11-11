@@ -1666,3 +1666,8 @@ input[type="file"]:disabled::file-selector-button { opacity: .5; cursor: default
 .v2-wn-st { font-size: 0.6875rem; border-radius: 10px; padding: 1px 8px; white-space: nowrap; border: 1px solid var(--line); color: var(--muted); }
 .v2-wn-st.ok { border-color: var(--good); color: var(--good); }
 .v2-wn-st.error, .v2-wn-st.failed { border-color: var(--bad); color: var(--bad); }
+
+.snz-extra-panel{position:static;width:100%;padding:16px;background:var(--bg);color:var(--ink);box-sizing:border-box}
+.snz-extra-panel h3{margin:0 0 8px}.snz-extra-panel p{font-size:13px;margin:8px 0}.snz-extra-panel label{display:flex;flex-direction:column;gap:5px;margin:12px 0;font-size:13px}.snz-extra-panel input,.snz-extra-panel select{height:36px;box-sizing:border-box;width:100%;padding:5px 8px;font:14px system-ui;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}.snz-extra-panel small{display:block;color:var(--muted)}.snz-extra-panel .ws-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+.snz-extra-panel [data-extra-alert]:empty{display:none}

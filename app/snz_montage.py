@@ -3,6 +3,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from app.snz_policy import order_items
+from app.snz_fact_store import records
 
 
 def status_montage(conn, object_id):
@@ -55,17 +56,36 @@ def project_montage(state, statuses):
 
 def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=None):
     grouped={}
+    store=records(state)
+    closed=store.get("closed",{})
     for row in conn.execute('SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=? ORDER BY work_date,shift,id',(object_id,)):
         if day and row['work_date']!=day:continue
         if shift and row['shift']!=shift:continue
         if crew_id and row['crew_id']!=crew_id:continue
         order=json.loads(row['snapshot_json']);members=order_items(order)
-        for task in order['tasks']:
-            if task['operation_id']!='install':continue
-            for eid in task['element_ids']:
-                item=grouped.setdefault(eid,{**members[eid],'orders':[],
-                    'task_key':task['key'] if task['element_ids']==[eid] else None})
-                item['orders'].append({'id':row['id'],'date':row['work_date'],'shift':row['shift'],'crew':order['crew']['name']})
+        if order['crew'].get('kind')=='preparation':continue
+        for eid,member in members.items():
+            task=next((t for t in order['tasks'] if t['operation_id']=='install' and t['element_ids']==[eid]),None)
+            item=grouped.setdefault(eid,{**member,'orders':[],'task_key':task['key'] if task else None})
+            if task:item['task_key']=task['key']
+            item['orders'].append({'id':row['id'],'date':row['work_date'],'shift':row['shift'],'crew_id':row['crew_id'],'crew':order['crew']['name'],
+                    'foreman':order['crew'].get('foreman',''),'note_key':f"o:{row['id']}:e:{eid}",
+                    'note':store['notes'].get(f"o:{row['id']}:e:{eid}",{}).get('text',''),
+                    'closed_at':closed.get(str(row['id']),{}).get('closed_at'),
+                    'frozen':closed.get(str(row['id']),{}).get('rows',{}).get(str(eid))})
+    for request_id,batch in store['extra'].items():
+        if day and batch['date']!=day:continue
+        if crew_id and batch['crew_id']!=crew_id:continue
+        for record in batch['items']:
+            if shift and record['shift']!=shift:continue
+            eid=record['element']['id']
+            item=grouped.setdefault(eid,{**record['element'],'orders':[],'task_key':None})
+            ref={'request_id':request_id,'date':batch['date'],'crew_id':batch['crew_id'],
+                 'crew':batch['crew']['name'],'foreman':batch['crew'].get('foreman',''),
+                 'shift':record['shift'],'history_id':record['history_id'],
+                 'note_key':f'x:{request_id}:e:{eid}'}
+            ref['note']=store['notes'].get(ref['note_key'],{}).get('text','')
+            item.setdefault('extra',[]).append(ref)
     for eid,item in grouped.items():
         status=statuses.get(eid,{})
         fact=state['facts'].get(item['task_key'],{})
@@ -73,4 +93,17 @@ def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=No
                     completed=bool(status.get('completed_at') or fact.get('completed')),completed_at=status.get('completed_at') or fact.get('completed_at'),
                     status_confirmed=status.get('current_status') in ('installed','accepted'),
                     expected_rev=status.get('expected_rev'))
+        item['closed']=bool(item['orders']) and all(r.get('closed_at') for r in item['orders']) and not item.get('extra')
+        if item.get('extra') and not any(not r.get('closed_at') for r in item['orders']):item['task_key']=None
+        if item['closed']:
+            frozen=[r['frozen'] for r in item['orders'] if r.get('frozen')]
+            if frozen:
+                chosen=next((r for r in reversed(frozen) if r['status_confirmed']),frozen[-1])
+                item.update(chosen)
+        if not item['orders'] or (item.get('extra') and all(r.get('closed_at') for r in item['orders'])):
+            # A later rollback/reinstallation must not confirm an unrelated old extra record.
+            matching=any(ref['history_id']==status.get('history_id') for ref in item.get('extra',[]))
+            item['status_confirmed']=bool(matching and status.get('completed_at'))
+            item['completed']=item['status_confirmed']
+            item['completed_at']=status.get('completed_at') if item['completed'] else None
     return list(grouped.values())

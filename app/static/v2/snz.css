@@ -21,3 +21,7 @@
 .snz-issued-splitter:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
 .snz-orders-bottom{flex:1;min-height:0;overflow:auto;padding:0 2px}
 .snz-orders-bottom>.snz-edit,.snz-orders-bottom>.snz-result,.snz-sequence{margin-top:0;border-top:0}
+.snz-dialog .snz-fact-notes{min-width:240px;max-width:350px}
+.snz-dialog .snz-fact-notes label{display:flex;flex-direction:column;gap:4px}
+.snz-dialog .snz-fact-notes textarea{width:100%;box-sizing:border-box;min-height:64px;font:14px system-ui;border:1px solid #cbd5e1;border-radius:6px;padding:8px;resize:vertical}
+.snz-dialog .snz-fact-notes button{margin:6px 0 10px}

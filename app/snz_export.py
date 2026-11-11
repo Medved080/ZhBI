@@ -109,7 +109,7 @@ def build_xlsx(order):
         ws.column_dimensions[get_column_letter(col)].width = width
 
     items = wb.create_sheet("Изделия")
-    items.append(["ID изделия", "Тип элемента", "Подтип", "Марка", "Отметка, мм", "Этаж", "Адрес по осям", "Контрагент (справочно)", "Захватка", "Кран", "Стоянка", "Бригада", "Очередность", "Смена", "Дата", "Время монтажа"])
+    items.append(["ID изделия", "Тип элемента", "Подтип", "Марка", "Отметка, мм", "Этаж", "Адрес по осям", "Контрагент (справочно)", "Захватка", "Кран", "Стоянка", "Бригада", "Очередность", "Смена", "Дата", "Время монтажа", "Перенос с"])
     elements = order_items(order)
     for eid, e in sorted(elements.items()):
         install = next((t for t in order["tasks"] if t["operation_id"] == "install" and eid in t["element_ids"]), None)
@@ -117,13 +117,13 @@ def build_xlsx(order):
         items.append([eid, e["element_type"], e.get("subtype"), e.get("mark"), e.get("elevation_mm"), e.get("floor"), e.get("address"),
                       e.get("counterparty"), e.get("zakhvatka"), e.get("crane"), e.get("stance"), crew["name"], order.get("item_priorities", related.get("priorities", {})).get(str(eid)),
                       "День" if order["shift"] == "day" else "Ночь", datetime.fromisoformat(order["date"]),
-                      datetime.fromisoformat(install["segments"][0]["start"]) if install and install["segments"] else None])
+                      datetime.fromisoformat(install["segments"][0]["start"]) if install and install["segments"] else None, e.get("transfer_from")])
     if elements:
-        table = Table(displayName="SNZElements", ref=f"A1:P{items.max_row}")
+        table = Table(displayName="SNZElements", ref=f"A1:Q{items.max_row}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
         items.add_table(table)
     items.freeze_panes = "E2"
-    for i in range(1, 17):
+    for i in range(1, 18):
         items.column_dimensions[get_column_letter(i)].width = 23 if i not in (5, 6, 13) else 13
     for row in items.iter_rows(min_row=2):
         row[14].number_format = "dd.mm.yyyy"
@@ -223,112 +223,6 @@ def _points(e):
     return [(x - 150, y - 150), (x + 150, y - 150), (x + 150, y + 150), (x - 150, y + 150)]
 
 
-def build_pdf(order, context, axes):
-    from reportlab.pdfgen import canvas
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.pagesizes import A3, landscape
-    from reportlab.lib.colors import HexColor
-
-    fonts = Path(__file__).parent / "fonts"
-    for name, filename in (("SNZ", "DejaVuSans.ttf"), ("SNZ-Bold", "DejaVuSans-Bold.ttf")):
-        if name not in pdfmetrics.getRegisteredFontNames():
-            pdfmetrics.registerFont(TTFont(name, str(fonts / filename)))
-    output = BytesIO()
-    w, h = landscape(A3)
-    pdf = canvas.Canvas(output, pagesize=(w, h))
-    pdf.setTitle("СНЗ — поэтажные планы")
-    selected = order_items(order)
-    if not selected:
-        pdf.setFont("SNZ-Bold", 18)
-        pdf.drawString(35, h - 45, "СНЗ без работ после исправления состава")
-        pdf.setFont("SNZ", 11)
-        pdf.drawString(35, h - 70, f"{order['date']} · {'День' if order['shift'] == 'day' else 'Ночь'} · редакция {order.get('order_revision', 1)}")
-        pdf.drawString(35, h - 92, "Исходный состав сохранён в истории редакций СНЗ.")
-        pdf.showPage()
-    floors = sorted({e.get("floor") for e in selected.values()}, key=lambda f: (f is None, f or 0))
-    for page, floor in enumerate(floors, 1):
-        active = {eid: e for eid, e in selected.items() if e.get("floor") == floor}
-        sources = {e["source_file"] for e in active.values()}
-        backdrop = [e for e in context if e.get("floor") == floor and e["source_file"] in sources]
-        # Issued elements survive subsequent model changes in their saved geometry.
-        visible = {e["id"]: e for e in backdrop}
-        visible.update(active)
-        points = [p for e in visible.values() for p in _points(e)]
-        xmin, xmax = min(p[0] for p in points), max(p[0] for p in points)
-        ymin, ymax = min(p[1] for p in points), max(p[1] for p in points)
-        xmin -= 1000; xmax += 1000; ymin -= 1000; ymax += 1000
-        left, bottom, width, height = 65, 65, w - 130, h - 155
-        scale = min(width / max(1, xmax - xmin), height / max(1, ymax - ymin))
-        ox = left + (width - (xmax - xmin) * scale) / 2
-        oy = bottom + (height - (ymax - ymin) * scale) / 2
-        def xy(x, y):
-            return ox + (x - xmin) * scale, oy + (y - ymin) * scale
-        title = f"СНЗ · {order['object_name']} · Этаж {floor if floor is not None else 'не задан'}" + (f" · ред. {order['order_revision']}" if order.get("order_revision", 1) > 1 else "")
-        title_size = 15
-        while pdf.stringWidth(title, "SNZ-Bold", title_size) > w - 70 and title_size > 8:
-            title_size -= .5
-        pdf.setFont("SNZ-Bold", title_size)
-        pdf.drawString(35, h - 32, title)
-        pdf.setFont("SNZ", 10)
-        pdf.drawString(35, h - 51, f"{order['date']} · {'Дневная' if order['shift'] == 'day' else 'Ночная'} смена · {order['crew']['name']} · Прораб: {order['crew']['foreman'] or 'не назначен'}")
-        pdf.setStrokeColor(HexColor("#CBD5E1")); pdf.setLineWidth(.5)
-        for axis in axes:
-            if axis["source_file"] not in sources:
-                continue
-            coord = axis["coord"]
-            if axis["kind"] == "numeric" and xmin <= coord <= xmax:
-                x, _ = xy(coord, ymin)
-                pdf.line(x, bottom, x, bottom + height)
-                tx, ty = x, bottom - 15
-            elif axis["kind"] == "letter" and ymin <= coord <= ymax:
-                _, y = xy(xmin, coord)
-                pdf.line(left, y, left + width, y)
-                tx, ty = left - 18, y
-            else:
-                continue
-            pdf.setFillColor(HexColor("#FFFFFF")); pdf.circle(tx, ty, 11, fill=1, stroke=1)
-            pdf.setFillColor(HexColor("#334155")); pdf.setFont("SNZ", 8)
-            pdf.drawCentredString(tx, ty - 3, axis["label"])
-        for eid, e in visible.items():
-            pdf.saveState()
-            is_active = eid in active
-            pdf.setFillColor(HexColor("#2563EB" if is_active else "#64748B"))
-            pdf.setStrokeColor(HexColor("#1D4ED8" if is_active else "#94A3B8"))
-            pdf.setFillAlpha(.65 if is_active else .10)
-            pdf.setStrokeAlpha(1 if is_active else .15)
-            path = pdf.beginPath()
-            for i, p in enumerate(_points(e)):
-                x, y = xy(*p)
-                if i == 0: path.moveTo(x, y)
-                else: path.lineTo(x, y)
-            path.close()
-            pdf.drawPath(path, fill=1, stroke=1)
-            pdf.restoreState()
-        placed = []
-        for eid, e in sorted(active.items()):
-            task = next((t for t in order["tasks"] if eid in t["element_ids"]), {})
-            priority = order.get("item_priorities", task.get("priorities", {})).get(str(eid))
-            label = f"{priority if priority is not None else '—'} · {e.get('mark') or eid}"
-            font_size = 8
-            text_w = pdfmetrics.stringWidth(label, "SNZ-Bold", font_size) + 8
-            x, y = xy(e["x"], e["y"])
-            lx, ly = min(max(left, x + 10), w - text_w - 35), min(max(bottom, y + 8), h - 88)
-            for _ in range(80):
-                if not any(lx < bx + bw and lx + text_w > bx and ly < by + 14 and ly + 14 > by for bx, by, bw in placed):
-                    break
-                ly += 15
-                if ly > h - 88:
-                    ly = bottom; lx = max(left, lx - text_w - 10)
-            placed.append((lx, ly, text_w))
-            pdf.setStrokeColor(HexColor("#475569")); pdf.setLineWidth(.5)
-            pdf.line(x, y, lx, ly + 6)
-            pdf.setFillColor(HexColor("#FFFFFF")); pdf.rect(lx, ly, text_w, 14, fill=1, stroke=0)
-            pdf.setFillColor(HexColor("#0F172A")); pdf.setFont("SNZ-Bold", font_size)
-            pdf.drawString(lx + 4, ly + 4, label)
-        pdf.setFont("SNZ", 8); pdf.setFillColor(HexColor("#475569"))
-        pdf.drawString(35, 22, "Синим — изделия СНЗ; окружение показано полупрозрачным. Подпись: очередность · марка изделия.")
-        pdf.drawRightString(w - 35, 22, f"Лист {page} из {len(floors)}")
-        pdf.showPage()
-    pdf.save()
-    return output.getvalue()
+def build_pdf(order, context, axes, zones=(), status_colors=None, floor_levels=()):
+    from app.snz_plans import build_floor_plans
+    return build_floor_plans(order, context, axes, zones, status_colors, floor_levels)

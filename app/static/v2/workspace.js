@@ -12,6 +12,7 @@
 // Уход с рабочего места: слушатель снимается, кадр обнуляется и удаляется — вместе с документом освобождаются WebGL-контексты и таймеры.
 import { esc } from "./screen-view.js";
 import { createSnz } from "./snz.js";
+import { createExtraFactPicker } from "./snz-extra-fact.js";
 import { createSnzWorkspace } from "./snz-workspace.js";
 import { renderElementWorks } from "../mfr-element-works.js";
 import { createDetailPanelScroll } from "./detail-panel-scroll.js";
@@ -63,10 +64,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   let timeoutId = null;
   const queue = [];
   let sc = null;               // последний снимок сцены из кадра
-  let inlineSnz = null;
+  let inlineSnz = null, extraPicker = null, extraReturnTab = "props";
   const modelSelection = () => !sc?.loaded || sc.objectId !== curObject ? [] : sc?.multiIds?.length ? [...sc.multiIds] : sc?.selectedId ? [sc.selectedId] : [];
   const snz = foreman ? createSnz({ api, getObjectId: () => curObject,
     getSelectedIds: () => inlineSnz?.selectedIds().length ? inlineSnz.selectedIds() : modelSelection(),
+    onPickExtra: scope => {extraReturnTab=tab;tab="props";paintPanel();extraPicker.open(scope);},
     onChanged: () => inlineSnz?.refreshSoon(), send: (c, a) => send(c, a) }) : null;
   let assistantIds = null;
   let filters = null;          // модель фильтров
@@ -147,6 +149,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     statusHtml: () => ops.selectionStatusHtml(), bindStatus: (body) => ops.bind(body),
     captureStatusFocus: (body) => ops.captureFocus(body),
   });
+
+  if(foreman)extraPicker=createExtraFactPicker({api,host:$("#ws-panel-body"),getObjectId:()=>curObject,getSelectedIds:modelSelection,send,
+    onDone:()=>{tab=extraReturnTab;paintPanel();inlineSnz?.refreshSoon();}});
 
   // ------------------------------------------------------------ связь с кадром
   function send(cmd, args = {}) {
@@ -400,14 +405,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     if (dead) return;
     inlineSnz?.activate(tab === "snz");
     if (foreman && tab !== "snz") snz.hideLabels();
-    for (const b of el.querySelectorAll(".ws-tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+    for (const b of el.querySelectorAll(".ws-tabs button")) {b.setAttribute("aria-selected", String(b.dataset.tab === tab));b.disabled=!!extraPicker?.isOpen();}
     const body = $("#ws-panel-body");
     const restoreFocus = ops.captureFocus(body);     // фокус и курсор переживают перерисовку (снимки сцены приходят часто)
     if (!tabs.some(([k]) => k === tab) || (tab === "filters" && filtersLeft())) tab = "props";
     el.querySelector('.ws-tabs [data-tab="filters"]')?.toggleAttribute("hidden", filtersLeft());
     const elementProps = mfr && tab === "props" && sc?.mfr?.selected?.kind === "element";
     const matchesDetail = detail.id === selKey(sc);
-    panelScroll.update(body, {
+    if(!extraPicker?.isOpen())panelScroll.update(body, {
       scope: elementProps ? `mfr-element:${curObject}` : null,
       loading: elementProps && (!matchesDetail || (!detail.data && !detail.error)),
       complete: elementProps && matchesDetail && !!detail.data && !detail.error,
@@ -422,7 +427,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     });
     const left = $("#ws-left-body");
     if (left && filtersLeft()) { const ks = left.scrollTop; left.innerHTML = sideSwitchHtml() + (mfr ? mfrFiltersHtml() : filtersHtml()); left.scrollTop = ks; bindPanel(left); }
-    paintMultiBar();
+    paintMultiBar();extraPicker?.update();
   }
 
   // Панель группового выделения над схемой (как в V1): «Выделено: N · Изменить статус · Плановая дата поставки · ✕»; кнопки открывают окна (element-ops.js).
@@ -1127,9 +1132,10 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       selectedIds: sc?.loaded ? [...new Set([...(sc.multiIds || []), ...(sc.selectedId ? [sc.selectedId] : [])])].slice(0,100) : [],
       filters: JSON.stringify({ view:sc?.view,shown:sc?.shown,total:sc?.total,excluded:sc?.excluded }).slice(0,3000) }),
     openFbx: () => extm.open(),   // «Загрузить из FBX» из меню, когда это рабочее место уже открыто
-    hasUnsavedChanges: () => !!inlineSnz?.isBusy() || anyModalDirty() || ops.hasUnsaved() || extm.isDirty() || !!snz?.isDirty(),
+    hasUnsavedChanges: () => !!extraPicker?.isOpen() || !!inlineSnz?.isBusy() || anyModalDirty() || ops.hasUnsaved() || extm.isDirty() || !!snz?.isDirty(),
     guardLeave: async () => {
       if (inlineSnz?.isBusy()) return false;
+      if(extraPicker&&!extraPicker.guardLeave())return false;
       if (snz && !snz.guardLeave()) return false;
       if (!(await guardModals())) return false;   // окна МФР (факт, ЗР, состав работ) с несохранённым вводом
       if (extm.isOpen() && !(await extm.close())) return false;   // окно внешних 3D-моделей: несохранённое положение
@@ -1139,6 +1145,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // запоздавший ответ прежнего объекта не применяется — мост обрабатывает только последнюю команду).
     onObjectChange(id) {
       if (dead || !id || id === curObject) return true;
+      if(extraPicker&&!extraPicker.guardLeave())return false;
       if (snz && !snz.guardLeave()) return false;
       if (inlineSnz?.isBusy()) return false;
       inlineSnz?.reset(); snz?.reset();
@@ -1169,7 +1176,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // Годится ли спрятанное рабочее место для возврата: после ошибки или обрыва загрузки схемы показывать нечего — строим заново
     isReusable: () => !dead && !!frame && !sc?.error,
     destroy() {
-      inlineSnz?.destroy(); snz?.destroy();
+      extraPicker?.destroy();inlineSnz?.destroy(); snz?.destroy();
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
       clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();
       const side = shellSide(); if (side) side.hidden = navWasHidden;
