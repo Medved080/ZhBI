@@ -1,3 +1,4 @@
+import {createSceneContextMenu} from './scene-context-menu.js';
 // Рабочее место со схемой внутри V2 (модель ЖБИ; та же основа — для остальных рабочих мест).
 //
 // Сцену (2D SVG / 3D / выбор / фильтры) рисует движок V1 — его нельзя вынуть из документа V1 без переписывания app.js (глобальный DOM),
@@ -96,6 +97,8 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // групповые операции есть и у комплектовщика (как панель группового выделения V1); Ctrl + щелчок там только убирает из рамки (мост его не расширяет)
     groupOps: true, ctrlAdds: !picker, onUpdated: (items) => inlineSnz?.onElements(items),
   });
+  const contextMenu=createSceneContextMenu({getScene:()=>sc,canWrite:()=>canStatus===true&&ops.canStatus()===true&&!mfr&&!inlineSnz?.isBusy(),label:k=>stLabel(k),color:k=>sw(k),
+    onStatus:(id,status)=>ops.openContextStatus(id,status)});
   let canStatus = null;         // null — права ещё не получены; true/false — можно ли менять статусы на объекте (распределение комплектовщика)
   const openGroups = new Set(["status", "pk:elementType"]);
   const openItems = new Set();
@@ -188,6 +191,12 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       send("getFilters");
     } else if (m.evt === "state" && m.state && typeof m.state === "object") {
       onScene(m.state);
+    } else if(m.evt==="context-menu"){
+      if(mfr||m.objectId!==curObject||m.state?.objectId!==curObject||m.state?.selectedId!==m.id||!Number.isSafeInteger(m.id)||m.id<=0||!Number.isFinite(m.x)||!Number.isFinite(m.y))return;
+      onScene(m.state);const rect=frame.getBoundingClientRect();
+      contextMenu.open({id:m.id,x:rect.left+Math.max(0,Math.min(rect.width,m.x)),y:rect.top+Math.max(0,Math.min(rect.height,m.y))});
+    } else if(m.evt==="context-dismiss"){
+      contextMenu.close();
     } else if (m.evt === "filters" && m.model && Array.isArray(m.model.groups)) {
       filters = m.model;
       if (guidDraft !== null && (m.model.guid?.text ?? "") === guidDraft) guidDraft = null;   // сцена приняла набранное — дальше показываем её значение
@@ -294,7 +303,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   }
   function onScene(s) {
     const prevSel = selKey(sc);
-    sc = s;
+    sc = s;contextMenu.sync();ops.syncContext();
     inlineSnz?.onScene(s);
     mbp?.onScene(s);
     mfrStartView(s);
@@ -404,6 +413,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
 
   function paintPanel() {
     if (dead) return;
+    contextMenu.sync();
     inlineSnz?.activate(tab === "snz");
     if (foreman && tab !== "snz") snz.hideLabels();
     for (const b of el.querySelectorAll(".ws-tabs button")) {b.setAttribute("aria-selected", String(b.dataset.tab === tab));b.disabled=!!extraPicker?.isOpen();}
@@ -1149,7 +1159,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       if(extraPicker&&!extraPicker.guardLeave())return false;
       if (snz && !snz.guardLeave()) return false;
       if (inlineSnz?.isBusy()) return false;
-      inlineSnz?.reset(); snz?.reset();
+      contextMenu.close();inlineSnz?.reset(); snz?.reset();
       extm.close(true);
       assistantIds = null; curObject = id; ops.reset(); mbp?.reset(); mini?.clear(); reportSignature = ""; canStatus = null; Object.assign(al, { loaded: false, loading: false, loadError: "", contracts: [], supplier: "", contractId: null, lineKey: null, cand: null, candAsked: false, busy: false, error: "", done: "", warn: "" }); loadStatusRights(); detail.id = null; detail.data = null; filters = null; sc = sc ? { ...sc, loaded: false, loading: true, selected: null, multi: null, mfr: sc.mfr ? { ...sc.mfr, selected: null, selectedBlocks: [] } : sc.mfr } : sc;
       perfScene = window.zhbiPerf?.start(`V2 схема (${ws}): смена объекта`, "scene") || null;
@@ -1160,6 +1170,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // загруженные данные остаются), возвращаем оболочке то, что рабочее место у неё забирало, — общую навигацию. destroy() при этом не вызывается.
     suspend() {
       if (dead) return;
+      contextMenu.close();ops.closeContext();
       if (found) found.hidden = true;
       const side = shellSide(); if (side) side.hidden = navWasHidden;
     },
@@ -1177,6 +1188,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
     // Годится ли спрятанное рабочее место для возврата: после ошибки или обрыва загрузки схемы показывать нечего — строим заново
     isReusable: () => !dead && !!frame && !sc?.error,
     destroy() {
+      contextMenu.destroy();ops.closeContext();
       extraPicker?.destroy();inlineSnz?.destroy(); snz?.destroy();
       dead = true; window.removeEventListener("message", onMessage); document.removeEventListener("pointerdown", onDocDown, true);
       clearTimeout(qTimer); clearTimeout(stripRetry); extm.destroy(); stopFrame(); queue.length = 0; mbp?.destroy();

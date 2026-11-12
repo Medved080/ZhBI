@@ -82,8 +82,8 @@ export function createElementOps(ctx) {
   const sc = () => getScene();
   // Окно групповой операции (кнопки панели над схемой) показывает те же формы и то же состояние G, что вкладка «Свойства»: любая перерисовка панели
   // перерисовывает и его (пока оно открыто — `gdlg`, см. «Окна групповых операций»)
-  let gdlg = null;
-  function repaint() { repaintPanel(); gdlg?.redraw(); }
+  let gdlg = null, contextDialog = null;
+  function repaint() { repaintPanel(); gdlg?.redraw(); contextDialog?.redraw(); }
   const sw = (k) => statusColor(k);
 
   // ------------------------------------------------------------ права (по объекту, как в V1: раздел + порог «запись»)
@@ -109,7 +109,7 @@ export function createElementOps(ctx) {
   };
   const bannerHtml = () => banner.text ? `<div class="eo-banner eo-banner-${banner.kind}" role="${banner.kind === "err" ? "alert" : "status"}"><span>${esc(banner.text)}</span><button type="button" class="eo-x" data-eo="banner-x" aria-label="Скрыть сообщение">✕</button></div>` : "";
   const G = { st: { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }, pd: { date: "", onlyEmpty: true, busy: false, error: "", done: "" } };
-  function reset() { forms.clear(); Object.assign(G.st, { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }); Object.assign(G.pd, { date: "", onlyEmpty: true, busy: false, error: "", done: "" }); setBanner("", ""); contracts.byObject = null; }
+  function reset() { contextDialog?.close();contextDialog=null;forms.clear(); Object.assign(G.st, { status: "", at: "", comment: "", busy: false, error: "", done: "", prev: null }); Object.assign(G.pd, { date: "", onlyEmpty: true, busy: false, error: "", done: "" }); setBanner("", ""); contracts.byObject = null; }
 
   // ------------------------------------------------------------ контракты объекта (из кадра) и позиции (сервер)
   const contracts = { byObject: null, waiters: [] };
@@ -562,15 +562,16 @@ export function createElementOps(ctx) {
   }
 
   // ---- смена статуса одного изделия
-  function statusFormHtml(e, f, snz = false) {
+  function statusFormHtml(e, f, snz = false, formId = "ws-sform") {
     if (!R.loaded) return "";
+    if (sc()?.readOnly) return `<p class="v2-muted ws-ro">Открыт срез на дату. Для смены статуса вернитесь в режим «Актуальный».</p>`;
     if (!R.status) return `<p class="v2-muted ws-ro">Смена статуса недоступна: нет права изменять статусы на этом объекте.</p>`;
     const w = f.st;
     const opts = statusOptions(snz).filter((k) => snz || k !== e.current_status);
     const leavingPlanned = e.current_status === "planned" && w.status && w.status !== "planned";
     const toPlanned = w.status === "planned";
     return `${snz ? "" : "<h4>Изменить статус</h4>"}
-      <form class="ws-form" id="ws-sform" autocomplete="off" novalidate>
+      <form class="ws-form" id="${formId}" autocomplete="off" novalidate>
         <label class="ws-fld">Новый статус
           <select name="status" ${w.busy ? "disabled" : ""}><option value="">— выберите —</option>${opts.map((k) => `<option value="${esc(k)}" ${w.status === k ? "selected" : ""}>${esc(statusLabel(k))}</option>`).join("")}</select></label>
         ${leavingPlanned ? `<div class="ws-fld">Контракт <small>(необязательно)</small>
@@ -589,7 +590,7 @@ export function createElementOps(ctx) {
   }
   async function submitStatus(id) {
     const f = F(id), w = f.st;
-    if (w.busy || !w.status || !R.status) return;               // повторная отправка, пока идёт запрос, невозможна
+    if (w.busy || !w.status || !R.status || sc()?.readOnly) return;               // повторная отправка, пока идёт запрос, невозможна
     const e = sc()?.selected;
     if (!e || e.id !== id) return;                               // форма всегда про ВЫБРАННОЕ изделие
     const wanted = w.status;
@@ -1132,8 +1133,27 @@ export function createElementOps(ctx) {
     gdlg = null;
   }
 
+  async function openContextStatus(id,status){
+    const scene=sc(),e=scene?.selected;
+    if(contextDialog||!R.status||!scene?.loaded||scene.readOnly||e?.id!==id||!(scene.statusOrder||[]).includes(status)||F(id).st.busy)return;
+    const object=getObjectId(),w=F(id).st,previous={...w};let attempted=false;w.status=status;w.error="";w.done="";
+    await openModal({title:`Сменить статус · ${e.mark||id}`,width:560,mount(body,m){
+      function draw(){
+        if(isDead()||getObjectId()!==object||!R.status){m.close(undefined);return;}
+        if(w.busy)attempted=true;
+        const restore=captureFocus(body);body.classList.add("eo-context-status");
+        if(sc()?.selectedId!==id){body.innerHTML=`<p role="status">${esc(w.busy?'Сохранение…':w.done||w.error||'Выбор изделия изменился. Закройте окно и снова выберите изделие правой кнопкой мыши.')}</p>`;m.setBusy(w.busy);return;}
+        const current=sc().selected;
+        body.innerHTML=`<p class="v2-muted">${esc(e.mark||id)} · сейчас ${esc(statusLabel(sc()?.selected?.id===id?sc().selected.current_status:e.current_status))}</p>${statusFormHtml(current,F(id),true,"eo-context-sform")}`;
+        bind(body,{statusOnly:true,statusFormId:"eo-context-sform"});m.setBusy(w.busy);restore();
+      }
+      contextDialog={redraw:draw,close:()=>m.close(undefined)};draw();
+    }});
+    contextDialog=null;if(!attempted)Object.assign(w,previous);repaintPanel();
+  }
+
   // ================================================================ привязка обработчиков
-  function bind(body) {
+  function bind(body, {statusOnly=false,statusFormId="ws-sform"}={}) {
     const s = sc();
     const id = s?.selected?.id;
     body.querySelectorAll("[data-install-date]").forEach((host) => {
@@ -1145,14 +1165,14 @@ export function createElementOps(ctx) {
 
     const on = (sel, ev, fn) => body.querySelectorAll(sel).forEach((n) => n.addEventListener(ev, fn));
     // --- вложения (список читает любой, кому видна карточка; загрузка/удаление — по правам). Идемпотентно: st.loaded/st.loading гасят повтор.
-    if (id != null) {
+    if (id != null && !statusOnly) {
       const at = F(id).at;
       if (!at.loaded && !at.loading) loadAttachments(api, at, id, repaint);
       bindAttachments(body, api, at, id, { canDelete: R.attachmentsDelete }, repaint);
       loadContext(id);
     }
     // --- одно изделие
-    const sf = body.querySelector("#ws-sform");
+    const sf = body.querySelector("#"+statusFormId);
     if (sf && id != null) {
       const w = F(id).st;
       sf.querySelector('[name="status"]').addEventListener("change", (ev) => { w.status = ev.target.value; w.error = ""; w.done = ""; if (w.status === "planned") { w.contractId = null; w.contractLabel = ""; } repaint(); });
@@ -1251,5 +1271,5 @@ export function createElementOps(ctx) {
     return '<p class="v2-muted">Выберите изделие щелчком на модели. Ctrl (⌘) + щелчок или Shift + перетаскивание добавляют изделия к выбору.</p>';
   }
 
-  return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, selectionStatusHtml, bannerHtml, multiBarHtml, bindMultiBar, bind, captureFocus, hasUnsaved, guardLeave, canStatus, rights: R };
+  return { setRights, rightsFailed, reset, setContracts, cardHtml, groupHtml, selectionStatusHtml, bannerHtml, multiBarHtml, bindMultiBar, bind, captureFocus, hasUnsaved, guardLeave, canStatus, openContextStatus, syncContext:()=>contextDialog?.redraw(), closeContext:()=>{contextDialog?.close();contextDialog=null;}, rights: R };
 }

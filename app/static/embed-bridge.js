@@ -139,6 +139,7 @@
       total: state.elements.length,
       shown: state.elements.length ? shownCount() : 0,
       selectedId: state.selectedId,
+      readOnly: !!window.zhbiTimeline?.isChrono(),
       multiIds: Array.from(state.multiSelectedIds),
       defaultContracts: { ...state.defaultContracts },
       // состав выделения рамкой (для проверки перед распределением): только скаляры, не больше 3000 элементов
@@ -395,6 +396,24 @@
     return orig.apply(this, arguments) && (!snzScope.mode || element.current_status === "ready_for_installation")
       && (!snzScope.ids || snzScope.ids.has(element.id));
   });
+
+  // V1's context menu is hidden in embed mode. The parent owns its UI and writes.
+  if (!MFR) {
+    let contextOpen=false;
+    wrap("openCtxMenu", () => function (element, x, y) {
+      if (objectBusy || loading || !element || !state.byId.has(element.id) || !passesPlacementFilters(element)) return;
+      if(state.view3d.active && typeof threeDragging!=="undefined" && threeDragging)return;
+      closeCtxMenu();
+      const current=snapshot();
+      if(current.readOnly){window.zhbiTimeline.guardEdit();post({evt:"context-dismiss"});return;}
+      contextOpen=true;
+      post({evt:"context-menu", objectId:state.objectId, id:element.id, x, y, state:current});
+    });
+    document.addEventListener("pointerdown", e => {if(e.button!==2){contextOpen=false;post({evt:"context-dismiss"});}}, true);
+    document.addEventListener("pointermove", e => {if(e.buttons&&contextOpen){contextOpen=false;post({evt:"context-dismiss"});}}, true);
+    document.addEventListener("wheel", () => post({evt:"context-dismiss"}), {passive:true});
+    document.addEventListener("keydown", e => {if(e.key==="Escape")post({evt:"context-dismiss"});});
+  }
 
   wrap("setStageLoading", (orig) => function (on, text) { loading = !!on; scheduleState(); return orig.apply(this, arguments); });
   wrap("loadPlanInner", (orig) => async function () {
