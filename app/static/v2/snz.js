@@ -13,7 +13,7 @@ const scopes = [["preparation", "Подготовка"], ["element", "Издел
 const options = (rows, value, key = "id", title = "name") => rows.map(r => `<option value="${esc(r[key])}" ${r[key] === value ? "selected" : ""}>${esc(r[title])}</option>`).join("");
 const textInput = (path, value, extra = "") => `<input data-path="${path}" value="${esc(value ?? "")}" ${extra}>`;
 
-export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, onPickExtra }) {
+export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, onPickExtra, onShowElement }) {
   let validationIssue = null, orderEdit = null, revisions = null, scrollToEdit = false;
   const editDirty = () => !!orderEdit && (orderEdit.exclude.size > 0 || !!orderEdit.reason.trim());
   let data = null, draft = null, dialog = null, dirty = false, busy = false, error = "", message = "";
@@ -195,7 +195,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       <td>${esc(ELEMENT_STATUS_LABELS[r.current_status]||r.current_status)}<small>${r.completed?'100 %':r.status_confirmed?'Время статуса отсутствует':'0 %'}</small></td>
       <td><input type="datetime-local" step="1" data-montage-time="${r.id}" aria-label="Дата и время монтажа ${r.id}" value="${esc(factEdits.get(r.id)??r.completed_at?.slice(0,19)??'')}" ${r.closed||r.status_confirmed||!factData.can_fact?'disabled':''}></td>
       <td class="snz-fact-notes">${[...r.orders,...(r.extra||[])].map(ref=>`<label>${r.orders.length>1?`СНЗ № ${ref.id}`:''}<textarea maxlength="4000" data-fact-note="${esc(ref.note_key)}" aria-label="Примечание ${r.id} ${esc(ref.note_key)}" ${!factData.can_fact||ref.closed_at?'disabled':''}>${esc(factNotes.get(ref.note_key)??ref.note??'')}</textarea></label><button data-action="save-fact-note" data-id="${r.id}" data-note-key="${esc(ref.note_key)}" ${!factData.can_fact||factBlocked||ref.closed_at?'disabled':''}>Сохранить примечание</button>`).join('')}</td>
-      <td><button data-action="montage-complete" data-id="${r.id}" ${!r.task_key||r.closed||r.status_confirmed||!factData.can_fact||factBlocked?'disabled':''}>${r.closed?'СНЗ закрыт':r.status_confirmed?'Подтверждено':r.completed?'Подтвердить статус':'Отметить монтаж'}</button></td></tr>`).join('')||'<tr><td colspan="7">Нет изделий по выбранным условиям.</td></tr>'}</tbody></table></div>`;
+      <td><button data-action="show-on-model" data-id="${r.id}">На схеме</button><button data-action="montage-complete" data-id="${r.id}" ${!r.task_key||r.closed||r.status_confirmed||!factData.can_fact||factBlocked?'disabled':''}>${r.closed?'СНЗ закрыт':r.status_confirmed?'Подтверждено':r.completed?'Подтвердить статус':'Отметить монтаж'}</button></td></tr>`).join('')||'<tr><td colspan="7">Нет изделий по выбранным условиям.</td></tr>'}</tbody></table></div>`;
   }
   function factsHtml(){
     const openOrders=(data.orders||[]).filter(o=>!o.closed_at&&o.crew_kind!=="preparation"&&(!factDate||o.work_date===factDate)&&(!factShift||o.shift===factShift)&&(!factCrew||o.crew_id===factCrew));
@@ -340,6 +340,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       tab=button.dataset.tab;error="";message="";if(tab==='facts')await run(load);else render();return;
     }
     const action = button.dataset.action;
+    if(action==='show-on-model'){const id=Number(button.dataset.id);if(close())onShowElement?.(id);return;}
     if(['facts-refresh','facts-all'].includes(action)){
       if(factDirty()&&!window.confirm('Сбросить несохранённое время и примечания?'))return;
       factEdits.clear();factNotes.clear();if(action==='facts-all')factDate='';await run(load);return;
@@ -376,7 +377,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     if(action==='extra-fact'){
       if(!factDate||!factData.can_fact||factBlocked)return;
       if(factDirty()){error='Сначала сохраните введённые время и примечания.';render();return;}
-      const scope={date:factDate,crewId:factCrew,onReturn:()=>open('facts')};close(true);onPickExtra?.(scope);return;
+      const scope={date:factDate,crewId:factCrew,shift:factShift,onReturn:()=>open('facts')};close(true);onPickExtra?.(scope);return;
     }
     if(action==='add-floor'){
       draft.floor_levels??=[];const floors=new Set(draft.floor_levels.map(r=>r.floor));let floor=1;while(floors.has(floor))floor++;

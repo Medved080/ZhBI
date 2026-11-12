@@ -598,6 +598,18 @@
   }
 
   const COMMANDS = {
+    snzFactColors(a) {
+      if (!SNZ_FOREMAN || !Array.isArray(a.items) || a.items.length>20000 || a.items.some(r=>!isInt(r.id)||typeof r.completed!=="boolean")) throw new Error("цвета факта СНЗ");
+      window.snzFactColorById=new Map(a.items.map(r=>[r.id,r.completed?"#166534":"#9ca3af"]));
+      for(const e of state.elements){const shape=document.querySelector(`.element-shape[data-id="${e.id}"]`);if(shape)styleShape(shape,e);}
+      refresh3DStatusColors();scheduleState();
+    },
+    snzReveal(a) {
+      if(!SNZ_FOREMAN||!isInt(a.id)||!state.byId.has(a.id))throw new Error("изделие СНЗ");
+      snzScope={mode:"",ids:null,ticket:0};
+      if(!passesPlacementFilters(state.byId.get(a.id)))COMMANDS.resetFilters();
+      applyPlacementFilters();COMMANDS.clearSelection();COMMANDS.select(a);COMMANDS.locate(a);
+    },
     snzScope(a) {
       if (!SNZ_FOREMAN || !isInt(a.objectId) || a.objectId !== state.objectId
         || !["", "date", "unplanned", "all"].includes(a.mode)
@@ -622,7 +634,7 @@
     setObject(a) {
       if (!isInt(a.objectId)) throw new Error("objectId");
       snzScope = { mode: "", ids: null, ticket: 0 };
-      snzLabels = []; drawSnzLabels();
+      window.snzFactColorById=new Map();snzLabels = []; drawSnzLabels();
       const known = state.projects.flatMap((p) => p.objects || []).some((o) => o.id === a.objectId);
       if (!known) throw new Error("объект недоступен");
       return setObject(a.objectId);

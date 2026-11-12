@@ -68,6 +68,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   const modelSelection = () => !sc?.loaded || sc.objectId !== curObject ? [] : sc?.multiIds?.length ? [...sc.multiIds] : sc?.selectedId ? [sc.selectedId] : [];
   const snz = foreman ? createSnz({ api, getObjectId: () => curObject,
     getSelectedIds: () => inlineSnz?.selectedIds().length ? inlineSnz.selectedIds() : modelSelection(),
+    onShowElement: id => {tab="props";paintPanel();send("snzReveal",{id});},
     onPickExtra: scope => {extraReturnTab=tab;tab="props";paintPanel();extraPicker.open(scope);},
     onChanged: () => inlineSnz?.refreshSoon(), send: (c, a) => send(c, a) }) : null;
   let assistantIds = null;

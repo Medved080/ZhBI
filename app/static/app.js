@@ -5876,6 +5876,11 @@ function colorFor(status) {
   return state.statusColors[status] || "#999999";
 }
 
+// Temporary element colours supplied by the foreman SNZ picker; never saved as statuses.
+function snzElementColor(element) {
+  return window.snzFactColorById?.get(element?.id) || colorFor(element?.current_status);
+}
+
 // ---------- форма маркера по (слой, тип элемента) — п.11 третьего раунда,
 // "как в оригинале" (outline) — реальный контур вытянутых элементов вместо
 // условного маркера фиксированного размера (см. Docs/backlog.md). ----------
@@ -5928,7 +5933,7 @@ function updateShapeGeometry(node, shapeName, cx, cy, r, outline) {
 function styleShape(shape, element) {
   const selected = state.selectedId === element.id;
   // срез состояния: изделие, отстающее от графика, рисуется косой штриховкой (app/static/timeline.js)
-  shape.setAttribute("fill", (window.zhbiTimeline && zhbiTimeline.hatchFill(element)) || colorFor(element.current_status));
+  shape.setAttribute("fill", window.snzFactColorById?.get(element.id) || (window.zhbiTimeline && zhbiTimeline.hatchFill(element)) || colorFor(element.current_status));
   // хронология: изделия «без статуса» полупрозрачны, сквозь них видны остальные
   shape.setAttribute("fill-opacity", window.zhbiTimeline && zhbiTimeline.isGhost(element) ? "0.5" : "1");
   shape.classList.toggle("selected", selected);
@@ -26514,7 +26519,7 @@ function build3DMergedGeometry(elements, levels, columnTops) {
     const normal = geometry.attributes.normal.array;
     const count = geometry.attributes.position.count;
 
-    color.set(colorFor(element.current_status));
+    color.set(snzElementColor(element));
     const rgb = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) { rgb[i * 3] = color.r; rgb[i * 3 + 1] = color.g; rgb[i * 3 + 2] = color.b; }
 
@@ -26616,7 +26621,7 @@ function setElementVertexColor(elementId, status, hatchColor) {
   if (!range) return false;
   const attribute = merged.mesh.geometry.attributes.color;
   const array = attribute.array;
-  const color = new THREE.Color(colorFor(status));
+  const color = new THREE.Color(window.snzFactColorById?.get(elementId) || colorFor(status));
   for (let i = 0; i < range.count; i++) {
     const at = (range.start + i) * 3;
     array[at] = color.r; array[at + 1] = color.g; array[at + 2] = color.b;

@@ -49,6 +49,18 @@ class ReportingTests(unittest.TestCase):
         self.assertNotIn(self.extra,{r['id'] for r in self.rows(date=date(2026,11,11))['items']})
         c=self.db.get_connection();self.assertEqual(c.execute('SELECT COUNT(*) FROM status_history WHERE element_id=?',(self.extra,)).fetchone()[0],1);c.close()
 
+    def test_existing_montage_can_be_attributed_without_rewriting_history(self):
+        from app.contracts import apply_status_change
+        c=self.db.get_connection();apply_status_change(c,self.extra,'installed',False,None,'2026-11-10 07:41:16','','Test',self.admin['id']);c.commit()
+        before=[tuple(r) for r in c.execute('SELECT * FROM status_history WHERE element_id=?',(self.extra,))];c.close()
+        body=self.extra_body(shift='day',completed_at=None)
+        self.snz.complete_extra_fact(self.object_id,body,self.admin)
+        row=next(r for r in self.rows(date=date(2026,11,10),shift='day')['items'] if r['id']==self.extra)
+        self.assertEqual(row['completed_at'],'2026-11-10T07:41:16');self.assertEqual(row['extra'][0]['crew_id'],'install1')
+        c=self.db.get_connection();after=[tuple(r) for r in c.execute('SELECT * FROM status_history WHERE element_id=?',(self.extra,))];c.close();self.assertEqual(before,after)
+        self.assertNotIn(self.extra,{r['id'] for r in self.snz.extra_fact_candidates(self.object_id,date(2026,11,10),self.admin)['items']})
+        self.assertTrue(self.snz.complete_extra_fact(self.object_id,body,self.admin)['already_completed'])
+
     def test_note_persists_through_planning_and_does_not_change_status(self):
         row=self.rows()['items'][0];key=row['orders'][0]['note_key']
         self.snz.save_fact_note(self.object_id,self.snz.FactNoteIn(revision=self.rows()['revision'],element_id=row['id'],note_key=key,text='Не доставлен крепёж'),self.admin)

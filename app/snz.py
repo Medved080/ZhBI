@@ -144,6 +144,7 @@ class ExtraItemIn(Strict):
 
 
 class ExtraFactIn(Strict):
+    shift: Literal['day','night'] | None = None
     revision: int = Field(ge=0)
     date: date
     crew_id: str = Field(pattern=KEY)
@@ -698,15 +699,19 @@ def save_fact_note(object_id: int, body: FactNoteIn, user=Depends(get_current_us
 
 
 @router.get("/facts/extra-candidates")
-def extra_fact_candidates(object_id: int, date: date, user=Depends(get_current_user)):
+def extra_fact_candidates(object_id: int, date: date, user=Depends(get_current_user), shift: Literal['day','night'] | None = None, crew_id: str | None = None):
     conn=get_connection()
     try:
         assert_object_feature(conn,user,object_id,'plan','read')
         state,revision=_load(conn,object_id);statuses=status_montage(conn,object_id)
-        planned={r['id'] for r in fact_rows(conn,object_id,state,statuses,date.isoformat()) if r['orders']}
+        rows=fact_rows(conn,object_id,state,statuses,date.isoformat())
+        planned={r['id'] for r in rows if r['orders']}
+        recorded={r['id'] for r in rows if r.get('extra')}
+        scoped=fact_rows(conn,object_id,state,statuses,date.isoformat(),shift,crew_id)
         return {'revision':revision,'items':[{'id':e['id'],'expected_rev':statuses[e['id']]['expected_rev'],
                  'current_status':e['current_status']} for e in _elements(conn,object_id)
-                 if e.get('is_current',1) and e['id'] not in planned and e['current_status'] not in ('installed','accepted')],
+                 if e.get('is_current',1) and e['id'] not in planned and e['id'] not in recorded and (e['current_status'] not in ('installed','accepted') or statuses[e['id']]['completed_at'])],
+                'planned':[{'id':r['id'],'completed':r['status_confirmed']} for r in scoped if r['orders']],
                 'crews':[c for c in state['crews'] if c['kind']=='installation'],
                 'can_fact':has_feature(conn,user,'status','write',object_id)}
     finally:conn.close()
@@ -721,7 +726,7 @@ def complete_extra_fact(object_id: int, body: ExtraFactIn, user=Depends(get_curr
     try:
         begin_write(conn);assert_object_feature(conn,user,object_id,'status','write')
         state,revision=_load(conn,object_id)
-        payload=hashlib.sha256(body.model_dump_json(exclude={'revision'}).encode()).hexdigest()
+        payload=hashlib.sha256(body.model_dump_json(exclude={'revision','shift'} if body.shift is None else {'revision'}).encode()).hexdigest()
         store=records(state,True)
         prior=store['extra'].get(body.request_id)
         if prior:
@@ -734,21 +739,29 @@ def complete_extra_fact(object_id: int, body: ExtraFactIn, user=Depends(get_curr
         if now.tzinfo:now=now.astimezone(ZoneInfo('Europe/Moscow'))
         now=now.replace(tzinfo=None,microsecond=0)
         start=datetime.combine(body.date,datetime.min.time()).replace(hour=8)
-        if not start<=now<start+timedelta(days=1):
+        initial_statuses=status_montage(conn,object_id)
+        new_items=any(initial_statuses.get(e.element_id,{}).get('current_status') not in ('installed','accepted') for e in body.items)
+        if new_items and not start<=now<start+timedelta(days=1):
             raise HTTPException(422,'Дополнительный факт должен попадать с 08:00 выбранной даты до 08:00 следующего дня. Уточните дату и время.')
+        if new_items and body.shift and body.shift!=('day' if now<start+timedelta(hours=12) else 'night'):
+            raise HTTPException(422,'Время нового монтажа не соответствует выбранной смене.')
         _unique([r.model_dump() for r in body.items],'element_id','Дополнительный факт')
         statuses=status_montage(conn,object_id);elements={e['id']:e for e in _elements(conn,object_id)}
-        planned={r['id'] for r in fact_rows(conn,object_id,state,statuses,body.date.isoformat()) if r['orders']}
+        rows=fact_rows(conn,object_id,state,statuses,body.date.isoformat())
+        planned={r['id'] for r in rows if r['orders']}
+        recorded={r['id'] for r in rows if r.get('extra')}
         for item in body.items:
             e=elements.get(item.element_id)
             if not e or not e.get('is_current',1):raise HTTPException(422,'Изделие отсутствует в актуальной модели объекта.')
             if item.element_id in planned:raise HTTPException(409,'Изделие уже включено в СНЗ выбранной даты. Отметьте его во вкладке «Факт».')
-            if statuses[item.element_id]['expected_rev']!=item.expected_rev or e['current_status'] in ('installed','accepted'):
+            if item.element_id in recorded:raise HTTPException(409,'Изделие уже зарегистрировано дополнительным фактом этой даты.')
+            if e['current_status'] in ('installed','accepted') and not statuses[item.element_id]['completed_at']:raise HTTPException(409,'У изделия отсутствует время монтажа в истории статусов.')
+            if statuses[item.element_id]['expected_rev']!=item.expected_rev:
                 raise HTTPException(409,'Статус выбранного изделия изменился. Обновите данные перед записью.')
         installed=[]
         for item in body.items:
             eid=item.element_id
-            apply_status_change(conn,eid,'installed',False,None,now.isoformat(sep=' ',timespec='seconds'),
+            if elements[eid]['current_status'] not in ('installed','accepted'):apply_status_change(conn,eid,'installed',False,None,now.isoformat(sep=' ',timespec='seconds'),
                                 'Дополнительный факт монтажа вне СНЗ',audit_display_name(user),user['id'])
             if conn.execute('SELECT current_status FROM elements WHERE id=?',(eid,)).fetchone()[0] not in ('installed','accepted'):
                 raise HTTPException(409,'После указанного времени есть другой статус. Проверьте время монтажа.')
@@ -757,7 +770,7 @@ def complete_extra_fact(object_id: int, body: ExtraFactIn, user=Depends(get_curr
         store['extra'][body.request_id]={'date':body.date.isoformat(),'crew_id':crew['id'],'crew':crew,
             'payload_hash':payload,'created_by':audit_display_name(user),'created_at':now.isoformat(timespec='seconds'),
             'items':[{'element':elements[eid],'history_id':statuses[eid]['history_id'],
-                      'shift':'day' if now<start+timedelta(hours=12) else 'night'} for eid in installed]}
+                      'shift':body.shift or ('day' if datetime.fromisoformat(statuses[eid]['completed_at']).hour in range(8,20) else 'night')} for eid in installed]}
         for eid in installed:
             state['facts'].setdefault(f'e:{eid}:install',{})
         project_montage(state,statuses);_write(conn,object_id,state,revision);touch_elements(conn,installed);conn.commit()
