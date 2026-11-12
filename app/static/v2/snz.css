@@ -25,3 +25,7 @@
 .snz-dialog .snz-fact-notes label{display:flex;flex-direction:column;gap:4px}
 .snz-dialog .snz-fact-notes textarea{width:100%;box-sizing:border-box;min-height:64px;font:14px system-ui;border:1px solid #cbd5e1;border-radius:6px;padding:8px;resize:vertical}
 .snz-dialog .snz-fact-notes button{margin:6px 0 10px}
+
+.snz-admin-position{padding:12px;margin:12px 0;border:1px solid #cbd5e1;border-radius:7px;background:#f8fafc}.snz-admin-steps{min-width:1250px}.snz-admin-editor [data-admin-candidate]{max-width:440px}.snz-admin-editor input[type=datetime-local]{min-width:205px}.snz-admin-editor .snz-check{white-space:nowrap}.snz-history td{overflow-wrap:anywhere}.snz-history details{padding:8px}.snz-history .snz-table{min-width:700px}
+
+.snz-diff{table-layout:fixed;min-width:1000px!important}.snz-diff th:nth-child(1),.snz-diff th:nth-child(2){width:14%}.snz-diff th:nth-child(3){width:16%}.snz-diff th:nth-child(4),.snz-diff th:nth-child(5){width:28%}.snz-diff td,.snz-diff th{overflow-wrap:break-word;word-break:normal}

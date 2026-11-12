@@ -61,7 +61,7 @@ try{
  check('Assignments and facts survive correction',JSON.stringify(after.state)===JSON.stringify(before.state));
  check('Day order remains intact',(await(await page.request.get(base+'/objects/1/snz/orders/1')).json()).tasks.some(t=>t.element_ids.includes(1)));
  check('Registry quantities update after revision',after.registry_total.quantity===3&&after.registry_total.unique_quantity===3);
- await page.locator('[data-action="order-revisions"][data-id="2"]').click();await page.waitForFunction(()=>!document.querySelector('.snz-content[aria-busy="true"]'));
+ await page.locator('.snz-orders-top [data-action="order-revisions"][data-id="2"]').click();await page.waitForFunction(()=>!document.querySelector('.snz-content[aria-busy="true"]'));
  await page.locator('[data-action="open-revision"][data-revision="1"]').click();await page.waitForFunction(()=>!document.querySelector('.snz-content[aria-busy="true"]'));
  check('Archive keeps original column and disables fact editing',await page.locator('.snz-result tbody tr').count()===3&&await page.locator('[data-action="complete"]').count()===0);
  check('No JavaScript errors',errors.length===0);

@@ -1,3 +1,4 @@
+import {createAdminEditor, diffHtml, historyTime} from './snz-admin-editor.js';
 import { esc } from "./screen-view.js";
 import { ELEMENT_STATUS_LABELS } from "./element-statuses.js";
 import { bindIssuedLayout } from "./snz-issued-layout.js";
@@ -15,7 +16,7 @@ const textInput = (path, value, extra = "") => `<input data-path="${path}" value
 
 export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, onPickExtra, onShowElement }) {
   let validationIssue = null, orderEdit = null, revisions = null, scrollToEdit = false;
-  const editDirty = () => !!orderEdit && (orderEdit.exclude.size > 0 || !!orderEdit.reason.trim());
+  const editDirty = () => adminEditor.dirty() || (!!orderEdit && (orderEdit.exclude.size > 0 || !!orderEdit.reason.trim()));
   let data = null, draft = null, dialog = null, dirty = false, busy = false, error = "", message = "";
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
   let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", shiftFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
@@ -29,6 +30,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   const locked = (id) => data.locked_element_ids.includes(id);
   const crewName = (id) => draft.crews.find(c => c.id === id)?.name || id;
   const dirtyMark = () => { normalizeMontageAssignments(draft.assignments,data.locked_element_ids); dirty = true; plan = null; const el = dialog?.querySelector("[data-dirty]"); if (el) el.textContent = "Есть несохранённые изменения"; const saveButton=dialog?.querySelector('[data-action="save"]');if(saveButton)saveButton.disabled=!canWrite();for(const b of dialog?.querySelectorAll('[data-action="preview"],[data-action="issue"]')||[])b.disabled=true; };
+
+  const adminEditor=createAdminEditor({api,path,getData:()=>data,run,render,previewHtml:planHtml,
+    onSaved:async id=>{orderEdit=null;revisions=null;await load();plan=await api.get(path()+`/orders/${id}`);message='Новая версия СНЗ сохранена. Изменения доступны по кнопке «История».';send('poll');onChanged?.();}});
 
   async function load() {
     const object = getObjectId(), ticket = ++generation;
@@ -66,6 +70,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     dialog.addEventListener("click", click);
     dialog.addEventListener("change", change);
     dialog.addEventListener("input", e => {
+      if(adminEditor.input(e.target))return;
       if(e.target.matches('[data-fact-search]')){factSearch=e.target.value;factPage=0;dialog.querySelector('[data-fact-rows]').innerHTML=factRowsHtml();}
       if(e.target.dataset.factNote){factNotes.set(e.target.dataset.factNote,e.target.value);}
       if(e.target.dataset.montageTime){const id=Number(e.target.dataset.montageTime),initial=factData?.items.find(r=>r.id===id)?.completed_at||'';if(e.target.value===(initial.slice(0,19)))factEdits.delete(id);else factEdits.set(id,e.target.value);}
@@ -86,7 +91,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     if (busy && !force) return false;
     if ((dirty || editDirty() || factDirty()) && !force && !window.confirm("Закрыть СНЗ без сохранения изменений?")) return false;
     const wasOpen=!!dialog;
-    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; factEdits.clear();factNotes.clear();orderEdit=null;revisions=null;generation++;
+    dialog?.close(); dialog?.remove(); dialog = null; dirty = false; factEdits.clear();factNotes.clear();orderEdit=null;revisions=null;adminEditor.reset();generation++;
     if(wasOpen)onChanged?.();
     return true;
   }
@@ -163,7 +168,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     const origin = new Date(doc.start).getTime(), offset = s => Math.max(0, Math.min(100, (new Date(s).getTime()-origin)/432000));
     const teams = [...new Set(doc.tasks.map(t=>t.team))], facts = doc.facts || draft.facts;
     return `<section class="snz-result"><div class="snz-controls"><h3>${doc.editPreview ? "Предпросмотр исправления СНЗ № "+doc.id : doc.closed_at ? "Закрытый СНЗ № "+doc.id : doc.id ? "Выданный СНЗ № "+doc.id : "Расчёт смены"}${doc.order_revision ? " · ред. "+doc.order_revision : ""}${doc.historical ? " · архив" : ""} · ${dayText(doc.date)} · ${shiftText(doc.shift)} · ${esc(doc.crew.name)}</h3>
-      ${doc.id && !doc.editPreview ? `<button data-action="xlsx">Excel</button><button data-action="pdf">Поэтажные планы PDF</button>` : ""}</div>
+      ${doc.id && !doc.editPreview ? `<button data-action="xlsx">Excel</button><button data-action="pdf">Поэтажные планы PDF</button><button data-action="order-revisions" data-id="${doc.id}">История</button>${data.can_admin_edit&&!doc.historical?`<button data-action="admin-edit-open" data-id="${doc.id}">Редактировать (администратор)</button>`:""}` : ""}</div>
       ${doc.ignore_fact?'<p class="snz-muted" data-snz-mode>Режим расчёта: не учитывать факт. Рассчитаны назначения выбранной смены без автоматического переноса остатка.</p>':''}
       ${doc.warnings.length ? `<details class="snz-warnings"><summary>Предупреждения: ${doc.warnings.length}</summary><ul>${doc.warnings.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
       <p class="snz-muted">Изделий в СНЗ: ${members.size}. План: ${doc.tasks.length} операций · ${doc.tasks.reduce((n,t)=>n+t.segments.reduce((m,s)=>m+s.minutes,0),0)} минут работы звеньев. Факт: только 0 или 100 %.</p>
@@ -257,7 +262,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   }
   function revisionsHtml(){
     if(!revisions)return "";
-    return `<section class="snz-edit"><h3>Редакции СНЗ № ${revisions.id}</h3><table class="snz-table"><thead><tr><th>Редакция</th><th>Дата</th><th>Автор</th><th>Причина</th><th></th></tr></thead><tbody>${revisions.rows.map(r=>`<tr><td>${r.revision}</td><td>${esc(r.created_at)}</td><td>${esc(r.created_by)}</td><td>${esc(r.reason)}</td><td><button data-action="open-revision" data-id="${revisions.id}" data-revision="${r.revision}">Открыть редакцию</button></td></tr>`).join("")}</tbody></table></section>`;
+    return `<section class="snz-edit snz-history"><h3>История СНЗ № ${revisions.id}</h3><p class="snz-muted">Дата и время — МСК. Каждая версия сохраняется отдельно; ниже показаны изменения относительно предыдущей версии.</p><table class="snz-table"><thead><tr><th>Версия</th><th>Сохранена (МСК)</th><th>Кто сохранил</th><th>Причина</th><th></th></tr></thead><tbody>${revisions.rows.map(r=>`<tr><td>${r.revision}</td><td>${esc(historyTime(r.created_at))}</td><td>${esc(r.created_by)}</td><td>${esc(r.reason)}</td><td><button data-action="open-revision" data-id="${revisions.id}" data-revision="${r.revision}">Открыть редакцию</button></td></tr><tr><td colspan="5"><details data-history-version="${r.revision}" ${r.revision===revisions.rows[0].revision?'open':''}><summary>${r.previous_revision?`Изменения ${r.previous_revision} → ${r.revision}`:'Первоначальная выдача'} · ${r.changes?.length||0}</summary>${!r.facts_recorded?'<p class="snz-muted">В старой версии отдельный снимок факта не сохранялся.</p>':r.facts_captured_at?`<p class="snz-muted">Снимок факта зафиксирован: ${esc(historyTime(r.facts_captured_at))} МСК. Для первоначальной выдачи это момент первого архивирования.</p>`:''}${diffHtml(r.changes||[])}</details></td></tr>`).join("")}</tbody></table></section>`;
   }
   function ordersHtml() {
     const rows=data.orders.filter(o=>!ordersDate||o.work_date===ordersDate);
@@ -265,14 +270,16 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     return `<div class="snz-issued-layout"><section class="snz-orders-top" aria-label="Реестр выданных СНЗ">
       <div class="snz-controls"><label>Дата СНЗ (отбор)<input type="date" data-filter="ordersDate" value="${esc(ordersDate)}"></label><button data-action="orders-all">Все даты</button><button data-action="registry-xlsx" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Реестр за день в Excel</button><button data-action="registry-pdf" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Поэтажные планы за день PDF</button></div>
       <p class="snz-muted">Ночь: 20:00 выбранного дня — 08:00 следующего. Реестр: открытые СНЗ — план, закрытые — план/факт; без СНЗ — ниже. PDF — все СНЗ за дату.</p>
-      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Прораб</th><th>Количество шт</th><th>Выдал</th><th>Действия</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${o.id}${o.closed_at?`<small class="snz-done">Закрыт ${dayText(o.closed_at)} ${timeText(o.closed_at)}</small>`:""}${o.order_revision>1?` · ред. ${o.order_revision}`:""}</td><td>${dayText(o.work_date)}</td><td title="${dayText(o.start)} ${timeText(o.start)} — ${dayText(o.end)} ${timeText(o.end)}">${shiftText(o.shift)}</td><td>${esc(o.crew_name)}</td><td>${esc(o.foreman||"Не назначен")}</td><td>${o.quantity}</td><td>${esc(o.created_by)}</td><td><div class="snz-order-actions"><button data-action="open-order" data-id="${o.id}">Открыть</button>${canWrite()&&!o.closed_at?`<button data-action="edit-order" data-id="${o.id}">Редактировать</button><button data-action="delete-order" data-id="${o.id}">Удалить СНЗ</button>`:""}<button data-action="order-revisions" data-id="${o.id}">Редакции</button></div></td></tr>`).join("")||'<tr><td colspan="8">За выбранную дату СНЗ не выдавались.</td></tr>'}</tbody></table></div>
+      <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Прораб</th><th>Количество шт</th><th>Выдал</th><th>Действия</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${o.id}${o.closed_at?`<small class="snz-done">Закрыт ${dayText(o.closed_at)} ${timeText(o.closed_at)}</small>`:""}${o.order_revision>1?` · ред. ${o.order_revision}`:""}</td><td>${dayText(o.work_date)}</td><td title="${dayText(o.start)} ${timeText(o.start)} — ${dayText(o.end)} ${timeText(o.end)}">${shiftText(o.shift)}</td><td>${esc(o.crew_name)}</td><td>${esc(o.foreman||"Не назначен")}</td><td>${o.quantity}</td><td>${esc(o.created_by)}</td><td><div class="snz-order-actions"><button data-action="open-order" data-id="${o.id}">Открыть</button>${data.can_admin_edit?`<button data-action="admin-edit-open" data-id="${o.id}">Редактировать</button>`:""}${canWrite()&&!o.closed_at?`<button data-action="edit-order" data-id="${o.id}">Исключить позиции</button><button data-action="delete-order" data-id="${o.id}">Удалить СНЗ</button>`:""}<button data-action="order-revisions" data-id="${o.id}">История</button></div></td></tr>`).join("")||'<tr><td colspan="8">За выбранную дату СНЗ не выдавались.</td></tr>'}</tbody></table></div>
       <p class="snz-registry-total"><strong>Итого по документам: ${total.quantity} шт.</strong> Уникальных изделий: ${total.unique_quantity} шт. · СНЗ: ${rows.length}</p></section>
       <div class="snz-issued-splitter" data-snz-splitter role="separator" aria-label="Высота реестра и открытого СНЗ" aria-orientation="horizontal" aria-valuemin="15" aria-valuemax="80" tabindex="0" title="Перетащите для изменения высоты; стрелки вверх и вниз — с клавиатуры"></div>
-      <section class="snz-orders-bottom" aria-label="Открытый СНЗ">${orderEditHtml()}${revisionsHtml()}${!orderEdit?planHtml():""}${!orderEdit&&!revisions&&!plan?'<p class="snz-muted">Откройте СНЗ в реестре сверху. Высоту частей можно изменить разделителем.</p>':""}</section></div>`;
+      <section class="snz-orders-bottom" aria-label="Открытый СНЗ">${adminEditor.html()}${orderEditHtml()}${revisionsHtml()}${!orderEdit&&!adminEditor.active()?planHtml():""}${!orderEdit&&!adminEditor.active()&&!revisions&&!plan?'<p class="snz-muted">Откройте СНЗ в реестре сверху. Высоту частей можно изменить разделителем.</p>':""}</section></div>`;
   }
   function render() {
     if (!dialog) return;
     const active = document.activeElement, focusKey = active?.dataset?.path;
+    const adminFocus=active?.dataset?.adminField?`[data-admin-field="${active.dataset.adminField}"][data-admin-id="${active.dataset.adminId}"][data-admin-step="${active.dataset.adminStep}"]`:active?.matches('[data-admin-search]')?'[data-admin-search]':null;
+    const adminCursor=active?.matches('[data-admin-search]')?active.selectionStart:null;
     const paneScroll=[...dialog.querySelectorAll('.snz-orders-top,.snz-orders-bottom')].map(el=>el.scrollTop);
     const editScroll=orderEdit?dialog.querySelector('.snz-content')?.scrollTop:null;
     const searchFocus=active?.matches('[data-edit-search]')?active.selectionStart:null;
@@ -282,6 +289,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       <div class="snz-content ${tab==="orders"?"snz-issued-content":""}" ${busy?'aria-busy="true"':""}>${error?`<p class="snz-error" role="alert">${esc(error)}</p>`:""}${message?`<p class="snz-message" role="status">${esc(message)}</p>`:""}
       ${!draft?"<p>Загрузка данных СНЗ…</p>":`<fieldset ${busy?"disabled":""}>${tab==="plan"?plannerHtml():tab==="orders"?ordersHtml():tab==="facts"?factsHtml():`<fieldset ${!canWrite()?"disabled":""}>${tab==="cards"?cardsHtml():tab==="operations"?operationsHtml():tab==="teams"?teamsHtml():tab==="crews"?crewsHtml():tab==="floors"?floorsHtml():groupsHtml()}</fieldset>`}</fieldset>`}</div>`;
     bindIssuedLayout(dialog);
+    if(adminFocus&&!busy){const input=dialog.querySelector(adminFocus);input?.focus();if(adminCursor!=null)input?.setSelectionRange(adminCursor,adminCursor);}
     dialog.querySelectorAll('.snz-orders-top,.snz-orders-bottom').forEach((el,i)=>{el.scrollTop=paneScroll[i]||0;});
     if(editScroll!=null)dialog.querySelector('.snz-content').scrollTop=editScroll;
     if(searchFocus!=null){const input=dialog.querySelector('[data-edit-search]');input?.focus();input?.setSelectionRange(searchFocus,searchFocus);}
@@ -292,6 +300,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   }
   function change(e) {
     const target = e.target;
+    if(adminEditor.change(target))return;
     if (target.dataset.path) {
       const parts = target.dataset.path.split("."), key = parts.pop();
       let holder = draft; for (const part of parts) holder = holder[part];
@@ -340,6 +349,10 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       tab=button.dataset.tab;error="";message="";if(tab==='facts')await run(load);else render();return;
     }
     const action = button.dataset.action;
+    if(action?.startsWith('admin-')){
+      if(action==='admin-edit-open'){if(dirty||factDirty()){error='Сначала сохраните другие изменения.';render();return;}orderEdit=null;revisions=null;plan=null;tab='orders';scrollToEdit=true;}
+      await adminEditor.click(button);return;
+    }
     if(action==='show-on-model'){const id=Number(button.dataset.id);if(close())onShowElement?.(id);return;}
     if(['facts-refresh','facts-all'].includes(action)){
       if(factDirty()&&!window.confirm('Сбросить несохранённое время и примечания?'))return;
@@ -403,7 +416,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
 
     if (action==="close") { close();return; }
     if (action==="save") { await run(save);return; }
-    if (action==="reload") { if ((dirty||editDirty()||factDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{factEdits.clear();factNotes.clear();await load();plan=null;orderEdit=null;revisions=null;});return; }
+    if (action==="reload") { if ((dirty||editDirty()||factDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{factEdits.clear();factNotes.clear();await load();plan=null;orderEdit=null;revisions=null;adminEditor.reset();});return; }
     if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId,ignore_fact:ignoreFact});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
 
     if(action==='sequence-up'||action==='sequence-down'){
@@ -454,12 +467,12 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     }
     if(action==="order-revisions"){
       if(dirty){error="Сначала сохраните изменения планирования.";render();return;}
-      await run(async()=>{const id=Number(button.dataset.id);revisions={id,rows:await api.get(path()+`/orders/${id}/revisions`)};orderEdit=null;});return;
+      await run(async()=>{tab='orders';const id=Number(button.dataset.id);revisions={id,rows:await api.get(path()+`/orders/${id}/revisions`)};orderEdit=null;adminEditor.reset();scrollToEdit=true;});return;
     }
     if(action==="open-revision"){
       await run(async()=>{plan=await api.get(path()+`/orders/${Number(button.dataset.id)}/revisions/${Number(button.dataset.revision)}`);});return;
     }
-    if (action==="open-order") { if(dirty){error="Сначала сохраните изменения или обновите данные.";render();return;} await run(async()=>{plan=await api.get(path()+`/orders/${Number(button.dataset.id)}`);orderEdit=null;revisions=null;});return; }
+    if (action==="open-order") { if(dirty){error="Сначала сохраните изменения или обновите данные.";render();return;} await run(async()=>{plan=await api.get(path()+`/orders/${Number(button.dataset.id)}`);orderEdit=null;revisions=null;adminEditor.reset();});return; }
     if (action==="complete") { const key=button.dataset.key; await run(async()=>{const r=await api.post(path()+"/facts",{revision:data.revision,task_key:key,order_id:Number(button.dataset.orderId)});await load();plan=await api.get(path()+`/orders/${plan.id}`);message=r.warnings?.join(" ")||"Операция завершена";send("poll");});return; }
     if (action==="xlsx" || action==="pdf") {
       await run(async()=>{const blob=await api.download(path()+`/orders/${plan.id}/export.${action}${plan.historical?"?revision="+plan.order_revision:""}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`СНЗ-${plan.id}${plan.order_revision?"-ред-"+plan.order_revision:""}.${action}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;

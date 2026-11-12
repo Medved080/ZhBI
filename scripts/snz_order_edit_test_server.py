@@ -20,7 +20,10 @@ issue('day','day-fixture')
 d=cls.snz.get_state(cls.object_id,cls.admin)
 d['state']['assignments'].append(dict(d['state']['assignments'][0],element_id=cls.ids[3],priority=4,prep_priority=4))
 cls.snz.save_state(cls.object_id,cls.snz.StateIn(revision=d['revision'],**{k:v for k,v in d['state'].items() if k!='facts'}),cls.admin)
-night=issue('night','night-fixture')
+# Reproduce already-issued legacy carry, before the later closure requirement.
+from unittest.mock import patch
+with patch('app.snz_closure.assert_previous_orders_closed'):
+    night=issue('night','night-fixture')
 from datetime import datetime
 class FixtureClock(datetime):
     @classmethod

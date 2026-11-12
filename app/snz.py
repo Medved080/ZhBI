@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import activity
-from app.access import assert_object_feature, has_feature
+from app.access import assert_object_feature, has_feature, is_system_admin
 from app.auth import audit_display_name, get_current_user
 from app.db import begin_write, get_connection, touch_elements
 from app.snz_core import build_schedule, default_state, suggest_card
@@ -338,7 +338,7 @@ def get_state(object_id: int, user=Depends(get_current_user)):
                 or (element["id"] in grouped and state["facts"].get(f"g:{grouped[element['id']]['id']}:{op['id']}", {}).get("completed"))]
         return {"revision": revision, "state": {**state,"facts":_public_facts(state)}, "elements": elements, **register, "locked_element_ids": locked,
                 "can_write": has_feature(conn, user, "planned_date", "write", object_id),
-                "can_fact": has_feature(conn, user, "status", "write", object_id)}
+                "can_fact": has_feature(conn, user, "status", "write", object_id), "can_admin_edit": is_system_admin(user)}
     finally:
         conn.close()
 
@@ -541,11 +541,17 @@ def edit_order(object_id: int, order_id: int, body: EditOrderIn, user=Depends(ge
         name = audit_display_name(user)
         old = json.loads(row["snapshot_json"])
         old_revision = old.get("order_revision", 1)
+        from app.snz_order_history import freeze
+        old_archive=freeze(old,_public_facts(state))
+        old_archive['version_facts_captured_at']=datetime.now(ZoneInfo('UTC')).isoformat(timespec='seconds')
+        original_archive=json.dumps(old_archive,ensure_ascii=False)
         # The original legacy row is archived lazily, inside this same transaction.
         conn.execute("INSERT OR IGNORE INTO snz_order_revisions(object_id,order_id,revision,snapshot_json,created_at,created_by,reason) VALUES (?,?,?,?,?,?,?)",
-                     (object_id, order_id, old_revision, row["snapshot_json"], row["created_at"], old.get("edited_by", row["created_by"]), old.get("edit_reason", "Первоначальная выдача")))
+                     (object_id, order_id, old_revision, original_archive, old.get("edited_at",row["created_at"]), old.get("edited_by", row["created_by"]), old.get("edit_reason", "Первоначальная выдача")))
         snapshot["edited_by"] = name
         snapshot["edited_at"] = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+        snapshot=freeze(snapshot,_public_facts(state))
+        snapshot["version_facts_captured_at"]=snapshot["edited_at"]
         raw = json.dumps(snapshot, ensure_ascii=False)
         conn.execute("INSERT INTO snz_order_revisions(object_id,order_id,revision,snapshot_json,created_by,reason,request_id,request_hash) VALUES (?,?,?,?,?,?,?,?)",
                      (object_id, order_id, snapshot["order_revision"], raw, name, body.reason.strip(), body.request_id, request_hash))
@@ -561,12 +567,20 @@ def edit_order(object_id: int, order_id: int, body: EditOrderIn, user=Depends(ge
 
 def _order_revision(conn, object_id, order_id, revision):
     current = _order(conn, object_id, order_id)
-    if revision is None or revision == current.get("order_revision", 1):
-        return current
+    if revision is None:return current
     row = conn.execute("SELECT snapshot_json FROM snz_order_revisions WHERE object_id=? AND order_id=? AND revision=?", (object_id, order_id, revision)).fetchone()
-    if not row:
-        raise HTTPException(404, "Редакция СНЗ не найдена.")
-    return json.loads(row[0])
+    if row:
+        from app.snz_closure import closure_projection
+        archived=json.loads(row[0])
+        return closure_projection(archived,archived.get('version_closure'))
+    if revision==current.get('order_revision',1):
+        closure=records_for_closed(conn,object_id,order_id)
+        if closure is not None:
+            from app.snz_order_history import freeze
+            from app.snz_closure import closed_orders
+            return freeze(current,closure,closed_orders(conn,object_id).get(str(order_id)))
+        return current
+    raise HTTPException(404, "Редакция СНЗ не найдена.")
 
 
 @router.post("/orders/{order_id}/delete")
@@ -592,11 +606,8 @@ def list_order_revisions(object_id: int, order_id: int, user=Depends(get_current
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
         _order(conn, object_id, order_id)
-        rows = [dict(row) for row in conn.execute("SELECT revision,reason,created_at,created_by FROM snz_order_revisions WHERE object_id=? AND order_id=? ORDER BY revision DESC", (object_id, order_id))]
-        if not rows:
-            row = conn.execute("SELECT created_at,created_by FROM snz_orders WHERE id=?", (order_id,)).fetchone()
-            rows = [{"revision": 1, "reason": "Первоначальная выдача", **dict(row)}]
-        return rows
+        from app.snz_order_history import history
+        return history(conn,object_id,order_id)
     finally:
         conn.close()
 
@@ -607,7 +618,7 @@ def read_order_revision(object_id: int, order_id: int, revision: int, user=Depen
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
         snapshot = _order_revision(conn, object_id, order_id, revision)
-        return {**snapshot, "id": order_id, "order_revision": revision, "historical": True, "facts": (records_for_closed(conn,object_id,order_id) or _public_facts(_load(conn, object_id)[0]))}
+        return {**snapshot, "id": order_id, "order_revision": revision, "historical": True, "facts": snapshot.get("version_facts", {}), "facts_recorded": "version_facts" in snapshot}
     finally:
         conn.close()
 
@@ -981,3 +992,7 @@ def complete_model_fact(object_id: int,body: ModelFactIn,user=Depends(get_curren
                                   'confirmed':result['confirmed'],'extra':result['extra']})
         return result
     finally:activity.defer_end(events);conn.close()
+
+
+from app.snz_admin import router as admin_router
+router.include_router(admin_router)
