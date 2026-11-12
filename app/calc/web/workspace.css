@@ -2,6 +2,11 @@
 html{scrollbar-gutter:auto}
 #precast-concept [hidden]{display:none!important}
 #precast-concept .pc-shell{height:100dvh;min-height:0;grid-template-columns:300px minmax(0,1fr);grid-template-rows:46px minmax(0,1fr);border:0;border-radius:0}
+#precast-concept .pc-update-notice{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:10px 104px 10px 16px;background:var(--surface);border-bottom:2px solid var(--pc-accent)}
+#precast-concept .pc-update-notice #pc-update-status:empty{display:none}
+#precast-concept .pc-update-notice #pc-update-status{flex-basis:100%;color:var(--pc-ink)}
+#precast-concept[data-update-available="true"] .pc-shell{grid-template-rows:auto 46px minmax(0,1fr)}
+#precast-concept[data-update-available="true"] :is(.pc-sidebar,.pc-main){grid-row:3}
 #precast-concept .pc-workspace-nav{grid-column:1/-1;display:flex;align-items:center;gap:4px;padding:0 16px;border-bottom:1px solid var(--pc-line);background:var(--pc-bg);min-width:0;z-index:5}
 #precast-concept .pc-workspace-nav .pc-brand{font-size:14px;margin:0 20px 0 0;white-space:nowrap}
 #precast-concept .pc-workspace-nav>button{height:46px;border:0;border-radius:0;background:transparent;padding:8px 12px;border-bottom:2px solid transparent;color:var(--pc-muted);white-space:nowrap;font-size:13px}

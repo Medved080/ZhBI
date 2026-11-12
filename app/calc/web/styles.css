@@ -430,6 +430,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-properties dt{white-space:normal}
 #precast-concept .pc-properties dl{gap:10px 8px;margin:14px 0}
 #precast-concept .pc-properties #pc-project-properties{padding-top:14px;border-top:1px solid var(--pc-line)}
+#precast-concept #pc-project-properties{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}
+#precast-concept #pc-project-properties :is(dt,dd){min-width:0;white-space:normal;overflow-wrap:anywhere}
+#precast-concept #pc-project-properties .pc-property-long{grid-column:1/-1;text-align:left}
+#precast-concept #pc-project-properties dd.pc-property-long{font-weight:400}
 #precast-concept #pc-geometry-note{line-height:1.6;overflow-wrap:anywhere}
 #precast-concept .pc-viewer{padding:14px}
 #precast-concept .pc-view-tools{gap:10px 14px;font-size:12px}

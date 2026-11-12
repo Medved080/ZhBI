@@ -17,7 +17,7 @@
  function applySkin(theme){try{const skin=SKINS.has(theme)?theme:'gos';document.documentElement.dataset.skin=skin;document.documentElement.style.colorScheme=DARK.has(skin)?'dark':'light';}catch{}}
  async function ready(){
   try{user=await request('/calc/api/auth/me');applySkin(user.uiTheme);return user;}catch(error){
-   if(error.status===401){location.assign('/');return new Promise(()=>{});}
+   if(error.status===401&&!user){location.assign('/');return new Promise(()=>{});}
    throw error;}
  }
  // Вход и выход — общие с ЖБИ: подсистема собственных сеансов не ведёт.

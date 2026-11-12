@@ -93,6 +93,11 @@ function matchesProductName(product, query){
  }
  async function flushSaves(){for(const id of [...jobs.keys()])await saveProduct(id);}
  window.CalcZhBIFlushSaves=flushSaves;
+ window.CalcZhBIUpdates.start({request:api.request,beforeReload:async()=>{
+  if(window.CalcZhBINorms?.hasUnsavedChanges())throw new Error('Сначала сохраните изменения в разделе «Цены и нормы».');
+  if(document.getElementById('pc-product-dialog')?.open)throw new Error('Завершите редактирование параметров изделия перед обновлением.');
+  await flushSaves();
+ }});
  q('#pc-save-retry').addEventListener('click',()=>{const conflict=[...jobs.keys()].find(id=>jobs.get(id).conflict);if(conflict)showConflict(conflict);else void flushSaves().catch(()=>{});});
  for(const choice of ['server','mine'])document.getElementById('pc-conflict-'+choice).addEventListener('click',()=>{
   const id=conflictId,job=jobs.get(id);if(!job?.conflict)return;const i=products.findIndex(p=>p.id===id),remote=job.conflict;
@@ -102,7 +107,7 @@ function matchesProductName(product, query){
  });
  q('#pc-current-user').textContent=user.displayName+(user.local?'':' · '+({admin:'администратор',editor:'редактор',viewer:'просмотр'}[user.role]));q('#pc-logout').hidden=user.local||Boolean(window.frameElement?.dataset?.calcEmbed);q('#pc-logout').addEventListener('click',()=>void flushSaves().then(()=>api.logout()).catch(error=>saveStatus(error.message,true)));
  if(!writeable){q('#pc-edit-product').hidden=true;q('#pc-verify-product').hidden=true;q('#pc-verify-selected').hidden=true;q('#pc-add').hidden=true;q('#pc-clear').hidden=true;}
- window.addEventListener('beforeunload',event=>{if(jobs.size){event.preventDefault();event.returnValue='';}});
+ window.addEventListener('beforeunload',event=>{if(jobs.size||window.CalcZhBINorms?.hasUnsavedChanges()||document.getElementById('pc-product-dialog')?.open){event.preventDefault();event.returnValue='';}});
  const albumNames={doc01:'Колонны · нижние',doc02:'Колонны · средние, ч. 1',doc03:'Колонны · средние, ч. 2',doc04:'Колонны · верхние',doc05:'Колонны · АБК',doc06:'Ригели · 6.9',doc07:'Ригели · 6.6',doc08:'Ригели · 4.6.5 / 4.4.5',doc09:'Ригели · АБК',doc10:'Плиты · корпус',doc11:'Плиты · АБК',doc12:'Подъёмники',doc13:'Шахты лифтов',doc14:'Лестничные балки',doc15:'Цокольные панели'};
  const albumOptions=[...new Map(products.filter(p=>p.documentModel?.source.id).map(p=>[p.documentModel.source.id,{family:p.documentModel.family,title:p.documentModel.source.title}])).entries()];
  q('#pc-product-filter').innerHTML='<option value="">Все альбомы</option>'+albumOptions.map(([id,doc])=>`<option value="${escapeHTML(id)}">${escapeHTML(albumNames[id]||doc.family)}</option>`).join('');
@@ -323,7 +328,7 @@ function matchesProductName(product, query){
     // автоматически прочитано с листа PDF: что именно взято, откуда, и перечень закладных, труб и петель (для проверки человеком)
     const sheet=reading.sheet||{},names={embedded:'закладные',loop:'петли',pipe:'трубы'};
     const items=(reading.embedded||[]).map(([kind,name,mass,qty])=>`${escapeHTML(name.replace(/^Закладная деталь |^Петлевой выпуск |^Петля /,''))} × ${qty}`);
-    q('#pc-project-properties').innerHTML+=`<dt>Прочитано с листа</dt><dd>${escapeHTML(reading.applied.length?reading.applied.join(', '):'пробелов не было')} · альбом doc${String(sheet.doc||0).padStart(2,'0')}, стр. ${sheet.page||'?'} · не подтверждено</dd>${items.length?`<dt>Закладные, трубы, петли по листу</dt><dd>${items.slice(0,14).join(', ')}${items.length>14?' и ещё '+(items.length-14):''}</dd>`:''}`;
+    q('#pc-project-properties').innerHTML+=`<dt class="pc-property-long">Прочитано с листа</dt><dd class="pc-property-long">${escapeHTML(reading.applied.length?reading.applied.join(', '):'пробелов не было')} · альбом doc${String(sheet.doc||0).padStart(2,'0')}, стр. ${sheet.page||'?'} · не подтверждено</dd>${items.length?`<dt class="pc-property-long">Закладные, трубы, петли по листу</dt><dd class="pc-property-long">${items.slice(0,14).join(', ')}${items.length>14?' и ещё '+(items.length-14):''}</dd>`:''}`;
    }
    if(doc.kind!=='registry')q('#pc-geometry-note').textContent='Сечение 900 × '+doc.section[1]+' мм · консоль '+(doc.bounds[1][1]-doc.bounds[0][1])+' мм. По бетону 8 940 мм, с выпусками 11 280 мм.';
    q('#pc-source-description').textContent='Конструктив: '+doc.source.title+' · '+doc.source.revision+(doc.kind==='registry'?'. Расход по распознанной спецификации; цены и нормы требуют проверки.':'. Расходы и цены: Excel МСУ-1.');

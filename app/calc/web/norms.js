@@ -190,5 +190,8 @@
   document.querySelector('.pc-tabs').hidden=true;for(const v of ['calculation','model','tech','issues','collisions','sources','sheets','history'])document.getElementById('pc-'+v+'-panel').hidden=true;
   panel.hidden=false;open.setAttribute('aria-pressed','true');panel.textContent='Загрузка расценок и норм…';
   try{[prices,norms,readiness]=await Promise.all([api.request('/calc/api/prices'),api.request('/calc/api/norms'),api.request('/calc/api/readiness').catch(()=>null)]);render();}catch(e){panel.textContent=e.message;}
- });window.CalcZhBINorms={close};
+ });window.CalcZhBINorms={close,hasUnsavedChanges(){
+  const form=panel.querySelector('form');if(!form)return false;
+  return [...form.querySelectorAll('[data-exact]')].some(changed)||[...form.querySelectorAll('[name^="g:"],[name^="t:"]')].some(el=>el.type==='checkbox'?el.checked!==el.defaultChecked:el.value!==el.defaultValue);
+ }};
 })();

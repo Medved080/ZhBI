@@ -442,3 +442,5 @@
 СНЗ, 12.11: «На схеме» из строки факта — выбор/фокус в текущем виде АРМ прораба; доп. факт поддерживает уже установленный статус с сохранением истории, отдельную смену и временные цвета исполнения 2D/3D. `snz-extra-fact.js`, `embed-bridge.js`, `app/snz.py`; проверки `test_snz_extra_existing_ui.mjs`, `test_snz_extra_colors_3d.mjs`.
 
 12.11.2026: журнал диагностики — `app/service_events.py`, `app/static/v2/activity-screen.js`; поиск и связывание событий — `app/main.py`, `app/activity.py`. Плоская XLSX и числовые поля калькулятора — `Docs/calc-sync.md`; средства частичных моделей — `Docs/calc-model-tools.md`.
+
+12.11.2026: уведомление сборки калькулятора — `app/calc/web/update-notice.js`; общий контроль истечения сеанса V1/V2/калькулятора — `app/static/session-notice.js`. Свойства с длинными описаниями — исправлены переносы. `Docs/calc-update-session.md`.
