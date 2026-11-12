@@ -210,6 +210,24 @@ def _elements(conn, object_id):
     return result
 
 
+def _plan_pdf(conn, object_id, order):
+    from app.snz_export import build_pdf
+    from app.snz_policy import order_items
+    context = _elements(conn, object_id)
+    selected = list(order_items(order).values())
+    floors = {e.get('floor') for e in selected}
+    sources = {e['source_file'] for e in [*context, *selected] if e.get('floor') in floors}
+    axes = [dict(r) for source in sorted(sources)
+            for r in conn.execute('SELECT * FROM axis_lines WHERE source_file=?', (source,))]
+    zones = [dict(r) for r in conn.execute(
+        "SELECT id,name,outline_json FROM zones WHERE object_id=? AND category='Захватка'", (object_id,))]
+    colors = {r['status']: r['color'] for r in conn.execute('SELECT status,color FROM status_colors')}
+    try:
+        return build_pdf(order, context, axes, zones, colors)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 def _history(conn, object_id):
     from app.snz_closure import closed_orders
     closed=closed_orders(conn,object_id)
@@ -870,17 +888,12 @@ def export_fact_xlsx(object_id: int, date: date, shift: Literal['day','night'] |
 def export_fact_pdf(object_id: int, date: date, shift: Literal['day','night'] | None = None,
                     crew_id: str | None = None, user=Depends(get_current_user)):
     from app.snz_fact_report import report,drawing_order
-    from app.snz_export import build_pdf
     conn=get_connection()
     try:
         assert_object_feature(conn,user,object_id,'plan','read')
         state,_=_load(conn,object_id);data=report(conn,object_id,state,date.isoformat(),shift,crew_id)
         order=drawing_order(data)
-        sources={e['source_file'] for e in order['items']}
-        axes=[dict(r) for source in sources for r in conn.execute('SELECT * FROM axis_lines WHERE source_file=?',(source,))]
-        zones=[dict(r) for r in conn.execute("SELECT id,name,outline_json FROM zones WHERE object_id=? AND category='Захватка'",(object_id,))]
-        colors={r['status']:r['color'] for r in conn.execute('SELECT status,color FROM status_colors')}
-        return Response(build_pdf(order,_elements(conn,object_id),axes,zones,colors,state['floor_levels']),media_type='application/pdf',
+        return Response(_plan_pdf(conn,object_id,order),media_type='application/pdf',
                         headers={'Content-Disposition':f'attachment; filename="SNZ-facts-{date.isoformat()}.pdf"'})
     finally:conn.close()
 
@@ -916,16 +929,11 @@ def export_xlsx(object_id: int, order_id: int, user=Depends(get_current_user), r
 
 @router.get("/orders/{order_id}/export.pdf")
 def export_pdf(object_id: int, order_id: int, user=Depends(get_current_user), revision: int | None = None):
-    from app.snz_export import build_pdf
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
         order = _order_revision(conn, object_id, order_id, revision)
-        sources = {e["source_file"] for task in order["tasks"] for e in task["elements"]}
-        axes = [dict(r) for source in sources for r in conn.execute("SELECT * FROM axis_lines WHERE source_file=?", (source,))]
-        zones = [dict(r) for r in conn.execute("SELECT id,name,outline_json FROM zones WHERE object_id=? AND category='Захватка'", (object_id,))]
-        colors = {r["status"]:r["color"] for r in conn.execute("SELECT status,color FROM status_colors")}
-        return Response(build_pdf(order, _elements(conn, object_id), axes, zones, colors, _load(conn, object_id)[0]["floor_levels"]), media_type="application/pdf",
+        return Response(_plan_pdf(conn, object_id, order), media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="SNZ-{order_id}.pdf"'})
     finally:
         conn.close()

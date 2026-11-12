@@ -81,9 +81,15 @@ class ReportingTests(unittest.TestCase):
         table=wb['План и факт'];self.assertIn('Вне СНЗ',[table.cell(i,7).value for i in range(6,11)])
         self.assertEqual({table.cell(i,9).value for i in range(6,11)},{'День','Ночь'})
         out=Path(__file__).resolve().parents[1]/'outputs/snz-fact-report';out.mkdir(parents=True,exist_ok=True);(out/'facts.xlsx').write_bytes(data)
-        pdf=self.snz.export_fact_pdf(self.object_id,date(2026,11,10),user=self.admin).body;(out/'facts.pdf').write_bytes(pdf)
+        c=self.db.get_connection()
+        column=c.execute("INSERT INTO elements(source_file,dxf_handle,layer,element_type,mark,mark_source,x,y,axis_status,object_id,floor,elevation_mm,current_status) VALUES ('СНЗ-проверка.dxf','column-base','snz','Колонна','К-основание','manual',100,100,'matched',?,1,1200,'installed')",(self.object_id,)).lastrowid
+        c.commit();c.close()
+        try:pdf=self.snz.export_fact_pdf(self.object_id,date(2026,11,10),user=self.admin).body
+        finally:
+            c=self.db.get_connection();c.execute('DELETE FROM elements WHERE id=?',(column,));c.commit();c.close()
+        (out/'facts.pdf').write_bytes(pdf)
         import fitz
-        text='\n'.join(p.get_text() for p in fitz.open(stream=pdf,filetype='pdf'));self.assertIn('отм +5.000',text);self.assertIn('ДОП - Доп-5',text)
+        text='\n'.join(p.get_text() for p in fitz.open(stream=pdf,filetype='pdf'));self.assertIn('отм +1.200',text);self.assertNotIn('отм +5.000',text);self.assertIn('ДОП - Доп-5',text)
 
     def test_extra_rejects_planned_wrong_crew_time_status_and_object(self):
         for change in ({'crew_id':'missing'},{'completed_at':'2026-11-12T01:00:00'}, {'items':[{'element_id':self.base.ids[0],'expected_rev':'0'*64}]}):

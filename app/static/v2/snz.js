@@ -205,7 +205,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       ${factBlocked?'<p class="snz-error">Обновите факт перед повторной записью.</p>':''}<div data-fact-rows>${factRowsHtml()}</div>`;
   }
   function floorsHtml(){
-    return `<p class="snz-muted">Отметка пола используется в названии листа поэтажного PDF. Значение задаётся в миллиметрах: +15.800 м = 15800 мм. Если этаж не заполнен, в PDF показано «Отметка пола не задана».</p><button data-action="add-floor">Добавить этаж</button>
+    return `<p class="snz-muted">В поэтажном PDF отметка пола теперь определяется автоматически: минимальная отметка низа колонн данного этажа. При отсутствии этих данных показано «Отметка пола не задана». Ранее введённые справочные отметки сохранены; они не заменяют отметки колонн в PDF. Значения справочника задаются в миллиметрах: +15.800 м = 15800 мм.</p><button data-action="add-floor">Добавить этаж</button>
       <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>Этаж</th><th>Отметка пола, мм</th><th></th></tr></thead><tbody>${(draft.floor_levels||[]).map((r,i)=>`<tr><td>${textInput(`floor_levels.${i}.floor`,r.floor,'type="number" min="-20" max="300" required aria-label="Номер этажа"')}</td><td>${textInput(`floor_levels.${i}.elevation_mm`,r.elevation_mm,'type="number" min="-1000000" max="3000000" required aria-label="Отметка пола, мм"')}</td><td><button data-action="remove-floor" data-index="${i}">Удалить строку</button></td></tr>`).join('')}</tbody></table></div>`;
   }
   function cardsHtml() {
