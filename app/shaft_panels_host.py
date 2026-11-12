@@ -21,11 +21,12 @@ def assert_access(conn,user,object_id):
 
 
 def backup(user,object_id):
-    backup_before_import(f'Панели облицовки шахт → объект #{object_id}',audit_display_name(user),user['id'])
+    backup_before_import(f'Развёртка панелей → объект #{object_id}',audit_display_name(user),user['id'])
 
 
 def before_commit(conn,user,object_id,changed_ids,summary):
-    conn.execute('INSERT OR IGNORE INTO label_visibility (object_id,element_type,visible) VALUES (?,?,0)',(object_id,TYPE))
+    element_type = 'Панель' if summary.get('scope','').startswith('facade-') else TYPE
+    conn.execute('INSERT OR IGNORE INTO label_visibility (object_id,element_type,visible) VALUES (?,?,0)',(object_id,element_type))
     versioned = has_versioning(conn, object_id)
     if versioned:
         register_import_membership(conn, object_id)
@@ -63,7 +64,8 @@ def after_apply(user,object_id,summary):
     # внутри транзакции и остаётся первичным доказательством применения;
     # это — только отображение в общем журнале действий.
     activity.log('import_dxf',user=user,entity_type='object',entity_id=object_id,
-                details={'kind':'shaft_panels','object_id':object_id,'summary':summary})
+                details={'kind':'facade_panels' if summary.get('scope','').startswith('facade-') else 'shaft_panels',
+                         'object_id':object_id,'summary':summary})
 
 
 router=build_router(connection_factory=get_connection,get_user=get_current_user,

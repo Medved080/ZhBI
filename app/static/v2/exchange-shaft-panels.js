@@ -5,7 +5,7 @@
 // толщины и при уходе с экрана: иначе занятое место в очереди токенов (лимит 8) держится 15 минут впустую.
 import { showConfirmDialog } from "./dialogs.js";
 import {
-  esc, errText, isUnknownOutcome, checkFile, fmtSize, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, factsHtml, listHtml, objectOptions,
+  esc, errText, isUnknownOutcome, checkFile, pageFrame, makeStatus, unknownOutcomeHtml, verifyOutcome, factsHtml, listHtml, objectOptions,
 } from "./exchange-common.js";
 
 export function mountShaftPanels(el, ctx) {
@@ -16,13 +16,16 @@ export function mountShaftPanels(el, ctx) {
   el.className = "v2-page";
   el.innerHTML = pageFrame({
     screen, groupTitle,
-    summary: "Развёртки ГП1/ГП2 (профиль конкретного комплекта чертежей): распознавание панелей по осям 5–7/Е–Ж выбранного объекта, сводка, применение.",
+    summary: "Выберите один DWG фасада СМ1 или DXF шахт ГП1/ГП2.",
     body: `<form id="sp-form" autocomplete="off" novalidate>
         <label class="v2-wire-field v2-field-wide"><span>Объект (ЖБИ)</span>
           <select id="sp-object" aria-label="Объект">${zhbiObjects.some((o) => o.id === currentObjectId) ? "" : `<option value="" selected>— выберите объект —</option>`}${objectOptions(zhbiObjects, currentObjectId)}</select></label>
-        <label class="v2-wire-field v2-field-wide"><span>Файл чертежа (DXF)</span><input type="file" id="sp-file" accept=".dxf"></label>
-        <label class="v2-wire-field"><span>Толщина панели, мм (по паспорту изделия)</span><input type="number" id="sp-thickness" min="1" max="500" step="0.1" placeholder="необязательно"></label>
-        <p class="v2-muted v2-ex-hint">Без толщины доступно только распознавание лицевых поверхностей (панели видны в таблице), но объёмы и применение — только с толщиной.</p>
+        <label class="v2-wire-field v2-field-wide"><span>Файл развёртки (DWG или DXF)</span><input type="file" id="sp-file" accept=".dwg,.dxf"></label>
+        <label class="v2-wire-field v2-field-wide"><span>Толщина панели, мм (по паспорту изделия)</span><input type="number" id="sp-thickness" min="1" max="500" step="0.1" placeholder="по проекту"></label>
+        <div id="sp-offset-field" hidden><label class="v2-wire-field v2-field-wide"><span>Отступ внутренней грани наружу, мм</span>
+          <input type="number" id="sp-offset" step="any" value="0"></label>
+          <p class="v2-muted v2-ex-hint">От оси фасада. На косом участке — от линии центров колонн 36–38.</p></div>
+        <p class="v2-muted v2-ex-hint" id="sp-section-hint">Для добавления в модель укажите толщину панели.</p>
         <div class="v2-bar"><button type="submit" class="v2-btn v2-primary" id="sp-analyze">Распознать</button><button type="button" class="v2-btn" id="sp-cancel">Отменить анализ</button></div>
       </form>
       <div id="sp-status" class="v2-ex-status" role="status" aria-live="polite"></div>
@@ -30,18 +33,23 @@ export function mountShaftPanels(el, ctx) {
   });
   const $ = (s) => el.querySelector(s);
   const status = makeStatus($("#sp-status"));
+  function setBusy(value) {
+    busy = value;
+    $("#sp-form").querySelectorAll("input, select, button").forEach((field) => { field.disabled = value; });
+  }
 
-  async function cancelToken(silent) {
+  async function cancelToken() {
     if (!token) return;
     const t = token; token = null;
+    data = null;
+    $("#sp-result")?.replaceChildren();
     try { await api.delete(`/shaft-panels/pending/${encodeURIComponent(t)}`); } catch (e) { /* истёк сам по TTL — не страшно */ }
-    if (!silent) { data = null; $("#sp-result").innerHTML = ""; }
   }
 
   function panelsTableHtml(panels) {
     const shown = panels.slice(0, 500);
-    return `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Шахта / сторона</th><th>Ш × В, мм</th><th>Расположение</th></tr></thead><tbody>
-      ${shown.map((p) => `<tr><td>${esc(p.mark)}</td><td>${esc(p.shaft)}/${esc(p.face)}</td><td>${esc(p.width_mm)} × ${esc(p.height_mm)}</td><td>${esc(p.address)}</td></tr>`).join("")}
+    return `<div class="v2-read-table"><table class="v2-read-tbl"><thead><tr><th>Марка</th><th>Фасад / сторона шахты</th><th>Ш × В, мм</th><th>Расположение</th></tr></thead><tbody>
+      ${shown.map((p) => `<tr><td>${esc(p.mark)}</td><td>${p.shaft ? esc(p.shaft) + "/" : ""}${esc(p.face)}</td><td>${esc(p.width_mm)} × ${esc(p.height_mm)}</td><td>${esc(p.address)}</td></tr>`).join("")}
       </tbody></table></div>${panels.length > shown.length ? `<p class="v2-muted">Показаны первые ${shown.length} из ${panels.length}.</p>` : ""}`;
   }
 
@@ -50,6 +58,10 @@ export function mountShaftPanels(el, ctx) {
     if (!data) { box.innerHTML = ""; return; }
     const d = data.drawing;
     const parts = [factsHtml([["Панелей", d.panels.length], ["Марок", Object.keys(d.counts?.by_mark || {}).length], ["Сетка осей", data.grid_source]])];
+    if (d.scope) {
+      const section = d.section_layers_mm ? d.section_layers_mm.join(" + ") + " = " : "";
+      parts.push(factsHtml([["Толщина панели", section + d.thickness_mm + " мм"]]));
+    }
     parts.push(panelsTableHtml(d.panels));
     if (d.warnings.length) {
       parts.push(`<div class="v2-callout" role="note"><p><strong>Замечания к чертежу — подтвердите каждое:</strong></p>
@@ -59,7 +71,7 @@ export function mountShaftPanels(el, ctx) {
       const a = data.analysis;
       parts.push(factsHtml([["Добавить", a.counts.new], ["Обновить", a.counts.updated], ["Без изменений", a.counts.unchanged], ["Отсутствуют в новой версии", a.counts.missing]]));
       if (a.conflicts.length) parts.push(listHtml("Конфликты (применение недоступно, пока не разрешены в штатном редакторе)", a.conflicts.map((c) => `Элемент ${c.id}: ${c.reason}`)));
-      parts.push(`<label class="v2-wire-check"><input type="checkbox" id="sp-retire"> Снять актуальность отсутствующих панелей (только область ГП1/ГП2; история сохраняется)</label>`);
+      parts.push(`<label class="v2-wire-check"><input type="checkbox" id="sp-retire"> Снять актуальность отсутствующих панелей (только эта развёртка)</label>`);
       parts.push(`<div class="v2-bar"><button type="button" class="v2-btn v2-primary" id="sp-apply" ${a.conflicts.length ? "disabled" : ""}>Добавить панели в объект</button></div>`);
     } else {
       parts.push(`<div class="v2-callout" role="note">Панели распознаны без записи объёмов. Укажите толщину панели и нажмите «Распознать» ещё раз, чтобы получить сводку для применения.</div>`);
@@ -73,15 +85,18 @@ export function mountShaftPanels(el, ctx) {
     const oid = Number($("#sp-object").value) || null;
     const file = $("#sp-file").files[0];
     const thicknessRaw = $("#sp-thickness").value;
-    const problem = !oid ? "Сначала выберите объект" : checkFile(file, { ext: ["dxf"] })
-      || (thicknessRaw && (!(Number(thicknessRaw) > 0) || Number(thicknessRaw) > 500) ? "Толщина должна быть больше 0 и не больше 500 мм" : null);
+    const thickness = Number(thicknessRaw);
+    let problem = !oid ? "Сначала выберите объект" : checkFile(file, { ext: ["dxf", "dwg"] });
+    if (!problem && thicknessRaw && (!Number.isFinite(thickness) || thickness <= 0)) problem = "Толщина должна быть положительным числом";
+    if (!problem && !isFacade() && thickness > 500) problem = "Толщина панели шахты не должна превышать 500 мм";
     if (problem) { status.set(problem, "bad"); return; }
-    busy = true; $("#sp-analyze").disabled = true; status.set("Распознавание…", "busy");
+    setBusy(true); status.set("Распознавание…", "busy");
     try {
-      await cancelToken(true);
+      await cancelToken();
       const fd = new FormData();
       fd.append("file", file, file.name);
       fd.append("object_id", String(oid));
+      if (isFacade()) fd.append("facade_offset_mm", $("#sp-offset").value || "0");
       if (thicknessRaw) fd.append("thickness_mm", thicknessRaw);
       const res = await api.upload("/shaft-panels/analyze", fd);
       if (dead) { try { await api.delete(`/shaft-panels/pending/${encodeURIComponent(res.token)}`); } catch (e) {} return; }
@@ -91,7 +106,7 @@ export function mountShaftPanels(el, ctx) {
     } catch (err) {
       if (dead) return;
       status.set(`Не удалось распознать: ${errText(err)}`, "bad");
-    } finally { busy = false; if (!dead) $("#sp-analyze").disabled = false; }
+    } finally { if (!dead) setBusy(false); }
   }
 
   async function apply() {
@@ -99,13 +114,13 @@ export function mountShaftPanels(el, ctx) {
     const checks = [...el.querySelectorAll("[data-warning]")];
     if (checks.some((c) => !c.checked)) { status.set("Подтвердите все замечания к чертежу флажками.", "bad"); return; }
     if (data.analysis.conflicts.length) return;
-    busy = true; $("#sp-result").querySelectorAll("button, input").forEach((n) => (n.disabled = true));
+    setBusy(true); $("#sp-result").querySelectorAll("button, input").forEach((n) => (n.disabled = true));
     let sentAt = null;
     try {
       const retireMissing = !!$("#sp-retire")?.checked;
       const c = data.analysis.counts;
       const ok = await showConfirmDialog(
-        `Добавить панели облицовки шахты в объект?\n\nДобавить: ${c.new}; обновить: ${c.updated}; без изменений: ${c.unchanged}${retireMissing ? `; снять актуальность: ${c.missing}` : ""}.\nПеред применением сервер сохранит копию базы; применение выполняется одной операцией.`,
+        `Добавить панели этой развёртки в объект?\n\nДобавить: ${c.new}; обновить: ${c.updated}; без изменений: ${c.unchanged}${retireMissing ? `; снять актуальность: ${c.missing}` : ""}.\nПеред применением сервер сохранит копию базы; применение выполняется одной операцией.`,
         { confirmLabel: "Применить", multiline: true },
       );
       if (!ok || dead) { if (!dead) status.set("Применение отменено — ничего не изменено.", ""); return; }
@@ -120,17 +135,26 @@ export function mountShaftPanels(el, ctx) {
       if (dead) return;
       if (err.blockedByPolicy) { status.set(errText(err), "bad"); return; }
       if (isUnknownOutcome(err)) {
-        status.html(unknownOutcomeHtml("применение панелей облицовки шахты"), "bad");
+        status.html(unknownOutcomeHtml("применение панелей развёртки"), "bad");
         const box = $("#sp-status");
-        box.querySelector("[data-verify]")?.addEventListener("click", () => verifyOutcome(api, box, { action: "import_dxf", entityId: currentObjectId, sinceMs: sentAt || Date.now(), what: "применение панелей облицовки шахты" }));
+        box.querySelector("[data-verify]")?.addEventListener("click", () => verifyOutcome(api, box, { action: "import_dxf", entityId: currentObjectId, sinceMs: sentAt || Date.now(), what: "применение панелей развёртки" }));
         token = null; // потерянный ответ: токен либо уже применён (второй раз сервер откажет), либо истёк — новый анализ безопаснее повторной попытки тем же токеном
       } else status.set(`Не удалось применить: ${errText(err)}`, "bad");
-    } finally { busy = false; if (!dead) render(); }
+    } finally { if (!dead) { setBusy(false); if (data) render(); } }
   }
 
   $("#sp-form").addEventListener("submit", (e) => { e.preventDefault(); analyze(); });
   $("#sp-cancel").addEventListener("click", async () => { if (busy) return; await cancelToken(); status.set("Анализ отменён.", ""); });
-  for (const id of ["#sp-file", "#sp-thickness", "#sp-object"]) {
+  const isFacade = () => /\.dwg$/i.test($("#sp-file").files[0]?.name || "");
+  let facadeSelected = false;
+  $("#sp-file").addEventListener("change", () => {
+    if (isFacade() !== facadeSelected) $("#sp-thickness").value = isFacade() ? "440" : "";
+    facadeSelected = isFacade();
+    $("#sp-section-hint").textContent = facadeSelected ? "По разрезу 2–2 слои панели составляют 100, 150 и 190 мм." : "Для добавления в модель укажите толщину панели.";
+    $("#sp-offset-field").hidden = !isFacade();
+    $("#sp-thickness").max = isFacade() ? "" : "500";
+  });
+  for (const id of ["#sp-file", "#sp-thickness", "#sp-offset", "#sp-object"]) {
     $(id).addEventListener("change", async () => { if (busy || !token) return; await cancelToken(); status.set("Параметры изменились — повторите анализ.", ""); });
   }
 
@@ -138,10 +162,10 @@ export function mountShaftPanels(el, ctx) {
     hasUnsavedChanges: () => !!data?.analysis,
     async guardLeave() {
       if (!data?.analysis) return true;
-      const leave = await showConfirmDialog("Сводка панелей облицовки шахты не применена — результат будет потерян. Уйти?", { confirmLabel: "Уйти", cancelLabel: "Остаться" });
-      if (leave) await cancelToken(true);
+      const leave = await showConfirmDialog("Сводка загрузки панелей не применена — результат будет потерян. Уйти?", { confirmLabel: "Уйти", cancelLabel: "Остаться" });
+      if (leave) await cancelToken();
       return leave;
     },
-    destroy() { dead = true; cancelToken(true).catch(() => {}); },
+    destroy() { dead = true; cancelToken().catch(() => {}); },
   };
 }

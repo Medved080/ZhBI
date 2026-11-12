@@ -22,7 +22,7 @@ def register_primary_drawing(conn,object_id,source_file):
     supplemental={r[0] for r in conn.execute('''SELECT DISTINCT e.source_file FROM elements e
         JOIN shaft_panel_geometry g ON g.element_id=e.id WHERE g.object_id=?''',(object_id,))}
     if source_file in supplemental:
-        raise ValueError('Это источник панелей шахт; используйте отдельный импорт')
+        raise ValueError('Это источник отдельной развёртки панелей; используйте форму «Панели фасадов и шахт»')
     for r in conn.execute('SELECT source_file FROM object_drawings WHERE object_id=?',(object_id,)).fetchall():
         if r[0] not in supplemental:
             conn.execute('UPDATE object_drawings SET is_current=0 WHERE object_id=? AND source_file=?',(object_id,r[0]))

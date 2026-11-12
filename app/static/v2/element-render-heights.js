@@ -74,6 +74,7 @@ function computeTopColumnCeiling(levels, allElements) {
 //   ниже дало бы толщину в 60-150 мм вместо метра с лишним.
 // - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
 function elementExtrusionHeight(element, levels, columnTops, allElements) {
+  if (element.element_type === "Панель" && Number.isFinite(element.height_mm) && element.height_mm > 0) return element.height_mm;
   if (element.element_type === "Панель облицовки шахты") {
     if (!Number.isFinite(element.height_mm) || element.height_mm <= 0) {
       throw new Error(`У панели ${element.id} отсутствует высота из DXF`);

@@ -1,6 +1,7 @@
 // Host ES module. No global state; the existing authenticated fetch wrapper
 // (including CSRF behavior) and the selected object are explicit dependencies.
 export function panelExtrusionHeight(element) {
+  if (element.element_type === 'Панель' && Number.isFinite(element.height_mm) && element.height_mm > 0) return element.height_mm;
   if (element.element_type !== 'Панель облицовки шахты') return null;
   if (!Number.isFinite(element.height_mm) || element.height_mm <= 0) {
     throw new Error(`У панели ${element.id} отсутствует высота из DXF`);
@@ -20,21 +21,26 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
   const form = document.createElement('form');
   form.innerHTML = `
     <div class="modal-sticky-head">
-      <h2>Панели облицовки шахт подъемников</h2>
-      <p class="hint-text">Развёртки ГП1/ГП2 привязываются к осям 5–7 / Е–Ж выбранного объекта.</p>
+      <h2>Панели фасадов и шахт</h2>
+      <p class="hint-text">Выберите один DWG фасада СМ1 или DXF шахт ГП1/ГП2.</p>
       <div class="bulk-edit-steps">
         <div class="bulk-edit-block bulk-edit-block-file">
           <div class="bulk-edit-block-title"><span class="step-num">1</span>Чертёж и толщина</div>
           <div class="bulk-edit-controls">
-            <input name="drawing" type="file" accept=".dxf" required>
+            <input name="drawing" type="file" accept=".dwg,.dxf" required>
           </div>
           <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem">
             Толщина панели, мм
             <input name="thickness" type="number" min="1" max="500" step="0.1"
                    placeholder="по паспорту изделия" style="width:90px">
           </label>
-          <div class="bulk-edit-status">Без толщины доступно только распознавание лицевых
-            поверхностей — размер стенки 300&nbsp;мм не подставляется как толщина панели.</div>
+          <div data-offset-field hidden>
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem">Отступ внутренней грани наружу, мм
+              <input name="offset" type="number" step="any" value="0" style="width:90px">
+            </label>
+            <div class="bulk-edit-status">От оси фасада. На косом участке — от линии центров колонн 36–38.</div>
+          </div>
+          <div class="bulk-edit-status" data-section-hint>Для добавления в модель укажите толщину панели.</div>
         </div>
         <div class="bulk-edit-block">
           <div class="bulk-edit-block-title"><span class="step-num">2</span>Распознать и проверить</div>
@@ -75,17 +81,22 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
     const summary = document.createElement('p');
     summary.className = 'hint-text';
     summary.textContent = `${data.drawing.panels.length} панелей; ${Object.keys(data.drawing.counts.by_mark).length} марок. Сетка: ${data.grid_source}.`;
+    if (data.drawing.scope) {
+      const d = data.drawing;
+      const section = d.section_layers_mm ? d.section_layers_mm.join(' + ') + ' = ' : '';
+      summary.textContent += ` Толщина панели: ${section}${d.thickness_mm} мм.`;
+    }
     result.append(summary);
     const table = document.createElement('table');
     table.className = 'bulk-edit-table';
     const head = table.createTHead().insertRow();
-    ['Марка','Шахта / сторона','Ш × В, мм','Расположение'].forEach(t => {
+    ['Марка','Фасад / сторона шахты','Ш × В, мм','Расположение'].forEach(t => {
       const th = document.createElement('th'); th.textContent = t; head.append(th);
     });
     const body = table.createTBody();
     data.drawing.panels.forEach(p => {
       const row = body.insertRow();
-      [p.mark, `${p.shaft}/${p.face}`, `${p.width_mm} × ${p.height_mm}`, p.address].forEach(t => row.insertCell().textContent = t);
+      [p.mark, p.shaft ? `${p.shaft}/${p.face}` : p.face, `${p.width_mm} × ${p.height_mm}`, p.address].forEach(t => row.insertCell().textContent = t);
     });
     const wrap = document.createElement('div');
     wrap.className = 'bulk-edit-table-wrap';
@@ -126,7 +137,7 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
     });
     const retire = document.createElement('input'); retire.type = 'checkbox';
     const retireLabel = document.createElement('label'); retireLabel.className = 'toggle';
-    retireLabel.append(retire, document.createTextNode('Снять актуальность отсутствующих панелей только ГП1/ГП2; сохранить их историю'));
+    retireLabel.append(retire, document.createTextNode('Снять актуальность отсутствующих панелей этой развёртки'));
     stepApply.append(retireLabel);
     const controls = document.createElement('div');
     controls.className = 'bulk-edit-controls';
@@ -155,6 +166,7 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
     try {
       await cancel();
       const body = new FormData(); body.set('object_id', String(objectId)); body.set('file', form.elements.drawing.files[0]);
+      if (isFacade()) body.set('facade_offset_mm', form.elements.offset.value || '0');
       if (form.elements.thickness.value) body.set('thickness_mm', form.elements.thickness.value);
       const data = await api('/shaft-panels/analyze', { method:'POST', body }); current = data;
       if (disposed) { await cancel(); return; }
@@ -165,7 +177,16 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
   form.querySelector('[data-action="cancel"]').addEventListener('click', () => {
     if (!busy) cancel().then(() => status.textContent = 'Анализ отменен.').catch(e => status.textContent = e.message);
   });
-  for (const field of [form.elements.drawing, form.elements.thickness]) field.addEventListener('change', () => {
+  const isFacade = () => /\.dwg$/i.test(form.elements.drawing.files[0]?.name || '');
+  let facadeSelected = false;
+  form.elements.drawing.addEventListener('change', () => {
+    if (isFacade() !== facadeSelected) form.elements.thickness.value = isFacade() ? '440' : '';
+    facadeSelected = isFacade();
+    form.querySelector('[data-section-hint]').textContent = facadeSelected ? 'По разрезу 2–2 слои панели составляют 100, 150 и 190 мм.' : 'Для добавления в модель укажите толщину панели.';
+    form.querySelector('[data-offset-field]').hidden = !isFacade();
+    form.elements.thickness.max = isFacade() ? '' : '500';
+  });
+  for (const field of [form.elements.drawing, form.elements.thickness, form.elements.offset]) field.addEventListener('change', () => {
     if (!busy && current) cancel().then(() => status.textContent = 'Параметры изменились — повторите анализ.').catch(e => status.textContent = e.message);
   });
   return () => { disposed = true; cancel().catch(() => {}); container.replaceChildren(); };

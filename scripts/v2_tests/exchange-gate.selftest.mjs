@@ -71,6 +71,9 @@ t(A("POST", "/shaft-panels/analyze", fd({ object_id: "1" }, "p.dxf")), "shaft: �
 t(A("POST", "/shaft-panels/analyze", fd({ object_id: "1", thickness_mm: "300" }, "p.dxf")), "shaft: разбор с толщиной");
 t(!A("POST", "/shaft-panels/analyze", fd({ thickness_mm: "300" }, "p.dxf")), "shaft: без объекта");
 t(!A("POST", "/shaft-panels/analyze", fd({ object_id: "1", thickness_mm: "0" }, "p.dxf")), "shaft: нулевая толщина");
+t(A("POST", "/shaft-panels/analyze", fd({ object_id: "1", thickness_mm: "440", facade_offset_mm: "-50" }, "фасад.DWG")), "фасад: разрез и отступ");
+t(!A("POST", "/shaft-panels/analyze", fd({ object_id: "1", facade_offset_mm: "abc" }, "p.dwg")), "фасад: некорректный отступ");
+t(!A("POST", "/shaft-panels/analyze", fd({ object_id: "1", facade_offset_mm: "10" }, "p.dxf")), "шахта: параметр фасада");
 t(!A("POST", "/shaft-panels/analyze", fd({ object_id: "1" }, "p.xlsx")), "shaft: расширение");
 t(A("POST", "/shaft-panels/apply", { token: tok, acknowledged_warnings: ["plan_joint"], retire_missing: false }), "shaft: применение");
 t(!A("POST", "/shaft-panels/apply", { token: tok, acknowledged_warnings: ["plan_joint"] }), "shaft: без retire_missing");

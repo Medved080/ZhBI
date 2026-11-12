@@ -485,9 +485,9 @@ export const POLICY = [
   { id: "bulk.apply", screen: "bulk-edit", action: "Массовая правка через Excel: применить отмеченные расхождения (реквизиты изделий / история статусов / контрактация)", method: "POST", path: re("/elements/bulk-edit/apply"), check: bulkApplyProblem, risk: "данные изделий, история статусов, контрактация; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение отмеченного, откат при отказе стража, отказ 403, журнал после сохранения, устаревшая сверка не применяется" },
   { id: "settings.analyze", screen: "settings-io", action: "Экспорт/импорт настроек: сверка файла (копии учётных записей) с базой — ничего не пишет", method: "POST", path: re("/settings/import/analyze"), check: uploadCheck({ ext: ["json"] }), risk: "чтение (сверка), данные не меняются", allowed: true, proof: "настоящий backend: расхождения по пользователям/цветам/видимости подписей, 422 на неверный JSON, отказ 403 у не-админа" },
   { id: "settings.apply", screen: "settings-io", action: "Экспорт/импорт настроек: применить файл (копию учётных записей) по сверенному digest", method: "POST", path: re("/settings/import/apply"), check: uploadCheck({ ext: ["json"], fields: { digest: isHexDigest } }), risk: "пользователи (пароли, роли), цвета статусов, видимость подписей; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по сверенному digest, устаревшая сверка (409) при подмене файла/базы, отказ 403 у не-админа, журнал после сохранения" },
-  { id: "shaft.analyze", screen: "shaft-panels", action: "Панели облицовки шахты: разбор DXF по объекту (толщина панели — необязательное поле), сводка расхождений (в базу не пишет)", method: "POST", path: re("/shaft-panels/analyze"), check: shaftAnalyzeProblem, risk: "чтение (разбор), данные не меняются; файл — во временной папке сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF профиля ГП1/ГП2, отказ 403 у не-админа, 4xx на неверный профиль/оси/марки/перекрытие" },
-  { id: "shaft.apply", screen: "shaft-panels", action: "Панели облицовки шахты: применить показанную сводку по токену (подтверждённые замечания, снятие актуальности отсутствующих)", method: "POST", path: re("/shaft-panels/apply"), check: shaftApplyProblem, risk: "изделия объекта (тип «Панель облицовки шахты»), сетка осей чертежа; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, конфликты блокируют применение, отказ 403 у не-админа, журнал после сохранения" },
-  { id: "shaft.cancel", screen: "shaft-panels", action: "Панели облицовки шахты: отменить незавершённый анализ (освобождает токен)", method: "DELETE", path: re(`/shaft-panels/pending/${TOKEN_URLSAFE}`), risk: "ничего не меняет — снимает временную запись разбора своего же токена", allowed: true, proof: "настоящий backend: отмена своего токена, чужой токен и неизвестный токен отклоняются сервером" },
+  { id: "shaft.analyze", screen: "shaft-panels", action: "Панели фасадов и шахт: разбор DWG/DXF по объекту (толщина панели — необязательное поле), сводка расхождений (в базу не пишет)", method: "POST", path: re("/shaft-panels/analyze"), check: shaftAnalyzeProblem, risk: "чтение (разбор), данные не меняются; файл — во временной папке сервера", allowed: true, proof: "настоящий backend: разбор синтетического DXF профиля ГП1/ГП2, отказ 403 у не-админа, 4xx на неверный профиль/оси/марки/перекрытие" },
+  { id: "shaft.apply", screen: "shaft-panels", action: "Панели фасадов и шахт: применить показанную сводку по токену (подтверждённые замечания, снятие актуальности отсутствующих)", method: "POST", path: re("/shaft-panels/apply"), check: shaftApplyProblem, risk: "изделия объекта (фасадные панели или панели облицовки шахты), сетка осей чертежа; одна транзакция, копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, конфликты блокируют применение, отказ 403 у не-админа, журнал после сохранения" },
+  { id: "shaft.cancel", screen: "shaft-panels", action: "Панели фасадов и шахт: отменить незавершённый анализ (освобождает токен)", method: "DELETE", path: re(`/shaft-panels/pending/${TOKEN_URLSAFE}`), risk: "ничего не меняет — снимает временную запись разбора своего же токена", allowed: true, proof: "настоящий backend: отмена своего токена, чужой токен и неизвестный токен отклоняются сервером" },
   { id: "pdf.analyze.start", screen: "pdf-import", action: "Загрузка из PDF: запуск фонового разбора помещений (в базу не пишет)", method: "POST", path: re("/import-pdf/analyze/start"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор в фоновом потоке), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF (детально и «только фасады»), отказ 403 у не-админа, 4xx на неверный/битый файл" },
   { id: "pdf.apply", screen: "pdf-import", action: "Загрузка из PDF: применить показанную сводку помещений по токену", method: "POST", path: re("/import-pdf/apply"), check: tokenOnlyProblem, risk: "секции/этажи/помещения модели МФР объекта; копия базы перед применением", allowed: true, proof: "настоящий backend: применение по токену, повтор токена отклоняется, отказ 403, журнал после сохранения" },
   { id: "pdf.facade.analyze", screen: "pdf-import", action: "Загрузка из PDF «только фасады»: синхронный разбор макета блоков (в базу не пишет)", method: "POST", path: re("/import-pdf-facade/analyze"), check: uploadCheck({ ext: ["pdf"], fields: { object_id: isIntStr } }), risk: "чтение (разбор), данные не меняются", allowed: true, proof: "настоящий backend: разбор синтетического PDF, отказ 403 у не-админа, 4xx на неверный/битый файл" },
@@ -707,11 +707,14 @@ function tokenOnlyProblem(body) {
 function shaftAnalyzeProblem(body) {
   if (typeof FormData === "undefined" || !(body instanceof FormData)) return "не форма загрузки";
   const keys = new Set(body.keys());
-  if ([...keys].some((k) => !["file", "object_id", "thickness_mm"].includes(k))) return "лишние поля формы";
+  if ([...keys].some((k) => !["file", "object_id", "thickness_mm", "facade_offset_mm"].includes(k))) return "лишние поля формы";
   const files = body.getAll("file");
   if (files.length !== 1 || typeof files[0] !== "object" || files[0] === null || typeof files[0].name !== "string") return "нужен ровно один файл";
   const f = files[0];
-  if ((f.name.split(".").pop() || "").toLowerCase() !== "dxf") return "неверное расширение файла";
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  if (!["dxf", "dwg"].includes(ext)) return "неверное расширение файла";
+  const offsets = body.getAll("facade_offset_mm");
+  if (offsets.length && (ext !== "dwg" || offsets.length !== 1 || typeof offsets[0] !== "string" || !offsets[0].trim() || !Number.isFinite(Number(offsets[0])))) return "некорректный отступ фасада";
   if (!(f.size > 0)) return "файл пуст";
   if (f.size > 30 * 1024 * 1024) return "файл больше лимита сервера (30 МБ)";
   const oid = body.getAll("object_id");
@@ -720,7 +723,8 @@ function shaftAnalyzeProblem(body) {
   if (th.length > 1) return "толщина указана дважды";
   if (th.length === 1) {
     const v = Number(th[0]);
-    if (!Number.isFinite(v) || v <= 0 || v > 500) return "толщина должна быть числом больше 0 и не больше 500 мм";
+    if (!Number.isFinite(v) || v <= 0) return "толщина должна быть положительным числом";
+    if (ext === "dxf" && v > 500) return "толщина панели шахты больше 500 мм";
   }
   return null;
 }

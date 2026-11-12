@@ -46,17 +46,27 @@ def install_schema(conn):
     )''')
 
 
-def load_target_axes(conn, object_id, source_file=None):
+def load_target_axes(conn, object_id, source_file=None, *, facade=False):
     """Read only the selected object's registered grids; never merge layouts."""
     rows = conn.execute('''SELECT a.kind,a.label,a.coord,a.source_file FROM axis_lines a
         JOIN object_drawings d ON d.source_file=a.source_file
         WHERE d.object_id=? AND (? IS NULL OR a.source_file=?)
+        AND (NOT ? OR (d.is_current=1 AND NOT EXISTS (
+            SELECT 1 FROM shaft_panel_geometry g JOIN elements e ON e.id=g.element_id
+            WHERE g.object_id=d.object_id AND e.source_file=d.source_file)))
         ORDER BY d.is_current DESC,d.imported_at DESC,a.source_file''',
-        (object_id,source_file,source_file)).fetchall()
+        (object_id,source_file,source_file,facade)).fetchall()
     by_source={}
     for r in rows:
         r=dict(r)
         by_source.setdefault(r['source_file'],{'numeric':{},'letter':{}})[r['kind']][r['label']]=r['coord']
+    if facade:
+        if not by_source:
+            raise DrawingError('Сначала загрузите основной чертёж объекта ЖБИ с координатной сеткой')
+        if len({digest(axes) for axes in by_source.values()}) > 1:
+            raise DrawingError('В объекте несколько актуальных сеток: укажите чертёж для привязки')
+        name = next(iter(by_source))
+        return by_source[name], name
     candidates=[(name,axes) for name,axes in by_source.items()
                 if {'5','7'}<=set(axes['numeric']) and {'Е','Ж'}<=set(axes['letter'])]
     if not candidates:
@@ -75,19 +85,26 @@ def _existing(conn, object_id, scope):
 
 
 def _row(p,object_id,scope):
-    return {'source_file':f'Панели шахт {scope} (объект {object_id}).dxf',
-        'dxf_handle':'SP:'+digest([scope,p['physical_key']])[:24],
-        'layer':f"Шахта {p['shaft']} / {p['face']}", 'element_type':TYPE,
-        'mark':p['mark'],'mark_source':'shaft_dxf_'+p['mark_method'],
+    if scope.startswith('facade-'):
+        layer = 'Фасад '+p['face']
+        identity = {'source_file':f'{layer} (объект {object_id}).dwg', 'layer':layer,
+                    'element_type':'Панель', 'subtype':'фасадная', 'mark_source':'facade_dwg'}
+    else:
+        identity = {'source_file':f'Панели шахт {scope} (объект {object_id}).dxf',
+                    'layer':f"Шахта {p['shaft']} / {p['face']}", 'element_type':TYPE,
+                    'subtype':None, 'mark_source':'shaft_dxf_'+p['mark_method']}
+    return {**identity, 'dxf_handle':'SP:'+digest([scope,p['physical_key']])[:24],
+        'mark':p['mark'],
         'x':p['x'],'y':p['y'],'z':p['z'],'address':p['address'],'axis_status':'offset',
         'axis_number':None,'axis_letter':None,'nearest_axis_number':p['nearest_axis_number'],
         'nearest_axis_letter':p['nearest_axis_letter'],'offset_x_mm':p['offset_x_mm'],
         'offset_y_mm':p['offset_y_mm'],'outline_json':canonical(p['outline']),
-        'subtype':None,'elevation_mm':p['elevation_mm'],'height_mm':p['height_mm'],
+        'elevation_mm':p['elevation_mm'],'height_mm':p['height_mm'],
         'floor':None,'object_id':object_id}
 
 
-def analyze(conn,object_id,placed,scope=SCOPE):
+def analyze(conn,object_id,placed,scope=None):
+    scope = scope or placed.get('scope', SCOPE)
     obj=conn.execute('SELECT kind FROM objects WHERE id=?',(object_id,)).fetchone()
     if not obj or obj['kind']!='zhbi':
         raise DrawingError('Нужен существующий объект ЖБИ')
@@ -107,7 +124,7 @@ def analyze(conn,object_id,placed,scope=SCOPE):
         if not e:
             new.append(key); continue
         changed={k:[e.get(k),v] for k,v in row.items() if e.get(k)!=v}
-        if e['object_id']!=object_id or e['element_type']!=TYPE:
+        if e['object_id']!=object_id or e['element_type']!=row['element_type']:
             raise DrawingError('Нарушена область данных панели')
         if 'mark' in changed and e.get('contract_id') is not None:
             conflicts.append({'id':e['id'],'reason':'Смена марки законтрактованной панели: нужен штатный contract_guard'})
@@ -145,6 +162,9 @@ def apply(conn,preview,placed,*,user_id,acknowledged_warnings=(),retire_missing=
         old={e['physical_key']:e for e in _existing(conn,object_id,scope)}
         changed=[]
         counts=fresh['counts'] | {'retired':len(fresh['missing']) if retire_missing else 0}
+        facade = scope.startswith('facade-')
+        if facade:
+            counts['scope'] = scope
         updates={v['id'] for v in fresh['updated']}
         for p in placed['panels']:
             row=_row(p,object_id,scope);e=old.get(p['physical_key'])
@@ -159,7 +179,8 @@ def apply(conn,preview,placed,*,user_id,acknowledged_warnings=(),retire_missing=
                 row['element_uid']=uuid.uuid4().hex
                 cur=conn.execute('INSERT INTO elements ('+','.join(row)+') VALUES ('+','.join('?' for _ in row)+')',tuple(row.values()))
                 element_id=cur.lastrowid;changed.append(element_id)
-                conn.execute("INSERT INTO status_history (element_id,status,changed_by,comment) VALUES (?,'planned','import','Создан импортом панелей шахт')",(element_id,))
+                comment = 'Создан импортом фасадных панелей' if facade else 'Создан импортом панелей шахт'
+                conn.execute("INSERT INTO status_history (element_id,status,changed_by,comment) VALUES (?,'planned','import',?)",(element_id,comment))
             conn.execute('''INSERT INTO shaft_panel_geometry
                 (element_id,object_id,scope_key,physical_key,source_name,source_sha256,metadata_json)
                 VALUES (?,?,?,?,?,?,?) ON CONFLICT(element_id) DO UPDATE SET
@@ -178,8 +199,10 @@ def apply(conn,preview,placed,*,user_id,acknowledged_warnings=(),retire_missing=
         conn.executemany('INSERT INTO axis_lines (source_file,kind,label,coord) VALUES (?,?,?,?)',
                          [(source,kind,k,v) for kind,axes in placed['target_axes'].items() for k,v in axes.items()])
         # Common catalogs in this service, scoped to the target object.
+        if facade:
+            conn.execute("INSERT OR IGNORE INTO allowed_subtypes (object_id,element_type,subtype) VALUES (?,'Панель','фасадная')",(object_id,))
         for mark in sorted({p['mark'] for p in placed['panels']}):
-            conn.execute('INSERT OR IGNORE INTO marks (object_id,element_type,name) VALUES (?,?,?)',(object_id,TYPE,mark))
+            conn.execute('INSERT OR IGNORE INTO marks (object_id,element_type,name) VALUES (?,?,?)',(object_id,'Панель' if facade else TYPE,mark))
         conn.execute('''UPDATE elements SET mark_id=(SELECT m.id FROM marks m
             WHERE m.object_id=elements.object_id AND m.element_type=elements.element_type AND m.name=elements.mark)
             WHERE id IN (SELECT element_id FROM shaft_panel_geometry WHERE object_id=? AND scope_key=?)''',(object_id,scope))
