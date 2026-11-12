@@ -12,6 +12,8 @@ if '--existing' in sys.argv:
  from app.contracts import apply_status_change
  apply_status_change(c,test.extra,'installed',False,None,'2026-11-10 11:15:00','','Учебный монтаж',test.admin['id'])
  apply_status_change(c,test.base.ids[0],'installed',False,None,'2026-11-10 10:00:00','','Учебный монтаж',test.admin['id'])
+if '--tiny-label' in sys.argv:
+ c.execute("UPDATE elements SET mark='ID 44560',element_type='Другое',outline_json='[[6000,6000],[6020,6000],[6020,6020],[6000,6020]]' WHERE id=?",(test.extra,))
 c.commit();c.close()
 from app import main,auth,activity
 main.app.dependency_overrides[auth.get_current_user]=lambda:test.admin

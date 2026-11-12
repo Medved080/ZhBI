@@ -41,25 +41,34 @@ def add_sheet(wb, data):
     from openpyxl.utils import get_column_letter
     ws=wb.create_sheet('Реестр СНЗ',0)
     register=data['registry'];day=datetime.fromisoformat(data['date'])
-    ws.append([f"Реестр выданных СНЗ за {day.strftime('%d.%m.%Y')}"]);ws.merge_cells('A1:G1')
+    actual=not data.get('daily_mode') or register.get('has_closed',False)
+    title=f"Реестр СНЗ: {'план и факт' if actual else 'план'} за {day.strftime('%d.%m.%Y')}" if data.get('daily_mode') else f"Реестр выданных СНЗ за {day.strftime('%d.%m.%Y')}"
+    if data.get('mode')=='fact':title=f"Монтаж без СНЗ за {day.strftime('%d.%m.%Y')}"
+    ws.append([title]);ws.merge_cells('A1:G1')
     ws.append(['Дата относится к началу смены. Ночь: 20:00 выбранной даты — 08:00 следующего дня.']);ws.merge_cells('A2:G2')
     ws.append([])
-    ws.append(['№ СНЗ','Дата','Смена','Бригада','Прораб','Количество план, шт','Количество факт, шт'])
+    headers=['№ СНЗ','Дата','Смена','Бригада','Прораб','Количество план, шт']
+    if actual:headers.append('Количество факт, шт')
+    ws.append(headers)
     for row in register['orders']:
-        ws.append([row['id'],datetime.fromisoformat(row['work_date']),'День' if row['shift']=='day' else 'Ночь',
-                   row['crew_name'],row['foreman'] or 'Не назначен',row['planned'],row['completed']])
+        values=[row['id'],datetime.fromisoformat(row['work_date']),'День' if row['shift']=='day' else 'Ночь',
+                row['crew_name'],row['foreman'] or 'Не назначен',row['planned']]
+        if actual:values.append(row['completed'])
+        ws.append(values)
     end=ws.max_row
     if register['orders']:
-        table=Table(displayName='SNZDailyPlanFactRegister',ref=f'A4:G{end}')
+        table=Table(displayName='SNZDailyPlanFactRegister',ref=f"A4:{'G' if actual else 'F'}{end}")
         table.tableStyleInfo=TableStyleInfo(name='TableStyleMedium2',showRowStripes=True)
         ws.add_table(table)
-    ws.append(['Итого по документам, шт',None,None,None,None,register['planned'],register['completed']])
+    ws.append(['Итого по документам, шт',None,None,None,None,register['planned'],register['completed'] if actual else None])
     total=ws.max_row;ws.merge_cells(start_row=total,start_column=1,end_row=total,end_column=5)
     if not register['orders']:
         ws.append(['За выбранную дату, смену и бригаду СНЗ не выдавались.']);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
     if register['unassigned_extra']:
-        ws.append([f"Доп. факт без выданного СНЗ: {register['unassigned_extra']} шт. Показан на листе «План и факт», в итог по документам не включён."]);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
-    ws.append(['Факт включает выполненный план и доп. монтаж этой бригады и смены. Выполненный план закрытых СНЗ зафиксирован при закрытии; доп. факт учитывается по отдельным записям.']);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
+        where='Подробности — во вкладке «Факт».' if data.get('daily_mode') else 'Показан на листе «План и факт».'
+        ws.append([f"Доп. факт без выданного СНЗ: {register['unassigned_extra']} шт. {where} В итог по документам не включён."]);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
+    explanation='Открытые СНЗ — только план; факт показан по закрытым СНЗ и включает доп. монтаж соответствующей даты, смены и бригады. Пустая ячейка факта означает: СНЗ не закрыт.' if data.get('daily_mode') else 'Факт включает выполненный план и доп. монтаж этой бригады и смены. Выполненный план закрытых СНЗ зафиксирован при закрытии; доп. факт учитывается по отдельным записям.'
+    ws.append([explanation]);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
     for row in ws:
         rn=row[0].row;ws.row_dimensions[rn].height=24 if rn>=5 else 32
         for cell in row:
@@ -71,6 +80,8 @@ def add_sheet(wb, data):
                 cell.border=Border(bottom=Side(style='hair',color='9CBCE2'))
             if rn in (4,total):
                 cell.fill=PatternFill('solid',fgColor='17365D');cell.font=Font(name='Calibri',size=11,color='FFFFFF',bold=rn==4)
+    if not actual:
+        ws['G4'].fill=PatternFill(fill_type=None)
     ws['A1'].font=Font(name='Calibri',size=16,bold=True,color='17365D');ws['A1'].alignment=Alignment(vertical='center',horizontal='left')
     ws['A2'].alignment=Alignment(vertical='center',horizontal='left',wrap_text=True)
     ws.cell(total,1).alignment=Alignment(vertical='center',horizontal='left')

@@ -900,13 +900,13 @@ def export_fact_pdf(object_id: int, date: date, shift: Literal['day','night'] | 
 
 @router.get("/registry.xlsx")
 def export_registry(object_id: int, date: date, user=Depends(get_current_user)):
-    from app.snz_registry import registry
-    from app.snz_export import build_registry_xlsx
+    from app.snz_daily_report import collect,build_xlsx
     conn = get_connection()
     try:
         assert_object_feature(conn, user, object_id, "plan", "read")
-        report = registry(conn, object_id, date.isoformat(), include_snapshots=True)
-        data = build_registry_xlsx(report, date)
+        state,_=_load(conn,object_id)
+        data = build_xlsx(collect(conn,object_id,state,date.isoformat()))
+
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         headers={"Content-Disposition": f'attachment; filename="SNZ-register-{date.isoformat()}.xlsx"'})
     finally:
@@ -937,3 +937,16 @@ def export_pdf(object_id: int, order_id: int, user=Depends(get_current_user), re
                         headers={"Content-Disposition": f'attachment; filename="SNZ-{order_id}.pdf"'})
     finally:
         conn.close()
+
+
+@router.get("/registry.pdf")
+def export_daily_pdf(object_id: int, date: date, user=Depends(get_current_user)):
+    from app.snz_daily_report import collect,drawing_order
+    conn=get_connection()
+    try:
+        assert_object_feature(conn,user,object_id,'plan','read')
+        state,_=_load(conn,object_id)
+        order=drawing_order(collect(conn,object_id,state,date.isoformat()))
+        return Response(_plan_pdf(conn,object_id,order),media_type='application/pdf',
+                        headers={'Content-Disposition':f'attachment; filename="SNZ-daily-{date.isoformat()}.pdf"'})
+    finally:conn.close()

@@ -217,10 +217,10 @@ class EditTests(unittest.TestCase):
             subprocess.run([sys.executable,'/Users/max/.codex/scripts/validate_xlsx.py',str(path)],check=True,capture_output=True)
             ws=load_workbook(BytesIO(response.body)).active
             if day.day==10:
-                self.assertEqual(ws['E5'].value.isoformat(),'2026-11-11T08:00:00')
-                self.assertEqual(ws['H5'].value,4)
-                totals={r[0].value:r[7].value for r in ws if r[0].value in ('Итого по документам, шт','Уникальных изделий, шт')}
-                self.assertEqual(totals,{'Итого по документам, шт':8,'Уникальных изделий, шт':4})
+                self.assertEqual(ws['B5'].value.isoformat(),'2026-11-10T00:00:00')
+                self.assertEqual(ws['F5'].value,4)
+                totals={r[0].value:r[5].value for r in ws if r[0].value in ('Итого по документам, шт','Уникальных изделий плана, шт')}
+                self.assertEqual(totals,{'Итого по документам, шт':8,'Уникальных изделий плана, шт':4})
             else:self.assertEqual(len(ws.tables),0)
 
 

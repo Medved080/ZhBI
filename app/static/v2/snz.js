@@ -263,8 +263,8 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     const rows=data.orders.filter(o=>!ordersDate||o.work_date===ordersDate);
     const total=(ordersDate?data.registry_by_date?.[ordersDate]:data.registry_total)||{quantity:0,unique_quantity:0};
     return `<div class="snz-issued-layout"><section class="snz-orders-top" aria-label="Реестр выданных СНЗ">
-      <div class="snz-controls"><label>Дата СНЗ (отбор)<input type="date" data-filter="ordersDate" value="${esc(ordersDate)}"></label><button data-action="orders-all">Все даты</button><button data-action="registry-xlsx" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Реестр за день в Excel</button></div>
-      <p class="snz-muted">Дата — начало смены. Ночь: 20:00 выбранного дня — 08:00 следующего.</p>
+      <div class="snz-controls"><label>Дата СНЗ (отбор)<input type="date" data-filter="ordersDate" value="${esc(ordersDate)}"></label><button data-action="orders-all">Все даты</button><button data-action="registry-xlsx" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Реестр за день в Excel</button><button data-action="registry-pdf" ${!ordersDate?"disabled title='Выберите дату реестра'":""}>Поэтажные планы за день PDF</button></div>
+      <p class="snz-muted">Ночь: 20:00 выбранного дня — 08:00 следующего. Реестр: открытые СНЗ — план, закрытые — план/факт; без СНЗ — ниже. PDF — все СНЗ за дату.</p>
       <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>№</th><th>Дата</th><th>Смена</th><th>Бригада</th><th>Прораб</th><th>Количество шт</th><th>Выдал</th><th>Действия</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${o.id}${o.closed_at?`<small class="snz-done">Закрыт ${dayText(o.closed_at)} ${timeText(o.closed_at)}</small>`:""}${o.order_revision>1?` · ред. ${o.order_revision}`:""}</td><td>${dayText(o.work_date)}</td><td title="${dayText(o.start)} ${timeText(o.start)} — ${dayText(o.end)} ${timeText(o.end)}">${shiftText(o.shift)}</td><td>${esc(o.crew_name)}</td><td>${esc(o.foreman||"Не назначен")}</td><td>${o.quantity}</td><td>${esc(o.created_by)}</td><td><div class="snz-order-actions"><button data-action="open-order" data-id="${o.id}">Открыть</button>${canWrite()&&!o.closed_at?`<button data-action="edit-order" data-id="${o.id}">Редактировать</button><button data-action="delete-order" data-id="${o.id}">Удалить СНЗ</button>`:""}<button data-action="order-revisions" data-id="${o.id}">Редакции</button></div></td></tr>`).join("")||'<tr><td colspan="8">За выбранную дату СНЗ не выдавались.</td></tr>'}</tbody></table></div>
       <p class="snz-registry-total"><strong>Итого по документам: ${total.quantity} шт.</strong> Уникальных изделий: ${total.unique_quantity} шт. · СНЗ: ${rows.length}</p></section>
       <div class="snz-issued-splitter" data-snz-splitter role="separator" aria-label="Высота реестра и открытого СНЗ" aria-orientation="horizontal" aria-valuemin="15" aria-valuemax="80" tabindex="0" title="Перетащите для изменения высоты; стрелки вверх и вниз — с клавиатуры"></div>
@@ -397,13 +397,10 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       });return;
     }
     if(action==="orders-all"){ordersDate="";render();return;}
-    if(action==="registry-xlsx"&&ordersDate){
-      await run(async()=>{const blob=await api.download(path()+`/registry.xlsx?date=${ordersDate}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`Реестр-СНЗ-${ordersDate}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
+    if((action==="registry-xlsx"||action==="registry-pdf")&&ordersDate){
+      await run(async()=>{const ext=action==='registry-pdf'?'pdf':'xlsx';const blob=await api.download(path()+`/registry.${ext}?date=${ordersDate}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`СНЗ-за-день-${ordersDate}.${ext}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
     }
-    if (action==="close") { close();return; }
-    if (action==="save") { await run(save);return; }
-    if (action==="reload") { if ((dirty||editDirty()||factDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{factEdits.clear();factNotes.clear();await load();plan=null;orderEdit=null;revisions=null;});return; }
-    if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId,ignore_fact:ignoreFact});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
+
     if(action==='sequence-up'||action==='sequence-down'){
       if(!plan||plan.id||!canWrite()||dirty)return;
       await run(async()=>{

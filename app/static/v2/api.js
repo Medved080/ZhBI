@@ -192,7 +192,7 @@ export const api = {
   async download(path, body, { method = "POST" } = {}) {
     const okPath = /^\/reports\/[a-z0-9-]+\.(xlsx|pdf)$/.test(path) || path === "/export.xlsx" || /^\/export\.pdf(\?|$)/.test(path)
       || /^\/objects\/\d+\/snz\/orders\/\d+\/export\.(xlsx|pdf)(\?revision=\d+)?$/.test(path)
-      || /^\/objects\/\d+\/snz\/registry\.xlsx\?date=\d{4}-\d{2}-\d{2}$/.test(path)
+      || /^\/objects\/\d+\/snz\/registry\.(xlsx|pdf)\?date=\d{4}-\d{2}-\d{2}$/.test(path)
       || /^\/objects\/\d+\/snz\/facts\/report\.(xlsx|pdf)\?date=\d{4}-\d{2}-\d{2}(?:&crew_id=[a-zA-Z0-9_-]{1,64})?(?:&shift=(day|night))?$/.test(path)
       || /^\/objects\/\d+\/block-works\/bulk-edit\/export$/.test(path)                       // выгрузка ЗР в Excel для правки (учёт по блокам)
       || /^\/objects\/\d+\/blocks\/chess-flat-export\.(xlsx|pdf)$/.test(path)                // бланк обхода плоской шахматки
