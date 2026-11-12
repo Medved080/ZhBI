@@ -58,9 +58,20 @@ class FixedLabelTests(unittest.TestCase):
         for l in labels:
             if l['leader']:self.assertLessEqual(math.dist((l['x'],l['y']),l['anchor']),54)
 
-    def test_unfittable_mark_is_explicit_not_reduced_dropped_or_moved_out(self):
-        with self.assertRaisesRegex(ValueError,'не помещается внутри контура'):
-            self.layout([item(1,'Плита перекрытия','Очень-длинная-марка'*20,1000,1000,500,100)])
+    def test_unfittable_mark_does_not_abort_or_remove_geometry(self):
+        from app.snz_plans import build_floor_plans
+        import fitz
+        bad=item(1,'Плита перекрытия','Очень-длинная-марка'*20,1000,1000,500,100)
+        page={'items':{1:bad},'active':{1:bad}}
+        layout=place_labels(page,(30,30,700,700),lambda x,y:(80+x*.006445,80+y*.006445),{})
+        self.assertEqual(len(layout),0);self.assertEqual(len(layout.warnings),1)
+        bad.update(floor=1,source_file='test.dxf',current_status='installed')
+        order={'date':'2026-11-12','shift':'day','crew':{'name':'Test'},'items':[bad],'tasks':[]}
+        pdf=build_floor_plans(order,[bad],[])
+        document=fitz.open(stream=pdf,filetype='pdf')
+        self.assertEqual(len(document),1)
+        self.assertIn('Не размещено подписей: 1',document[0].get_text())
+        self.assertEqual(sum(d['type']=='fs' and abs(d['width']-1.4)<.01 for d in document[0].get_drawings()),1)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

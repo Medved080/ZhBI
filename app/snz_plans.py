@@ -297,6 +297,8 @@ def build_floor_plans(order, context, axes, zones=(), status_colors=None, floor_
             pdf.drawCentredString(0,-(ascent+descent)/2,label['text']);pdf.restoreState()
         pdf.setFont('SNZ', 8.5); pdf.setFillColor(HexColor('#334155'))
         caption = 'Изделия СНЗ: прозрачность 0%; окружение: 70%. Номер - очередь монтажа; ДОП - вне СНЗ.'
+        if labels.warnings:
+            caption += f' Не размещено подписей: {len(labels.warnings)}; все изделия показаны.'
         if not page['column_levels']:
             caption += ' Отметка низа колонн этажа не задана.'
         if order.get('closed_at') or any(e.get('closed') for e in page['active'].values()):

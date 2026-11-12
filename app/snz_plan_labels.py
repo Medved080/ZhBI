@@ -3,6 +3,13 @@ import heapq
 import math
 
 
+class LabelLayout(list):
+    """Placed labels plus nonfatal omissions; source items remain untouched."""
+    def __init__(self):
+        super().__init__()
+        self.warnings=[]
+
+
 def mark_size(kind, short_side, long_side):
     """Points on paper, selected by physical type/section, never by page density."""
     kind = str(kind or '').casefold()
@@ -43,7 +50,7 @@ def layout_labels(page, plot, xy, priorities, reserved=()):
     _fonts()
     left, bottom, width, height = plot
     area = left+2, bottom-14, left+width-2, bottom+height+12
-    entries, labels = {}, []
+    entries, labels = {}, LabelLayout()
     index = _LabelIndex()
     for rect in reserved:
         index.add(rect)
@@ -132,7 +139,7 @@ def layout_labels(page, plot, xy, priorities, reserved=()):
             if placed:
                 break
         if not placed:
-            raise ValueError(f"Марка «{entry['text']}» не помещается внутри контура на А3 при фиксированном размере {entry['size']:g} pt.")
+            labels.warnings.append(f"Марка «{entry['text']}» не поместилась внутри контура при размере {entry['size']:g} pt.")
     index=_LabelIndex()
     for rect in [*reserved,*(l['rect'] for l in labels)]:
         index.add(rect)
@@ -147,5 +154,5 @@ def layout_labels(page, plot, xy, priorities, reserved=()):
             if not index.overlaps(label['rect']):
                 labels.append(label);index.add(label['rect']);break
         else:
-            raise ValueError(f"Для колонны «{entry['text']}» нет места для короткой выноски на А3.")
+            labels.warnings.append(f"Для колонны «{entry['text']}» не нашлось места для короткой выноски.")
     return labels
