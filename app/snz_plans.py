@@ -164,65 +164,9 @@ class _LabelIndex:
             self.cells[key].append(rect)
 
 
-def place_labels(page, plot, xy, priorities):
-    """Lay out every mark first; leaders are drawn beneath all label backgrounds."""
-    from reportlab.pdfbase import pdfmetrics
-    _fonts()
-    left, bottom, width, height = plot
-    members = sorted(page['items'].items(), key=lambda pair: (
-        pair[0] not in page['active'], pair[1]['y'], pair[1]['x'], pair[0]))
-    best = None
-    for size in (9.5, 9, 8.5, 8, 7.5, 7, 6.5, 6):
-        index, labels, cursors = _LabelIndex(), [], {}
-        for eid, item in members:
-            priority = priorities.get(str(eid)) if eid in page['active'] else None
-            text = ('ДОП - ' if item.get('outside_snz') else f'{priority} - ' if priority is not None else '') + str(item.get('mark') or f'ID {eid}')
-            font = 'SNZ-Bold' if eid in page['active'] else 'SNZ'
-            tw, th = pdfmetrics.stringWidth(text, font, size)+4, size*1.15+2.5
-            b = bounds([item]); x, y = xy((b[0]+b[2])/2, (b[1]+b[3])/2)
-            spot = None
-
-            def fits(lx, ly):
-                return (left <= lx <= left+width-tw and bottom <= ly <= bottom+height-th
-                        and not index.overlaps((lx-.75, ly-.75, lx+tw+.75, ly+th+.75)))
-
-            bx0, by0 = xy(b[0], b[1]); bx1, by1 = xy(b[2], b[3])
-            offset = (abs(by1-by0)+th)/2+3
-            initial = [0] if eid not in page['active'] or (tw+4 <= abs(bx1-bx0) and th+4 <= abs(by1-by0)) else [offset, -offset]
-            for dy in [*initial, *[sign*n*(th+3) for n in range(1, 9) for sign in (1, -1)]]:
-                for dx in (0, tw/2+5, -tw/2-5, tw+7, -tw-7, 2*tw+10, -2*tw-10, 3*tw+12, -3*tw-12):
-                    lx, ly = x-tw/2+dx, y-th/2+dy
-                    if fits(lx, ly):
-                        spot = lx, ly; break
-                if spot:
-                    break
-            if spot is None:
-                for row in range(max(0, int((height-th)//(th+2)))+1):
-                    ly, lx = bottom+row*(th+2), cursors.get(row, left)
-                    while lx <= left+width-tw:
-                        if fits(lx, ly):
-                            spot = lx, ly; cursors[row] = lx+tw+2; break
-                        lx += 4
-                    if spot:
-                        break
-            if spot is None:
-                break
-            lx, ly = spot
-            index.add((lx-.75, ly-.75, lx+tw+.75, ly+th+.75))
-            labels.append({'id': eid, 'text': text, 'font': font, 'size': size,
-                           'rect': (lx, ly, lx+tw, ly+th), 'anchor': (x, y), 'active': eid in page['active']})
-        else:
-            distances = [math.hypot((r['rect'][0]+r['rect'][2])/2-r['anchor'][0],
-                                    (r['rect'][1]+r['rect'][3])/2-r['anchor'][1]) for r in labels]
-            score = (sum(d > 40 for d in distances), sum(max(0, d-15) for d in distances))
-            if best is None or score < best[0]:
-                best = score, labels
-            # Prefer a slightly smaller local mark over hundreds of long crossing leaders.
-            if max(distances, default=0) <= 100 and score[0] <= max(2, len(labels)*.02) and sum(d > 15 for d in distances) <= max(3, len(labels)*.10):
-                return labels
-    if best is not None:
-        return best[1]
-    raise ValueError('На листе А3 недостаточно места для всех марок без перекрытия при читаемом кегле.')
+def place_labels(page, plot, xy, priorities, reserved=()):
+    from app.snz_plan_labels import layout_labels
+    return layout_labels(page, plot, xy, priorities, reserved)
 
 
 def leader_segments(start, end, labels):
@@ -296,7 +240,7 @@ def build_floor_plans(order, context, axes, zones=(), status_colors=None, floor_
             return ox+(x-xmin)*scale, oy+(y-ymin)*scale
 
         pdf.setStrokeColor(HexColor('#CBD5E1')); pdf.setLineWidth(.55)
-        used_axes = set()
+        used_axes = set(); reserved = []
         for axis in axes:
             key = axis['kind'], axis['coord'], str(axis['label'])
             if axis['source_file'] not in page['sources'] or key in used_axes:
@@ -312,6 +256,7 @@ def build_floor_plans(order, context, axes, zones=(), status_colors=None, floor_
                 continue
             for tx, ty in bubbles:
                 label = str(axis['label']); radius = max(11, pdfmetrics.stringWidth(label, 'SNZ-Bold', 11)/2+4)
+                reserved.append((tx-radius,ty-radius,tx+radius,ty+radius))
                 pdf.setFillColor(HexColor('#FFFFFF')); pdf.circle(tx, ty, radius, fill=1, stroke=1)
                 pdf.setFillColor(HexColor('#334155')); pdf.setFont('SNZ-Bold', 11); pdf.drawCentredString(tx, ty-4, label)
         for zone in page['zones']:
@@ -333,19 +278,23 @@ def build_floor_plans(order, context, axes, zones=(), status_colors=None, floor_
             for i, p in enumerate(points(item)):
                 (path.moveTo if i == 0 else path.lineTo)(*xy(*p))
             path.close(); pdf.drawPath(path, fill=1, stroke=1); pdf.restoreState()
-        labels = place_labels(page, (left, bottom, width, height), xy, priorities)
-        pdf.setStrokeColor(HexColor('#475569')); pdf.setLineWidth(.45)
+        labels = place_labels(page, (left, bottom, width, height), xy, priorities, reserved)
+        pdf.setStrokeColor(HexColor('#64748B')); pdf.setLineWidth(.35)
         for label in labels:
+            if not label['leader']:
+                continue
             lx, ly, rx, ry = label['rect']; x, y = label['anchor']
-            if abs((lx+rx)/2-x) > 3 or abs((ly+ry)/2-y) > 3:
-                for a, b in leader_segments((x, y), ((lx+rx)/2, (ly+ry)/2), labels):
-                    pdf.line(*a, *b)
+            tx,ty=label['x'],label['y'];edge=lx if tx>x else rx
+            for start,end in [((x,y),(edge,ty)),((edge,ty),(tx,ty))]:
+                for a,b in leader_segments(start,end,labels):
+                    pdf.line(*a,*b)
         for label in labels:
-            lx, ly, rx, ry = label['rect']
-            if label['active']:
-                pdf.setFillColor(HexColor('#FFFFFF')); pdf.rect(lx, ly, rx-lx, ry-ly, fill=1, stroke=0)
-            pdf.setFillColor(HexColor('#0F172A')); pdf.setFont(label['font'], label['size'])
-            pdf.drawString(lx+2, ly+3, label['text'])
+            pdf.saveState();pdf.translate(label['x'],label['y']);pdf.rotate(label['angle'])
+            pdf.setFillColor(HexColor('#FFFFFF'));pdf.setFillAlpha(1 if label['active'] or label['leader'] else .72)
+            tw,th=label['tw'],label['th'];pdf.rect(-tw/2,-th/2,tw,th,fill=1,stroke=0)
+            pdf.setFillColor(HexColor('#0F172A'));pdf.setFillAlpha(1);pdf.setFont(label['font'],label['size'])
+            ascent,descent=pdfmetrics.getAscentDescent(label['font'],label['size'])
+            pdf.drawCentredString(0,-(ascent+descent)/2,label['text']);pdf.restoreState()
         pdf.setFont('SNZ', 8.5); pdf.setFillColor(HexColor('#334155'))
         caption = 'Изделия СНЗ: прозрачность 0%; окружение: 70%. Номер - очередь монтажа; ДОП - вне СНЗ.'
         if not page['column_levels']:

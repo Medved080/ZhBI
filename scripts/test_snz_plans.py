@@ -130,7 +130,7 @@ class PlanTests(unittest.TestCase):
             text=page.get_text();self.assertIn(expected['title'],text);self.assertNotIn('ДАЛЬНИЙ-10001',text)
             labels=pdf_labels(page);self.assertEqual(len(labels),len(expected['items']))
             spans=[s for b in page.get_text('dict')['blocks'] if 'lines' in b for line in b['lines'] for s in line['spans'] if re.search(r'[ПК]-\d+',s['text'])]
-            self.assertTrue(all(s['size']>=5.99 for s in spans))
+            self.assertTrue(all(abs(s['size']-(6 if 'К-' in s['text'] else 3.5))<.01 for s in spans))
             for item in expected['items'].values():
                 self.assertTrue(any(s['text']==item['mark'] or s['text'].endswith(' - '+item['mark']) for s in labels),item['mark'])
             for i,a in enumerate(labels):

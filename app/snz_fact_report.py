@@ -7,14 +7,18 @@ from app.snz_montage import fact_rows, status_montage
 
 
 def report(conn, object_id, state, day, shift=None, crew_id=None):
-    rows=fact_rows(conn,object_id,state,status_montage(conn,object_id),day,shift,crew_id)
+    from app.snz_registry import registry
+    from app.snz_fact_registry import summarize
+    statuses=status_montage(conn,object_id)
+    rows=fact_rows(conn,object_id,state,statuses,day,shift,crew_id)
+    orders=[r for r in registry(conn,object_id,day)['orders'] if (not shift or r['shift']==shift) and (not crew_id or r['crew_id']==crew_id)]
     planned={r['id'] for r in rows if r['orders']}
     done={r['id'] for r in rows if r['status_confirmed']}
     extra={r['id'] for r in rows if not r['orders']}
     return {'date':day,'shift':shift,'crew_id':crew_id,
             'object_name':conn.execute('SELECT name FROM objects WHERE id=?',(object_id,)).fetchone()[0],
             'generated_at':datetime.now(ZoneInfo('Europe/Moscow')).replace(tzinfo=None).isoformat(timespec='seconds'),
-            'items':rows,'totals':{'planned':len(planned),'completed_plan':len(planned&done),
+            'registry':summarize(orders,rows,statuses),'items':rows,'totals':{'planned':len(planned),'completed_plan':len(planned&done),
                                   'uncompleted':len(planned-done),'extra':len(extra&done),
                                   'completed_total':len(done),'unique_items':len(rows)}}
 
@@ -76,6 +80,8 @@ def build_xlsx(data):
         for c in sheet[header]:c.font=Font(name='Calibri',size=11,bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='17365D')
         for i,width in enumerate(widths,1):sheet.column_dimensions[get_column_letter(i)].width=width
     ws['A1'].font=Font(name='Calibri',size=16,bold=True)
+    from app.snz_fact_registry import add_sheet
+    add_sheet(wb,data)
     output=BytesIO();wb.save(output);return output.getvalue()
 
 
