@@ -4,6 +4,7 @@
 Журнал — recovery_events (до 600 записей на задание, старые удаляются), снимок — recovery_live (одна строка на задание, пишется не чаще
 раза в секунду)."""
 import json
+import logging
 import time
 
 from .database import dumps, now, transaction
@@ -21,6 +22,11 @@ class Trace:
 
     # --- журнал
     def note(self, text, level="info", **data):
+        if level in {"warn", "warning", "error"}:
+            logging.getLogger(__name__).log(
+                logging.ERROR if level == "error" else logging.WARNING,
+                "Задание %s: %s", self.job, text,
+                extra={"service_details": {"задание": str(self.job), "этап": self.state.get("phase")}})
         try:
             with transaction(self.settings.database_path) as conn:
                 conn.execute("INSERT INTO recovery_events(job_id,ts,level,text,data_json) VALUES(?,?,?,?,?)", (self.job, now(), level, text, dumps(data) if data else None))

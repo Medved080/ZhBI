@@ -486,7 +486,8 @@ async function api(path, opts) {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const сообщение = describeApiError(body, res);
+    const requestId = res.headers.get("X-Request-ID") || body?.request_id;
+    const сообщение = describeApiError(body, res) + (requestId ? ` · Запрос: ${requestId}` : "");
     if (пишемОшибки) {
       // 5xx — сбой программы, 4xx — отказ: разные категории в журнале, и
       // выбирает их клиент, потому что только он знает код ответа.
@@ -502,6 +503,7 @@ async function api(path, opts) {
     // код переспрашивает подтверждение по этим данным и повторяет запрос
     // с force=true (живой запрос пользователя, 2026-09-10).
     err.status = res.status;
+    err.requestId = requestId;
     err.detail = body && body.detail;
     throw err;
   }
@@ -24909,6 +24911,13 @@ const ACTIVITY_COLUMNS = [
   { key: "new_value", label: "Стало", filter: "like" },
   { key: "duration_ms", label: "Длительность, мс", filter: "min" },
   { key: "request_id", label: "Операция", filter: "like" },
+  { key: "path", label: "Путь запроса", filter: "like" },
+  { key: "method", label: "HTTP-метод", filter: "eq" },
+  { key: "status", label: "HTTP-статус", filter: "num" },
+  { key: "subsystem", label: "Подсистема", filter: "eq" },
+  { key: "level", label: "Уровень", filter: "eq" },
+  { key: "logger", label: "Модуль", filter: "like" },
+  { key: "exception_type", label: "Тип ошибки", filter: "like" },
   { key: "details", label: "Подробности", filter: "like" },
 ];
 
@@ -24972,6 +24981,7 @@ function activityRowHtml(r) {
     ${ячейка(label(r.new_value))}
     ${ячейка(r.duration_ms === null || r.duration_ms === undefined ? "" : String(r.duration_ms))}
     ${ячейка(r.request_id || "")}
+    ${["path", "method", "status", "subsystem", "level", "logger", "exception_type"].map(k => ячейка(String(r[k] ?? ""))).join("")}
     <td class="act-details" title="${escapeHtml(подробности)}">${escapeHtml(подробности)}</td>
   </tr>`;
 }

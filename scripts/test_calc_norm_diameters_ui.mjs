@@ -28,6 +28,32 @@ try{
  await page.locator('#pc-open-norms').click();
  await page.locator('[data-settings-section="norms"]').click();
  const table=page.locator('#pc-resource-norms');await table.waitFor({state:'visible'});
+ // Числовые поля не должны попадать в автозаполнение контактов, в том числе после перерисовки.
+ const checkNumericFields=async()=>{
+  const fields=await page.locator('input[type="number"],input[inputmode="decimal"],input[inputmode="numeric"]').evaluateAll(inputs=>inputs.map(el=>({
+   name:el.name||el.id||el.dataset.bulkField||el.dataset.field,
+   autocomplete:el.autocomplete,
+   label:el.getAttribute('aria-label')||[...el.labels].map(l=>l.textContent.trim()).join(' '),
+  })));
+  assert.ok(fields.length>100);
+  for(const field of fields){assert.equal(field.autocomplete,'off',field.name);assert.ok(field.label&&!field.label.includes('undefined'),field.name);}
+  assert.equal(await page.locator('#pc-login-form [name="login"]').getAttribute('autocomplete'),'username');
+  assert.equal(await page.locator('#pc-login-form [name="password"]').getAttribute('autocomplete'),'current-password');
+ };
+ await checkNumericFields();
+ const factor=table.locator('input[name="f:steel6A500C"]');
+ assert.match(await factor.getAttribute('aria-label'),/Арматура.*коэффициент расхода/);
+ const original=await factor.inputValue();
+ for(const value of ['0.99','10.01']){await factor.fill(value);assert.equal(await factor.evaluate(el=>el.checkValidity()),false);}
+ await factor.fill('1.01');assert.equal(await factor.evaluate(el=>el.checkValidity()),true);
+ await factor.fill(original);
+ await page.locator('[data-settings-section="prices"]').click();
+ const price=page.locator('#pc-base-table input[name="c:default"]'),originalPrice=await price.inputValue();
+ await price.fill('12 345,67');assert.equal(await price.evaluate(el=>window.CalcZhBIMoney.read(el)),'12345.67');
+ assert.equal(await price.evaluate(el=>el.checkValidity()),true);
+ await price.fill('-1');assert.equal(await price.evaluate(el=>el.checkValidity()),false);
+ await price.fill(originalPrice);
+ await page.locator('[data-settings-section="norms"]').click();
  const readNorms=async()=>{const response=await page.request.get(base+'/calc/api/norms');assert.equal(response.status(),200);return response.json();};
  const before=await readNorms();
  for(const key of ['mainsteel','wire','steel8','steel10a240','steel10a500','steel25a240','steel25a500'])assert.equal(await table.locator(`input[name="f:${key}"]`).count(),0);
@@ -62,6 +88,7 @@ try{
   assert.equal(Number(after.parameters.resources[target].factor),Number(next));
   assert.equal(after.parameters.resources[target].factorBasis,'manual');
   for(const [key,value] of Object.entries(current.parameters.resources))if(key!==target)assert.deepEqual(after.parameters.resources[key],value,key);
+  await checkNumericFields();
   current=after;
  }
  await page.locator('[data-settings-section="history"]').click();

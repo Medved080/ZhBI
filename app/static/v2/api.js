@@ -100,12 +100,13 @@ function describeDetail(detail, status) {
 import { checkWrite, announceBlocked } from "./write-gate.js";
 
 export class ApiError extends Error {
-  constructor(status, detail) {
-    const text = describeDetail(detail, status);
+  constructor(status, detail, requestId = null) {
+    const text = describeDetail(detail, status) + (requestId ? ` · Запрос: ${requestId}` : "");
     super(text);
     this.status = status;
     this.rawDetail = detail;
     this.detail = text;
+    this.requestId = requestId;
   }
 }
 
@@ -170,7 +171,7 @@ async function request(method, path, body, { read = false, background = false } 
     }
     if (!res.ok) {
       const detail = data && typeof data === "object" && "detail" in data ? data.detail : data;
-      throw new ApiError(res.status, detail || res.statusText);
+      throw new ApiError(res.status, detail || res.statusText, res.headers.get("X-Request-ID") || data?.request_id);
     }
     if (isWrite && !background) writeEpoch++;
     return data;
@@ -208,7 +209,7 @@ export const api = {
     if (!res.ok) {
       let detail = null;
       try { const j = await res.json(); detail = j && typeof j === "object" && "detail" in j ? j.detail : j; } catch (e) { /* не JSON */ }
-      throw new ApiError(res.status, detail || res.statusText);
+      throw new ApiError(res.status, detail || res.statusText, res.headers.get("X-Request-ID"));
     }
     return res.blob();
   },
@@ -227,7 +228,7 @@ export const api = {
     if (!res.ok) {
       let detail = null;
       try { const j = await res.json(); detail = j && typeof j === "object" && "detail" in j ? j.detail : j; } catch (e) { /* не JSON */ }
-      throw new ApiError(res.status, detail || res.statusText);
+      throw new ApiError(res.status, detail || res.statusText, res.headers.get("X-Request-ID"));
     }
     const cd = res.headers.get("Content-Disposition") || "";
     let filename = null;

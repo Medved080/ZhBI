@@ -231,14 +231,13 @@
   if(contents)addContents(contents,entries);
   return workbook;
  }
- // Плоская ведомость по образцу «сравнение (копия)»: расход из чертежа,
- // без производственных припусков и начислений калькуляции. Цены — текущие.
+ // Все строки текущей калькуляции, с проектным и производственным расходом.
  function buildMaterialsWorkbook(snapshots){
   if(!globalThis.ExcelJS)throw new Error('Не удалось загрузить XLSX. Обновите страницу.');
   if(!Array.isArray(snapshots)||!snapshots.length)throw new Error('Выберите хотя бы одно изделие.');
   const workbook=new ExcelJS.Workbook();workbook.creator='CalcZhBI';workbook.calcProperties.fullCalcOnLoad=true;
-  const sheet=workbook.addWorksheet('Материалы',{views:[{state:'frozen',ySplit:1,showGridLines:false}],pageSetup:{paperSize:9,orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:'1:1'}});
-  const headers=['Номенклтура','Материал','ЕИ','Количество чертеж','Цена','Сумма чертеж','Статья','на м3 руб','на м3 кол-во','Количество по модели в проекте, шт.','Количество по таблице, шт.','Предлагаемое наименование','Наименование в ТТН'];
+  const sheet=workbook.addWorksheet('Калькуляции',{views:[{state:'frozen',ySplit:1,showGridLines:false}],pageSetup:{paperSize:9,orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:'1:1'}});
+  const headers=['Номенклатура','Марка изделия','Строка калькуляции','ЕИ','Проектный объем / масса','Коэффициент','Объем / масса с учетом коэффициента','Цена, ₽','Сумма, ₽','Статья','на м3 руб','на м3 кол-во','Количество по модели в проекте, шт.','Количество по таблице, шт.','Предлагаемое наименование','Наименование в ТТН'];
   // B/G/H already appear as names and source quantity; add every other populated source column A–P.
   const sourceColumns=[
    {index:0,letter:'A',label:'№ по таблице',width:14},
@@ -256,48 +255,62 @@
    {index:15,letter:'P',label:'КП · P (без заголовка)',width:24}
   ];
   sheet.addRow([...headers,...sourceColumns.map(c=>c.label)]);
-  [36,44,9,20,16,20,14,18,18,28,24,75,65,...sourceColumns.map(c=>c.width)].forEach((width,i)=>{sheet.getColumn(i+1).width=width;});
+  [36,22,44,9,24,18,32,16,20,26,18,18,28,24,75,65,...sourceColumns.map(c=>c.width)].forEach((width,i)=>{sheet.getColumn(i+1).width=width;});
   const missing=(cell,text)=>{cell.note=text;cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFC7CE'}};};
   const number=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))&&Number(value)>=0?Number(value):null;
   const blockStarts=new Set();
   for(const snapshot of snapshots){
    const {product,rows}=snapshot,doc=product.documentModel,byId=new Map(rows.map(row=>[row.id,row]));
+   const mark=doc?.alias||doc?.mark?.match(/\(([^()]+)\)\s*$/)?.[1]||product.name;
    const concrete=byId.get('concrete');if(!concrete)throw new Error('Нет строки бетона: '+product.name+'.');
-   const volume=number(doc?doc.projectVolume:product.volume),concreteRow=sheet.rowCount+1;
-   blockStarts.add(concreteRow);
-   const materials=[{id:'concrete',name:concrete.name,unit:'м³',projectQty:volume},...(doc?.resources||[])];
-   for(const material of materials){
-    const source=byId.get(material.id),unit=material.unit,tonnes=unit==='т',scale=tonnes?1000:1;
-    const qty=number(material.projectQty),rate=number(source?.effective?.rate);
-    const quantity=qty===null?null:qty*scale,price=rate===null?null:rate/scale;
-    const category=material.id==='concrete'?'Бетон':/электрод|флюс/i.test(material.name)?'Прочие':tonnes||/арматур|сталь|стальн|проволок|труб|прокат|полос|закладн|металл|прут|моток|уголок|швеллер|двутавр/i.test(material.name)?'металл':'Прочие';
-    const r=sheet.rowCount+1,amount=quantity===null||price===null?null:quantity*price;
-    sheet.addRow([doc?.mark||product.name,material.name,tonnes?'кг':unit==='м³'?'м3':unit,quantity,price,null,category,null,null,r===concreteRow?number(snapshot.projectQuantity):null,r===concreteRow?number(snapshot.exportReference?.sourceQuantity):null,r===concreteRow?snapshot.exportReference?.proposedName??null:null,r===concreteRow?snapshot.exportReference?.ttnName??null:null]);
-    sheet.getCell('F'+r).value=formula('IF(OR(D'+r+'="",E'+r+'=""),"",D'+r+'*E'+r+')',amount??'');
-    sheet.getCell('H'+r).value=formula('IF(OR($D$'+concreteRow+'="",$D$'+concreteRow+'=0,F'+r+'=""),"",F'+r+'/$D$'+concreteRow+')',volume>0&&amount!==null?amount/volume:'');
-    sheet.getCell('I'+r).value=formula('IF(OR($D$'+concreteRow+'="",$D$'+concreteRow+'=0,D'+r+'=""),"",D'+r+'/$D$'+concreteRow+')',volume>0&&quantity!==null?quantity/volume:'');
-    for(const col of ['D','E','F','H','I'])sheet.getCell(col+r).numFmt='#,##0.00';
-    if(quantity===null)missing(sheet.getCell('D'+r),'Количество по чертежу не задано. Производственный расход из калькуляции не подставляется.');
-    if(price===null||price===0)missing(sheet.getCell('E'+r),'Цена материала не задана.');
-    if(!(volume>0))for(const col of ['H','I'])missing(sheet.getCell(col+r),'Для расчёта на м³ нужен положительный объём бетона по чертежу.');
+   const volume=number(doc?doc.projectVolume:product.volume),firstRow=sheet.rowCount+1,concreteRow=firstRow+rows.indexOf(concrete);
+   blockStarts.add(firstRow);
+   const resources=new Map((doc?.resources||[]).map(resource=>[resource.id,resource]));
+   const categories={rest:'Прочие',labour:'Труд',soc:'Страховые взносы',energy:'Энергоуслуги',overhead:'Общепроизводственные',admin:'Административные',commercial:'Коммерческие',profit:'Прибыль',delivery:'Доставка'};
+   for(const source of rows){
+    const resource=resources.get(source.id),unit=source.unit,tonnes=unit==='т',scale=tonnes?1000:1;
+    const qty=source.id==='concrete'?volume:number(resource?resource.projectQty:source.projectQty??source.precise?.qty??source.qty);
+    const effectiveQty=number(has(source,'qty')?source.manual.qty:source.effective?.qty??source.precise?.qty??source.qty);
+    const rate=number(source.effective?.rate),quantity=qty===null?null:qty*scale;
+    const adjusted=effectiveQty===null?null:effectiveQty*scale,price=rate===null?null:rate/scale;
+    // Фактический коэффициент включает производственное округление и ручное количество.
+    // При неизвестной/нулевой базе сохраняем расход калькуляции без выдуманного коэффициента.
+    const factor=quantity>0&&adjusted!==null?adjusted/quantity:quantity===0&&adjusted===0?1:null;
+    const category=categories[source.id]||(source.id==='concrete'?'Бетон':/электрод|флюс/i.test(source.name)?'Прочие':tonnes||/арматур|сталь|стальн|проволок|труб|прокат|полос|закладн|металл|прут|моток|уголок|швеллер|двутавр/i.test(source.name)?'металл':'Прочие');
+    const r=sheet.rowCount+1,amount=number(source.precise?.effectiveAmount??source.effective?.amount);
+    sheet.addRow([doc?.mark||product.name,mark,source.name,tonnes?'кг':unit==='м³'?'м3':unit,quantity,factor,null,price,null,category,null,null,r===firstRow?number(snapshot.projectQuantity):null,r===firstRow?number(snapshot.exportReference?.sourceQuantity):null,r===firstRow?snapshot.exportReference?.proposedName??null:null,r===firstRow?snapshot.exportReference?.ttnName??null:null]);
+    sheet.getCell('G'+r).value=factor===null?adjusted:formula('E'+r+'*F'+r,adjusted);
+    sheet.getCell('I'+r).value=has(source,'amount')?Number(source.manual.amount):formula('IF(OR(G'+r+'="",H'+r+'=""),"",G'+r+'*H'+r+')',amount??'');
+    sheet.getCell('K'+r).value=formula('IF(OR($E$'+concreteRow+'="",$E$'+concreteRow+'=0,I'+r+'=""),"",I'+r+'/$E$'+concreteRow+')',volume>0&&amount!==null?amount/volume:'');
+    sheet.getCell('L'+r).value=formula('IF(OR($E$'+concreteRow+'="",$E$'+concreteRow+'=0,G'+r+'=""),"",G'+r+'/$E$'+concreteRow+')',volume>0&&adjusted!==null?adjusted/volume:'');
+    for(const col of ['E','G','L'])sheet.getCell(col+r).numFmt='#,##0.#####';
+    sheet.getCell('F'+r).numFmt='0.########';
+    for(const col of ['H','I','K'])sheet.getCell(col+r).numFmt='#,##0.00';
+    if(!resource&&source.id!=='concrete')sheet.getCell('E'+r).note='Проектный объем или масса для этой статьи не предусмотрены. Показана исходная норма калькуляции в единице строки (процент, чел·ч, комплект и т. п.).';
+    if(quantity===null)missing(sheet.getCell('E'+r),'Количество по чертежу не задано. Расход калькуляции показан отдельно.');
+    if(factor===null)missing(sheet.getCell('F'+r),'Коэффициент не определён: проектное количество отсутствует или равно нулю. Расход калькуляции сохранён в следующей колонке.');
+    if(has(source,'qty'))sheet.getCell('G'+r).note='Количество задано пользователем: '+source.manual.qty+' '+unit+'.';
+    if(has(source,'amount'))sheet.getCell('I'+r).note='Сумма задана пользователем и сохранена из калькуляции. Она может отличаться от количества × цены.';
+    if(price===null||price===0)missing(sheet.getCell('H'+r),'Цена / ставка не задана или равна нулю.');
+    if(!(volume>0))for(const col of ['K','L'])missing(sheet.getCell(col+r),'Для расчёта на м³ нужен положительный объём бетона по чертежу.');
    }
-   const projectCount=sheet.getCell('J'+concreteRow);projectCount.numFmt='#,##0';
+   const projectCount=sheet.getCell('M'+firstRow);projectCount.numFmt='#,##0';
    if(projectCount.value===null)missing(projectCount,snapshot.projectQuantityStatus==='ambiguous'?'Марка неоднозначно связана с изделиями калькулятора. Количество не определено.':'Проект ЖБИ не привязан или количество недоступно.');
    else if(snapshot.quantityProjectName)projectCount.note='Проект: '+snapshot.quantityProjectName+'. Количество по всем объектам проекта.';
    const reference=snapshot.exportReference;
-   const sourceCount=sheet.getCell('K'+concreteRow);sourceCount.numFmt='#,##0';
+   const sourceCount=sheet.getCell('N'+firstRow);sourceCount.numFmt='#,##0';
    sourceCount.note=sourceCount.value!==null?'Источник: «Приложение №3 Стоимости для КП.xlsx», колонка H, строки '+reference.sourceRows.join(', ')+'.':'Количество по таблице не определено для отдельного изделия: строка не найдена, количество не заполнено либо требуется уточнение привязки/объединённых строк.';
    if(reference?.sourceQuantity!==undefined&&reference.sourceQuantity!==null&&projectCount.value!==null){
     const same=Number(reference.sourceQuantity)===projectCount.value;
     projectCount.note=(projectCount.note||'')+' В файле КП: '+reference.sourceQuantity+' шт., строка '+reference.sourceRows.join(', ')+'. '+(same?'Количество совпадает.':'Расхождение: '+(projectCount.value-Number(reference.sourceQuantity))+' шт.');
     if(!same)projectCount.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFEB9C'}};
    }
-   for(const col of ['L','M']){
-    const cell=sheet.getCell(col+concreteRow);
+   for(const col of ['O','P']){
+    const cell=sheet.getCell(col+firstRow);
     cell.note=reference?.referenceStatus==='found'?'Источник: «Приложение №3 Стоимости для КП.xlsx», лист «ДЛя КП», строки '+reference.sourceRows.join(', ')+'.':reference?.referenceStatus==='ambiguous'?'В исходном файле несколько разных наименований для изделия. Нужна проверка строк '+reference.sourceRows.join(', ')+'.':'Однозначная строка изделия в исходном файле не найдена.';
    }
    sourceColumns.forEach((column,i)=>{
-    const cell=sheet.getCell(concreteRow,14+i),source=reference?.sourceCells?.[column.index];
+    const cell=sheet.getCell(firstRow,17+i),source=reference?.sourceCells?.[column.index];
     cell.value=source?.value??null;
     if(source){
      cell.numFmt=source.numberFormat||'General';
@@ -307,9 +320,9 @@
   }
   sheet.eachRow((row,index)=>{
    const blockStart=blockStarts.has(index);
-   row.height=index===1?44:Math.min(409,Math.max(32,Math.ceil(String(row.getCell('L').value||'').length/75)*14,Math.ceil(String(row.getCell('M').value||'').length/65)*14,...sourceColumns.map((c,i)=>Math.ceil(String(row.getCell(14+i).value??'').split('\n').reduce((sum,line)=>sum+Math.max(1,Math.ceil(line.length/c.width)),0))*14)));
+   row.height=index===1?60:Math.min(409,Math.max(32,Math.ceil(String(row.getCell('B').value||'').length/22)*14,Math.ceil(String(row.getCell('C').value||'').length/40)*14,Math.ceil(String(row.getCell('O').value||'').length/75)*14,Math.ceil(String(row.getCell('P').value||'').length/65)*14,...sourceColumns.map((c,i)=>Math.ceil(String(row.getCell(17+i).value??'').split('\n').reduce((sum,line)=>sum+Math.max(1,Math.ceil(line.length/c.width)),0))*14)));
    // Include empty source cells so the block band runs continuously across all exported columns.
-   if(blockStart)sheet.getCell(index,26);
+   if(blockStart)sheet.getCell(index,29);
    row.eachCell({includeEmpty:true},cell=>{
     cell.font={name:'Arial',size:10,bold:index===1||blockStart};cell.alignment={vertical:'middle',wrapText:true};
     cell.border={bottom:{style:'hair',color:{argb:'FFD9D9D9'}},...(blockStart?{top:{style:'medium',color:{argb:'FF6F94BD'}}}:{})};
@@ -318,13 +331,16 @@
     else if(blockStart&&!cell.fill)cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFDFEAF7'}};
    });
   });
-  sheet.getCell('C1').alignment={horizontal:'center',vertical:'middle'};
-  sheet.getCell('D1').note='Количество по чертежу без производственных припусков. Для изделия без чертежа — введённый объём бетона. Корректировки количества и общей суммы в калькуляции сюда не переносятся.';
-  sheet.getCell('E1').note='Текущие цены калькулятора без НДС, включая ручную корректировку цены. Для ресурсов в тоннах количество и цена переведены в кг и руб/кг. Другие единицы сохранены.';
-  sheet.getCell('J1').note='Количество актуальных изделий этой марки по всем объектам привязанного проекта ЖБИ. Заполнено только в первой строке блока изделия; ноль означает, что совпадающих изделий в проекте нет.';
-  sheet.getCell('K1').note='Количество из колонки H файла «Приложение №3 Стоимости для КП.xlsx». Пусто, если нет однозначного количества для отдельного изделия. Заполнено только в первой строке блока изделия.';
-  sourceColumns.forEach((column,i)=>{sheet.getCell(1,14+i).note='Колонка '+column.letter+' исходного файла КП. Показаны также скрытые колонки. Исходные формулы выгружаются сохранёнными значениями, без ссылок на чужие координаты.';});
-  sheet.autoFilter='A1:Z'+sheet.rowCount;sheet.pageSetup.printArea='A1:Z'+sheet.rowCount;
+  sheet.getCell('B1').note='Короткая марка из каталога (например, Р5.1 или ПЦ-10). Если отдельная короткая марка не указана, используется обозначение в скобках полной марки либо введённое название изделия. Повторяется в каждой строке калькуляции для фильтрации.';
+  sheet.getCell('D1').alignment={horizontal:'center',vertical:'middle'};
+  sheet.getCell('E1').note='Объем или масса по чертежу без производственных припусков. Для изделия без чертежа — введённый объём бетона. Для труда, начислений и дополнительных статей — исходная норма калькуляции в единице строки.';
+  sheet.getCell('F1').note='Отношение текущего количества калькуляции к проектному объему / массе или исходной норме. Включает припуски, производственные округления и ручные корректировки количества.';
+  sheet.getCell('G1').note='Количество текущей калькуляции с учетом коэффициента и ручных корректировок. Тонны переведены в кг. Для процентных статей — текущая ставка в процентах.';
+  sheet.getCell('H1').note='Текущие цены и ставки калькулятора без НДС, включая ручную корректировку цены. Для ресурсов в тоннах количество и цена переведены в кг и руб/кг. Другие единицы сохранены.';
+  sheet.getCell('M1').note='Количество актуальных изделий этой марки по всем объектам привязанного проекта ЖБИ. Заполнено только в первой строке блока изделия; ноль означает, что совпадающих изделий в проекте нет.';
+  sheet.getCell('N1').note='Количество из колонки H файла «Приложение №3 Стоимости для КП.xlsx». Пусто, если нет однозначного количества для отдельного изделия. Заполнено только в первой строке блока изделия.';
+  sourceColumns.forEach((column,i)=>{sheet.getCell(1,17+i).note='Колонка '+column.letter+' исходного файла КП. Показаны также скрытые колонки. Исходные формулы выгружаются сохранёнными значениями, без ссылок на чужие координаты.';});
+  sheet.autoFilter='A1:AC'+sheet.rowCount;sheet.pageSetup.printArea='A1:AC'+sheet.rowCount;
   return workbook;
  }
  async function download(snapshots,format='calculation'){
@@ -332,7 +348,7 @@
   const workbook=materials?buildMaterialsWorkbook(snapshots):buildWorkbook(snapshots,await window.CalcZhBIAPI.request('/calc/api/calculation-export-template'));
   const buffer=await workbook.xlsx.writeBuffer();
   const url=URL.createObjectURL(new Blob([buffer],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
-  const anchor=document.createElement('a');anchor.href=url;anchor.download=materials?'Материалы ЖБИ.xlsx':'Калькуляция ЖБИ.xlsx';document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  const anchor=document.createElement('a');anchor.href=url;anchor.download=materials?'Калькуляции ЖБИ (плоская).xlsx':'Калькуляция ЖБИ.xlsx';document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
  }
  window.CalcZhBIExport={buildWorkbook,buildMaterialsWorkbook,download};
 })();

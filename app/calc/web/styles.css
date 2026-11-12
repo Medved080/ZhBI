@@ -303,6 +303,10 @@ body{margin:0;padding:0;background:var(--bg);color:var(--ink)}
 #precast-concept .pc-norms-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 #precast-concept .pc-norms-fields label{font-size:12px;display:flex;flex-direction:column;gap:8px;justify-content:flex-end}
 #precast-concept #pc-norms-form input{width:100%;min-width:0;font:inherit;padding:8px;border:1px solid var(--pc-line);border-radius:5px;background:var(--pc-bg);color:var(--pc-ink)}
+/* Safari may ignore autocomplete="off" and mistake numeric fields for contact data.
+   Suppress its contact picker only in numeric controls, including the product dialog outside the shell. */
+#precast-concept input:is([type=number],[inputmode=decimal],[inputmode=numeric])::-webkit-contacts-auto-fill-button,
+#pc-product-form input:is([type=number],[inputmode=decimal])::-webkit-contacts-auto-fill-button{display:none!important;visibility:hidden;pointer-events:none}
 #precast-concept .pc-norms-fields small{font-size:11px;color:var(--pc-muted)}
 #precast-concept .pc-norms-table{overflow-x:auto}
 #precast-concept .pc-norms-table:has(#pc-prices-table){max-height:420px;overflow:auto}

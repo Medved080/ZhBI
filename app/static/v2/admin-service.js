@@ -10,6 +10,7 @@ import { showConfirmDialog, showInfoDialog } from "./dialogs.js";
 import { frame, errText, askTyped } from "./admin-common.js";
 import { checkWrite } from "./write-gate.js";
 import { mountReadScreen } from "./read-screen.js";
+import { mountActivityJournal } from "./activity-screen.js";
 
 const unknownOutcome = (e) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
 const fmtNum = (n) => Number(n || 0).toLocaleString("ru-RU");
@@ -522,7 +523,7 @@ export function mountActivity(el, ctx) {
   // (задание «tables», п.1).
   el.innerHTML = `<div class="v2-container v2-container--wide v2-screen" style="margin-bottom:0;padding-bottom:0"><p class="v2-muted" id="ac-stats" role="status" aria-live="polite">Считаю объём журнала…</p></div>
     <div id="ac-read"></div>${canClean ? `<div class="v2-container v2-container--wide v2-screen" style="margin-top:0"><section class="v2-result" id="ac-clean"></section></div>` : ""}`;
-  const readModule = mountReadScreen(el.querySelector("#ac-read"), { ...ctx, screen: { ...screen, impl: "read" } });
+  const readModule = mountActivityJournal(el.querySelector("#ac-read"), ctx);
   let busy = false, dead = false;
   (async () => {
     const box = el.querySelector("#ac-stats");

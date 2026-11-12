@@ -32,7 +32,7 @@ import queue
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import app.db as _db  # модулем, а не `from ... import DB_PATH`: путь читается в
@@ -75,7 +75,8 @@ def _impersonation_columns() -> dict:
 def _now() -> str:
     """Время с миллисекундами — 'нажал кнопку / открылась форма' различаются
     десятками миллисекунд, посекундной точности datetime('now') не хватает."""
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.") + f"{datetime.utcnow().microsecond // 1000:03d}"
+    instant = datetime.now(timezone.utc)
+    return instant.strftime("%Y-%m-%d %H:%M:%S.") + f"{instant.microsecond // 1000:03d}"
 
 
 def log(
@@ -108,6 +109,13 @@ def log(
     она зависит от ЗНАЧЕНИЯ, а не от кода: ответ 500 — «Ошибка», ответ 403 —
     «Отказ», а действие у них одно (см. app/main.py, обработчики ошибок)."""
     global _dropped
+    from app.service_events import request_context
+    context = request_context.get()
+    if request_id is None and context:
+        request_id = context["request_id"]
+    elif context and request_id != context["request_id"]:
+        # Keep existing operation groups, while linking them to the HTTP request.
+        details = {**(details or {}), "http_request_id": context["request_id"]}
     if user is not None:
         user_id = user["id"] if user_id is None else user_id
         if user_name is None:

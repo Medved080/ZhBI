@@ -6,7 +6,7 @@
  <div id="pc-recovery-status" role="status" aria-live="polite"></div><div class="pc-recovery-layout">
  <aside><section><h3>Подключение к ИИ</h3><p>Сервер и модель чтения чертежей задаются в основных настройках сервиса.</p><a href="/v2#/ai-integration" target="_top">Администрирование → Интеграция с ИИ</a><p id="pc-recovery-probe"></p></section>
  <section><h3>Новая партия</h3><label>Изделия<select id="pc-recovery-scope"><option value="active">Текущее изделие</option><option value="selected">Выбранные флажками</option><option value="visible">Показанные в списке</option><option value="remaining">Все без полной модели</option></select></label>
- <p id="pc-recovery-selection"></p><label id="pc-recovery-extra-label">Дополнительные физические PDF-страницы<input id="pc-recovery-extra" placeholder="Например: 12, 13, 18" inputmode="numeric"></label>
+ <p id="pc-recovery-selection"></p><label id="pc-recovery-extra-label">Дополнительные физические PDF-страницы<input id="pc-recovery-extra" placeholder="Например: 12, 13, 18" inputmode="numeric" autocomplete="off"></label>
  <p class="pc-recovery-muted">Связанные виды, детали и спецификации включаются автоматически. Дополнительные страницы относятся к альбому текущего изделия.</p>
  <button type="button" id="pc-recovery-start">Запустить обработку</button><p id="pc-recovery-worker"></p></section></aside>
  <section class="pc-recovery-work"><div class="pc-recovery-queue-tools"><label>Партия<select id="pc-recovery-batch"><option value="">Все партии</option></select></label><button type="button" id="pc-recovery-refresh">Обновить</button><span id="pc-recovery-batch-controls"></span></div>

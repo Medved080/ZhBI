@@ -48,7 +48,7 @@ _WINDOW_SEC = 60.0
 # десятки килобайт (Starlette + FastAPI + shapely), и в таблице, которую
 # листают глазами, она не нужна: для опознания места хватает хвоста —
 # последних кадров и самой строки исключения.
-_TRACE_TAIL = 2000
+_TRACE_TAIL = 24000
 
 _seen: dict = {}
 _seen_lock = threading.Lock()
@@ -146,7 +146,10 @@ def _display(row: sqlite3.Row) -> str:
 
 
 def _write(request, *, action: str, category: str, status: int, detail: str,
-           trace: Optional[str] = None) -> None:
+           trace: Optional[str] = None, exception_type: Optional[str] = None) -> None:
+    from app.service_events import safe_query, safe_text
+    if getattr(request.state, "error_logged", False):
+        return
     путь = request.url.path
     if (request.method, путь) in _SKIP:
         return
@@ -156,22 +159,36 @@ def _write(request, *, action: str, category: str, status: int, detail: str,
     # Отличать «кого» в ключе можно и без базы — по токену сеанса, а без
     # него по адресу: разным людям с одной и той же ошибкой достанутся
     # разные ключи, а это всё, что от ключа требуется.
-    подавлено = _should_write((_кто(request), request.method, путь, status, detail[:120]))
+    # Each 5xx needs its own request ID, even if another request failed identically.
+    подавлено = 0 if status >= 500 else _should_write((_кто(request), request.method, путь, status, detail[:120]))
     if подавлено is None:
+        request.state.error_logged = True
         return
     user_id, user_name = _user_for_log(request)
     подробности = {
         "путь": путь,
         "метод": request.method,
         "код": status,
-        "сообщение": detail,
+        "сообщение": safe_text(detail),
+        "подсистема": "calc" if путь.startswith("/calc/") else "service",
+        "уровень": "ERROR" if status >= 500 else "WARNING",
     }
+    info = getattr(request.state, "service_event", {})
+    route = request.scope.get("endpoint")
+    if route:
+        подробности["обработчик"] = f"{route.__module__}.{route.__qualname__}"
+    if request.client:
+        подробности["клиент"] = request.client.host
     # Строка запроса — только у неуспехов: по ней видно, с какими
     # параметрами отчёт или выборка не открылись.
     if request.url.query:
-        подробности["параметры"] = request.url.query
+        подробности["параметры"] = safe_query(request.url.query)
     if trace:
-        подробности["трассировка"] = trace[-_TRACE_TAIL:]
+        подробности["трассировка"] = safe_text(trace)[-_TRACE_TAIL:]
+        if len(trace) > _TRACE_TAIL:
+            подробности["трассировка усечена"] = True
+    if exception_type:
+        подробности["тип ошибки"] = exception_type
     if подавлено:
         подробности["повторов подавлено"] = подавлено
     activity.log(
@@ -180,6 +197,8 @@ def _write(request, *, action: str, category: str, status: int, detail: str,
         user_id=user_id,
         user_name=user_name,
         entity_type="request",
+        request_id=info.get("request_id"),
+        duration_ms=round((time.perf_counter() - info["started"]) * 1000, 2) if info else None,
         new_value=f"{status} {request.method} {путь}",
         details=подробности,
     )
@@ -199,11 +218,12 @@ def note_exception(request, exc: BaseException) -> None:
         category=CATEGORY_ERROR,
         status=500,
         detail=f"{type(exc).__name__}: {exc}",
+        exception_type=type(exc).__name__,
         trace="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     )
 
 
-def note_http_error(request, status: int, detail: str) -> None:
+def note_http_error(request, status: int, detail: str, *, exc=None) -> None:
     """HTTPException: 5xx — сбой программы, 4xx — отказ."""
     ошибка = status >= 500
     _write(
@@ -212,6 +232,9 @@ def note_http_error(request, status: int, detail: str) -> None:
         category=CATEGORY_ERROR if ошибка else CATEGORY_DENIED,
         status=status,
         detail=detail,
+        exception_type=type(exc.__cause__ or exc.__context__ or exc).__name__ if exc is not None else None,
+        trace="".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        if status >= 500 and exc is not None and (exc.__cause__ or exc.__context__) else None,
     )
 
 

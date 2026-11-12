@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import math
 import threading
 import os
 import shutil
@@ -389,13 +390,8 @@ async def security_headers(request, call_next):
     # вкладка показывала старые).
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
-    # Неуспешный ответ — в журнал (2026-08-20). Здесь ловится ХВОСТ: то, до
-    # чего обработчики исключений ниже не доходят — отказ по размеру тела
-    # (его отдаёт посредник снаружи роутера), ответ, собранный роутом
-    # вручную. Уже записанное не дублируется: обработчик ставит на запрос
-    # отметку (app/error_log.note_response).
-    if response.status_code >= 400:
-        error_log.note_response(request, response.status_code)
+    # ServiceEventsMiddleware records unsuccessful responses, including
+    # those returned by outer middleware or assembled by a route manually.
     return response
 
 
@@ -409,7 +405,7 @@ async def security_headers(request, call_next):
 # событие. Иначе тексты ошибок в интерфейсе разъехались бы с привычными.
 @app.exception_handler(StarletteHTTPException)
 async def _log_http_exception(request: Request, exc: StarletteHTTPException):
-    error_log.note_http_error(request, exc.status_code, str(exc.detail))
+    error_log.note_http_error(request, exc.status_code, str(exc.detail), exc=exc)
     return await http_exception_handler(request, exc)
 
 
@@ -444,7 +440,10 @@ async def _log_unhandled_exception(request: Request, exc: Exception):
     этого обработчика, поэтому запись в журнал не отменяет привычного
     разбора по логам сервера."""
     error_log.note_exception(request, exc)
-    return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка сервера"})
+    request_id = getattr(request.state, "service_event", {}).get("request_id")
+    return JSONResponse(status_code=500,
+                        content={"detail": "Внутренняя ошибка сервера", "request_id": request_id},
+                        headers={"X-Request-ID": request_id} if request_id else None)
 
 
 # Сжатие текстовых ответов (gzip) — `/plan-data` весит ~18 МБ, в gzip ~0,9 МБ;
@@ -462,6 +461,10 @@ app.add_middleware(PerfMiddleware)
 # авторизации. Реализация — в app/upload_limits.py, там же объяснено,
 # почему это чистый ASGI-класс, а не @app.middleware.
 app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_UPLOAD_BYTES)
+
+from app.service_events import ServiceEventsMiddleware, install_logging  # noqa: E402
+app.add_middleware(ServiceEventsMiddleware)
+install_logging()
 
 # Режим «Зайти под пользователем» (2026-08-05) — разбор заголовка и установка
 # контекста запроса. ЧИСТЫЙ ASGI-класс, а не @app.middleware: тот работает
@@ -2882,6 +2885,14 @@ def post_activity(body: ClientEventsIn, user: sqlite3.Row = Depends(get_current_
 #   "num"  — точное число (идентификатор сущности);
 #   "min"  — «не меньше» (длительность: ищут «что тормозило дольше 500 мс»).
 _ACT_FILTERS = {
+    "id": "num",
+    "path": "like",
+    "method": "eq",
+    "status": "num",
+    "subsystem": "eq",
+    "level": "eq",
+    "logger": "like",
+    "exception_type": "like",
     "source": "eq",
     "category": "eq",
     "action": "eq",
@@ -2899,10 +2910,19 @@ _ACT_FILTERS = {
     "user_id": "num",
     "duration_ms": "min",
 }
+# Virtual fields preserve historical JSON events without rewriting the journal.
+_ACT_DETAIL_FIELDS = {
+    "path": "путь", "method": "метод", "status": "код", "subsystem": "подсистема",
+    "level": "уровень", "logger": "модуль", "exception_type": "тип ошибки",
+}
+_ACT_EXPRESSIONS = {
+    key: f"CASE WHEN json_valid(details) THEN json_extract(details, '$.\"{name}\"') END"
+    for key, name in _ACT_DETAIL_FIELDS.items()
+}
 # Колонки с выпадашкой — им сервер отдаёт наборы встретившихся значений.
 _ACT_DROPDOWNS = tuple(k for k, kind in _ACT_FILTERS.items() if kind == "eq")
 # Параметры запроса, которые отбором НЕ являются.
-_ACT_RESERVED = {"date_from", "date_to", "text", "limit", "offset"}
+_ACT_RESERVED = {"date_from", "date_to", "text", "limit", "offset", "detail_key", "detail_value"}
 
 
 @app.get("/activity")
@@ -2911,7 +2931,7 @@ def search_activity(
     date_from: Optional[str] = Query(None, description="'ГГГГ-ММ-ДД' включительно"),
     date_to: Optional[str] = Query(None, description="'ГГГГ-ММ-ДД' включительно"),
     text: Optional[str] = Query(None, description="подстрока в марке/типе/подтипе/значениях"),
-    limit: int = Query(200, le=2000),
+    limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     admin: sqlite3.Row = Depends(require_service_feature("activity_log", "read")),
 ):
@@ -2940,6 +2960,10 @@ def search_activity(
     # трактуем её как раньше, целыми сутками: так продолжают работать
     # прямые вызовы эндпоинта (curl, внешние скрипты).
     filters = {}
+    detail_key = request.query_params.get("detail_key", "").strip()
+    detail_value = request.query_params.get("detail_value", "")
+    if len(detail_key) > 128 or (detail_value and not detail_key):
+        raise HTTPException(400, "Укажите имя поля подробностей (до 128 символов)")
     for key, value in request.query_params.items():
         if key in _ACT_RESERVED:
             continue
@@ -2960,6 +2984,8 @@ def search_activity(
             if column == skip:
                 continue
             kind = _ACT_FILTERS[column]
+            field_name = column
+            column = _ACT_EXPRESSIONS.get(column, column)
             if value == PLACEMENT_NONE_SENTINEL:
                 # «Не заполнено» — тот же сентинел, что в справочнике
                 # элементов: у журнала пустых значений много (у системных
@@ -2972,29 +2998,39 @@ def search_activity(
             elif kind == "num":
                 if not str(value).lstrip("-").isdigit():
                     raise HTTPException(status_code=400,
-                                        detail=f"«{column}»: ожидается число, получено «{value}»")
+                                        detail=f"«{field_name}»: ожидается целое число")
+                if not -(2**63) <= int(value) < 2**63:
+                    raise HTTPException(400, f"«{field_name}»: число вне допустимого диапазона")
                 parts.append(f"{column} = ?")
                 params.append(int(value))
             elif kind == "min":
                 try:
                     порог = float(str(value).replace(",", "."))
+                    if not math.isfinite(порог) or порог < 0:
+                        raise ValueError
                 except ValueError:
                     raise HTTPException(status_code=400,
-                                        detail=f"«{column}»: ожидается число, получено «{value}»")
+                                        detail=f"«{field_name}»: ожидается неотрицательное конечное число")
                 parts.append(f"{column} >= ?")
                 params.append(порог)
+            elif field_name == "request_id":
+                parts.append("(request_id LIKE ? OR CASE WHEN json_valid(details) "
+                             "THEN json_extract(details, '$.http_request_id') END LIKE ?)")
+                params.extend([f"%{value}%"] * 2)
             else:
-                # Регистронезависимый поиск кириллицы SQLite без ICU не
-                # умеет (см. Docs/TZ.md), поэтому сравниваем как есть — для
-                # марок, кодов и значений этого достаточно: они хранятся в
-                # том виде, в каком их ищут.
-                parts.append(f"{column} LIKE ?")
+                parts.append(f"CASEFOLD(CAST({column} AS TEXT)) LIKE CASEFOLD(?)")
                 params.append(f"%{value}%")
         if text:
             like = f"%{text}%"
-            parts.append("(mark LIKE ? OR element_type LIKE ? OR subtype LIKE ? "
-                         "OR old_value LIKE ? OR new_value LIKE ? OR user_name LIKE ?)")
-            params.extend([like] * 6)
+            search_columns = ("mark", "element_type", "subtype", "old_value", "new_value",
+                              "user_name", "details", "request_id", "action", "category", "source",
+                              "at", "id", "entity_type", "entity_id", "user_id", "impersonator_name", "duration_ms")
+            parts.append("(" + " OR ".join(f"CASEFOLD(CAST({c} AS TEXT)) LIKE CASEFOLD(?)" for c in search_columns) + ")")
+            params.extend([like] * len(search_columns))
+        if detail_key:
+            parts.append("EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(details) THEN details ELSE '{}' END) j "
+                         "WHERE j.key = ? AND CASEFOLD(CAST(j.value AS TEXT)) LIKE CASEFOLD(?))")
+            params.extend([detail_key, f"%{detail_value}%"])
         return (f"WHERE {' AND '.join(parts)}" if parts else ""), params
 
     conn = get_connection()
@@ -3013,7 +3049,7 @@ def search_activity(
         # включён, набор считается своим запросом без её собственного
         # условия — иначе, выбрав значение, из него нельзя было бы выйти.
         наборы = {c: set() for c in _ACT_DROPDOWNS}
-        сводка = ", ".join(_ACT_DROPDOWNS)
+        сводка = ", ".join(_ACT_EXPRESSIONS.get(c, c) for c in _ACT_DROPDOWNS)
         for r in conn.execute(f"SELECT DISTINCT {сводка} FROM activity_log {where}", params):
             for i, column in enumerate(_ACT_DROPDOWNS):
                 if r[i] not in (None, ""):
@@ -3024,16 +3060,28 @@ def search_activity(
             sub_where, sub_params = clauses_for(skip=column)
             наборы[column] = {
                 r[0] for r in conn.execute(
-                    f"SELECT DISTINCT {column} FROM activity_log {sub_where}", sub_params)
+                    f"SELECT DISTINCT {_ACT_EXPRESSIONS.get(column, column)} FROM activity_log {sub_where}", sub_params)
                 if r[0] not in (None, "")
             }
         values = {c: sorted(v, key=str) for c, v in наборы.items()}
         # Список действий отдельным полем — прежний договор с клиентом
         # (выпадашка «Действие» в шапке формы) остаётся рабочим.
         actions = values["action"]
+        result_rows = []
+        for row in rows:
+            item = dict(row)
+            try:
+                detail = json.loads(item["details"] or "{}")
+            except (ValueError, TypeError):
+                detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
+            item.update({key: detail.get(name) for key, name in _ACT_DETAIL_FIELDS.items()})
+            result_rows.append(item)
         return {
             "total": total,
-            "rows": [dict(r) for r in rows],
+            "rows": result_rows,
+            "filters": _ACT_FILTERS,
             "actions": actions,
             "values": values,
             # Подписи — с сервера: реестр действий и категорий живёт в

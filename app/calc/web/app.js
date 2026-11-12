@@ -196,7 +196,7 @@ function matchesProductName(product, query){
   q('#pc-export').disabled=state.selected.length===0||state.exporting;
   q('#pc-export').textContent='XLSX · '+state.selected.length;
   q('#pc-export-materials').disabled=state.selected.length===0||state.exporting;
-  q('#pc-export-materials').textContent='Материалы XLSX · '+state.selected.length;
+  q('#pc-export-materials').textContent='Плоская XLSX · '+state.selected.length;
   {const vb=q('#pc-verify-selected');vb.disabled=state.selected.length===0;vb.textContent='Проверено · '+state.selected.length;}
   q('#pc-export-one').disabled=state.exporting;
   q('#pc-export-materials-one').disabled=state.exporting;
@@ -294,7 +294,7 @@ function matchesProductName(product, query){
    ]);
    if(quantities)for(const snapshot of snapshots){const entry=quantities.products[snapshot.product.id];snapshot.projectQuantity=entry?.quantity??null;snapshot.projectQuantityStatus=entry?.status;snapshot.quantityProjectName=quantities.project?.name;snapshot.exportReference=entry;}
    await window.CalcZhBIExport.download(snapshots,format);
-   status(format==='materials'?'Ведомость материалов сформирована. Изделий: '+snapshots.length+'.':'Книга сформирована. Листов: '+snapshots.length+'.');
+   status(format==='materials'?'Плоская выгрузка калькуляций сформирована. Изделий: '+snapshots.length+'.':'Книга сформирована. Листов: '+snapshots.length+'.');
   }catch(error){status(error.message||'Не удалось сформировать XLSX. Повторите выгрузку.',true);}
   finally{state.exporting=false;q('#pc-export').textContent='Выгрузить XLSX';updateSelection();}
  }
@@ -340,7 +340,7 @@ function matchesProductName(product, query){
    route.innerHTML=doc.stages.map(s=>`<li>${escapeHTML(s)}</li>`).join('');
   }else route.innerHTML=route.dataset.defaultRoute;
   root.querySelectorAll('[data-product]').forEach(b=>b.setAttribute('aria-pressed',Number(b.dataset.product)===state.product));
-  q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td class="pc-baseline-cell" data-base="${r.id}:qty">${number(r.qty)}</td><td class="pc-baseline-cell" data-base="${r.id}:rate">${money(r.rate)}</td><td class="pc-baseline-cell" data-base="${r.id}:amount">${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" inputmode="decimal" data-money'} min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
+  q('#pc-rows').innerHTML=rowData().map(r=>`<tr><td>${r.id.startsWith('extra')?`<input class="pc-extra-name" type="text" data-extra-name="${r.id}" maxlength="100" aria-label="Название дополнительной статьи" value="${escapeHTML(r.name)}">`:`<button class="pc-article cursor-interaction" data-detail="${r.id}" aria-expanded="false">${escapeHTML(r.name)}</button>`}</td><td>${escapeHTML(r.unit)}</td><td class="pc-baseline-cell" data-base="${r.id}:qty">${number(r.qty)}</td><td class="pc-baseline-cell" data-base="${r.id}:rate">${money(r.rate)}</td><td class="pc-baseline-cell" data-base="${r.id}:amount">${money(r.qty*r.rate)}</td>${['qty','rate','amount'].map(f=>`<td><input ${f==='qty'?'type="number"':'type="text" data-money'} inputmode="decimal" autocomplete="off" min="0" ${r.id==='profit'&&f==='qty'?'max="99.999999"':''} step="any" data-id="${r.id}" data-field="${f}" aria-label="${escapeHTML(r.name)}: моя ${f==='qty'?'норма':f==='rate'?'цена':'сумма'}" value="${escapeHTML(f==='qty'?(state.overrides[state.product][r.id]?.[f]??''):window.CalcZhBIMoney.editable(state.overrides[state.product][r.id]?.[f]??''))}"></td>`).join('')}</tr><tr class="pc-detail" id="pc-detail-${r.id}" hidden><td colspan="8">${escapeHTML(r.detail)}</td></tr>`).join('');
   q('#pc-calculation-heading').textContent=doc?.kind==='registry'?'Предварительная калькуляция на 1 изделие':'Калькуляция на 1 изделие';
   q('#pc-volume').textContent=p.volume?number(p.volume)+' м³':'Не задан';q('#pc-hours').textContent=doc?.kind==='registry'&&!p.hours?'Не задана':number(p.hours)+' чел·ч';
   // Первая загрузка отдаёт каталог без реестра расхождений (десятки МБ): он догружается для открытого изделия.
