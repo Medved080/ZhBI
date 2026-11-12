@@ -151,11 +151,12 @@ try{
  await page.locator('#v2-object-btn').click();await page.locator('[data-object-id="1"]').click();await page.locator('[data-go="ws-foreman"]').click();await page.locator('.ws-tabs [data-tab="snz"]').click();await waitRows(8);
  check('Returning to object restores its assignments',await rowField(5,'date').inputValue()==='2026-11-14');
  await page.route('**/me/permissions?object_id=1',async route=>{const r=await route.fetch(),body=await r.json();body.system_admin=false;body.features.status='read';await route.fulfill({response:r,json:body});});
- await page.route('**/objects/1/snz/state',async route=>{const r=await route.fetch(),body=await r.json();body.can_write=false;await route.fulfill({response:r,json:body});});
+ await page.route('**/objects/1/snz/state',async route=>{const r=await route.fetch(),body=await r.json();body.can_write=false;body.can_fact=false;await route.fulfill({response:r,json:body});});
  await page.reload();await page.locator('.ws-tabs [data-tab="snz"]').click();await waitRows(8);
- await page.locator('[data-snzi-check="5"]').check();await field('mode','date');
+ await page.locator('[data-snzi-check="5"]').check();await field('mode','');
  await page.locator('[data-snzi-fold] summary').click();
  await page.locator('[data-snzi-status]').getByText('Нет права изменять статусы на этом объекте.').waitFor();
+ check('Fact is read-only without status rights',!await page.locator('[data-snzf-action="save"]').isEnabled());
  check('Registry is read-only without planning rights',!await rowField(1,'date').isEnabled()&&!await rowField(1,'shift').isEnabled()&&!await rowField(1,'crew_id').isEnabled());
  check('Read-only rights allow filters but disable writes',!await page.locator('[data-snzi-action="plan"]').isEnabled()&&await page.locator('[data-snzi-status] form').count()===0);
  const ordinary=await browser.newPage({viewport:{width:1440,height:900}});

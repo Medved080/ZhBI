@@ -1,3 +1,4 @@
+import {createModelFact} from './snz-model-fact.js';
 import {snzErrorIssue} from './snz-validation.js';
 import {esc} from './screen-view.js';
 import {scopeFor, makeAssignmentState, editAssignmentState, isDay, READY} from './snz-workspace-core.js';
@@ -18,6 +19,10 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
   const currentRows=()=>data&&visible?data.elements.filter(e=>visible.has(e.id)):[];
   const isOpen=()=>!!root?.isConnected&&active;
   const installationCrews=()=>data?.state.crews.filter(c=>c.kind==='installation')||[];
+
+  const modelFact=createModelFact({api,getObjectId,getPicked:()=>[...picked],getSelectionCount,getState:()=>data,
+    refreshState:reload,isParentBusy:()=>saving||loading,clearSelection:()=>{setPicked([]);send('clearSelection');},onBusy:()=>render(),
+    onSaved:async result=>{send('applyElements',{items:result.updates});send('poll');await reload();}});
 
   function applyScope(force=false){
     if(!active||!data||object!==getObjectId()||!getScene()?.loaded||getScene()?.objectId!==object)return;
@@ -64,19 +69,20 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     const byId=allById(),lockedIds=new Set(data?.locked_element_ids||[]),count=getSelectionCount(),blocked=picked.some(id=>lockedIds.has(id)||byId.get(id)?.current_status!==READY),extra=holdSelection&&picked.length?' Выбор сохранён при смене отбора.':'';
     root.querySelector('[data-snzi-count]').textContent=`Выбрано: ${picked.length}.${extra}${visible?` Показано в реестре: ${visible.size}.`:''}`;
     root.querySelector('[data-snzi-hint]').textContent='Отбор дополняет фильтры слева. Бригада и смена отбирают существующие назначения. Пустая дата снимает только отбор по дате СНЗ.';
-    root.querySelectorAll('[data-snzi]').forEach(el=>el.disabled=saving);
-    root.querySelector('[data-snzi-status]').disabled=saving;
+    root.querySelectorAll('[data-snzi]').forEach(el=>el.disabled=saving||modelFact.isBusy());
+    root.querySelector('[data-snzi-status]').disabled=saving||modelFact.isBusy();
+    root.querySelector('[data-snz-open]').disabled=saving||modelFact.isBusy();
     const text=error||message||(loading?'Загрузка СНЗ…':''),result=root.querySelector('[data-snzi-result]');
     result.hidden=!text;result.textContent=text;result.setAttribute('role',error?'alert':'status');
-    root.querySelector('[data-snzi-action="plan"]').disabled=!data?.can_write||loading||saving||writeBlocked||!isDay(date)||!shift||!crewId||!picked.length||count>picked.length||blocked;
-    root.querySelector('[data-snzi-action="refresh"]').disabled=loading||saving;
-    root.querySelector('[data-snzi-action="clear"]').disabled=!picked.length||saving;
+    root.querySelector('[data-snzi-action="plan"]').disabled=!data?.can_write||loading||saving||writeBlocked||!isDay(date)||!shift||!crewId||!picked.length||count>picked.length||blocked||modelFact.isBusy();
+    root.querySelector('[data-snzi-action="refresh"]').disabled=loading||saving||modelFact.isBusy();
+    root.querySelector('[data-snzi-action="clear"]').disabled=!picked.length||saving||modelFact.isBusy();
     root.querySelector('[data-snzi-action="plan"]').textContent=saving?'Сохранение…':'Запланировать';
     root.querySelector('[data-snzi-rights]').hidden=!data||data.can_write;
-    renderStatus();renderRegister();
+    renderStatus();renderRegister();modelFact.render();
   }
   function rowHtml(e,assignments,selected,locked){
-    const a=assignments.get(e.id),disabled=!data.can_write||loading||saving||writeBlocked||locked.has(e.id)||e.current_status!==READY?'disabled':'';
+    const a=assignments.get(e.id),disabled=!data.can_write||loading||saving||modelFact.isBusy()||writeBlocked||locked.has(e.id)||e.current_status!==READY?'disabled':'';
     const rowInput=(field,value,attrs)=>`<input data-snzi-row="${field}" data-id="${e.id}" value="${esc(value??'')}" aria-label="${field==='date'?'Дата':field==='priority'?'Очередность':field} ${esc(e.mark||e.id)}" ${attrs} ${disabled}>`;
     const rowSelect=(field,rows,value,label)=>`<select data-snzi-row="${field}" data-id="${e.id}" aria-label="${label} ${esc(e.mark||e.id)}" ${disabled}>${options(rows,value)}</select>`;
     return `<tr aria-selected="${selected.has(e.id)}">
@@ -92,7 +98,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     if(!register)return;register.hidden=!active;if(!active)return;
     // Frequent scene snapshots must not replace an input while the user edits it.
     if(!saving&&register.contains(document.activeElement)&&document.activeElement.matches('[data-snzi-row]'))return;
-    const key=JSON.stringify([object,dataVersion,visibleVersion,loading,saving,writeBlocked,error,visible===null,page,picked,shift,crewId]);
+    const key=JSON.stringify([object,dataVersion,visibleVersion,loading,saving,modelFact.isBusy(),writeBlocked,error,visible===null,page,picked,shift,crewId]);
     if(key===rowsKey)return;rowsKey=key;
     const rows=currentRows(),totalPages=Math.max(1,Math.ceil(rows.length/60));page=Math.min(page,totalPages-1);
     const assignments=new Map((data?.state.assignments||[]).map(a=>[a.element_id,a]));
@@ -127,7 +133,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     });
   }
   async function persist(body,ids,text){
-    if(saving||loading||writeBlocked||!data?.can_write)return;
+    if(saving||modelFact.isBusy()||loading||writeBlocked||!data?.can_write)return;
     saving=true;error='';message='';render();const obj=getObjectId(),selection=[...picked];
     try{
       const result=await api.put(`/objects/${obj}/snz/state`,body);
@@ -146,12 +152,12 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     }finally{saving=false;rowsKey='';render();}
   }
   function planPicked(){
-    if(saving||loading||writeBlocked||!data?.can_write)return;
+    if(saving||modelFact.isBusy()||loading||writeBlocked||!data?.can_write)return;
     try{const ids=[...picked],body=makeAssignmentState(data,ids,{date,shift,crewId});persist(body,ids,`Запланировано изделий: ${ids.length}. ${day(date)} · ${shift==='day'?'День':'Ночь'}.`);}
     catch(e){error=e.message;render();}
   }
   function editRow(id,field,value){
-    if(saving||loading||writeBlocked||!data?.can_write)return;
+    if(saving||modelFact.isBusy()||loading||writeBlocked||!data?.can_write)return;
     try{const body=editAssignmentState(data,id,field,value,{shift,crewId});persist(body,[id],'Назначение изделия сохранено.');}
     catch(e){error=e.message;rowsKey='';render();}
   }
@@ -174,8 +180,8 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
         <div class="snzi-inline-actions"><button type="button" class="snzi-button" data-snzi-action="clear">Снять выбор</button><button type="button" class="snzi-button" data-snzi-action="refresh">Обновить</button></div>
         <div class="snzi-result" data-snzi-result hidden></div><p data-snzi-rights hidden>Нет права изменять плановые даты на этом объекте.</p>
         <p class="snzi-subtle">Дата, смена, бригада и очередность в строках реестра сохраняются при изменении. Для нового назначения сначала укажите дату. Неоднозначную карту уточните в расширенном планировании.</p>
-        </details></section>`;
-      root=host.querySelector('[data-snzi-root]');statusKey='';
+        </details><div data-snzi-fact-host></div></section>`;
+      root=host.querySelector('[data-snzi-root]');statusKey='';modelFact.mount(root.querySelector('[data-snzi-fact-host]'));
       root.querySelector('[data-snzi-fold]').addEventListener('toggle',e=>{statusOpen=e.target.open;});
       root.querySelector('[data-snzi-filter-fold]').addEventListener('toggle',e=>{filterOpen=e.target.open;});
       root.querySelector('[data-snzi-planning-fold]').addEventListener('toggle',e=>{planningOpen=e.target.open;});
@@ -217,8 +223,8 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     onElements(items){
       if(data){const map=allById();for(const x of items)if(map.has(x.id))Object.assign(map.get(x.id),x);dataVersion++;scopeKey='';applyScope();rowsKey='';render();}
     },
-    reload,refreshSoon,selectedIds:()=>[...picked],clearSelection(){setPicked([],false);},isBusy:()=>saving,
-    reset(){active=false;ticket++;clearTimeout(refreshTimer);refreshTimer=null;data=null;object=null;picked=[];holdSelection=false;sceneKey='';statusKey='';visible=null;scopeKey='';rowsKey='';error='';message='';loading=false;writeBlocked=false;mode='';filterCrew='';filterShift='';date=today();filterDate=today();shift='day';crewId='install1';root=null;if(register){register.innerHTML='';register.hidden=true;}},
-    destroy(){alive=false;ticket++;clearTimeout(refreshTimer);},
+    reload,refreshSoon,selectedIds:()=>[...picked],clearSelection(){setPicked([],false);},isBusy:()=>saving||modelFact.isBusy(),
+    reset(){modelFact.reset();active=false;ticket++;clearTimeout(refreshTimer);refreshTimer=null;data=null;object=null;picked=[];holdSelection=false;sceneKey='';statusKey='';visible=null;scopeKey='';rowsKey='';error='';message='';loading=false;writeBlocked=false;mode='';filterCrew='';filterShift='';date=today();filterDate=today();shift='day';crewId='install1';root=null;if(register){register.innerHTML='';register.hidden=true;}},
+    destroy(){modelFact.destroy();alive=false;ticket++;clearTimeout(refreshTimer);},
   };
 }

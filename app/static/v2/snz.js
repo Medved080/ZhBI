@@ -401,6 +401,11 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       await run(async()=>{const ext=action==='registry-pdf'?'pdf':'xlsx';const blob=await api.download(path()+`/registry.${ext}?date=${ordersDate}`,undefined,{method:"GET"});const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`СНЗ-за-день-${ordersDate}.${ext}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);});return;
     }
 
+    if (action==="close") { close();return; }
+    if (action==="save") { await run(save);return; }
+    if (action==="reload") { if ((dirty||editDirty()||factDirty())&&!window.confirm("Отменить несохранённые изменения и загрузить данные заново?"))return; await run(async()=>{factEdits.clear();factNotes.clear();await load();plan=null;orderEdit=null;revisions=null;});return; }
+    if (action==="preview") { await run(async()=>{plan=await api.post(path()+"/preview",{revision:data.revision,date,shift,crew_id:crewId,ignore_fact:ignoreFact});if(plan.id)message="СНЗ этой смены уже выдан: открыт сохранённый документ. Для исправления состава используйте «Редактировать».";});return; }
+
     if(action==='sequence-up'||action==='sequence-down'){
       if(!plan||plan.id||!canWrite()||dirty)return;
       await run(async()=>{

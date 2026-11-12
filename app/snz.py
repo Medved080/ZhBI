@@ -153,6 +153,10 @@ class ExtraFactIn(Strict):
     items: list[ExtraItemIn] = Field(min_length=1, max_length=500)
 
 
+class ModelFactIn(ExtraFactIn):
+    shift: Literal['day','night'] = Field(...)
+
+
 class CloseScopeIn(Strict):
     revision: int = Field(ge=0)
     date: DateValue | None = None
@@ -950,3 +954,30 @@ def export_daily_pdf(object_id: int, date: date, user=Depends(get_current_user))
         return Response(_plan_pdf(conn,object_id,order),media_type='application/pdf',
                         headers={'Content-Disposition':f'attachment; filename="SNZ-daily-{date.isoformat()}.pdf"'})
     finally:conn.close()
+
+
+@router.get("/facts/model-candidates")
+def model_fact_candidates(object_id: int,date: date,shift: Literal['day','night'],crew_id: str,user=Depends(get_current_user)):
+    from app.snz_model_fact import candidates
+    conn=get_connection()
+    try:
+        assert_object_feature(conn,user,object_id,'plan','read');state,revision=_load(conn,object_id)
+        return {'revision':revision,'items':candidates(conn,object_id,state,date.isoformat(),shift,crew_id),
+                'can_fact':has_feature(conn,user,'status','write',object_id)}
+    finally:conn.close()
+
+
+@router.post("/facts/model")
+def complete_model_fact(object_id: int,body: ModelFactIn,user=Depends(get_current_user)):
+    from app.snz_model_fact import apply
+    conn=get_connection();events=activity.defer_begin()
+    try:
+        begin_write(conn);assert_object_feature(conn,user,object_id,'status','write')
+        state,revision=_load(conn,object_id);result=apply(conn,object_id,state,revision,body,user)
+        conn.commit();activity.defer_flush(events)
+        if not result.get('already_completed'):
+            activity.log('snz_fact',user=user,entity_type='object',entity_id=object_id,
+                         details={'action':'model','date':body.date.isoformat(),'shift':body.shift,'crew_id':body.crew_id,
+                                  'confirmed':result['confirmed'],'extra':result['extra']})
+        return result
+    finally:activity.defer_end(events);conn.close()
