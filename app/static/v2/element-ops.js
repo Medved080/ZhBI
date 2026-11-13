@@ -1,3 +1,4 @@
+import { openWorkGroups } from './work-groups.js';
 import { mountInstallationDate } from "../planned-installation.js";
 // Операции над изделиями на схеме (модель ЖБИ, АРМ прораба): карточка выбранного изделия и панель группового выделения.
 //
@@ -87,14 +88,14 @@ export function createElementOps(ctx) {
   const sw = (k) => statusColor(k);
 
   // ------------------------------------------------------------ права (по объекту, как в V1: раздел + порог «запись»)
-  const R = { loaded: false, status: false, plannedDate: false, schedule: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false };
+  const R = { zones:false, loaded: false, status: false, plannedDate: false, schedule: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false };
   function setRights(r) {
     const can = (k) => !!r && (!!r.system_admin || (r.features?.[k] === "write" && !(r.not_applicable || []).includes(k)));
-    Object.assign(R, { loaded: true, status: can("status"), plannedDate: can("planned_date"), schedule: can("schedule"), comment: can("comment"), history: can("history"), fields: can("element_fields"),
+    Object.assign(R, { zones:can("zones"), loaded: true, status: can("status"), plannedDate: can("planned_date"), schedule: can("schedule"), comment: can("comment"), history: can("history"), fields: can("element_fields"),
       attachments: can("attachments"), attachmentsDelete: can("attachments_delete") });
     repaint();
   }
-  function rightsFailed() { Object.assign(R, { loaded: true, status: false, plannedDate: false, schedule: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false }); repaint(); }
+  function rightsFailed() { Object.assign(R, { zones:false, loaded: true, status: false, plannedDate: false, schedule: false, comment: false, history: false, fields: false, attachments: false, attachmentsDelete: false }); repaint(); }
 
   // ------------------------------------------------------------ состояние форм (по изделию: переключение выбора не теряет ввод)
   const forms = new Map();
@@ -286,9 +287,10 @@ export function createElementOps(ctx) {
         <div class="ws-type">${esc(e.element_type)}${e.subtype ? ` <span class="v2-muted">· ${esc(e.subtype)}</span>` : ""}</div>
         <div class="ws-chip"><i class="ws-sw" style="background:${esc(sw(e.current_status))}"></i>${esc(statusLabel(e.current_status))}</div></div>
       ${topExtra || ""}
+      ${R.zones ? '<div class="ws-actions"><button type="button" class="v2-btn" data-eo="work-group">Назначить захватку</button></div>' : ""}
       <div class="ws-actions"><button type="button" class="v2-btn" data-act="locate">Показать на схеме</button><button type="button" class="v2-btn" data-act="clear-all">Снять выбор</button>${R.fields ? `<button type="button" class="v2-btn" data-eo="ef-open">Форма элемента…</button>` : ""}</div>
       ${f.ef.done ? `<p class="ws-ok" role="status">${esc(f.ef.done)}</p>` : ""}
-      <h4>Размещение</h4><dl class="ws-dl">${e.element_uid ? `<div class="ws-kv ws-guid"><dt>GUID</dt><dd>${esc(e.element_uid)}</dd></div>` : ""}${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Захватка", z.zakhvatka)}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
+      <h4>Размещение</h4><dl class="ws-dl">${e.element_uid ? `<div class="ws-kv ws-guid"><dt>GUID</dt><dd>${esc(e.element_uid)}</dd></div>` : ""}${row("Адрес по осям", e.address)}${row("Этаж", e.floor)}${row("Отметка, мм", e.elevation_mm)}${row("Группа работ", e.workGroupName)}${row("Захватка", z.zakhvatka)}${row("Назначение захватки", e.capture_assignment_mode === "manual" ? "Вручную" : "По контуру")}${row("Кран", z.crane)}${row("Стоянка", z.stance)}</dl>
       <h4>Мини-карта</h4>${miniMapHtml(f)}
       <h4>Контрактация</h4><dl class="ws-dl">${contractBlock}</dl>
       ${canContract ? `<div class="ws-actions"><button type="button" class="v2-btn" data-eo="ct-pick" ${f.ct.busy ? "disabled" : ""}>${e.contract_id ? "Изменить контракт…" : "Назначить контракт…"}</button></div>` : ""}
@@ -1099,13 +1101,14 @@ export function createElementOps(ctx) {
     if (!a) return "";
     const n = sc().multi.count;
     const btn = (k, text, can) => `<button type="button" class="v2-btn ${k === "status" ? "v2-primary" : ""}" data-eo-bar="${k}" ${a.ok && can ? "" : "disabled"} ${a.ok ? (can ? "" : 'title="Нет права на эту операцию"') : `title="${esc(a.why)}"`}>${text}</button>`;
-    return `<div class="eo-bar-row"><span class="eo-bar-n">Выделено: <b>${nf(n)}</b></span>${btn("status", "Изменить статус", R.status)}${btn("planned", "Плановая дата поставки", R.plannedDate)}
+    return `<div class="eo-bar-row"><span class="eo-bar-n">Выделено: <b>${nf(n)}</b></span>${btn("status", "Изменить статус", R.status)}${btn("planned", "Плановая дата поставки", R.plannedDate)}${R.zones ? '<button type="button" class="v2-btn" data-eo-bar="work-group">Назначить захватку</button>' : ""}
       <button type="button" class="v2-btn eo-bar-x" data-eo-bar="clear" title="Снять выбор" aria-label="Снять выбор">✕</button></div>${withBanner ? bannerHtml() : ""}`;
   }
   function bindMultiBar(root) {
     root.querySelectorAll("[data-eo-bar]").forEach((b) => b.addEventListener("click", () => {
       const k = b.dataset.eoBar;
-      if (k === "clear") send("clearSelection");
+      if (k === "work-group") openCaptureAssignments();
+      else if (k === "clear") send("clearSelection");
       else openGroupDialog(k);
     }));
     root.querySelectorAll('[data-eo="banner-x"]').forEach((b) => b.addEventListener("click", () => { setBanner("", ""); repaint(); }));
@@ -1153,7 +1156,15 @@ export function createElementOps(ctx) {
   }
 
   // ================================================================ привязка обработчиков
+  function openCaptureAssignments() {
+    if (!R.zones) return;
+    const scene = sc();
+    const ids = scene?.multiIds?.length ? scene.multiIds : scene?.selected ? [scene.selected.id] : [];
+    openWorkGroups({ api, objectId:getObjectId(), canEdit:true, initialIds:ids,
+      onSaved:() => { send('reload'); if (scene?.selected?.id) reloadDetail(scene.selected.id); } });
+  }
   function bind(body, {statusOnly=false,statusFormId="ws-sform"}={}) {
+    body.querySelectorAll('[data-eo="work-group"]').forEach(button => button.addEventListener('click', openCaptureAssignments));
     const s = sc();
     const id = s?.selected?.id;
     body.querySelectorAll("[data-install-date]").forEach((host) => {

@@ -80,6 +80,7 @@ from app.crane_zone_versions import ensure_baselines as _ensure_crane_zone_basel
 from app.crane_zone_transition import transition_pending as _transition_crane_stances
 from app.db import get_connection
 from app.snz_catalogs import fill_initial_catalogs as _fill_snz_initial_catalogs
+from app.work_groups import migrate as _fill_zhbi_work_groups
 
 router = APIRouter(tags=["release"])
 
@@ -1639,6 +1640,10 @@ RELEASE_TASKS = [
      "why": "Добавить согласованные операции, звенья и проверенные нормативы из операционных карт ЖБИ; "
             "неоднозначные значения оставить для уточнения, сохранив ручные настройки и выданные СНЗ",
      "kind": KIND_DATA, "run": _fill_snz_initial_catalogs},
+    {"name": "2026-11-13-zhbi-work-groups", "version": code_version(), "date": "2026-11-13",
+     "title": "Группы работ ЖБИ и фасадных панелей",
+     "why": "Разделить захватки каркаса и фасада с сохранением прежних назначений в истории",
+     "kind": KIND_DATA, "run": _fill_zhbi_work_groups},
 ]
 
 

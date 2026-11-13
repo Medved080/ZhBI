@@ -317,17 +317,20 @@ def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id,
     а записать нужно и запись справочника (elements.zone_*_id), и — для
     стоянки — ярус внутри неё (zone_stance_level_id, решение З10): после
     склейки ярусов в одну запись справочника ярус иначе потерялся бы."""
+    work_group_ids = []
     for record in element_records:
-        if not record.zone_bindings:
-            continue
         element_row = conn.execute(
-            "SELECT id FROM elements WHERE source_file = ? AND dxf_handle = ?",
+            "SELECT id,work_group_id FROM elements WHERE source_file = ? AND dxf_handle = ?",
             (source_file, record.id),
         ).fetchone()
         if not element_row:
             continue
         updates = {"element_id": element_row["id"]}
-        for category, result in record.zone_bindings.items():
+        if element_row['work_group_id'] is not None:
+            work_group_ids.append(element_row['id'])
+        for category, result in (record.zone_bindings or {}).items():
+            if category == 'Захватка' and element_row['work_group_id'] is not None:
+                continue
             if allowed_categories is not None and category not in allowed_categories:
                 continue
             id_col, status_col = _ZONE_CATEGORY_COLUMNS[category]
@@ -340,6 +343,11 @@ def apply_zone_bindings(conn, source_file, element_records, zone_handle_to_id,
         set_clause = ", ".join(f"{col}=:{col}" for col in updates if col != "element_id")
         if set_clause:
             conn.execute(f"UPDATE elements SET {set_clause} WHERE id=:element_id", updates)
+    if work_group_ids:
+        from app.work_groups import recalculate
+        objects = {r[0] for r in conn.execute('SELECT DISTINCT object_id FROM elements WHERE source_file=?', (source_file,))}
+        for oid in objects:
+            recalculate(conn, oid, ids=work_group_ids)
     conn.commit()
 
 

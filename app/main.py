@@ -543,6 +543,8 @@ app.include_router(procurement_router)
 app.include_router(pp_router)
 app.include_router(contracting_plan_router)
 app.include_router(shaft_panels_router)
+from app.work_groups_api import router as work_groups_router
+app.include_router(work_groups_router)
 
 # Калькулятор: роуты /calc/*, приём и отправка пакетов, статические файлы. Права —
 # разделы calc и calc_sync (app/features.py), роль «Калькулятор».
@@ -3201,8 +3203,9 @@ def get_changes(
         # в реальном времени (аудит безопасности 2026-08-03).
         _guard_source_file(conn, user, source_file, "plan", "read")
         server_time = conn.execute("SELECT datetime('now') AS t").fetchone()["t"]
+        capture_revision = conn.execute('SELECT COALESCE(MAX(id),0) FROM work_group_history WHERE object_id=(SELECT object_id FROM elements WHERE source_file=? LIMIT 1)', (source_file,)).fetchone()[0]
         if not since:
-            return {"server_time": server_time, "elements": []}
+            return {"server_time": server_time, "elements": [], "capture_revision":capture_revision}
         # Сравнение НЕСТРОГОЕ (>=), и это не описка. `updated_at` и
         # `server_time` — оба `datetime('now')`, то есть с точностью до
         # СЕКУНДЫ. При строгом `>` правка, попавшая в ту же секунду, что и
@@ -3216,13 +3219,14 @@ def get_changes(
         # уведомление). Терять правки ради экономии одного повтора нельзя.
         rows = conn.execute(
             "SELECT id, current_status, contract_id, planned_delivery_date, planned_installation_date, "
-            "actual_delivery_date, project_delivery_date, project_smr_start_date, updated_at "
+            "actual_delivery_date, project_delivery_date, project_smr_start_date, work_group_id, capture_assignment_mode, zone_zakhvatka_id, zone_zakhvatka_status, updated_at "
             f"FROM elements WHERE source_file = ? AND updated_at >= ? "
             f"AND {visible_elements_clause()} ORDER BY updated_at",
             (source_file, since),
         ).fetchall()
         return {
             "server_time": server_time,
+            "capture_revision": capture_revision,
             "elements": [enrich_element_row(conn, dict(r)) for r in rows],
         }
     finally:
@@ -3659,7 +3663,7 @@ def list_zones(
 
         return [
             ZoneOut(
-                id=r["id"], category=r["category"], number=r["number"], name=r["name"],
+                id=r["id"], category=r["category"], number=r["number"], name=r["name"], work_group_id=r["work_group_id"], capture_source=r["capture_source"],
                 parent_zone_id=r["parent_zone_id"], parent_name=r["parent_name"],
                 is_current=bool(r["is_current"]), match_status=r["match_status"],
                 levels=levels_by_zone.get(r["id"], []),
@@ -3863,6 +3867,24 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(ge
                 detail="Краны и стоянки этого объекта ведутся редакциями. "
                        "Откройте «Зоны кранов» и создайте черновик новой редакции.",
             )
+        if zone['category'] == 'Захватка' and zone['work_group_id'] is not None:
+            from app import work_groups
+            begin_write(conn)
+            current = next(z for z in work_groups.zone_catalog(conn, zone['object_id']) if z['id']==zone_id)
+            prior_levels = {level['elevation_mm']:level for level in current['levels']}
+            levels = []
+            for level in body.levels:
+                values = level.model_dump()
+                if 'upper_elevation_mm' not in level.model_fields_set:
+                    values['upper_elevation_mm'] = prior_levels.get(level.elevation_mm,{}).get('upper_elevation_mm')
+                levels.append(values)
+            current.update(name=body.name,number=body.number,levels=levels)
+            result = work_groups.apply_action(conn,zone['object_id'],{'action':'zone','zone':current},audit_display_name(admin))
+            conn.commit()
+            payload = next(z for z in list_zones(zone['category'],True,zone['object_id'],admin) if z.id==zone_id).model_dump()
+            payload.update(recalculated=result['changed'],recalc_refused=None,can_undo=True)
+            activity.log('zone_edit',user=admin,entity_type='zone',entity_id=zone_id,new_value=body.name,details={'recalculated_elements':result['changed']})
+            return payload
         _validate_zone_edit(conn, zone, body)
 
         before = {
@@ -3930,7 +3952,7 @@ def update_zone(zone_id: int, body: ZonePatchIn, admin: sqlite3.Row = Depends(ge
             "recalc_refused": recalc.get("refused"),
         },
     )
-    result = next(z for z in list_zones(zone["category"], True, admin) if z.id == zone_id)
+    result = next(z for z in list_zones(zone["category"], True, zone["object_id"], admin) if z.id == zone_id)
     # Числа пересчёта прикладываем к ответу: форма показывает их сразу, не
     # отдельным запросом.
     payload = result.model_dump()
@@ -3956,6 +3978,16 @@ def undo_zone_edit(zone_id: int, admin: sqlite3.Row = Depends(get_current_user))
                 status_code=409,
                 detail="Откат крановой зоны выполняется новой редакцией, а не старой командой отмены.",
             )
+        if zone['category'] == 'Захватка':
+            from app import work_groups
+            begin_write(conn)
+            edits = conn.execute("SELECT id,after_json FROM work_group_history h WHERE object_id=? AND action='zone' AND NOT EXISTS(SELECT 1 FROM work_group_history undone WHERE undone.object_id=h.object_id AND undone.action='zone_undo' AND json_extract(undone.before_json,'$.history_id')=h.id) ORDER BY id DESC",(zone['object_id'],))
+            history_id = next((r['id'] for r in edits if json.loads(r['after_json']).get('id')==zone_id),None)
+            if history_id is not None:
+                restored = work_groups.apply_action(conn,zone['object_id'],{'action':'undo_zone','history_id':history_id},audit_display_name(admin))
+                conn.commit()
+                activity.log('zone_edit_undo',user=admin,entity_type='zone',entity_id=zone_id)
+                return {'restored':True,'elements':restored['changed']}
         result = zone_recalc.undo(conn, zone_id)
     finally:
         conn.close()
@@ -5393,6 +5425,8 @@ def create_object(body: ObjectCreateIn, admin: sqlite3.Row = Depends(require_ser
         )
         new_id = conn.execute("SELECT id FROM objects WHERE name = ?", (name,)).fetchone()["id"]
         object_team.write_team(conn, new_id, {k: v for k, v in правки_команды.items() if v is not None})
+        from app.work_groups import ensure_object
+        ensure_object(conn, new_id)
         team_access.sync_all(conn, [new_id])   # директор СМУ нового объекта тоже даёт права по команде (B2)
         conn.commit()
     finally:
@@ -5871,11 +5905,11 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             ).fetchone() is not None
             file_zones = []
             for r in conn.execute(
-                "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, "
+                "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, z.work_group_id,z.capture_floor, "
                 "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
                 "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
                 "WHERE z.object_id IS ? AND z.is_current = 1 AND l.is_reference = 0 "
-                "AND (l.source_file = ? OR (? AND z.category IN ('Кран', 'Стоянка')))",
+                "AND (l.source_file = ? OR z.category='Захватка' OR (? AND z.category IN ('Кран', 'Стоянка')))",
                 (item_object_id, item.source_file, 1 if ready else 0),
             ).fetchall():
                 if r["level_id"] in seen_level_ids:
@@ -6066,6 +6100,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         shape_rows = conn.execute("SELECT layer, element_type, shape FROM element_shapes").fetchall()
         element_shapes = {f"{r['layer']} {r['element_type']}": r["shape"] for r in shape_rows}
         perf_core.mark("контракты, подписи, формы: выборка и сборка")
+        plan_work_groups = [dict(r) for r in conn.execute('SELECT id,name,group_key FROM work_groups WHERE object_id=?', (plan_object_id,))]
     finally:
         conn.close()
 
@@ -6121,6 +6156,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         "default_contracts": default_contracts,
         "contract_line_totals": contract_line_totals,
         "element_shapes": element_shapes,
+        "work_groups": plan_work_groups,
         "zones": zones,
     })
 

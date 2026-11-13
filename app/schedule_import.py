@@ -276,7 +276,7 @@ def import_schedule(conn, parsed: dict, user=None, request_id: str = None,
     for row in rows:
         candidates = conn.execute(
             f"""
-            SELECT e.id, e.manual_fields, zc.name AS crane_name, zs.name AS stance_name,
+            SELECT e.id, e.manual_fields, e.work_group_id, zc.name AS crane_name, zs.name AS stance_name,
                    zz.name AS zakhvatka_name
             FROM elements e
             LEFT JOIN zones zc ON zc.id = e.zone_crane_id AND e.zone_crane_status = 'matched'
@@ -302,6 +302,9 @@ def import_schedule(conn, parsed: dict, user=None, request_id: str = None,
             return True
 
         matched = [c for c in candidates if подходит(c)]
+        if len({c['work_group_id'] for c in matched if c['work_group_id'] is not None}) > 1:
+            unmatched_blocks.append(f"{row['type_subtype_raw']} — строка относится к нескольким группам работ. Уточните объект, тип и подтип")
+            continue
 
         if not matched:
             unmatched_blocks.append(

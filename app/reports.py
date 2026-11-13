@@ -204,12 +204,12 @@ def build_status_report(conn, source_file: Optional[str], element_ids: Optional[
 
     rows = conn.execute(
         f"""
-        SELECT z.name AS zakhvatka, e.floor AS floor, e.element_type AS element_type,
+        SELECT CASE WHEN EXISTS(SELECT 1 FROM zones duplicate WHERE duplicate.object_id=z.object_id AND duplicate.category='Захватка' AND duplicate.name=z.name AND duplicate.work_group_id<>z.work_group_id) THEN (SELECT name FROM work_groups WHERE id=z.work_group_id)||' / '||z.name ELSE z.name END AS zakhvatka, e.floor AS floor, e.element_type AS element_type,
                e.subtype AS subtype, e.current_status AS status, COUNT(*) AS n
         FROM elements e
         LEFT JOIN zones z ON z.id = e.zone_zakhvatka_id
         {where}
-        GROUP BY z.name, e.floor, e.element_type, e.subtype, e.current_status
+        GROUP BY z.id, e.floor, e.element_type, e.subtype, e.current_status
         """,
         params,
     ).fetchall()

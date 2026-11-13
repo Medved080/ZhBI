@@ -133,7 +133,7 @@ def build_wbs(conn: sqlite3.Connection, object_id: int, skip_installed: bool = T
     rows = conn.execute(
         f"""
         SELECT e.id, e.element_type, e.subtype, e.floor,
-               zc.name AS crane, zs.name AS stance, zz.name AS zakhvatka
+               zc.name AS crane, zs.name AS stance, CASE WHEN EXISTS(SELECT 1 FROM zones duplicate WHERE duplicate.object_id=zz.object_id AND duplicate.category='Захватка' AND duplicate.name=zz.name AND duplicate.work_group_id<>zz.work_group_id) THEN (SELECT name FROM work_groups WHERE id=zz.work_group_id)||' / '||zz.name ELSE zz.name END AS zakhvatka
         FROM elements e
         LEFT JOIN zones zc ON zc.id = e.zone_crane_id AND e.zone_crane_status = 'matched'
         LEFT JOIN zones zs ON zs.id = e.zone_stance_id AND e.zone_stance_status = 'matched'

@@ -69,7 +69,8 @@ def plan_pages(order, context, zones=(), max_labels=None, floor_levels=()):
     by_id = {z['id']: z for z in zones}
     by_name = defaultdict(list)
     for zone in zones:
-        by_name[zone['name']].append(zone)
+        if zone.get('group_key') in (None, 'zhbi'):
+            by_name[zone['name']].append(zone)
     floors = defaultdict(dict)
     for eid, item in active.items():
         floors[item.get('floor')][eid] = item
@@ -84,12 +85,23 @@ def plan_pages(order, context, zones=(), max_labels=None, floor_levels=()):
             if zone is None:
                 unknown.append(item)
             else:
-                captures[zone['id']] = zone
+                captures[zone['id']] = {**zone, 'name':item.get('zakhvatka') or zone['name']}
         for zone in captures.values():
-            poly = outline(zone.get('outline_json'))
-            if poly:
-                shape = Polygon(poly)
-                regions.append(shape if shape.is_valid else box(*shape.bounds))
+            contours = []
+            for level in zone.get('levels', []):
+                low, high = level.get('elevation_mm'), level.get('upper_elevation_mm')
+                related_members = [e for e in members.values() if e.get('zone_zakhvatka_id') == zone['id']]
+                if any((low is None and high is None) or (e.get('elevation_mm') is not None
+                       and (low is None or e['elevation_mm'] >= low)
+                       and (high is None or e['elevation_mm'] < high)) for e in related_members):
+                    contours.append(level['outline'])
+            if not contours:
+                poly = outline(zone.get('outline_json'))
+                if poly: contours.append(poly)
+            if contours:
+                for poly in contours:
+                    shape = Polygon(poly)
+                    regions.append(shape if shape.is_valid else box(*shape.bounds))
             else:
                 related = [e for e in [*backdrop, *members.values()]
                            if e.get('zone_zakhvatka_id') == zone['id']

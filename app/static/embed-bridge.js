@@ -62,7 +62,7 @@
   // Поля выбранного элемента для панели V2 — только скаляры (строки/числа/даты), ровно те, что движок показывает в своей карточке.
   const ELEMENT_FIELDS = ["id", "element_type", "subtype", "mark", "address", "layer", "current_status", "floor", "elevation_mm", "source_file",
     "planned_delivery_date", "planned_installation_date", "actual_delivery_date", "project_smr_start_date", "project_delivery_date", "contract_id", "comment", "x", "y", "object_id",
-    "element_uid"];   // GUID изделия — строка «GUID» в «Размещении» панели V2 (2026-10-09: «в свойствах изделия не нашёл GUID»)
+    "work_group_id", "capture_assignment_mode", "element_uid"];   // GUID изделия — строка «GUID» в «Размещении» панели V2 (2026-10-09: «в свойствах изделия не нашёл GUID»)
   function elementInfo(e) {
     if (!e) return null;
     const out = {};
@@ -70,6 +70,7 @@
     const c = e.contract_id ? state.contracts.find((x) => x.id === e.contract_id) : null;
     out.contractName = c ? (c.name || null) : null;
     out.supplier = c ? (c.counterparty_short_name || null) : null;
+    out.workGroupName = state.workGroups?.find(g => g.id === e.work_group_id)?.name || null;
     out.zones = {
       zakhvatka: e.zone_zakhvatka_id ? zoneNameById(e.zone_zakhvatka_id) : null,
       crane: e.zone_crane_id ? zoneNameById(e.zone_crane_id) : null,
@@ -583,6 +584,7 @@
     return {
       guid: { text: state.guidFilter.text, tokens: gi.tokens.length, ignored: gi.ignored, found: guidFound },
       groups: [
+        flatGroup("workGroup", "Группа работ", workGroupLabelFor),
         flatGroup("zakhvatka", "Захватка", zoneLabelFor),
         craneGroup(),
         flatGroup("floor", "Этаж", floorLabelFor, { compareRaw: true }),

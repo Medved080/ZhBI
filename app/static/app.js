@@ -206,7 +206,7 @@ let state = {
   // ИСКЛЮЧЁННЫХ значений (пусто = категория не фильтрует ничего). См.
   // renderPlacementFilters/applyPlacementFilters, Docs/backlog.md.
   placementFilters: {
-    zakhvatka: new Set(), crane: new Set(), stance: new Set(), elevation: new Set(), floor: new Set(),
+    workGroup: new Set(), zakhvatka: new Set(), crane: new Set(), stance: new Set(), elevation: new Set(), floor: new Set(),
     elementType: new Set(), subtype: new Set(), mark: new Set(), status: new Set(),
     supplier: new Set(), contract: new Set(),
   },
@@ -281,7 +281,7 @@ let state = {
     active: false,
     sel: {
       elementType: new Set(), subtype: new Set(), mark: new Set(),
-      zakhvatka: new Set(), crane: new Set(), stance: new Set(), floor: new Set(),
+      workGroup: new Set(), zakhvatka: new Set(), crane: new Set(), stance: new Set(), floor: new Set(),
       // Контракт — такой же срез, как остальные, но живёт не в левой
       // панели, а в своей области справа от схемы (см. renderPickerContracts).
       contract: new Set(),
@@ -2087,6 +2087,7 @@ function renderZones() {
   const baseFontSize = xs.length ? (Math.max(...xs) - Math.min(...xs)) * 0.01 : 100;
 
   for (const zone of state.zones) {
+    if (zone.category === "Захватка" && state.placementFilters.workGroup.has(zone.work_group_id)) continue;
     // "Стоянка" — своя, более гранулярная видимость (конкретная стоянка
     // конкретного крана, opt-in), не общий тумблер категории — см.
     // state.stanceZoneVisible/renderStanceZoneToggles, Docs/backlog.md.
@@ -2453,6 +2454,7 @@ function supplierFilterValue(element) {
 // Единый список определений категорий — используется и для проверки
 // "проходит ли элемент фильтр", и для расчёта доступности значений.
 const PLACEMENT_FILTER_DEFS = [
+  { key: "workGroup", valueFn: e => e.work_group_id || PLACEMENT_NONE },
   { key: "zakhvatka", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status") },
   { key: "crane", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status") },
   { key: "stance", valueFn: stanceFilterValue },
@@ -2664,6 +2666,7 @@ function allValuesFor(key) {
   if (category) {
     for (const z of state.zones) {
       if (z.category !== category) continue;
+      if (category === "Захватка" && state.placementFilters.workGroup.has(z.work_group_id)) continue;
       // "Стоянка" — логический ключ (кран, имя), не id зоны — иначе
       // пустая стоянка (без элементов) без этого добавления пропала бы
       // из списка отдельно на КАЖДОМ ярусе, дублируя пункт, см.
@@ -2689,7 +2692,11 @@ function allValuesFor(key) {
   // список пунктов ещё и менялся по мере работы (живой запрос
   // пользователя). Легенда статусов рядом всегда показывала все семь.
   if (key === "status") { for (const s of state.statusOrder) set.add(s); }
-  for (const e of state.elements) set.add(def.valueFn(e));
+  if (key === "workGroup") for (const g of state.workGroups || []) set.add(g.id);
+  for (const e of state.elements) {
+    if (key === "zakhvatka" && state.placementFilters.workGroup.has(e.work_group_id)) continue;
+    set.add(def.valueFn(e));
+  }
   return set;
 }
 
@@ -2873,6 +2880,7 @@ function applyPlacementFiltersImpl(rebuild3D = true) {
 // в state.placementFilters, поэтому полная перерисовка чекбоксов не
 // теряет отметки пользователя.
 function onPlacementFilterChange() {
+  renderZones();
   applyPlacementFilters();
   renderLegend();
   renderPlacementFilters();
@@ -3860,10 +3868,12 @@ const contractLabelFor = v => {
   return c ? c.name : `контракт #${v}`;
 };
 const elementTypeLabelFor = v => v;
+const workGroupLabelFor = v => state.workGroups?.find(g => g.id === v)?.name || "Без группы";
 
 // Ключ категории → как её назвать в строке состояния и как подписать её
 // значения. Порядок — как в форме фильтров.
 const PLACEMENT_CATEGORY_INFO = [
+  ["workGroup", "Группа работ", workGroupLabelFor],
   ["zakhvatka", "Захватка", zoneLabelFor],
   ["crane", "Кран", zoneLabelFor],
   ["stance", "Стоянка", stanceLabelFor],
@@ -3931,6 +3941,7 @@ function renderPlacementFilters() {
   });
   container.appendChild(resetBtn);
   container.appendChild(buildGuidFilterBox());
+  container.appendChild(buildFilterGroup("Группа работ", "workGroup", allValuesFor("workGroup"), state.placementFilters.workGroup, workGroupLabelFor, enabledFor("workGroup"), onPlacementFilterChange));
 
   container.appendChild(buildFilterGroup(
     "Захватка", "zakhvatka", allValuesFor("zakhvatka"), state.placementFilters.zakhvatka, zoneLabelFor, enabledFor("zakhvatka"), onPlacementFilterChange
@@ -4180,6 +4191,7 @@ const PICKER_SLICERS = [
   // кранами (проверено на графике СМР: стоянки 4, 5, 10, 11, 16, 17 у
   // каждого из трёх кранов относятся к двум захваткам сразу). Порядок в
   // панели тот же, что в фильтрах «Модели»: захватка → кран → стоянка.
+  { key: "workGroup", title: "Группа работ", valueFn: e => e.work_group_id || PLACEMENT_NONE, labelFor: workGroupLabelFor },
   { key: "zakhvatka", title: "Захватка", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status"), labelFor: zoneLabelFor },
   { key: "crane", title: "Кран", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status"), labelFor: zoneLabelFor },
   // Стоянка — тоже с владельцем в подписи, и по той же причине, что и
@@ -7538,11 +7550,13 @@ window.addEventListener("pagehide", () => {
 const POLL_INTERVAL_MS = 15000;
 let pollTimer = null;
 let lastServerTime = null;
+let lastCaptureRevision = null;
 let pollInFlight = false;
 
 // Поля, которые приходят в дельте. Геометрия/зоны сюда не входят — они
 // меняются только переимпортом чертежа и точечно не применяются.
 const DELTA_FIELDS = [
+  "work_group_id", "capture_assignment_mode", "zone_zakhvatka_id", "zone_zakhvatka_status",
   "current_status", "contract_id", "counterparty_code",
   "planned_delivery_date", "planned_installation_date", "actual_delivery_date",
   "project_delivery_date", "project_smr_start_date", "actual_installation_date",
@@ -7576,6 +7590,9 @@ async function pollChanges(manual = false) {
     const params = new URLSearchParams({ source_file: state.sourceFile });
     if (lastServerTime) params.set("since", lastServerTime);
     const data = await api(`/changes?${params.toString()}`);
+    const revisionChanged = lastCaptureRevision != null && data.capture_revision !== lastCaptureRevision;
+    lastCaptureRevision = data.capture_revision;
+    if (revisionChanged) { await loadPlan(true); return 0; }
     const previousMark = lastServerTime;
     lastServerTime = data.server_time;
     // Самый первый запрос только запоминает метку: без неё сервер вернул
@@ -7888,6 +7905,7 @@ async function loadPlanInner(preserveView = true) {
   state.defaultContracts = data.default_contracts || {};
   state.elementShapes = data.element_shapes || {};
   state.zones = data.zones || [];
+  state.workGroups = data.work_groups || [];
   state.baseMarkerRadius = data.marker_radius;
   state.selectedId = null;
   const сохранённоеСостояние = await uiStateTake(состояниеОжидание);
@@ -8785,13 +8803,14 @@ async function showCard(element) {
 
   // У элементов старого стандарта имён слоёв зон нет вовсе — блок не
   // показывается (гнездо остаётся пустым, каркас от этого не меняется).
-  const hasZoneData = element.zone_zakhvatka_status || element.zone_crane_status || element.zone_stance_status;
+  const hasZoneData = element.work_group_id || element.zone_zakhvatka_status || element.zone_crane_status || element.zone_stance_status;
   document.getElementById("card-zones-slot").innerHTML = hasZoneData ? `
-    <div class="card-block"><h4>Зоны</h4><table>
+    <div class="card-block"><h4>Зоны</h4><table><tr><td class="k">Группа работ</td><td>${escapeHtml(workGroupLabelFor(element.work_group_id))}</td></tr><tr><td class="k">Назначение захватки</td><td>${element.capture_assignment_mode === "manual" ? "Вручную" : "По контуру"}</td></tr>
       <tr><td class="k">Захватка</td><td>${zoneBindingHtml(element, "zone_zakhvatka_id", "zone_zakhvatka_status", "Захватка")}</td></tr>
       <tr><td class="k">Кран</td><td>${zoneBindingHtml(element, "zone_crane_id", "zone_crane_status", "Кран")}</td></tr>
       <tr><td class="k">Стоянка</td><td>${zoneBindingHtml(element, "zone_stance_id", "zone_stance_status", "Стоянка")}</td></tr>
-    </table></div>` : "";
+    </table>${can("zones", "write") ? '<button type="button" class="btn btn-sm" id="card-work-group-assign">Назначить захватку</button>' : ''}</div>` : "";
+  document.getElementById('card-work-group-assign')?.addEventListener('click', () => openWorkGroupEditor([element.id]));
 
   if (canEdit) {
     document.getElementById("card-comment").value = element.comment || "";
@@ -10478,6 +10497,20 @@ function updateMultiSelectionPanel() {
   panel.style.display = "flex";
   document.getElementById("multi-select-count").textContent = `Выделено: ${n}`;
 }
+
+async function openWorkGroupEditor(ids = []) {
+  const { openWorkGroups } = await import('/static/v2/work-groups.js');
+  const objectId = state.elements.find(e => ids.includes(e.id))?.object_id || state.elements[0]?.object_id || currentObject()?.id;
+  if (!objectId) return;
+  openWorkGroups({ objectId, canEdit: can('zones','write'), initialIds: ids,
+    api: { get: path => api(path), post: (path, body) => api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}), put: (path,body) => api(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}) },
+    onSaved: () => loadPlan(),
+  });
+}
+const groupAssignButton = document.createElement('button');
+groupAssignButton.type = 'button'; groupAssignButton.className = 'btn btn-sm'; groupAssignButton.textContent = 'Назначить захватку';
+groupAssignButton.addEventListener('click', () => openWorkGroupEditor([...state.multiSelectedIds]));
+document.getElementById('multi-select-panel').append(groupAssignButton);
 
 document.getElementById("multi-select-clear").addEventListener("click", clearMultiSelection);
 document.getElementById("multi-select-status-btn").addEventListener("click", openBulkStatusModal);
@@ -15815,6 +15848,7 @@ document.getElementById("zone-edit-save").addEventListener("click", async () => 
 });
 
 function openZonesModal(category) {
+  if (category === "Захватка") return openWorkGroupEditor();
   zonesCategory = category;
   zonesBackdrop.classList.add("open");
   renderZonesModal();
@@ -27858,6 +27892,7 @@ function stanceTierElevations() {
 // видимости конкретной (кран, стоянка) (state.stanceZoneVisible, см.
 // renderStanceZoneToggles).
 function zoneMeshVisible(zone) {
+  if (zone.category === "Захватка" && state.placementFilters.workGroup.has(zone.work_group_id)) return false;
   if (zone.category === "Стоянка") return state.stanceZoneVisible.has(stanceLogicalKey(zone.id));
   return state.zoneVisibility[zone.category] !== false;
 }

@@ -131,6 +131,8 @@ class ElementOut(BaseModel):
     # модели, и форма элемента показывала бы пустые поля там, где в БД
     # значение есть. Форма правит их не напрямую (зоны считаются по
     # геометрии, см. app/zone_recalc.py) — но показать обязана.
+    work_group_id: Optional[int] = None
+    capture_assignment_mode: str = "auto"
     zone_zakhvatka_id: Optional[int] = None
     zone_zakhvatka_status: Optional[str] = None
     zone_crane_id: Optional[int] = None
@@ -305,6 +307,8 @@ class ZoneLevelOut(BaseModel):
 
 
 class ZoneOut(BaseModel):
+    work_group_id: Optional[int] = None
+    capture_source: str = "drawing"
     """Запись справочника зон (этап 2). Одна зона — произвольный набор
     ярусов-полигонов, см. Docs/TZ.md 3.0а."""
     id: int
@@ -320,6 +324,7 @@ class ZoneOut(BaseModel):
 
 
 class ZoneLevelIn(BaseModel):
+    upper_elevation_mm: Optional[int] = None
     id: Optional[int] = None  # None — новый ярус
     elevation_mm: Optional[int] = None
     outline: list[list[float]]

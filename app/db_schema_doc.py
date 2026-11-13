@@ -1603,6 +1603,56 @@ TABLES.append(('snz_deleted_orders', 'snz_deleted_orders — Архив удал
 ]))
 FKS.append(('snz_deleted_orders', 'object_id', 'objects', 'id', 'CASCADE'))
 
+# Группы монтажных работ ЖБИ и история назначений.
+TABLES.extend([
+    ('work_group_templates', 'work_group_templates — Версии общего шаблона ЖБИ', C_ZONE, S_ZONE, [
+        ('revision', 'INTEGER', 'PK', 'версия общего шаблона'),
+        ('groups_json', 'TEXT', '', 'JSON названий и правил тип/подтип с постоянными ключами групп'),
+        ('created_at', 'TEXT', '', 'время сохранения версии'),
+    ]),
+    ('work_groups', 'work_groups — Группы работ объекта ЖБИ', C_ZONE, S_ZONE, [
+        ('id', 'INTEGER', 'PK', 'идентификатор группы объекта'),
+        ('object_id', 'INTEGER', 'FK', 'объект → objects.id'),
+        ('group_key', 'TEXT', 'U', 'постоянный ключ в объекте и шаблоне'),
+        ('name', 'TEXT', '', 'название группы работ'),
+        ('rules_json', 'TEXT', '', 'JSON правил тип/подтип, * означает все значения'),
+    ]),
+    ('work_group_settings', 'work_group_settings — Применённый шаблон групп', C_ZONE, S_ZONE, [
+        ('object_id', 'INTEGER', 'PK,FK', 'объект → objects.id'),
+        ('template_revision', 'INTEGER', 'FK', 'последняя применённая версия шаблона'),
+        ('base_json', 'TEXT', '', 'базовый снимок для слияния правок объекта и шаблона'),
+    ]),
+    ('work_group_history', 'work_group_history — История групп и захваток', C_ZONE, S_ZONE, [
+        ('id', 'INTEGER', 'PK', 'идентификатор изменения'),
+        ('object_id', 'INTEGER', 'FK', 'объект → objects.id'),
+        ('element_id', 'INTEGER', 'FK', 'изделие → elements.id, пусто для настройки или контура'),
+        ('action', 'TEXT', '', 'migration, manual, rebind, zone, groups или template_apply'),
+        ('before_json', 'TEXT', '', 'состояние до изменения'),
+        ('after_json', 'TEXT', '', 'состояние после изменения'),
+        ('actor', 'TEXT', '', 'имя пользователя'),
+        ('created_at', 'TEXT', '', 'время изменения'),
+    ]),
+])
+for table in TABLES:
+    if table[0] in ('elements', 'zones'):
+        table[4].append(('work_group_id', 'INTEGER', 'FK', 'группа работ объекта → work_groups.id'))
+    if table[0] == 'elements':
+        table[4].append(('capture_assignment_mode', 'TEXT', '', 'auto — по контуру, manual — ручное назначение'))
+    if table[0] == 'zones':
+        table[4].extend([
+            ('capture_source', 'TEXT', '', 'drawing — импортированная захватка, user — созданная на схеме'),
+            ('capture_floor', 'INTEGER', '', 'ограничение захватки этажом, пусто — любой этаж'),
+        ])
+FKS.extend([
+    ('work_groups', 'object_id', 'objects', 'id', 'CASCADE'),
+    ('work_group_settings', 'object_id', 'objects', 'id', 'CASCADE'),
+    ('work_group_settings', 'template_revision', 'work_group_templates', 'revision', 'NO ACTION'),
+    ('work_group_history', 'object_id', 'objects', 'id', 'CASCADE'),
+    ('work_group_history', 'element_id', 'elements', 'id', 'SET NULL'),
+    ('elements', 'work_group_id', 'work_groups', 'id', 'NO ACTION'),
+    ('zones', 'work_group_id', 'work_groups', 'id', 'NO ACTION'),
+])
+
 BY_NAME = {t[0]: t for t in TABLES}
 
 # Домен таблицы — по цвету заливки: чем окрашена в схеме, к той группе и

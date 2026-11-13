@@ -2925,6 +2925,8 @@ def init_db() -> list:
         # пользователя после предпросмотра, не часть старта сервера.
         from app.shaft_panels.storage import install_schema as _install_shaft_panels_schema
         _install_shaft_panels_schema(conn)
+        from app.work_groups import install_schema as _install_work_groups
+        _install_work_groups(conn, changes)
         _seed_reference_data(conn)
         conn.commit()
     finally:

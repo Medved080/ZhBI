@@ -1,3 +1,4 @@
+import { mountWorkGroups } from './work-groups.js';
 // «Зоны: захватки, краны, стоянки» — список по трём категориям (как в V1: три вкладки одной формы) и правка
 // зоны (номер, наименование, кран-владелец, геометрия ярусов). Те же API и права, что у V1:
 // список — `GET /zones` (чтение всем, у кого есть доступ к объекту), правка — `PATCH /zones/{id}`
@@ -51,6 +52,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   // камера ставится один раз на открытие формы, холст переносится при перерисовке формы; при закрытии — освобождается WebGL.
   let previewMode = "2d", p3d = null;
   let craneModule = null;
+  let captureModule = null;
   const drop3d = () => { p3d?.dispose(); p3d = null; };
   const st = { category: "Захватка", includeRetired: false, rows: null, error: "", q: "", editing: null, lastEdit: null, notice: "" };
 
@@ -94,6 +96,12 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       else $("#ze-crane-editor").innerHTML = `<p class="v2-muted">Выберите объект в шапке.</p>`;
       return;
     }
+    captureModule?.destroy(); captureModule = null;
+    if (objectId && st.category === 'Захватка') {
+      box.innerHTML = '<div id="ze-work-groups"></div>';
+      captureModule = mountWorkGroups($('#ze-work-groups'), { api, objectId, canEdit });
+      return;
+    }
     if (!objectId) { box.innerHTML = `<p class="v2-muted">Выберите объект в шапке — справочник зон свой у каждого объекта.</p>`; return; }
     if (!st.rows) {
       box.innerHTML = st.error
@@ -131,6 +139,8 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
       if (st.category === b.dataset.cat) return;
       if (st.editing && !(await guardEditorLeave())) return;
       if (craneModule && !(await craneModule.guardLeave())) return;
+      if (captureModule && !(await captureModule.guardLeave())) return;
+      captureModule?.destroy(); captureModule = null;
       craneModule?.destroy(); craneModule = null;
       drop3d(); st.editing = null; ++seq;
       st.category = b.dataset.cat; st.rows = null; st.q = ""; st.notice = ""; loadList();
@@ -140,6 +150,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   async function loadList() {
     if (st.category !== "Захватка") { paint(); return; }
     if (!objectId) { paint(); return; }
+    if (captureModule) return;
     const my = ++seq;
     const q = new URLSearchParams({ category: st.category, include_retired: String(st.includeRetired), object_id: String(objectId) });
     try {
@@ -424,7 +435,7 @@ export function mountZonesEdit(el, { screen, structure, objectId, api, groupTitl
   loadList();
   return {
     hasUnsavedChanges: () => dirty() || !!craneModule?.hasUnsavedChanges(),
-    async guardLeave() { return craneModule ? craneModule.guardLeave() : guardEditorLeave(); },
-    destroy() { dead = true; drop3d(); craneModule?.destroy(); },
+    async guardLeave() { if (captureModule) return captureModule.guardLeave(); return craneModule ? craneModule.guardLeave() : guardEditorLeave(); },
+    destroy() { captureModule?.destroy(); dead = true; drop3d(); craneModule?.destroy(); },
   };
 }

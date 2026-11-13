@@ -317,4 +317,7 @@ def write_fields(conn, element_id: int, row, values: dict) -> tuple[dict, list]:
          "manual_fields": json.dumps(sorted(manual), ensure_ascii=False),
          "id": element_id},
     )
+    if set(changed) & {'element_type', 'subtype', 'floor', 'elevation_mm'}:
+        from app.work_groups import recalculate
+        recalculate(conn, row['object_id'], ids=[element_id])
     return changed, sorted(manual)

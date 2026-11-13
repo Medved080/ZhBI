@@ -50,6 +50,17 @@ def pdf_labels(page):
 
 
 class PlanTests(unittest.TestCase):
+    def test_saved_capture_name_and_level_contour(self):
+        order,context,axes,zones=fixture()
+        prior_name=zones[0]['name']
+        saved_outline=json.loads(zones[0]['outline_json'])
+        zones[0]={**zones[0],'name':'Новое имя','outline_json':'',
+                  'levels':[{'outline':saved_outline,'elevation_mm':0,'upper_elevation_mm':20000}]}
+        page,=plan_pages(order,context,zones)
+        self.assertIn(prior_name,page['zone'])
+        self.assertNotIn('Новое имя',page['zone'])
+        self.assertTrue(page['zones'][0]['levels'])
+
     def test_leaders_leave_label_text_clear(self):
         segments=leader_segments((0,5),(100,5),[{'rect':(20,0,40,10)},{'rect':(60,0,80,10)}])
         self.assertEqual(segments,[((0.,5.),(19.,5.)),((41.,5.),(59.,5.)),((81.,5.),(100.,5.))])

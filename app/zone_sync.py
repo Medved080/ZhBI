@@ -52,7 +52,7 @@ def load_catalog(conn: sqlite3.Connection, object_id: int) -> dict:
     уникален только внутри своего крана («Стоянка 1» есть у каждого крана)."""
     catalog = {}
     for row in conn.execute(
-        "SELECT * FROM zones WHERE object_id = ? AND is_current = 1", (object_id,)
+        "SELECT * FROM zones WHERE object_id = ? AND is_current = 1 AND (category <> 'Захватка' OR (capture_source='drawing' AND work_group_id IN (SELECT id FROM work_groups WHERE group_key='zhbi')))", (object_id,)
     ):
         key = _zone_key(row["category"], row["number"], row["name"])
         if row["category"] == "Стоянка":
@@ -262,7 +262,7 @@ def sync_zones(
         seen_zone_ids.add(zone_id)
 
     # Чего в чертеже больше нет — неактуально (решение З4).
-    stale_sql = "SELECT id FROM zones WHERE object_id = ? AND is_current = 1"
+    stale_sql = "SELECT id FROM zones WHERE object_id = ? AND is_current = 1 AND (category <> 'Захватка' OR capture_source='drawing')"
     stale_params = [object_id]
     if allowed_categories is not None:
         stale_sql += " AND category IN (" + ",".join("?" for _ in allowed_categories) + ")"
@@ -277,6 +277,9 @@ def sync_zones(
             f"UPDATE zones SET is_current = 0 WHERE id IN ({placeholders})", tuple(stale)
         )
 
+    from app.work_groups import ensure_object
+    ensure_object(conn, object_id)
+    conn.execute("UPDATE zones SET work_group_id=(SELECT id FROM work_groups WHERE object_id=? AND group_key='zhbi') WHERE object_id=? AND category='Захватка' AND capture_source='drawing' AND work_group_id IS NULL", (object_id, object_id))
     conn.commit()
     return {
         handle: (zone_id, handle_to_level.get(handle))

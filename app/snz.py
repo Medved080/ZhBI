@@ -200,7 +200,7 @@ def _elements(conn, object_id):
     result = [dict(r) for r in conn.execute(
         "SELECT e.id,e.element_uid,e.mark,e.element_type,e.subtype,e.floor,e.elevation_mm,e.address,"
         "e.axis_number,e.axis_letter,e.x,e.y,e.outline_json,e.source_file,e.current_status,e.is_current,e.planned_installation_date,"
-        "e.zone_zakhvatka_id,z.name AS zakhvatka,c.name AS crane,s.name AS stance,cp.short_name AS counterparty "
+        "e.work_group_id,e.capture_assignment_mode,e.zone_zakhvatka_id,z.name AS zakhvatka,c.name AS crane,s.name AS stance,cp.short_name AS counterparty "
         "FROM elements e LEFT JOIN zones z ON z.id=e.zone_zakhvatka_id "
         "LEFT JOIN zones c ON c.id=e.zone_crane_id LEFT JOIN zones s ON s.id=e.zone_stance_id "
         "LEFT JOIN contracts ct ON ct.id=e.contract_id LEFT JOIN specifications sp ON sp.id=ct.specification_id "
@@ -224,7 +224,8 @@ def _plan_pdf(conn, object_id, order):
     axes = [dict(r) for source in sorted(sources)
             for r in conn.execute('SELECT * FROM axis_lines WHERE source_file=?', (source,))]
     zones = [dict(r) for r in conn.execute(
-        "SELECT id,name,outline_json FROM zones WHERE object_id=? AND category='Захватка'", (object_id,))]
+        "SELECT z.id,z.name,z.outline_json,g.group_key FROM zones z LEFT JOIN work_groups g ON g.id=z.work_group_id WHERE z.object_id=? AND z.category='Захватка'", (object_id,))]
+    zones = order.get('capture_zones', zones)
     colors = {r['status']: r['color'] for r in conn.execute('SELECT status,color FROM status_colors')}
     try:
         return build_pdf(order, context, axes, zones, colors)
@@ -389,6 +390,8 @@ def _calculate(conn, object_id, body):
     if body.crew_id not in {c["id"] for c in state["crews"]}:
         raise HTTPException(422, "Бригада не найдена.")
     snapshot = build_schedule(state, _elements(conn, object_id), _schedule_history(conn, object_id), body.date.isoformat(), body.shift, body.crew_id, ignore_fact=body.ignore_fact)
+    from app.work_groups import zone_catalog
+    snapshot['capture_zones'] = zone_catalog(conn, object_id)
     snapshot["revision"] = revision
     snapshot["object_name"] = conn.execute("SELECT name FROM objects WHERE id=?", (object_id,)).fetchone()[0]
     snapshot["fingerprint"] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode()).hexdigest()

@@ -73,14 +73,17 @@ def resolve_import_object(conn: sqlite3.Connection, object_id: Optional[int], so
     превратить его в понятный отказ клиенту (400), а не дать уйти наверх
     пятисоткой. См. app/main.import_dxf и app/input_import.import_input_dxf.
     """
+    from app.work_groups import ensure_object
     if object_id is not None:
         row = conn.execute("SELECT id FROM objects WHERE id = ?", (object_id,)).fetchone()
         if row is None:
             raise ValueError(f"Объект #{object_id} не найден")
+        ensure_object(conn, row["id"])
         return row["id"]
 
     existing = conn.execute("SELECT id FROM objects ORDER BY id").fetchall()
     if len(existing) == 1:
+        ensure_object(conn, existing[0]["id"])
         return existing[0]["id"]
     if len(existing) > 1:
         # Текст НЕЙТРАЛЬНЫЙ: куда идти дальше, знает только вызывающий, и у
@@ -100,6 +103,7 @@ def resolve_import_object(conn: sqlite3.Connection, object_id: Optional[int], so
     # участия справочника «Объекты», не оставлял бы следа.
     activity.log("object_create", source="system", entity_type="object", entity_id=новый,
                  new_value=source_file, details={"причина": "заведён при загрузке чертежа"})
+    ensure_object(conn, новый)
     return новый
 
 

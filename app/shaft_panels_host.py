@@ -47,6 +47,8 @@ def before_commit(conn,user,object_id,changed_ids,summary):
                 json.loads(row['outline_json']),row['elevation_mm'],zones)
             updates={}
             for category,result in bindings.items():
+                if category == 'Захватка' and row['work_group_id'] is not None:
+                    continue
                 if versioned and category in ('Кран', 'Стоянка'):
                     continue
                 id_col,status_col=zone_recalc._CATEGORY_COLUMNS[category]
@@ -55,6 +57,8 @@ def before_commit(conn,user,object_id,changed_ids,summary):
                 if category=='Стоянка':updates['zone_stance_level_id']=level_id
             if updates:
                 conn.execute('UPDATE elements SET '+','.join(f'{k}=?' for k in updates)+' WHERE id=?',(*updates.values(),element_id))
+    from app.work_groups import recalculate
+    recalculate(conn, object_id, ids=changed_ids)
     touch_elements(conn,changed_ids)
 
 

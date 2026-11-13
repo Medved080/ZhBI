@@ -156,6 +156,8 @@ def recalculate(conn: sqlite3.Connection, object_id: int, user=None,
         )
         updates = {}
         for category, result in bindings.items():
+            if category == "Захватка":
+                continue
             id_col, status_col = _CATEGORY_COLUMNS[category]
             zone_id, level_id = _parse_handle(result.zone_handle)
             if element[id_col] != zone_id or element[status_col] != result.status:
@@ -186,6 +188,9 @@ def recalculate(conn: sqlite3.Connection, object_id: int, user=None,
             request_id=request_id,
         )
 
+    from app.work_groups import recalculate as recalculate_captures
+    capture_changes = recalculate_captures(conn, object_id)
+    by_category['Захватка'] = len(capture_changes)
     conn.commit()
     return {"changed": len(changed_rows), "by_category": by_category, "before": changed_rows}
 
@@ -290,7 +295,9 @@ def undo(conn: sqlite3.Connection, zone_id: int) -> dict:
             values["zone_stance_level_id"] = level_id_by_elevation.get(
                 saved.get("stance_level_elevation")
             ) if saved.get("zone_stance_id") == zone_id else level_id
-        assignments = ", ".join(f"{f} = :{f}" for f in _BINDING_FIELDS)
+        current = conn.execute('SELECT capture_assignment_mode FROM elements WHERE id=?', (saved['id'],)).fetchone()
+        restore_fields = [f for f in _BINDING_FIELDS if not (current and current['capture_assignment_mode'] == 'manual' and f.startswith('zone_zakhvatka'))]
+        assignments = ", ".join(f"{f} = :{f}" for f in restore_fields)
         conn.execute(
             f"UPDATE elements SET {assignments}, updated_at = datetime('now') WHERE id = :id", values
         )

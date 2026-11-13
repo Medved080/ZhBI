@@ -260,7 +260,7 @@ def deviation_summary(conn: sqlite3.Connection, object_id: int,
         f"""
         SELECT e.id, e.project_smr_start_date AS base_start, e.project_delivery_date AS base_end,
                d.smr_start_date AS f_start, d.smr_end_date AS f_end,
-               z.name AS zakhvatka
+               CASE WHEN EXISTS(SELECT 1 FROM zones duplicate WHERE duplicate.object_id=z.object_id AND duplicate.category='Захватка' AND duplicate.name=z.name AND duplicate.work_group_id<>z.work_group_id) THEN (SELECT name FROM work_groups WHERE id=z.work_group_id)||' / '||z.name ELSE z.name END AS zakhvatka
         FROM schedule_version_dates d
         JOIN elements e ON e.id = d.element_id
         LEFT JOIN zones z ON z.id = e.zone_zakhvatka_id
