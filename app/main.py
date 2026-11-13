@@ -5906,7 +5906,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
             file_zones = []
             for r in conn.execute(
                 "SELECT z.id, z.category, z.name, z.number, z.match_status, z.parent_zone_id, z.work_group_id,z.capture_floor, "
-                "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.outline_json "
+                "z.parent_match_status, l.id AS level_id, l.elevation_mm, l.upper_elevation_mm, l.outline_json "
                 "FROM zones z JOIN zone_levels l ON l.zone_id = z.id "
                 "WHERE z.object_id IS ? AND z.is_current = 1 AND l.is_reference = 0 "
                 "AND (l.source_file = ? OR z.category='Захватка' OR (? AND z.category IN ('Кран', 'Стоянка')))",
@@ -5917,6 +5917,11 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
                 seen_level_ids.add(r["level_id"])
                 z = dict(r)
                 z["outline"] = json.loads(z.pop("outline_json"))
+                if z['category'] == 'Захватка' and z['capture_floor'] is not None:
+                    from app.work_groups import elevation_bounds
+                    lower, upper = elevation_bounds(conn,item_object_id,z['capture_floor'])
+                    if z['elevation_mm'] is None: z['elevation_mm'] = lower
+                    if z['upper_elevation_mm'] is None: z['upper_elevation_mm'] = upper
                 file_zones.append(z)
 
             crane_meta = {r["id"]: dict(r) for r in conn.execute(

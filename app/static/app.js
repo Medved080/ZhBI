@@ -27921,9 +27921,11 @@ function build3DZoneMesh(zone, heightRange, stanceTiers) {
 
   let geometry, positionY, opacity;
   if (zone.category === "Захватка" || (zone.category === "Кран" && !zone.virtual_stance_box)) {
-    geometry = new THREE.ExtrudeGeometry(shape, { depth: heightRange.top - heightRange.bottom, bevelEnabled: false, steps: 1 });
+    const bottom = zone.category === "Захватка" ? (zone.elevation_mm ?? heightRange.bottom) : heightRange.bottom;
+    const top = zone.category === "Захватка" ? (zone.upper_elevation_mm ?? heightRange.top) : heightRange.top;
+    geometry = new THREE.ExtrudeGeometry(shape, { depth: Math.max(top - bottom, 1), bevelEnabled: false, steps: 1 });
     geometry.rotateX(-Math.PI / 2);
-    positionY = heightRange.bottom;
+    positionY = bottom;
     opacity = 0.07; // как у 2D-подложки (fill-opacity:.07) — элементы внутри не теряются
   } else if ((zone.category === "Стоянка" || zone.virtual_stance_box) &&
              stanceTiers.length && zone.elevation_mm != null) {
