@@ -22,9 +22,9 @@ export function mountShaftPanels(el, ctx) {
           <select id="sp-object" aria-label="Объект">${zhbiObjects.some((o) => o.id === currentObjectId) ? "" : `<option value="" selected>— выберите объект —</option>`}${objectOptions(zhbiObjects, currentObjectId)}</select></label>
         <label class="v2-wire-field v2-field-wide"><span>Файл развёртки (DWG или DXF)</span><input type="file" id="sp-file" accept=".dwg,.dxf"></label>
         <label class="v2-wire-field v2-field-wide"><span>Толщина панели, мм (по паспорту изделия)</span><input type="number" id="sp-thickness" min="1" max="500" step="0.1" placeholder="по проекту"></label>
-        <div id="sp-offset-field" hidden><label class="v2-wire-field v2-field-wide"><span>Отступ внутренней грани наружу, мм</span>
+        <div id="sp-offset-field" hidden><label class="v2-wire-field v2-field-wide"><span>Отступ от каркаса наружу, мм</span>
           <input type="number" id="sp-offset" step="any" value="0"></label>
-          <p class="v2-muted v2-ex-hint">От оси фасада. На косом участке — от линии центров колонн 36–38.</p></div>
+          <p class="v2-muted v2-ex-hint">При 0 мм внутренняя грань примыкает к наружной грани каркаса.</p></div>
         <p class="v2-muted v2-ex-hint" id="sp-section-hint">Для добавления в модель укажите толщину панели.</p>
         <div class="v2-bar"><button type="submit" class="v2-btn v2-primary" id="sp-analyze">Распознать</button><button type="button" class="v2-btn" id="sp-cancel">Отменить анализ</button></div>
       </form>

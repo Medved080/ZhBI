@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from .parser import DrawingError, parse_drawing
 from .placement import place_panels
-from .facade import diagonal_supports, place_facade, read_facade
+from .facade import align_to_frame, diagonal_supports, load_frame, place_facade, read_facade
 from . import storage
 
 
@@ -80,6 +80,7 @@ def build_router(*,connection_factory,get_user,assert_access,backup,before_commi
             facade = ext == '.dwg'
             axes,axis_source=storage.load_target_axes(conn,object_id,grid_source,facade=facade)
             supports = []
+            frame = load_frame(conn,object_id) if facade else []
             with tempfile.TemporaryDirectory(prefix='shaft-panels-') as folder:
                 path=Path(folder)/('drawing'+ext)
                 total=0
@@ -93,13 +94,13 @@ def build_router(*,connection_factory,get_user,assert_access,backup,before_commi
                     drawing = read_facade(path)
                     if drawing['scope'] == 'facade-diagonal':
                         supports = diagonal_supports(conn,object_id,axes)
-                    placed = place_facade(drawing,axes,supports,thickness_mm,facade_offset_mm)
+                    placed = align_to_frame(place_facade(drawing,axes,supports,thickness_mm,0,frame=frame),frame,facade_offset_mm)
                 else:
                     placed = place_panels(parse_drawing(path),axes,thickness_mm=thickness_mm)
             placed['source_file']=Path(file.filename.replace('\\','/')).name
             analysis=storage.analyze(conn,object_id,placed) if placed['commit_ready'] else None
             token=pending.put(user['id'],object_id,{'placed':placed,'analysis':analysis,
-                                                   'grid_source':axis_source,'geometry_digest':storage.digest([axes,supports])})
+                                                   'grid_source':axis_source,'geometry_digest':storage.digest([axes,supports,frame])})
             return {'token':token,'drawing':placed,'analysis':analysis,'grid_source':axis_source}
         except DrawingError as exc:
             raise HTTPException(422,str(exc)) from exc
@@ -121,8 +122,9 @@ def build_router(*,connection_factory,get_user,assert_access,backup,before_commi
                 def check_geometry(tx):
                     axes,_=storage.load_target_axes(tx,object_id,data['grid_source'],facade=scope.startswith('facade-'))
                     supports = diagonal_supports(tx,object_id,axes) if scope=='facade-diagonal' else []
-                    if storage.digest([axes,supports])!=data['geometry_digest']:
-                        raise DrawingError('Сетка осей или опорные колонны изменились после анализа')
+                    frame = load_frame(tx,object_id) if scope.startswith('facade-') else []
+                    if storage.digest([axes,supports,frame])!=data['geometry_digest']:
+                        raise DrawingError('Сетка осей или опорный каркас изменились после анализа')
                 check_geometry(conn)
                 # Check obvious conflicts before the host creates its backup.
                 fresh=storage.analyze(conn,object_id,data['placed'])

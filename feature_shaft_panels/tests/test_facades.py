@@ -10,6 +10,35 @@ from feature_shaft_panels.tests.test_feature import database
 
 
 class FacadeChecks(unittest.TestCase):
+    def test_station_registration_uses_physical_columns(self):
+        import json
+        frame = [{'element_type':'Колонна','outline_json':json.dumps(
+            [[x-100,0],[x+100,0],[x+100,600],[x-100,600]])} for x in (420,1420)]
+        self.assertAlmostEqual(facade.station_shift({'columns':[1,11]},(0,0),(1,0),frame),320)
+
+    def test_contact_uses_outer_beam_face_and_preserves_elevation(self):
+        import json
+        axes = {'numeric':{'1':0},'letter':{'А':0}}
+        panel = {'outline':[[0,0],[1000,0],[1000,-440],[0,-440]],
+                 'x':500,'y':-220,'z':20,'elevation_mm':20,'height_mm':1000,
+                 'face':'А'}
+        frame = [
+            {'id':1,'elevation_mm':0,'outline_json':json.dumps([[200,100],[800,100],[800,700],[200,700]])},
+            {'id':2,'elevation_mm':600,'outline_json':json.dumps([[0,50],[1000,50],[1000,250],[0,250]])},
+            {'id':3,'elevation_mm':0,'outline_json':json.dumps([[200,-5000],[800,-5000],[800,-4000],[200,-4000]])},
+        ]
+        placed = facade.align_to_frame({'panels':[panel],'target_axes':axes},frame)
+        self.assertEqual(panel['outline'],[[0,50],[1000,50],[1000,-390],[0,-390]])
+        self.assertEqual(placed['frame_registration']['support_ids'],[2])
+        self.assertEqual((panel['z'],panel['height_mm']),(20,1000))
+        self.assertEqual(panel['offset_y_mm'],-170)
+
+    def test_missing_supporting_frame_is_rejected(self):
+        panel = {'outline':[[0,0],[1000,0],[1000,-440],[0,-440]],
+                 'elevation_mm':20,'height_mm':1000}
+        with self.assertRaises(DrawingError):
+            facade.align_to_frame({'panels':[panel]},[])
+
     def test_unresolved_or_duplicate_marks_abort(self):
         label = {'text': 'Пс-2001', 'insert': [2, 3, 0], 'height': 2}
         wall = {'Part-1': (0, 0, 10, 10)}

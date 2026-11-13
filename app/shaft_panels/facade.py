@@ -2,9 +2,12 @@
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from hashlib import sha256
+import json
 from math import dist, hypot, isfinite
 import re
 from statistics import median
+from shapely import affinity
+from shapely.geometry import Polygon, box
 
 from .parser import DrawingError
 
@@ -19,6 +22,92 @@ VIEWS = {
 }
 SCALE = 100  # СМ1 elevations at 1:100. Checked against actual level arrows on each sheet.
 SECTION_2_2_MM = (100, 150, 190)  # left to right on the supplied cross-section
+
+
+def load_frame(conn, object_id):
+    """Snapshot the supporting geometry so apply can detect changes after analyze."""
+    return [dict(r) for r in conn.execute("""SELECT id,element_type,elevation_mm,height_mm,outline_json
+        FROM elements WHERE object_id=? AND is_current=1 AND element_type IN ('Колонна','Ригель')
+        AND outline_json IS NOT NULL ORDER BY id""", (object_id,))]
+
+
+def station_shift(drawing, origin, direction, frame):
+    """Register the view's columns to physical column footprints along the facade."""
+    ox, oy = origin
+    ux, uy = direction
+    stations = set()
+    for member in frame:
+        if member['element_type'] != 'Колонна':
+            continue
+        center = Polygon(json.loads(member['outline_json'])).centroid
+        if abs((center.x-ox)*uy-(center.y-oy)*ux) < 2000:
+            stations.add(center.x*ux+center.y*uy)
+    matches = []
+    for column in sorted(set(drawing['columns'])):
+        source = ox*ux+oy*uy+column*SCALE
+        if stations:
+            target = min(stations,key=lambda v:abs(v-source))
+            if abs(target-source) < 1000:
+                matches.append((target-source,target))
+    if len(matches)<2:
+        raise DrawingError('Для привязки вдоль фасада нужны две соответствующие колонны каркаса')
+    shift = median(delta for delta,_ in matches)
+    inliers = [(delta,target) for delta,target in matches if abs(delta-shift)<5]
+    if len({round(target) for _,target in inliers})<2:
+        raise DrawingError('Колонны развёртки не подтверждают единую привязку вдоль фасада')
+    return median(delta for delta,_ in inliers)
+
+
+def align_to_frame(placed, frame, offset_mm=0):
+    """Translate one complete elevation to the outer supporting face, keeping it planar."""
+    if not isfinite(offset_mm):
+        raise DrawingError('Некорректный отступ фасада')
+    panels = placed['panels']
+    a, b = panels[0]['outline'][:2]
+    length = dist(a, b)
+    ux, uy = (b[0]-a[0])/length, (b[1]-a[1])/length
+    nx, ny = uy, -ux
+    baseline = a[0]*nx+a[1]*ny
+    stations = [x*ux+y*uy for p in panels for x,y in p['outline'][:2]]
+    lo, hi = min(stations), max(stations)
+    top = max(p['elevation_mm']+p['height_mm'] for p in panels)
+    candidates = []
+    for member in frame:
+        if member['elevation_mm'] is None or member['elevation_mm'] >= top:
+            continue
+        poly = Polygon(json.loads(member['outline_json']))
+        if not poly.is_valid or poly.area <= 0:
+            raise DrawingError('Некорректный контур элемента каркаса '+str(member['id']))
+        local = affinity.affine_transform(poly, [ux,uy,nx,ny,0,-baseline])
+        left, inner, right, outer = local.bounds
+        # The СМ1 view is registered to its perimeter row. Exclude unrelated rows
+        # while retaining the complete section of any crossing beam.
+        if right <= lo or left >= hi or inner > 2000 or outer < -2000:
+            continue
+        clipped = local.intersection(box(lo,inner-1,hi,outer+1))
+        if not clipped.is_empty and clipped.area > 0:
+            candidates.append((clipped.bounds[3], member['id']))
+    if not candidates:
+        raise DrawingError('У фасада не найден опорный каркас для привязки внутренней грани')
+    face = max(value for value, _ in candidates)
+    shift = face+offset_mm
+    for panel in panels:
+        panel['outline'] = [[round(x+nx*shift,6),round(y+ny*shift,6)] for x,y in panel['outline']]
+        panel['x'] = round(panel['x']+nx*shift,6)
+        panel['y'] = round(panel['y']+ny*shift,6)
+        axes = placed['target_axes']
+        num = min(axes['numeric'],key=lambda k:abs(panel['x']-axes['numeric'][k]))
+        let = min(axes['letter'],key=lambda k:abs(panel['y']-axes['letter'][k]))
+        panel.update(nearest_axis_number=num,nearest_axis_letter=let,
+                     offset_x_mm=round(panel['x']-axes['numeric'][num],3),
+                     offset_y_mm=round(panel['y']-axes['letter'][let],3),
+                     address=f"Фасад {panel['face']}, {num}/{let}, {panel['z']/1000:+.3f} м",
+                     frame_offset_mm=offset_mm, registration_shift_mm=round(shift,6))
+    placed['frame_registration'] = {'normal_xy':[nx,ny], 'shift_mm':shift,
+        'offset_mm':offset_mm, 'support_ids':[id for value,id in candidates if abs(value-face)<.01]}
+    placed['warnings'] = [{'code':'facade_placement', 'message':
+        f'Внутренняя грань фасада привязана к наружной грани каркаса. Отступ наружу: {offset_mm:g} мм.'}]
+    return placed
 
 
 def _read(path, ezdwg):
@@ -204,7 +293,7 @@ def _frame(d, axes, supports):
     return (fixed, shift), (0, d['sign'])
 
 
-def place_facade(d, axes, supports, thickness, offset):
+def place_facade(d, axes, supports, thickness, offset, *, frame=None):
     if thickness is None:
         thickness = sum(SECTION_2_2_MM)
     if not isfinite(thickness) or thickness <= 0:
@@ -213,6 +302,11 @@ def place_facade(d, axes, supports, thickness, offset):
     if not isfinite(offset):
         raise DrawingError('Некорректный отступ фасада')
     (ox, oy), (ux, uy) = _frame(d, axes, supports)
+    longitudinal = 0
+    if frame is not None and d['scope'] != 'facade-diagonal':
+        longitudinal = station_shift(d,(ox,oy),(ux,uy),frame)
+        ox += ux*longitudinal
+        oy += uy*longitudinal
     # Viewed from outside: positive depth goes outward, right of the view axis.
     def xy(station, depth):
         return [round(ox+ux*station+uy*depth, 3), round(oy+uy*station-ux*depth, 3)]
@@ -229,6 +323,7 @@ def place_facade(d, axes, supports, thickness, offset):
         panels.append({'physical_key':raw['physical_key'], 'mark':raw['mark'], 'face':d['face'],
             'width_mm':round(right-left, 3), 'height_mm':height, 'thickness_mm':thickness,
             'section_layers_mm':layers,
+            'station_registration_mm':longitudinal,
             'x':x, 'y':y, 'z':z, 'elevation_mm':z,
             'outline':[xy(left,offset), xy(right,offset), xy(right,outer), xy(left,outer)],
             'nearest_axis_number':num, 'nearest_axis_letter':let, 'offset_x_mm':round(x-axes['numeric'][num],3),

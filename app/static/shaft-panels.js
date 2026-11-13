@@ -35,10 +35,10 @@ export function mountShaftImport(container, { objectId, request, onApplied }) {
                    placeholder="по паспорту изделия" style="width:90px">
           </label>
           <div data-offset-field hidden>
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem">Отступ внутренней грани наружу, мм
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem">Отступ от каркаса наружу, мм
               <input name="offset" type="number" step="any" value="0" style="width:90px">
             </label>
-            <div class="bulk-edit-status">От оси фасада. На косом участке — от линии центров колонн 36–38.</div>
+            <div class="bulk-edit-status">При 0 мм внутренняя грань примыкает к наружной грани каркаса.</div>
           </div>
           <div class="bulk-edit-status" data-section-hint>Для добавления в модель укажите толщину панели.</div>
         </div>
