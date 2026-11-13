@@ -26785,10 +26785,9 @@ function label3DWorldHeight(element) {
 // Колонна — на всех боковых (вертикальных) гранях, текст читается СНИЗУ
 // ВВЕРХ вдоль высоты (заказчик подтвердил именно так, не на торце —
 // колонна вертикальная, её "длина" в этом смысле высота, а не крошечное
-// сечение). Если марка не помещается по длине (короткий ригель и т.п.) —
-// null, вызывающий код падает назад на плавающую табличку
-// (build3DLabelSprite), как раньше. ----------
-const DECAL_TYPES = new Set(["Плита перекрытия", "Ригель", "Колонна"]);
+// сечение). Панели — на двух противоположных лицевых вертикальных гранях,
+// текст горизонтален и направлен вверх на обеих сторонах. ----------
+const DECAL_TYPES = new Set(["Плита перекрытия", "Ригель", "Колонна", "Панель", "Панель облицовки шахты"]);
 // Та же оценка ширины текста, что и в 2D (см. updateLabelBgRect) —
 // согласованно, без per-glyph измерения на каждый элемент.
 const DECAL_CHAR_WIDTH_RATIO = 0.62;
@@ -27521,6 +27520,33 @@ function collectMarkDecalQuads(element, label, aspect, levels, columnTops) {
   // фит-чека суммарная, не максимум из двух отдельных строк.
   const maxTextLen = element.mark.length + (label.subText ? label.subText.length + 1 : 0);
   const quads = [];
+
+  if (element.element_type === "Панель" || element.element_type === "Панель облицовки шахты") {
+    const sides = polygonSides(element.outline);
+    if (!sides.length) return null;
+    // Imported elevations store the front edge first, including narrow returns
+    // whose face width can be smaller than the panel thickness.
+    const imported = element.mark_source === "facade_dwg" || element.mark_source?.startsWith("shaft_dxf_");
+    const front = imported ? sides[0] : sides.reduce((longest, side) =>
+      Math.hypot(side.b[0] - side.a[0], side.b[1] - side.a[1]) >
+      Math.hypot(longest.b[0] - longest.a[0], longest.b[1] - longest.a[1]) ? side : longest);
+    const faces = sides.filter(side => Math.abs(side.dir[0] * front.dir[0] + side.dir[1] * front.dir[1]) > 1 - 1e-6);
+    const height = elementExtrusionHeight(element, levels, columnTops);
+    const [cx, cy] = footprintCentroid(element.outline);
+    for (const side of faces) {
+      const width = Math.hypot(side.b[0] - side.a[0], side.b[1] - side.a[1]);
+      const fontSize = Math.min(height * LABEL_3D_WIDTH_FRACTION, width * DECAL_FIT_MARGIN / aspect);
+      const midX = (side.a[0] + side.b[0]) / 2, midY = (side.a[1] + side.b[1]) / 2;
+      let nx = side.dir[1], ny = -side.dir[0];
+      if (nx * (midX - cx) + ny * (midY - cy) < 0) { nx = -nx; ny = -ny; }
+      const normal = new THREE.Vector3(nx, 0, -ny);
+      const right = new THREE.Vector3(normal.z, 0, -normal.x);
+      const center = new THREE.Vector3(midX, (element.elevation_mm || 0) + height / 2, -midY)
+        .addScaledVector(normal, DECAL_SURFACE_OFFSET_MM);
+      quads.push({ center, right, normal, width: fontSize * aspect, height: fontSize });
+    }
+    return quads;
+  }
 
   if (element.element_type === "Колонна") {
     const height = elementExtrusionHeight(element, levels, columnTops);
