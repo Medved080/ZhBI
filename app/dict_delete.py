@@ -493,15 +493,28 @@ def _zone_candidates(conn, row, parent_target):
             "SELECT * FROM zones WHERE object_id IS ? AND category = ? AND id <> ? ORDER BY number",
             (row["object_id"], row["category"], row["id"]),
         ).fetchall()
+    if row['category'] == 'Захватка':
+        rows = [r for r in rows if r['work_group_id'] == row['work_group_id'] and r['is_current']]
     return [{"key": str(r["id"]), "label": _zone_label(conn, r)} for r in rows]
 
 
 def _zone_repoint(conn, row, target):
     колонка = _ZONE_ELEMENT_COLUMN[row["category"]]
-    n = conn.execute(
-        f"UPDATE elements SET {колонка} = ?, updated_at = datetime('now') WHERE {колонка} = ?",
-        (target["id"], row["id"]),
-    ).rowcount
+    if row['category'] == 'Захватка':
+        if target['object_id'] != row['object_id'] or target['work_group_id'] != row['work_group_id'] or not target['is_current']:
+            raise HTTPException(422, 'Выберите действующую захватку той же группы работ')
+        from app.work_groups import binding, log_change
+        elements = [dict(r) for r in conn.execute('SELECT * FROM elements WHERE zone_zakhvatka_id=?',(row['id'],))]
+        n = conn.execute("UPDATE elements SET zone_zakhvatka_id=?,zone_zakhvatka_status='matched',capture_assignment_mode='manual',updated_at=datetime('now') WHERE zone_zakhvatka_id=?",(target['id'],row['id'])).rowcount
+        for element in elements:
+            before = binding(element)
+            after = before | {'zone_zakhvatka_id':target['id'],'zone_zakhvatka_status':'matched','capture_assignment_mode':'manual'}
+            log_change(conn,row['object_id'],element['id'],'manual',before,after)
+    else:
+        n = conn.execute(
+            f"UPDATE elements SET {колонка} = ?, updated_at = datetime('now') WHERE {колонка} = ?",
+            (target["id"], row["id"]),
+        ).rowcount
     итог = [("Изделия", n)]
     if row["category"] == "Стоянка":
         # Ярус стоянки — отдельная ссылка (zone_stance_level_id): у стоянки

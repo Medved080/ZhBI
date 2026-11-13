@@ -178,5 +178,13 @@ class WorkGroupsTest(unittest.TestCase):
         self.assertEqual(self.read(self.ids[1])['capture_assignment_mode'],'manual')
         self.assertTrue(undo_zone_edit(zid,self.admin)['restored'])
 
+    def test_dictionary_replacement_respects_work_group(self):
+        base=self.zone(self.base);facade=self.zone(self.facade)
+        from app.dict_delete import _zone_candidates,_zone_repoint
+        old=self.conn.execute('SELECT * FROM zones WHERE id=?',(base,)).fetchone()
+        target=self.conn.execute('SELECT * FROM zones WHERE id=?',(facade,)).fetchone()
+        self.assertNotIn(str(facade),[r['key'] for r in _zone_candidates(self.conn,old,None)])
+        with self.assertRaises(HTTPException):_zone_repoint(self.conn,old,target)
+
 
 if __name__=='__main__':unittest.main()
