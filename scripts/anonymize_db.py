@@ -445,6 +445,8 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
         scrub_person("attachments", "uploaded_by", "uploaded_by_user_id"),
     )
     count("report_notes.updated_by", scrub_person("report_notes", "updated_by", None))
+    if 'work_group_history' in existing:
+        count('work_group_history.actor', scrub_person('work_group_history','actor',None))
     count(
         "activity_log.impersonator_name",
         scrub_person("activity_log", "impersonator_name", "impersonator_user_id"),
@@ -739,7 +741,15 @@ def anonymize(conn: sqlite3.Connection, mapping: Mapping) -> dict[str, int]:
             ("object_flats", ("plan_type",)),
             ("object_roles", ("name",)),
             ("work_codifier", ("name", "parent_name", "section_name")),
+            ("work_group_history", ("before_json", "after_json")),
+            ("snz_state", ("data_json",)),
+            ("snz_orders", ("snapshot_json",)),
+            ("snz_order_revisions", ("snapshot_json",)),
+            ("snz_deleted_orders", ("order_json", "revisions_json", "result_json", "created_by")),
+            ("procurement_snapshots", ("data_json",)),
         ):
+            if table not in existing:
+                continue
             n = 0
             for row in conn.execute(f"SELECT rowid AS rid, {', '.join(columns)} FROM {table}"):
                 updates = {}
