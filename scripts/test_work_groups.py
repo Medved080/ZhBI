@@ -186,5 +186,23 @@ class WorkGroupsTest(unittest.TestCase):
         self.assertNotIn(str(facade),[r['key'] for r in _zone_candidates(self.conn,old,None)])
         with self.assertRaises(HTTPException):_zone_repoint(self.conn,old,target)
 
+    def test_plan_labels_include_manual_captures_without_geometry(self):
+        source=f'capture-labels-{self.oid}.dxf'
+        self.conn.execute('UPDATE elements SET source_file=? WHERE object_id=?',(source,self.oid))
+        self.conn.execute('INSERT INTO object_drawings(object_id,source_file,is_current) VALUES (?,?,1)',(self.oid,source))
+        self.conn.commit()
+        self.action({'action':'zone','zone':{'work_group_id':self.facade,'name':'Ось 1','number':1,'levels':[]}})
+        zid=self.conn.execute('SELECT id FROM zones WHERE object_id=?',(self.oid,)).fetchone()[0]
+        self.action({'action':'assign','zone_id':zid,'element_ids':[self.ids[1]]})
+        from app.main import plan_data
+        from app.models import PlanSelectionIn
+        response=plan_data(PlanSelectionIn(selection=[{'object_id':self.oid}]),self.admin)
+        payload=json.loads(response.body)
+        labels=[z for z in payload['zone_labels'] if z['category']=='Захватка']
+        self.assertEqual([(z['number'],z['name']) for z in labels],[(1,'Ось 1')])
+        self.assertEqual(payload['zones'],[])
+        element=next(e for e in payload['elements'] if e['id']==self.ids[1])
+        self.assertEqual(element['zone_zakhvatka_id'],labels[0]['id'])
+
 
 if __name__=='__main__':unittest.main()

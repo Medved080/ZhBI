@@ -585,7 +585,7 @@
       guid: { text: state.guidFilter.text, tokens: gi.tokens.length, ignored: gi.ignored, found: guidFound },
       groups: [
         flatGroup("workGroup", "Группа работ", workGroupLabelFor),
-        flatGroup("zakhvatka", "Захватка", zoneLabelFor),
+        flatGroup("zakhvatka", "Захватка", zakhvatkaLabelFor),
         craneGroup(),
         flatGroup("floor", "Этаж", floorLabelFor, { compareRaw: true }),
         flatGroup("elevation", "Отметка (высота)", elevationLabelFor, { compareRaw: true }),

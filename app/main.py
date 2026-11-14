@@ -6106,6 +6106,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         element_shapes = {f"{r['layer']} {r['element_type']}": r["shape"] for r in shape_rows}
         perf_core.mark("контракты, подписи, формы: выборка и сборка")
         plan_work_groups = [dict(r) for r in conn.execute('SELECT id,name,group_key FROM work_groups WHERE object_id=?', (plan_object_id,))]
+        plan_zone_labels = [dict(r) for r in conn.execute('SELECT id,category,number,name,work_group_id FROM zones WHERE object_id=? AND is_current=1', (plan_object_id,))]
     finally:
         conn.close()
 
@@ -6162,6 +6163,7 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         "contract_line_totals": contract_line_totals,
         "element_shapes": element_shapes,
         "work_groups": plan_work_groups,
+        "zone_labels": plan_zone_labels,
         "zones": zones,
     })
 

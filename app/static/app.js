@@ -2295,8 +2295,18 @@ function zoneFilterValue(element, idField, statusField) {
 }
 
 function zoneNameById(zoneId) {
-  const zone = state.zones.find(z => z.id === zoneId);
+  const zone = (state.zoneLabels || state.zones).find(z => z.id === zoneId);
   return zone ? (zone.name || `зона #${zone.id}`) : `зона #${zoneId}`;
+}
+
+function zakhvatkaLabelFor(value) {
+  if (value === PLACEMENT_NONE) return placementNoneLabel("zone");
+  const zone = (state.zoneLabels || state.zones).find(item => item.id === value);
+  if (!zone) return zoneNameById(value);
+  const name = (zone.name || "").trim();
+  if (zone.number == null) return name || "Захватка без номера";
+  const title = `Захватка ${zone.number}`;
+  return !name || name.toLowerCase() === title.toLowerCase() ? title : `${title}. ${name}`;
 }
 
 // Отображаемое имя ОДНОЙ ФИЗИЧЕСКОЙ зоны (для рендера на схеме — 2D/3D),
@@ -2664,7 +2674,7 @@ function allValuesFor(key) {
   const set = new Set();
   const category = PLACEMENT_ZONE_CATEGORY[key];
   if (category) {
-    for (const z of state.zones) {
+    for (const z of state.zoneLabels || state.zones) {
       if (z.category !== category) continue;
       if (category === "Захватка" && state.placementFilters.workGroup.has(z.work_group_id)) continue;
       // "Стоянка" — логический ключ (кран, имя), не id зоны — иначе
@@ -3874,7 +3884,7 @@ const workGroupLabelFor = v => state.workGroups?.find(g => g.id === v)?.name || 
 // значения. Порядок — как в форме фильтров.
 const PLACEMENT_CATEGORY_INFO = [
   ["workGroup", "Группа работ", workGroupLabelFor],
-  ["zakhvatka", "Захватка", zoneLabelFor],
+  ["zakhvatka", "Захватка", zakhvatkaLabelFor],
   ["crane", "Кран", zoneLabelFor],
   ["stance", "Стоянка", stanceLabelFor],
   ["floor", "Этаж", floorLabelFor],
@@ -3944,7 +3954,7 @@ function renderPlacementFilters() {
   container.appendChild(buildFilterGroup("Группа работ", "workGroup", allValuesFor("workGroup"), state.placementFilters.workGroup, workGroupLabelFor, enabledFor("workGroup"), onPlacementFilterChange));
 
   container.appendChild(buildFilterGroup(
-    "Захватка", "zakhvatka", allValuesFor("zakhvatka"), state.placementFilters.zakhvatka, zoneLabelFor, enabledFor("zakhvatka"), onPlacementFilterChange
+    "Захватка", "zakhvatka", allValuesFor("zakhvatka"), state.placementFilters.zakhvatka, zakhvatkaLabelFor, enabledFor("zakhvatka"), onPlacementFilterChange
   ));
 
   // Кран / Стоянка крана — иерархически (item 3). Заголовки — объединение
@@ -4192,7 +4202,7 @@ const PICKER_SLICERS = [
   // каждого из трёх кранов относятся к двум захваткам сразу). Порядок в
   // панели тот же, что в фильтрах «Модели»: захватка → кран → стоянка.
   { key: "workGroup", title: "Группа работ", valueFn: e => e.work_group_id || PLACEMENT_NONE, labelFor: workGroupLabelFor },
-  { key: "zakhvatka", title: "Захватка", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status"), labelFor: zoneLabelFor },
+  { key: "zakhvatka", title: "Захватка", valueFn: e => zoneFilterValue(e, "zone_zakhvatka_id", "zone_zakhvatka_status"), labelFor: zakhvatkaLabelFor },
   { key: "crane", title: "Кран", valueFn: e => zoneFilterValue(e, "zone_crane_id", "zone_crane_status"), labelFor: zoneLabelFor },
   // Стоянка — тоже с владельцем в подписи, и по той же причине, что и
   // подтип выше: имя стоянки уникально только внутри своего крана
@@ -7351,6 +7361,7 @@ function clearWorkspace() {
   state.elements = [];
   state.sourceFile = null;
   state.zones = [];
+  state.zoneLabels = [];
   state.zoneLabelEls = [];
   state.byId.clear();
   state.shapeById.clear();
@@ -7905,6 +7916,7 @@ async function loadPlanInner(preserveView = true) {
   state.defaultContracts = data.default_contracts || {};
   state.elementShapes = data.element_shapes || {};
   state.zones = data.zones || [];
+  state.zoneLabels = data.zone_labels || state.zones;
   state.workGroups = data.work_groups || [];
   state.baseMarkerRadius = data.marker_radius;
   state.selectedId = null;
