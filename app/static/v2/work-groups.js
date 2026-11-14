@@ -7,10 +7,22 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
   let dead = false, busy = false, data = null, elements = [], editing = null, templateMode = false;
   let selectedGroup = '', selected = new Set(initialIds), draft = null, drawing = false, preview = null, action = null;
   let message = '', history = null, view = null, fitView = null, rect = null, drag = null;
+  let mapFrame = 0, elementNodes = new Map();
   host.classList.add('wg-root');
   if (!document.getElementById('wg-style')) {
     const style = document.createElement('style'); style.id = 'wg-style';
     style.textContent = `.wg-root{min-width:0}.wg-root .wg-bar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:12px 0}.wg-root label{display:flex;flex-direction:column;gap:5px}.wg-root input,.wg-root select,.wg-root .v2-btn{height:38px;font:inherit;line-height:1.2;padding:6px 9px;box-sizing:border-box;max-width:100%}.wg-root input:not([type=number]){width:320px}.wg-root input[type=number]{width:160px}.wg-root select{min-width:190px}.wg-root table{border-collapse:collapse;width:100%;margin:14px 0}.wg-root th,.wg-root td{text-align:left;vertical-align:top;padding:9px;border-bottom:1px solid var(--line,#ccc)}.wg-root .wg-map{width:100%;height:clamp(240px,55vh,520px);display:block;box-sizing:border-box;border:1px solid #999;background:#f4f6f8;touch-action:none}.wg-root .wg-panel{border:1px solid var(--line,#aaa);border-radius:8px;padding:16px;margin:14px 0}.wg-root .wg-actions{display:flex;gap:8px;flex-wrap:wrap}.wg-root .wg-rules{display:grid;gap:8px}.wg-root .wg-rule{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}.wg-root .wg-note{white-space:pre-wrap}.wg-dialog{position:fixed;inset:3vh 3vw;max-width:1500px;max-height:94vh;width:auto;height:auto;box-sizing:border-box;padding:20px;overflow:auto;border:1px solid #aaa;border-radius:10px;background:var(--surface,#fff);color:var(--text,#222)}.wg-dialog::backdrop{background:#0007}.wg-root .wg-status:empty{display:none}.wg-root button:disabled{opacity:.5}.wg-root .wg-table-wrap{overflow:auto}`;
+    style.textContent += `
+      .wg-root .wg-map-wrap{position:relative}
+      .wg-root .wg-map{user-select:none;cursor:grab}
+      .wg-root .wg-map [data-element]{cursor:pointer}
+      .wg-root .wg-map.wg-panning,.wg-root .wg-map.wg-panning *{cursor:grabbing}
+      .wg-root .wg-map.wg-drawing,.wg-root .wg-map.wg-drawing *{cursor:crosshair}
+      .wg-root .wg-map-controls{position:absolute;right:16px;bottom:16px;display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--surface,#fff);border:1px solid var(--line,#cbd8df);border-radius:6px;box-shadow:0 2px 8px #19324121}
+      .wg-root .wg-map-controls output{min-width:42px;text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+      .wg-root .wg-map-controls button{width:32px;height:30px;padding:0;border:1px solid var(--line,#cbd8df);border-radius:5px;background:var(--surface,#fff);color:inherit;font:inherit;font-size:20px;line-height:1;cursor:pointer}
+      .wg-root .wg-map-controls button:hover{background:var(--bg,#eef4f7)}
+    `;
     document.head.append(style);
   }
   const $ = (q) => host.querySelector(q);
@@ -39,15 +51,40 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
     if (dead) return;
     elements = model.elements || [];
     if (selectedGroup && !data.groups.some(g => g.id === Number(selectedGroup))) selectedGroup = '';
-    if (!view) {
-      const xs = elements.map(e => e.x), ys = elements.map(e => e.y);
-      const minX = xs.length ? Math.min(...xs) : 0, maxX = xs.length ? Math.max(...xs) : 10000;
-      const minY = ys.length ? Math.min(...ys) : 0, maxY = ys.length ? Math.max(...ys) : 10000;
-      view = [minX - 2000, -maxY - 2000, Math.max(maxX-minX+4000, 10000), Math.max(maxY-minY+4000, 10000)];
-      fitView = [...view];
+    const xs = elements.map(e => e.x), ys = elements.map(e => e.y);
+    const minX = xs.length ? Math.min(...xs) : 0, maxX = xs.length ? Math.max(...xs) : 10000;
+    const minY = ys.length ? Math.min(...ys) : 0, maxY = ys.length ? Math.max(...ys) : 10000;
+    fitView = [minX - 2000, -maxY - 2000, Math.max(maxX-minX+4000, 10000), Math.max(maxY-minY+4000, 10000)];
+    if (!view) view = [...fitView];
+  }
+  function invalidate() { preview = null; action = null; $('[data-wg-preview]')?.remove(); }
+  function paintSelection(ids) {
+    for (const id of ids) {
+      const node = elementNodes.get(id);
+      if (!node) continue;
+      node.setAttribute('fill', selected.has(id) ? '#dc5d26' : '#607d8b');
+      if (node.tagName === 'polygon') node.setAttribute('stroke', selected.has(id) ? '#ab2800' : '#ffffff');
+    }
+    const assign = $('[data-wg="assign"]');
+    if (assign) assign.textContent = `Назначить выделенным (${selected.size})`;
+    for (const action of ['assign', 'auto', 'clear-selection']) {
+      const button = $(`[data-wg="${action}"]`);
+      if (button) button.disabled = busy || !selected.size;
     }
   }
-  function invalidate() { preview = null; action = null; }
+  function paintView() {
+    if (mapFrame) cancelAnimationFrame(mapFrame);
+    mapFrame = 0;
+    if (dead) return;
+    const svg = $('.wg-map'), box = view.join(' ');
+    if (svg && svg.getAttribute('viewBox') !== box) svg.setAttribute('viewBox', box);
+    const zoom = $('#wg-zoom');
+    const label = `${Math.round(100 * fitView[2] / view[2])}%`;
+    if (zoom && zoom.textContent !== label) zoom.textContent = label;
+  }
+  function scheduleView() {
+    if (!mapFrame) mapFrame = requestAnimationFrame(paintView);
+  }
   async function prepare(payload) {
     invalidate();
     const result = await api.post(`/work-groups/${objectId}/action`, { ...payload, preview: true });
@@ -98,14 +135,16 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
   }
   function renderPreview() {
     if (!preview) return '';
-    if (preview.conflicts?.length) return `<section class="wg-panel"><h3>Изменения шаблона и объекта</h3>${preview.conflicts.map(c => `<label>${esc(c.local?.name || c.template?.name || c.key)}<select data-choice="${esc(c.key)}"><option value="">Выберите вариант</option><option value="local">Сохранить настройки объекта</option><option value="template">Применить шаблон</option></select></label><p>Объект — ${esc(c.local?.rules.map(titleRule).join(', ') || 'группа удалена')}. Шаблон — ${esc(c.template?.rules.map(titleRule).join(', ') || 'группа удалена')}.</p>`).join('')}${btn('resolve','Пересчитать предпросмотр')}</section>`;
-    return `<section class="wg-panel" role="status"><h3>Предпросмотр</h3><p>Изменятся назначения ${preview.changed} изделий. Затронуто ручных назначений ${preview.manual_affected}.</p>
+    if (preview.conflicts?.length) return `<section class="wg-panel" data-wg-preview><h3>Изменения шаблона и объекта</h3>${preview.conflicts.map(c => `<label>${esc(c.local?.name || c.template?.name || c.key)}<select data-choice="${esc(c.key)}"><option value="">Выберите вариант</option><option value="local">Сохранить настройки объекта</option><option value="template">Применить шаблон</option></select></label><p>Объект — ${esc(c.local?.rules.map(titleRule).join(', ') || 'группа удалена')}. Шаблон — ${esc(c.template?.rules.map(titleRule).join(', ') || 'группа удалена')}.</p>`).join('')}${btn('resolve','Пересчитать предпросмотр')}</section>`;
+    return `<section class="wg-panel" data-wg-preview role="status"><h3>Предпросмотр</h3><p>Изменятся назначения ${preview.changed} изделий. Затронуто ручных назначений ${preview.manual_affected}.</p>
       <ul>${preview.summary.map(s => `<li>${esc(groupName(s.group_id))} — ${esc({matched:'Назначена захватка',unmatched:'Без захватки',needs_review:'Требует проверки',not_applicable:'Отметка не определена'}[s.status] || s.status)} — ${s.count}</li>`).join('')}</ul>
       <details><summary>Изделия и назначения</summary><div class="wg-table-wrap"><table><thead><tr><th>ID</th><th>Прежняя захватка</th><th>Новая захватка</th></tr></thead><tbody>${preview.changes.slice(0,300).map(c => `<tr><td>${c.id}</td><td>${esc(data.zones.find(z=>z.id===c.before.zone_zakhvatka_id)?.name || 'Без захватки')}</td><td>${esc(data.zones.find(z=>z.id===c.after.zone_zakhvatka_id)?.name || (c.after.zone_zakhvatka_id ? action.zone?.name || 'Новая захватка' : 'Без захватки'))}</td></tr>`).join('')}</tbody></table></div></details>
       <div class="wg-actions">${btn('apply','Применить')}${btn('cancel-preview','Отменить')}</div></section>`;
   }
   function render() {
     if (dead) return;
+    if (mapFrame) cancelAnimationFrame(mapFrame);
+    mapFrame = 0; drag = null; rect = null;
     if (!data || !view) { host.innerHTML = `<p role="status">${esc(message || 'Загрузка групп работ…')}</p>${btn('reload','Повторить')}`; wire(); return; }
     host.innerHTML = `<p class="wg-status wg-note" role="status">${esc(message || '')}</p>
       <div class="wg-bar">${btn('reload','Обновить')}${canEdit ? btn('edit-groups','Настроить группы объекта')+btn('template-apply','Применить общий шаблон') : ''}${data.can_edit_template ? btn('edit-template','Настроить общий шаблон') : ''}${btn('history','История назначений')}</div>
@@ -113,10 +152,16 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
       <p class="v2-muted">Шаблон объекта ${data.applied_revision}. Текущая версия общего шаблона ${data.template.revision}.</p>
       ${renderEditor()}
       <div class="wg-bar"><label>Группа работ<select id="wg-group"><option value="">Все группы</option>${groupOptions(selectedGroup)}</select></label><label>Назначить захватку<select id="wg-target"><option value="">Выберите захватку</option>${data.zones.filter(z=>z.is_current && (!selectedGroup || z.work_group_id===Number(selectedGroup))).map(z=>`<option value="${z.id}">${esc(groupName(z.work_group_id)+' / '+z.name)}</option>`).join('')}</select></label>
-        ${canEdit ? btn('new-zone','Создать захватку')+btn('assign',`Назначить выделенным (${selected.size})`,!selected.size)+btn('auto','Вернуть назначение по контуру',!selected.size) : ''}${btn('clear-selection','Снять выделение',!selected.size)}${btn('fit','Вписать')}<output id="wg-zoom" aria-label="Масштаб схемы">${Math.round(100 * fitView[2] / view[2])}%</output></div>
+        ${canEdit ? btn('new-zone','Создать захватку')+btn('assign',`Назначить выделенным (${selected.size})`,!selected.size)+btn('auto','Вернуть назначение по контуру',!selected.size) : ''}${btn('clear-selection','Снять выделение',!selected.size)}</div>
       ${renderDraft()}
-      <p class="v2-muted">Щелчок — выделение изделия. Shift и протяжка — выделение рамкой. Колесо — масштаб. Протяжка по фону — перемещение плана.</p>
-      <svg class="wg-map" role="img" aria-label="План изделий и захваток" viewBox="${(view || [0,0,10000,10000]).join(' ')}"></svg>
+      <p class="v2-muted">Щелчок — выделение изделия. Shift и протяжка — выделение рамкой. Колесо — масштаб. Протяжка — перемещение плана.</p>
+      <div class="wg-map-wrap">
+        <svg class="wg-map" role="img" aria-label="План изделий и захваток" viewBox="${view.join(' ')}"></svg>
+        <div class="wg-map-controls" role="group" aria-label="Масштаб схемы">
+          <output id="wg-zoom" aria-label="Текущий масштаб">${Math.round(100 * fitView[2] / view[2])}%</output>
+          <button type="button" data-wg="fit" title="Вписать всю схему, масштаб 100%" aria-label="Вписать всю схему" ${busy ? 'disabled' : ''}>⟲</button>
+        </div>
+      </div>
       <div class="wg-table-wrap"><table><thead><tr><th>Группа</th><th>Захватка</th><th>Контур</th><th>Состояние</th><th></th></tr></thead><tbody>${data.zones.filter(z=>!selectedGroup || z.work_group_id===Number(selectedGroup)).map(z=>`<tr><td>${esc(groupName(z.work_group_id))}</td><td>${esc(z.name)}</td><td>${z.levels.length ? z.levels.length+' ярус(а)' : 'Ручное назначение'}</td><td>${z.is_current ? 'Действующая' : 'Архивная'}</td><td>${canEdit ? btn('zone-'+z.id,'Изменить') : ''}</td></tr>`).join('')}</tbody></table></div>
       ${renderPreview()}
       ${history ? `<details open><summary>История назначений</summary><div class="wg-table-wrap"><table><thead><tr><th>Время</th><th>Изделие</th><th>Изменение</th><th>Автор</th><th></th></tr></thead><tbody>${history.map(h=>`<tr><td>${esc(h.created_at)}</td><td>${h.element_id ?? 'Захватка'}</td><td>${esc(h.action)}<details><summary>Подробности</summary><pre>${esc(h.before_json)}\n→\n${esc(h.after_json)}</pre></details></td><td>${esc(h.actor || '')}</td><td>${canEdit && h.element_id ? btn('restore-'+h.id,'Восстановить назначение') : canEdit && h.action==='zone' && !h.undone ? btn('undo-zone-'+h.id,'Отменить правку контура') : ''}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`;
@@ -133,7 +178,12 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
     if (draft.levels[0]) { draft.levels[0].elevation_mm = draft.lower; draft.levels[0].upper_elevation_mm = draft.upper; }
   }
   function wire() {
-    host.querySelectorAll('[data-wg]').forEach(b=>b.addEventListener('click',()=>run(async()=>{
+    // View and selection changes keep the existing model nodes and form values.
+    $('[data-wg="fit"]')?.addEventListener('click', () => { view = [...fitView]; paintView(); });
+    $('[data-wg="clear-selection"]')?.addEventListener('click', () => {
+      const changed = [...selected]; selected.clear(); invalidate(); paintSelection(changed);
+    });
+    host.querySelectorAll('[data-wg]:not([data-wg="fit"]):not([data-wg="clear-selection"])').forEach(b=>b.addEventListener('click',()=>run(async()=>{
       const id=b.dataset.wg;
       if (id.startsWith('show-group-')) { syncDraft(); selectedGroup=id.slice(11); selected.clear(); invalidate(); }
       else if (id==='reload') { invalidate(); await load(); }
@@ -168,45 +218,101 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
       else if(id==='preview-zone') { syncDraft(); await prepare({action:'zone',zone:draft}); }
       else if(id==='assign') { const target=Number($('#wg-target').value); if(!target) throw Error('Выберите захватку'); const z=data.zones.find(z=>z.id===target); const ids=elements.filter(e=>selected.has(e.id)&&e.work_group_id===z.work_group_id).map(e=>e.id); if(!ids.length) throw Error('В выделении нет изделий группы выбранной захватки'); await prepare({action:'assign',zone_id:target,element_ids:ids}); message=`К назначению выбрано ${ids.length} из ${selected.size} выделенных изделий`; }
       else if(id==='auto') await prepare({action:'auto',element_ids:[...selected]});
-      else if(id==='clear-selection') { selected.clear(); invalidate(); }
       else if(id==='history') history=await api.get(`/work-groups/${objectId}/history`);
       else if(id.startsWith('undo-zone-')) await prepare({action:'undo_zone',history_id:Number(id.slice(10))});
       else if(id.startsWith('restore-')) await prepare({action:'restore',history_id:Number(id.slice(8))});
-      else if(id==='fit') { view=null; await load(); }
     })));
-    $('#wg-group')?.addEventListener('change',e=>{ syncDraft(); selectedGroup=e.target.value; selected=new Set([...selected].filter(id=>visible().some(e=>e.id===id))); invalidate(); render(); });
+    $('#wg-group')?.addEventListener('change',e=>{ syncDraft(); selectedGroup=e.target.value; const ids=new Set(visible().map(e=>e.id)); selected=new Set([...selected].filter(id=>ids.has(id))); invalidate(); render(); });
     host.querySelectorAll('[data-name]').forEach(e=>e.addEventListener('input',()=>{ editing[Number(e.dataset.name)].name=e.value; invalidate(); }));
     for (const attr of ['type','subtype']) host.querySelectorAll(`[data-${attr}]`).forEach(e=>e.addEventListener('change',()=>{
       const [i,j]=e.dataset[attr].split(':').map(Number); editing[i].rules[j][attr==='type'?'element_type':'subtype']=e.value; invalidate(); render();
     }));
     host.querySelectorAll('[id^="wg-draft-"]').forEach(e=>e.addEventListener('input',()=>{ syncDraft(); invalidate(); }));
   }
+  const pointText = points => points.map(p => `${p[0]},${-p[1]}`).join(' ');
+  function paintDraft() {
+    const layer = $('[data-wg-draft]');
+    if (layer) layer.innerHTML = draft?.levels.map(l => `<polyline points="${pointText(l.outline)}" fill="#29a0d322" stroke="#0079b1" stroke-width="${view[2]/550}" pointer-events="none"/>`).join('') || '';
+  }
   function drawMap() {
-    const svg=$('.wg-map'); if(!svg) return;
-    const pointText=points=>points.map(p=>`${p[0]},${-p[1]}`).join(' ');
-    const width=view[2]/1100;
-    const zones=data.zones.filter(z=>z.is_current && (!selectedGroup || z.work_group_id===Number(selectedGroup)));
-    svg.innerHTML=`<g stroke-width="${width}">${zones.flatMap(z=>z.levels.map(l=>`<polygon points="${pointText(l.outline)}" fill="#e9be4a22" stroke="#b17700" pointer-events="none"/>`)).join('')}
-      ${visible().map(e=>e.outline?.length ? `<polygon data-element="${e.id}" points="${pointText(e.outline)}" fill="${selected.has(e.id)?'#dc5d26':'#607d8b'}" stroke="${selected.has(e.id)?'#ab2800':'#ffffff'}"><title>${esc(e.mark || e.id)} · ${esc(groupName(e.work_group_id))}</title></polygon>` : `<circle data-element="${e.id}" cx="${e.x}" cy="${-e.y}" r="${width*3}" fill="${selected.has(e.id)?'#dc5d26':'#607d8b'}"/>`).join('')}
-      ${draft?.levels.map(l=>`<polyline points="${pointText(l.outline)}" fill="#29a0d322" stroke="#0079b1" stroke-width="${width*2}" pointer-events="none"/>`).join('') || ''}</g>`;
-    const world=e=>{ const p=svg.createSVGPoint(); p.x=e.clientX;p.y=e.clientY;const q=p.matrixTransform(svg.getScreenCTM().inverse());return [q.x,-q.y]; };
-    svg.onpointerdown = e=>{
-      if(busy) return;
-      if(drawing) { syncDraft(); draft.levels[0].outline.push(world(e)); invalidate(); drawMap();return; }
-      drag={start:world(e),client:[e.clientX,e.clientY],view:[...view],id:Number(e.target.closest('[data-element]')?.dataset.element)||null,box:e.shiftKey};
-      svg.setPointerCapture(e.pointerId);
+    const svg = $('.wg-map'); if (!svg) return;
+    const width = view[2]/1100;
+    const zones = data.zones.filter(z => z.is_current && (!selectedGroup || z.work_group_id === Number(selectedGroup)));
+    svg.innerHTML = `<g stroke-width="${width}">${zones.flatMap(z => z.levels.map(l => `<polygon points="${pointText(l.outline)}" fill="#e9be4a22" stroke="#b17700" pointer-events="none"/>`)).join('')}
+      ${visible().map(e => e.outline?.length ? `<polygon data-element="${e.id}" points="${pointText(e.outline)}" fill="${selected.has(e.id)?'#dc5d26':'#607d8b'}" stroke="${selected.has(e.id)?'#ab2800':'#ffffff'}"><title>${esc(e.mark || e.id)} · ${esc(groupName(e.work_group_id))}</title></polygon>` : `<circle data-element="${e.id}" cx="${e.x}" cy="${-e.y}" r="${width*3}" fill="${selected.has(e.id)?'#dc5d26':'#607d8b'}"/>`).join('')}
+      </g><g data-wg-draft pointer-events="none"></g>
+      <rect data-wg-box style="display:none" fill="#29a0d322" stroke="#0079b1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
+    elementNodes = new Map([...svg.querySelectorAll('[data-element]')].map(node => [Number(node.dataset.element), node]));
+    svg.classList.toggle('wg-drawing', drawing);
+    paintDraft();
+    const box = svg.querySelector('[data-wg-box]');
+    const world = (event, inverse = svg.getScreenCTM().inverse()) => {
+      const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(inverse);
+      return [point.x, -point.y];
     };
-    svg.onpointermove = e=>{
-      if(!drag) return;
-      if(drag.box) { const p=world(e); rect=[drag.start,p]; }
-      else if(!drag.id) { const dx=(e.clientX-drag.client[0])*view[2]/svg.clientWidth,dy=(e.clientY-drag.client[1])*view[3]/svg.clientHeight;view=[drag.view[0]-dx,drag.view[1]-dy,view[2],view[3]];svg.setAttribute('viewBox',(view || [0,0,10000,10000]).join(' ')); }
+    function moveGesture(event) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!drag.moved && Math.hypot(event.clientX - drag.client[0], event.clientY - drag.client[1]) < 4) return;
+      drag.moved = true;
+      const point = world(event, drag.inverse);
+      if (drag.box) {
+        rect = [drag.start, point];
+        const [[x1, y1], [x2, y2]] = rect;
+        box.setAttribute('x', Math.min(x1, x2)); box.setAttribute('y', -Math.max(y1, y2));
+        box.setAttribute('width', Math.abs(x2 - x1)); box.setAttribute('height', Math.abs(y2 - y1));
+        box.style.display = '';
+      } else {
+        // Use the initial screen transform, including SVG letterboxing, throughout a gesture.
+        view = [drag.view[0] + drag.start[0] - point[0], drag.view[1] - drag.start[1] + point[1], drag.view[2], drag.view[3]];
+        svg.classList.add('wg-panning');
+        scheduleView();
+      }
+    }
+    function finishGesture(event, cancelled = false) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (!cancelled) moveGesture(event);
+      const gesture = drag;
+      drag = null;
+      if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+      svg.classList.remove('wg-panning'); box.style.display = 'none';
+      paintView();
+      const changed = [];
+      if (!cancelled) {
+        if (gesture.box && rect) {
+          const [[x1,y1],[x2,y2]] = rect;
+          for (const element of visible()) {
+            if (element.x >= Math.min(x1,x2) && element.x <= Math.max(x1,x2) && element.y >= Math.min(y1,y2) && element.y <= Math.max(y1,y2) && !selected.has(element.id)) {
+              selected.add(element.id); changed.push(element.id);
+            }
+          }
+        } else if (!gesture.moved && gesture.id) {
+          selected.has(gesture.id) ? selected.delete(gesture.id) : selected.add(gesture.id);
+          changed.push(gesture.id);
+        }
+      }
+      rect = null;
+      if (changed.length) { invalidate(); paintSelection(changed); }
+    }
+    svg.onpointerdown = event => {
+      if (busy || !event.isPrimary || event.button !== 0) return;
+      event.preventDefault();
+      if (drawing) {
+        syncDraft(); draft.levels[0].outline.push(world(event)); invalidate(); paintDraft(); return;
+      }
+      const inverse = svg.getScreenCTM().inverse();
+      drag = { start: world(event, inverse), client: [event.clientX,event.clientY], view: [...view], inverse,
+        id: Number(event.target.closest('[data-element]')?.dataset.element) || null,
+        box: event.shiftKey, pointerId: event.pointerId, moved: false };
+      svg.setPointerCapture(event.pointerId);
     };
-    svg.onpointerup = e=>{
-      if(!drag) return;
-      if(drag.box && rect) { const [[x1,y1],[x2,y2]]=rect;for(const el of visible()) if(el.x>=Math.min(x1,x2)&&el.x<=Math.max(x1,x2)&&el.y>=Math.min(y1,y2)&&el.y<=Math.max(y1,y2)) selected.add(el.id); }
-      else if(drag.id) selected.has(drag.id) ? selected.delete(drag.id) : selected.add(drag.id);
-      drag=null;rect=null; syncDraft();invalidate();render();
+    svg.onpointermove = event => {
+      if (drag && event.pointerType === 'mouse' && !(event.buttons & 1)) finishGesture(event, true);
+      else moveGesture(event);
     };
+    svg.onpointerup = event => finishGesture(event);
+    svg.onpointercancel = event => finishGesture(event, true);
+    svg.onlostpointercapture = event => finishGesture(event, true);
+    svg.ondragstart = event => event.preventDefault();
     svg.onwheel = event => {
       event.preventDefault();
       if (!event.deltaY || busy || drag) return;
@@ -223,12 +329,11 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
         fitView[2] / nextZoom,
         fitView[3] / nextZoom,
       ];
-      svg.setAttribute('viewBox', view.join(' '));
-      $('#wg-zoom').textContent = `${Math.round(nextZoom * 100)}%`;
+      paintView();
     };
   }
   void run(load);
-  return { destroy(){ dead=true; host.replaceChildren(); }, guardLeave(){ return Promise.resolve(!editing && !draft && !preview || window.confirm('Закрыть несохранённые изменения групп и захваток?')); } };
+  return { destroy(){ dead=true; if(mapFrame) cancelAnimationFrame(mapFrame); drag=null; elementNodes.clear(); host.replaceChildren(); }, guardLeave(){ return Promise.resolve(!editing && !draft && !preview || window.confirm('Закрыть несохранённые изменения групп и захваток?')); } };
 }
 
 export function openWorkGroups({ api, objectId, canEdit, initialIds, onSaved }) {

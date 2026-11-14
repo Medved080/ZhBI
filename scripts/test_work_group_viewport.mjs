@@ -26,6 +26,8 @@ try {
     const map = await browser.rect('.wg-map');
     assert.ok(map.x >= page.x && map.x + map.w <= page.x + page.w + 1, 'Map fits page width');
     assert.ok(map.y >= page.y - 1 && map.y + map.h <= height + 1, 'Complete map is reachable inside the window');
+    const controls = await browser.rect('.wg-map-controls');
+    assert.ok(controls.x > map.x && controls.y > map.y && controls.x + controls.w < map.x + map.w && controls.y + controls.h < map.y + map.h, 'Zoom controls are inside the scheme');
     await browser.shot(new URL(`map-${width}x${height}.png`, output).pathname);
   }
 
