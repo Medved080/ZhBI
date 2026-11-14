@@ -57,12 +57,31 @@ try {
   await browser.clickSel('[data-wg=fit]');
   await browser.waitFor("document.querySelector('#wg-zoom')?.textContent==='100%'", 10000);
   assert.deepEqual(await view(), initial, 'Fit restores 100 percent');
+  await browser.eval("document.querySelector('.wg-map').scrollIntoView({block:'center'})");
+  const pinchMap = await browser.rect('.wg-map');
+  const anchor = () => browser.eval(`(()=>{const p=new DOMPoint(${pinchMap.cx},${pinchMap.cy}).matrixTransform(document.querySelector('.wg-map').getScreenCTM().inverse());return [p.x,p.y]})()`);
+  const anchorBefore = await anchor();
+  await browser.wheel(pinchMap.cx, pinchMap.cy, -10, {ctrl:true});
+  await browser.sleep(100);
+  current = await view();
+  const pinchZoom = initial[2] / current[2];
+  assert.ok(pinchZoom > 1.08 && pinchZoom < 1.15, 'Small pinch motion gives a responsive, gradual zoom');
+  const anchorAfter = await browser.eval(`(()=>{const p=new DOMPoint(${anchorBefore[0]},${anchorBefore[1]}).matrixTransform(document.querySelector('.wg-map').getScreenCTM());return [p.x,p.y]})()`);
+  assert.ok(Math.hypot(anchorAfter[0]-pinchMap.cx,anchorAfter[1]-pinchMap.cy)<0.5,'Pinch keeps the point under the cursor fixed to subpixel accuracy');
+  await browser.wheel(pinchMap.cx, pinchMap.cy, 10, {ctrl:true});
+  await browser.sleep(100);
+  assert.ok(Math.abs((await view())[2] / initial[2] - 1)<1e-10,'Reversing pinch restores the scale');
+  for(let i=0;i<20;i++) await browser.wheel(pinchMap.cx, pinchMap.cy, 10, {ctrl:true});
+  await browser.sleep(100);
+  assert.equal(await browser.eval("document.querySelector('#wg-zoom').textContent"),'25%','Pinch respects the same minimum');
+  assert.equal(await browser.eval('visualViewport.scale'),1,'Pinch zooms the scheme, not the browser page');
+  await browser.clickSel('[data-wg=fit]');
   const audit = await browser.eval("({align:alignAudit(document.querySelector('.wg-root')),size:sizeAudit(document.querySelector('.wg-root'))})");
   assert.deepEqual(audit, { align: [], size: [] });
   await browser.eval("document.querySelector('[data-cat=Кран]').click()");
   assert.equal(await browser.eval("getComputedStyle(document.querySelector('#v2-content')).overflowY"), 'hidden');
   assert.deepEqual(browser.exceptions, []);
-  console.log('Viewport, scrolling, half-speed zoom, 25% bound and fit checks passed');
+  console.log('Viewport, scrolling, wheel and pinch sensitivity, 25% bound and fit checks passed');
 } finally {
   await browser.close();
 }

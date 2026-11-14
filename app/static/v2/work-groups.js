@@ -318,8 +318,10 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
       if (!event.deltaY || busy || drag) return;
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? svg.clientHeight : 1;
       const steps = Math.max(-1, Math.min(1, event.deltaY * unit / 100));
+      // Trackpad pinch is a ctrl-wheel stream with much smaller deltas than a wheel notch.
+      const sensitivity = event.ctrlKey ? 1 : Math.log(1.2) / 2;
       const currentZoom = fitView[2] / view[2];
-      const nextZoom = Math.max(0.25, currentZoom * Math.exp(-steps * Math.log(1.2) / 2));
+      const nextZoom = Math.max(0.25, currentZoom * Math.exp(-steps * sensitivity));
       const factor = currentZoom / nextZoom;
       if (factor === 1) return;
       const point = world(event);
