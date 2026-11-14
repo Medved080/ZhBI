@@ -6,11 +6,11 @@ const titleRule = (r) => `${r.element_type === '*' ? 'Все типы' : r.eleme
 export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [], onSaved = () => {} }) {
   let dead = false, busy = false, data = null, elements = [], editing = null, templateMode = false;
   let selectedGroup = '', selected = new Set(initialIds), draft = null, drawing = false, preview = null, action = null;
-  let message = '', history = null, view = null, rect = null, drag = null;
+  let message = '', history = null, view = null, fitView = null, rect = null, drag = null;
   host.classList.add('wg-root');
   if (!document.getElementById('wg-style')) {
     const style = document.createElement('style'); style.id = 'wg-style';
-    style.textContent = `.wg-root{min-width:0}.wg-root .wg-bar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:12px 0}.wg-root label{display:flex;flex-direction:column;gap:5px}.wg-root input,.wg-root select,.wg-root .v2-btn{height:38px;font:inherit;line-height:1.2;padding:6px 9px;box-sizing:border-box;max-width:100%}.wg-root input:not([type=number]){width:320px}.wg-root input[type=number]{width:160px}.wg-root select{min-width:190px}.wg-root table{border-collapse:collapse;width:100%;margin:14px 0}.wg-root th,.wg-root td{text-align:left;vertical-align:top;padding:9px;border-bottom:1px solid var(--line,#ccc)}.wg-root .wg-map{width:100%;height:520px;border:1px solid #999;background:#f4f6f8;touch-action:none}.wg-root .wg-panel{border:1px solid var(--line,#aaa);border-radius:8px;padding:16px;margin:14px 0}.wg-root .wg-actions{display:flex;gap:8px;flex-wrap:wrap}.wg-root .wg-rules{display:grid;gap:8px}.wg-root .wg-rule{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}.wg-root .wg-note{white-space:pre-wrap}.wg-dialog{position:fixed;inset:3vh 3vw;max-width:1500px;max-height:94vh;width:auto;height:auto;box-sizing:border-box;padding:20px;overflow:auto;border:1px solid #aaa;border-radius:10px;background:var(--surface,#fff);color:var(--text,#222)}.wg-dialog::backdrop{background:#0007}.wg-root .wg-status:empty{display:none}.wg-root button:disabled{opacity:.5}.wg-root .wg-table-wrap{overflow:auto}`;
+    style.textContent = `.wg-root{min-width:0}.wg-root .wg-bar{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:12px 0}.wg-root label{display:flex;flex-direction:column;gap:5px}.wg-root input,.wg-root select,.wg-root .v2-btn{height:38px;font:inherit;line-height:1.2;padding:6px 9px;box-sizing:border-box;max-width:100%}.wg-root input:not([type=number]){width:320px}.wg-root input[type=number]{width:160px}.wg-root select{min-width:190px}.wg-root table{border-collapse:collapse;width:100%;margin:14px 0}.wg-root th,.wg-root td{text-align:left;vertical-align:top;padding:9px;border-bottom:1px solid var(--line,#ccc)}.wg-root .wg-map{width:100%;height:clamp(240px,55vh,520px);display:block;box-sizing:border-box;border:1px solid #999;background:#f4f6f8;touch-action:none}.wg-root .wg-panel{border:1px solid var(--line,#aaa);border-radius:8px;padding:16px;margin:14px 0}.wg-root .wg-actions{display:flex;gap:8px;flex-wrap:wrap}.wg-root .wg-rules{display:grid;gap:8px}.wg-root .wg-rule{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}.wg-root .wg-note{white-space:pre-wrap}.wg-dialog{position:fixed;inset:3vh 3vw;max-width:1500px;max-height:94vh;width:auto;height:auto;box-sizing:border-box;padding:20px;overflow:auto;border:1px solid #aaa;border-radius:10px;background:var(--surface,#fff);color:var(--text,#222)}.wg-dialog::backdrop{background:#0007}.wg-root .wg-status:empty{display:none}.wg-root button:disabled{opacity:.5}.wg-root .wg-table-wrap{overflow:auto}`;
     document.head.append(style);
   }
   const $ = (q) => host.querySelector(q);
@@ -44,6 +44,7 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
       const minX = xs.length ? Math.min(...xs) : 0, maxX = xs.length ? Math.max(...xs) : 10000;
       const minY = ys.length ? Math.min(...ys) : 0, maxY = ys.length ? Math.max(...ys) : 10000;
       view = [minX - 2000, -maxY - 2000, Math.max(maxX-minX+4000, 10000), Math.max(maxY-minY+4000, 10000)];
+      fitView = [...view];
     }
   }
   function invalidate() { preview = null; action = null; }
@@ -112,7 +113,7 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
       <p class="v2-muted">Шаблон объекта ${data.applied_revision}. Текущая версия общего шаблона ${data.template.revision}.</p>
       ${renderEditor()}
       <div class="wg-bar"><label>Группа работ<select id="wg-group"><option value="">Все группы</option>${groupOptions(selectedGroup)}</select></label><label>Назначить захватку<select id="wg-target"><option value="">Выберите захватку</option>${data.zones.filter(z=>z.is_current && (!selectedGroup || z.work_group_id===Number(selectedGroup))).map(z=>`<option value="${z.id}">${esc(groupName(z.work_group_id)+' / '+z.name)}</option>`).join('')}</select></label>
-        ${canEdit ? btn('new-zone','Создать захватку')+btn('assign',`Назначить выделенным (${selected.size})`,!selected.size)+btn('auto','Вернуть назначение по контуру',!selected.size) : ''}${btn('clear-selection','Снять выделение',!selected.size)}${btn('fit','Вписать')}</div>
+        ${canEdit ? btn('new-zone','Создать захватку')+btn('assign',`Назначить выделенным (${selected.size})`,!selected.size)+btn('auto','Вернуть назначение по контуру',!selected.size) : ''}${btn('clear-selection','Снять выделение',!selected.size)}${btn('fit','Вписать')}<output id="wg-zoom" aria-label="Масштаб схемы">${Math.round(100 * fitView[2] / view[2])}%</output></div>
       ${renderDraft()}
       <p class="v2-muted">Щелчок — выделение изделия. Shift и протяжка — выделение рамкой. Колесо — масштаб. Протяжка по фону — перемещение плана.</p>
       <svg class="wg-map" role="img" aria-label="План изделий и захваток" viewBox="${(view || [0,0,10000,10000]).join(' ')}"></svg>
@@ -206,7 +207,25 @@ export function mountWorkGroups(host, { api, objectId, canEdit, initialIds = [],
       else if(drag.id) selected.has(drag.id) ? selected.delete(drag.id) : selected.add(drag.id);
       drag=null;rect=null; syncDraft();invalidate();render();
     };
-    svg.onwheel = e=>{e.preventDefault();const f=e.deltaY>0?1.2:1/1.2;const p=world(e);view=[p[0]-(p[0]-view[0])*f,-p[1]-(-p[1]-view[1])*f,view[2]*f,view[3]*f];svg.setAttribute('viewBox',(view || [0,0,10000,10000]).join(' '));};
+    svg.onwheel = event => {
+      event.preventDefault();
+      if (!event.deltaY || busy || drag) return;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? svg.clientHeight : 1;
+      const steps = Math.max(-1, Math.min(1, event.deltaY * unit / 100));
+      const currentZoom = fitView[2] / view[2];
+      const nextZoom = Math.max(0.25, currentZoom * Math.exp(-steps * Math.log(1.2) / 2));
+      const factor = currentZoom / nextZoom;
+      if (factor === 1) return;
+      const point = world(event);
+      view = [
+        point[0] - (point[0] - view[0]) * factor,
+        -point[1] - (-point[1] - view[1]) * factor,
+        fitView[2] / nextZoom,
+        fitView[3] / nextZoom,
+      ];
+      svg.setAttribute('viewBox', view.join(' '));
+      $('#wg-zoom').textContent = `${Math.round(nextZoom * 100)}%`;
+    };
   }
   void run(load);
   return { destroy(){ dead=true; host.replaceChildren(); }, guardLeave(){ return Promise.resolve(!editing && !draft && !preview || window.confirm('Закрыть несохранённые изменения групп и захваток?')); } };

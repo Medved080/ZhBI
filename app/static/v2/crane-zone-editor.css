@@ -1,4 +1,8 @@
 .v2-page.cz-page { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+/* Capture settings scroll as a document. Crane editing keeps its fitted layout. */
+.v2-page.cz-page:not(.cz-editor-active) { display: block; overflow: auto; }
+.cz-page:not(.cz-editor-active) > .v2-container { display: block; padding-bottom: 16px; }
+.cz-page:not(.cz-editor-active) #ze-body { display: block; }
 .cz-page > .v2-container { max-width: none; width: 100%; margin: 0; padding: 8px 16px 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cz-page .v2-crumbs, .cz-page .v2-screen-head, .cz-page .ze-tabs, .cz-page .ze-context { flex: none; }
 .cz-page .ze-tabs { margin: 8px 0 0; min-height: 43px; align-items: center; }
