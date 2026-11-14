@@ -25,7 +25,7 @@ def add_daily_details(wb, orders, day):
     cursor=3
     for order in orders:
         meta=[order['id'],datetime.fromisoformat(order['date']),'День' if order['shift']=='day' else 'Ночь',order['crew']['name'],order['crew'].get('foreman') or 'Не назначен',order.get('order_revision',1)]
-        source=load_workbook(BytesIO(build_xlsx(order)))
+        source=load_workbook(BytesIO(build_xlsx(order, daily_details=True)))
         for name,start in [('СНЗ',4),('Изделия',2)]:
             target=sheets[name]
             for row in source[name].iter_rows(min_row=start):

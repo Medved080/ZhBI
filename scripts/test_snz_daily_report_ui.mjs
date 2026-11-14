@@ -11,8 +11,8 @@ const tab=async name=>{await page.locator(`.snz-tabs [data-tab="${name}"]`).clic
 async function download(actionName,name){const waiting=page.waitForEvent('download');await action(actionName).click();const file=await waiting;await file.saveAs(new URL(name,out).pathname);await settled();check('download '+name,true);}
 try{
  await page.goto(base+'/v2?object_id=1#/ws-foreman');await page.locator('[data-tab="snz"]').click();await page.locator('[data-snz-open]').click();await settled();await tab('orders');
- check('daily exports require a date',!await action('registry-xlsx').isEnabled()&&!await action('registry-pdf').isEnabled());
- await page.locator('[data-filter="ordersDate"]').fill('2026-11-10');await settled();check('daily exports enabled for selected date',await action('registry-xlsx').isEnabled()&&await action('registry-pdf').isEnabled());
+ check('daily exports require a date',!await action('registry-xlsx').isEnabled()&&!await action('registry-pdf').isEnabled()&&!await action('daily-package').isEnabled());
+ await page.locator('[data-filter="ordersDate"]').fill('2026-11-10');await settled();check('daily exports enabled for selected date',await action('registry-xlsx').isEnabled()&&await action('registry-pdf').isEnabled()&&await action('daily-package').isEnabled());
  const audit=await readFile(new URL('./ui_align_audit.js',import.meta.url),'utf8');
  for(const viewport of [{width:1440,height:900},{width:2560,height:1440}]){
   await page.setViewportSize(viewport);await page.evaluate(audit);
@@ -20,6 +20,7 @@ try{
   check('daily controls aligned '+viewport.width,!issues.align.length&&!issues.size.length);await page.screenshot({path:new URL(`daily-${viewport.width}.png`,out).pathname});
  }
  await download('registry-xlsx','open.xlsx');await download('registry-pdf','open.pdf');
+ await download('daily-package','package.zip');
  await tab('facts');await page.locator('[data-fact-filter="date"]').fill('2026-11-10');await settled();await page.locator('[data-fact-filter="shift"]').selectOption('day');await settled();
  page.once('dialog',d=>d.accept());await action('close-orders').click();await settled();await tab('orders');
  await download('registry-xlsx','mixed.xlsx');await download('registry-pdf','mixed.pdf');

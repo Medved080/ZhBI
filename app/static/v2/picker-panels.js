@@ -39,15 +39,10 @@ export function createPickerPanels({ esc, nf, send, ui, getPk, loadingHtml, sw }
       const id = `pk:${g.key}`;
       const open = ui.openGroups.has(id) || (g.selected > 0 && !ui.closedGroups.has(id));
       const q = (ui.groupSearch.get(id) || "").toLowerCase();
-      const rows = g.rows.filter((r) => !q || r.label.toLowerCase().includes(q));
-      const avail = sortRows(rows.filter((r) => r.available), g.key), other = sortRows(rows.filter((r) => !r.available), g.key);
-      const shown = [...avail, ...other].slice(0, ROWS_LIMIT);
-      const rowHtml = (r) => `<label class="ws-check ws-pkrow${r.available ? "" : " ws-dim"}"><input type="checkbox" data-pk="${esc(g.key)}" data-v="${esc(JSON.stringify(r.v))}" ${r.on ? "checked" : ""}> <span>${esc(r.label)}</span><em>${nf(r.count)}</em>${g.contractedShown ? `<em class="ws-pkc">${nf(r.contracted)}</em><em class="${remCls(r.contracted - r.count)}">${r.contracted - r.count > 0 ? "+" : ""}${nf(r.contracted - r.count)}</em>` : ""}</label>`;
-      let list = "", sepDone = false;
-      for (const [i, r] of shown.entries()) {
-        if (!sepDone && i >= avail.length && other.length && avail.length) { list += `<div class="ws-sep">нет в текущем срезе</div>`; sepDone = true; }
-        list += rowHtml(r);
-      }
+      const rows = g.rows.filter((r) => r.available && (!q || r.label.toLowerCase().includes(q)));
+      const shown = sortRows(rows, g.key).slice(0, ROWS_LIMIT);
+      const rowHtml = (r) => `<label class="ws-check ws-pkrow"><input type="checkbox" data-pk="${esc(g.key)}" data-v="${esc(JSON.stringify(r.v))}" ${r.on ? "checked" : ""}> <span>${esc(r.label)}</span><em>${nf(r.count)}</em>${g.contractedShown ? `<em class="ws-pkc">${nf(r.contracted)}</em><em class="${remCls(r.contracted - r.count)}">${r.contracted - r.count > 0 ? "+" : ""}${nf(r.contracted - r.count)}</em>` : ""}</label>`;
+      const list = shown.map(rowHtml).join("");
       const notInSlice = CONTRACTED_KEYS.has(g.key) && !g.contractedShown
         ? `<p class="v2-muted ws-fnote" title="У позиции контракта есть только тип элемента и марка: по подтипу, крану, стоянке, этажу и показателю она не делится">законтрактовано — не в этом разрезе${pk.metricsSelected ? (pk.metricsSelected > 1 ? " (выбраны показатели)" : " (выбран показатель)") : ""}</p>` : "";
       // «сбросить» у каждого блока (как V1 buildPickerSlicer) — снимает выбор только этого среза

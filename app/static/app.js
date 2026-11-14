@@ -2645,7 +2645,7 @@ function cascadeGroupFor(key) {
 // Фильтр по датам СМР участвует здесь наравне с остальными категориями (в
 // каскадные группы он не входит — исключать его вместе с чем-либо не из
 // чего): при заданном диапазоне дат значения других категорий, у которых
-// не осталось ни одного подходящего элемента, должны становиться серыми,
+// не осталось ни одного подходящего элемента, должны скрываться,
 // как и от любого другого фильтра.
 function elementPassesExceptKeys(element, exceptKeys) {
   for (const def of PLACEMENT_FILTER_DEFS) {
@@ -2655,20 +2655,10 @@ function elementPassesExceptKeys(element, exceptKeys) {
   return elementPassesDateFilters(element) && elementPassesChangeFilter(element) && elementPassesGuidFilter(element);
 }
 
-// ПОЛНЫЙ список значений категории — НЕ зависит ни от одного текущего
-// фильтра (ни своего, ни чужих), поэтому пункт списка никогда не
-// пропадает из формы (см. Docs/backlog.md: "не убирай с формы отборы,
-// которые становятся неактуальными... а делай их недоступными" — было
-// найдено 2 реальных бага от прежнего поведения, когда список СУЖАЛСЯ:
-// (1) снятие галочки с "Колонна" убирало саму "Колонна" из списка —
-// её нельзя было вернуть без полного сброса фильтров, потому что
-// каскад по подтипам исключал все элементы этого типа ещё и из
-// подсчёта "остальных" фильтров; (2) стоянки крана пропадали из
-// иерархии целиком, если сам кран оказывался исключён в фильтре "Кран"
-// — тот же механизм). Для зон (Захватка/Кран/Стоянка) список
-// дополнительно объединяется с id зон из state.zones — иначе зона без
-// НИ ОДНОГО привязанного элемента (например, пустая стоянка) вообще не
-// попала бы в список, хотя видна на схеме.
+// Полный набор значений не зависит от отбора и нужен для сброса и каскадов.
+// При построении интерфейса недоступные варианты скрываются отдельно.
+// Доступность игнорирует собственную категорию и связанные категории дерева:
+// снятая галочка типа, подтипа, марки или крана должна оставаться обратимой.
 function allValuesFor(key) {
   const def = PLACEMENT_FILTER_DEFS.find(d => d.key === key);
   const set = new Set();
@@ -2713,9 +2703,8 @@ function allValuesFor(key) {
 // Доступно ли значение ПРЯМО СЕЙЧАС — есть ли хоть один элемент с этим
 // значением, проходящий все ОСТАЛЬНЫЕ активные фильтры (саму категорию
 // key не проверяем — иначе включение/выключение самого значения влияло
-// бы на его же доступность). Используется только для disabled/серого
-// вида чекбокса — сам чекбокс из формы никогда не убирается (см.
-// allValuesFor выше).
+// бы на его же доступность). Недоступные значения скрываются в интерфейсе,
+// полный набор allValuesFor сохраняется для сброса и каскадных действий.
 function isValueEnabled(key, value) {
   const def = PLACEMENT_FILTER_DEFS.find(d => d.key === key);
   const exceptKeys = cascadeGroupFor(key);
@@ -2994,24 +2983,22 @@ function filterGroupShell(title, key, { actions = true } = {}) {
   return { wrap, header, body, btnAll, btnNone };
 }
 
-// Отмечает чекбокс как временно недоступный (0 элементов проходит
-// остальные фильтры при этом значении) — checked-состояние и сам пункт
-// формы при этом не трогаются, см. Docs/backlog.md ("не убирай с формы
-// отборы... а делай их недоступными").
+// Состояние чекбокса; сами несовместимые варианты отсекаются конструкторами.
 function applyEnabledState(input, label, enabled) {
   input.disabled = !enabled;
   label.classList.toggle("filter-disabled", !enabled);
 }
 
 // Плоская группа (Захватка/Отметка/Статус) — просто список чекбоксов.
-// isEnabledFn(value) — влияет только на disabled/серый вид, не на состав
-// списка (values — уже ПОЛНЫЙ список, см. allValuesFor).
+// isEnabledFn(value) скрывает варианты, несовместимые с остальными фильтрами.
+// Исключённые в самой категории значения остаются доступны для обратного выбора.
 function buildFilterGroup(title, key, values, excludedSet, labelFor, isEnabledFn, onChange, sortOptions) {
   const { wrap, body, btnAll, btnNone } = filterGroupShell(title, key);
   const sorted = Array.from(values).sort(placementComparator(labelFor, sortOptions));
 
   const checkboxes = [];
   for (const v of sorted) {
+    if (!isEnabledFn(v)) continue;
     const label = document.createElement("label");
     label.className = "toggle";
     const input = document.createElement("input");
@@ -3495,7 +3482,8 @@ function buildHierarchicalFilterGroup(
   const allChildCheckboxes = [];
 
   for (const pv of parents) {
-    const children = childrenForParent(pv);
+    if (!parentIsEnabledFn(pv)) continue;
+    const children = childrenForParent(pv).filter(childIsEnabledFn);
 
     const pRow = document.createElement("div");
     pRow.className = "filter-parent-row";
@@ -3720,8 +3708,9 @@ function buildTypeTreeFilterGroup(types, subtypesByType, marksByType, onChange) 
 
   const typeCheckboxes = [];
   for (const тип of types) {
-    const подтипы = subtypesByType.get(тип) || [];
-    const марки = marksByType.get(тип) || [];
+    if (!isValueEnabled("elementType", тип)) continue;
+    const подтипы = (subtypesByType.get(тип) || []).filter(v => isValueEnabled("subtype", v));
+    const марки = (marksByType.get(тип) || []).filter(v => isValueEnabled("mark", v));
 
     const tRow = document.createElement("div");
     tRow.className = "filter-parent-row";
@@ -4650,7 +4639,7 @@ function buildPickerSlicer(def) {
     return {
       v, label: def.labelFor(v), count, contracted,
       diff: contractedShown ? contracted - count : null,
-      доступна: count > 0 || sel.has(v),
+      доступна: count > 0,
     };
   });
 
@@ -4658,28 +4647,10 @@ function buildPickerSlicer(def) {
   list.className = "picker-list";
   list.dataset.pickerList = def.key;
   const q = (state.picker.search[def.key] || "").trim().toLowerCase();
-  // Недоступные значения (в текущем срезе таких изделий не осталось) — ПОД
-  // разделителем, в конце списка (живой запрос 2026-08-10). Раньше они
-  // стояли вперемешку с доступными, просто приглушённые: список из сотни
-  // марок приходилось глазами процеживать, чтобы понять, из чего вообще
-  // можно выбирать. Из списка они по-прежнему не исчезают и остаются
-  // кликабельными — тот же принцип, что в фильтрах «Модели».
-  // Уже выбранное значение считается доступным всегда: иначе собственный
-  // выбор уезжал бы вниз ровно в тот момент, когда его сделали.
-  //
-  // Сортировка применяется К КАЖДОЙ ПОЛОВИНЕ ОТДЕЛЬНО (живой запрос
-  // 2026-08-10): черта разделяет «из чего выбирать» и «чего в срезе нет»,
-  // и сортировка не должна их перемешивать.
+  // Несовместимые с остальными срезами позиции скрыты. Сам выбор сохраняется
+  // до сброса и снова виден после снятия ограничений в соседних срезах.
   const доступные = pickerSortRows(строки.filter(r => r.доступна), def);
-  const недоступные = pickerSortRows(строки.filter(r => !r.доступна), def);
-
-  for (const [i, r] of [...доступные, ...недоступные].entries()) {
-    if (i === доступные.length && недоступные.length) {
-      const sep = document.createElement("div");
-      sep.className = "picker-divider";
-      sep.textContent = "нет в текущем срезе";
-      list.appendChild(sep);
-    }
+  for (const r of доступные) {
     const row = document.createElement("div");
     row.className = "picker-row";
     row.dataset.label = r.label;

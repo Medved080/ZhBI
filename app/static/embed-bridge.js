@@ -264,7 +264,7 @@
         rows: values.map((v) => {
           const count = counts.get(v) || 0;
           const contracted = cs ? (pickerContractedFor(def.key, v) || 0) : null;
-          return { v, label: def.labelFor(v), count, contracted, on: sel.has(v), available: count > 0 || sel.has(v) };
+          return { v, label: def.labelFor(v), count, contracted, on: sel.has(v), available: count > 0 };
         }),
       };
     });

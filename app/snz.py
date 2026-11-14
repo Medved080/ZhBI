@@ -945,6 +945,25 @@ def export_xlsx(object_id: int, order_id: int, user=Depends(get_current_user), r
         conn.close()
 
 
+@router.get("/package.zip")
+def export_daily_package(object_id: int, date: date, user=Depends(get_current_user)):
+    from fastapi.responses import StreamingResponse
+    from app.snz_daily_report import collect
+    from app.snz_package import build_package, archive_chunks
+    conn = get_connection()
+    try:
+        # One SQLite read snapshot for document revisions, facts and drawing context.
+        conn.execute('BEGIN')
+        assert_object_feature(conn, user, object_id, 'plan', 'read')
+        state, _ = _load(conn, object_id)
+        report = collect(conn, object_id, state, date.isoformat())
+        archive = build_package(report, date, lambda order: _plan_pdf(conn, object_id, order))
+    finally:
+        conn.close()
+    return StreamingResponse(archive_chunks(archive), media_type='application/zip',
+                             headers={'Content-Disposition': f'attachment; filename="SNZ-package-{date.isoformat()}.zip"'})
+
+
 @router.get("/orders/{order_id}/export.pdf")
 def export_pdf(object_id: int, order_id: int, user=Depends(get_current_user), revision: int | None = None):
     conn = get_connection()

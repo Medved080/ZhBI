@@ -532,11 +532,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
 
   // ---- фильтры
   function itemHtml(g, it, branchKey) {
+    if (!it.enabled) return "";
     const key = branchKey || g.key;
-    const dis = it.enabled ? "" : " ws-dim";
     // «частично включён»: родитель дерева включён, но часть его подтипов/марок исключена
     const partial = !branchKey && it.on && it.branches && Object.values(it.branches).some((arr) => arr.some((x) => !x.on));
-    return `<label class="ws-check${dis}"><input type="checkbox" data-g="${esc(g.id)}" data-key="${esc(key)}" data-v="${esc(JSON.stringify(it.v))}" ${it.on ? "checked" : ""} ${partial ? 'data-indet="1"' : ""}> <span>${esc(it.label)}</span><em>${it.count}</em></label>`;
+    return `<label class="ws-check"><input type="checkbox" data-g="${esc(g.id)}" data-key="${esc(key)}" data-v="${esc(JSON.stringify(it.v))}" ${it.on ? "checked" : ""} ${partial ? 'data-indet="1"' : ""}> <span>${esc(it.label)}</span><em>${it.count}</em></label>`;
   }
   // Диапазоны дат («СМР», «Поставка», в том числе прогнозные) и «Изменения» — группы особого вида: не список значений, а поля (2026-09-30)
   const EMPTY_MODES = [["show", "с датой и без даты"], ["hide", "только с датой"], ["only", "только без даты"]];
@@ -589,14 +589,14 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       const q = (groupSearch.get(g.id) || "").toLowerCase();
       // Поле поиска — у длинных групп и у ВСЕГДА у дерева «Тип элемента» (марки лежат в его ветках, типов мало, а марок сотни: как «Поиск марки…» в V1)
       const many = g.items.length > 12 || g.kind === "tree";
-      const items = g.items.filter((it) => !q || it.label.toLowerCase().includes(q) || (it.branches && Object.values(it.branches).some((arr) => arr.some((x) => x.label.toLowerCase().includes(q)))));
+      const items = g.items.filter((it) => it.enabled).filter((it) => !q || it.label.toLowerCase().includes(q) || (it.branches && Object.values(it.branches).some((arr) => arr.some((x) => x.label.toLowerCase().includes(q)))));
       const body = !open ? "" : `<div class="ws-fbody">${many ? `<input type="search" class="ws-fsearch" data-search="${esc(g.id)}" placeholder="${g.kind === "tree" ? "Поиск марки…" : "Найти…"}" value="${esc(groupSearch.get(g.id) || "")}" aria-label="Найти в группе «${esc(g.title)}»">` : ""}
         <div class="ws-factions"><button type="button" data-all="${esc(g.id)}" data-on="1">Все</button><button type="button" data-all="${esc(g.id)}" data-on="0">Ничего</button></div>
         ${items.map((it) => {
           if (g.kind !== "tree") return itemHtml(g, it);
           const id = `${g.id}::${JSON.stringify(it.v)}`;
           const exp = openItems.has(id) || !!q;
-          const kids = it.branches ? Object.entries(it.branches) : [];
+          const kids = it.branches ? Object.entries(it.branches).map(([key, arr]) => [key, arr.filter(x => x.enabled)]).filter(([, arr]) => arr.length) : [];
           const nKids = kids.reduce((n, [, arr]) => n + arr.length, 0);
           return `<div class="ws-tree"><div class="ws-tree-row">${nKids ? `<button type="button" class="ws-exp" data-exp="${esc(id)}" aria-expanded="${exp}" aria-label="Развернуть «${esc(it.label)}»">${exp ? "▾" : "▸"}</button>` : `<span class="ws-exp"></span>`}${itemHtml(g, it)}</div>
             ${exp ? kids.map(([bk, arr]) => `<div class="ws-branch"><div class="ws-btitle">${esc(g.branchTitles?.[bk] || bk)}</div>${arr.filter((x) => !q || x.label.toLowerCase().includes(q) || it.label.toLowerCase().includes(q)).map((x) => itemHtml(g, x, bk)).join("")}</div>`).join("") : ""}</div>`;
