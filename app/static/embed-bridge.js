@@ -364,7 +364,7 @@
         inSlice: rows.some((r) => r.inSlice), over: rows.some((r) => r.over) };
     });
     // Срез сужен свойством изделия — «привязано» и «остаток» считаются внутри среза, «всего» остаётся документальным (V1: оговорка в шапке области)
-    const narrowed = PICKER_SLICERS.some((d) => d.key !== "contract" && P.sel[d.key].size) || P.metrics.size > 0 || dateFilterIsActive("montageFact");
+    const narrowed = PICKER_SLICERS.some((d) => d.key !== "contract" && P.sel[d.key].size) || P.metrics.size > 0 || factDateFilterIsActive();
     return {
       slicers, metrics, contracts, unlinked, unlinkedOn: sel.has(PLACEMENT_NONE), contractSelected: sel.size,
       selectionActive: pickerSelectionActive(), base: base.length,
@@ -374,7 +374,7 @@
         .map((m) => ({ ...m, on: m.mark ? P.sel.mark.has(m.mark) : P.sel.elementType.has(m.type) })),
     };
   }
-  const pickerSelCount = () => PICKER_SLICERS.reduce((n, d) => n + state.picker.sel[d.key].size, 0) + state.picker.metrics.size + Number(dateFilterIsActive("montageFact"));
+  const pickerSelCount = () => PICKER_SLICERS.reduce((n, d) => n + state.picker.sel[d.key].size, 0) + state.picker.metrics.size + FACT_DATE_FILTER_KEYS.filter(dateFilterIsActive).length;
   let pickerTimer = null;
   function sendPicker() {
     if (!PICKER || pickerTimer) return;
@@ -741,7 +741,7 @@
     resetDateFilters(a) {
       const g = DATE_FILTER_GROUPS.find((x) => x.key === a.group);
       if (!g) throw new Error("группа дат");
-      for (const d of DATE_FILTER_DEFS) if (d.group === g.key && (!PICKER || d.key === "montageFact")) resetDateFilter(d.key);
+      for (const d of DATE_FILTER_DEFS) if (d.group === g.key && (!PICKER || FACT_DATE_FILTER_KEYS.includes(d.key))) resetDateFilter(d.key);
       if (!PICKER && g.key === "smr") for (const d of LAG_FILTER_DEFS) state.lagFilters[d.key] = false;
       if (PICKER) onPickerChange(); else onPlacementFilterChange();
       scheduleState(); sendFilters();
@@ -1101,7 +1101,7 @@
       onPickerChange();
     },
     pickerClear(a) {
-      if (a.key === null || a.key === undefined) { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); resetDateFilter("montageFact"); sendFilters(); }
+      if (a.key === null || a.key === undefined) { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); for (const key of FACT_DATE_FILTER_KEYS) resetDateFilter(key); sendFilters(); }
       else if (PICKER_KEYS().includes(a.key)) state.picker.sel[a.key].clear();
       else throw new Error("key");
       onPickerChange();
@@ -1152,7 +1152,7 @@
       scheduleState(); sendFilters(); sendPicker();
       post({ evt: "refreshed", changed });
     },
-    resetFilters() { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); resetDateFilter("montageFact"); onPickerChange(); sendFilters(); },
+    resetFilters() { for (const k of PICKER_KEYS()) state.picker.sel[k].clear(); state.picker.metrics.clear(); for (const key of FACT_DATE_FILTER_KEYS) resetDateFilter(key); onPickerChange(); sendFilters(); },
     getFilters() { sendFilters(); sendPicker(); scheduleState(); },
   });
   function viewMode2() { return (document.querySelector("#mfr-view-switch .view-mode-btn.active")?.dataset.mfrMode) || "2d"; }

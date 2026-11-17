@@ -228,6 +228,7 @@ let state = {
   // выразить иначе нечем (живой запрос 2026-07-31). См. DATE_FILTER_DEFS.
   dateFilters: {
     montageFact: { from: "", to: "", empty: "show" },
+    deliveryFact: { from: "", to: "", empty: "show" },
     smrStart: { from: "", to: "", empty: "show" },
     smrEnd: { from: "", to: "", empty: "show" },
     deliveryPlanned: { from: "", to: "", empty: "show" },
@@ -2496,6 +2497,7 @@ const DATE_FILTER_DEFS = [
   { key: "montageFact", title: "Факт монтажа", shortTitle: "факт монтажа", field: "actual_installation_date", group: "smr", singleDate: true },
   { key: "smrStart", title: "Дата начала СМР", shortTitle: "начало", field: "project_smr_start_date", group: "smr" },
   { key: "smrEnd", title: "Дата окончания СМР", shortTitle: "окончание", field: "project_delivery_date", group: "smr" },
+  { key: "deliveryFact", title: "Факт поставки", shortTitle: "факт поставки", field: "actual_delivery_date", group: "delivery", singleDate: true },
   { key: "deliveryPlanned", title: "Плановая дата поставки", shortTitle: "поставка", field: "planned_delivery_date", group: "delivery" },
   // Прогноз — последняя актуализация графика (2026-09-30, живой запрос: «фильтровать
   // и по прогнозным датам»). Поля приходят в /plan-data (forecast_smr_*_date; нет
@@ -2507,6 +2509,10 @@ const DATE_FILTER_DEFS = [
   { key: "smrEndForecast", title: "Прогноз окончания СМР", shortTitle: "окончание (прогноз)", field: "forecast_smr_end_date", group: "smr" },
   { key: "deliveryForecast", title: "Прогноз поставки (по прогнозному началу СМР)", shortTitle: "поставка (прогноз)", field: "forecast_smr_start_date", group: "delivery" },
 ];
+
+// Общие фактические даты доступны и в срезах комплектовщика.
+const FACT_DATE_FILTER_KEYS = DATE_FILTER_DEFS.filter(d => d.singleDate).map(d => d.key);
+const factDateFilterIsActive = () => FACT_DATE_FILTER_KEYS.some(dateFilterIsActive);
 
 // «Отставание» = прогнозная дата − плановая (плюс — позже плана). Две подгруппы в «СМР»: по началу и по окончанию.
 // Отстающим считается НЕ смонтированное изделие, у которого есть и плановая, и прогнозная дата и прогноз позже плана:
@@ -2552,8 +2558,15 @@ function elementPassesMontageFactFilter(element) {
   return !!raw && String(raw).slice(0, 10) === day;
 }
 
-function elementPassesDateFilters(element) {
+function elementPassesFactDateFilters(element) {
   if (!elementPassesMontageFactFilter(element)) return false;
+  const day = state.dateFilters.deliveryFact.from;
+  const raw = element.actual_delivery_date;
+  return !day || (!!raw && String(raw).slice(0, 10) === day);
+}
+
+function elementPassesDateFilters(element) {
+  if (!elementPassesFactDateFilters(element)) return false;
   for (const def of DATE_FILTER_DEFS) {
     if (def.singleDate || !dateFilterIsActive(def.key)) continue;
     const f = state.dateFilters[def.key];
@@ -4300,7 +4313,7 @@ function applyStatusInk(el, status) {
 // нули, и сравнить их между собой было бы нельзя). "__metric__" —
 // игнорировать выбранную плитку: сами плитки себя не фильтруют.
 function pickerElementPasses(element, exceptKey = null) {
-  if (!elementPassesMontageFactFilter(element)) return false;
+  if (!elementPassesFactDateFilters(element)) return false;
   // exceptKey — один ключ или НЕСКОЛЬКО (массив): разворот контракта по
   // маркам считается без учёта выбранных марок и типов, иначе выбор одной
   // марки обнулял бы и прятал все остальные строки разворота — и добавить
@@ -4333,7 +4346,7 @@ function pickerElementPasses(element, exceptKey = null) {
 const РАЗВОРОТ_БЕЗ = ["contract", "mark", "elementType"];
 
 function pickerSelectionActive() {
-  return dateFilterIsActive("montageFact") || state.picker.metrics.size > 0 || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
+  return factDateFilterIsActive() || state.picker.metrics.size > 0 || PICKER_SLICERS.some(d => state.picker.sel[d.key].size);
 }
 
 // «Законтрактовано» — сумма contract_lines.quantity (см.
@@ -4353,6 +4366,7 @@ function pickerContracted() {
   const blocked = PICKER_CONTRACT_BLOCKERS.filter(([key]) => state.picker.sel[key].size).map(([, word]) => word);
   if (state.picker.metrics.size) blocked.push("показателю");
   if (dateFilterIsActive("montageFact")) blocked.push("дате факта монтажа");
+  if (dateFilterIsActive("deliveryFact")) blocked.push("дате факта поставки");
   if (blocked.length) {
     return { value: null, reason: `Позиция контракта не делится по ${blocked.join(", ")} — числа в этом разрезе не существует` };
   }
@@ -4394,7 +4408,7 @@ function pickerContracted() {
 // pickerElementPasses): строки блока должны быть сравнимы между собой.
 function pickerContractedFor(key, value) {
   if (key !== "elementType" && key !== "mark") return null;
-  if (state.picker.metrics.size || dateFilterIsActive("montageFact")) return null;
+  if (state.picker.metrics.size || factDateFilterIsActive()) return null;
   if (PICKER_CONTRACT_BLOCKERS.some(([k]) => state.picker.sel[k].size)) return null;
   const types = state.picker.sel.elementType;
   const marks = state.picker.sel.mark;
@@ -5499,13 +5513,13 @@ function renderPicker() {
     reset.addEventListener("click", () => {
       for (const def of PICKER_SLICERS) state.picker.sel[def.key].clear();
       state.picker.metrics.clear();
-      resetDateFilter("montageFact");
+      for (const key of FACT_DATE_FILTER_KEYS) resetDateFilter(key);
       onPickerChange();
     });
     panel.appendChild(reset);
   }
 
-  panel.appendChild(buildDateRangeFilterGroup({ key: "smr", title: "СМР" }, onPickerChange, ["montageFact"]));
+  for (const group of DATE_FILTER_GROUPS) panel.appendChild(buildDateRangeFilterGroup(group, onPickerChange, FACT_DATE_FILTER_KEYS));
 
   // Срезы со своей областью (контракты) в левой панели не рисуются.
   for (const def of PICKER_SLICERS) if (!def.pane) panel.appendChild(buildPickerSlicer(def));
@@ -5531,7 +5545,7 @@ function onPickerChange() {
 // приёмом и с теми же подписями, что describeActiveFilters у «Модели».
 function describePickerSelection() {
   const parts = [];
-  if (dateFilterIsActive("montageFact")) parts.push(`Факт монтажа: ${dateFilterSummary(state.dateFilters.montageFact, true)}`);
+  for (const def of DATE_FILTER_DEFS) if (def.singleDate && dateFilterIsActive(def.key)) parts.push(`${def.title}: ${dateFilterSummary(state.dateFilters[def.key], true)}`);
   for (const def of PICKER_SLICERS) {
     const sel = state.picker.sel[def.key];
     if (!sel.size) continue;

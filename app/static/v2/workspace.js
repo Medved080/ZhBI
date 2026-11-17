@@ -841,9 +841,11 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   const panels = createPickerPanels({ esc, nf, send, sw, loadingHtml: pkLoading, getPk: () => pk,
     ui: { openGroups, closedGroups, groupSearch, repaint: () => paintPanel(), onlyRemainder: () => onlyRemainder, total: () => sc?.total ?? 0 } });
   function pickHtml() {
-    const g = filters?.groups.find(g => g.kind === "dates" && g.key === "smr");
-    const fields = g?.fields.filter(f => f.key === "montageFact") || [];
-    return (g ? datesGroupHtml({ ...g, fields, lags: [], active: fields.some(f => f.active) }) : "") + panels.pickHtml();
+    const groups = (filters?.groups || []).filter(g => g.kind === "dates").map(g => {
+      const fields = g.fields.filter(f => f.singleDate);
+      return fields.length ? datesGroupHtml({ ...g, fields, lags: [], active: fields.some(f => f.active) }) : "";
+    });
+    return groups.join("") + panels.pickHtml();
   }
   function metricsHtml() {
     if (!pk) return pkLoading();
