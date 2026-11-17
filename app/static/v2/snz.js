@@ -21,7 +21,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
   let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", shiftFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
   let ordersDate = "", ignoreFact = false;
-  let factData=null,factDate=today(),factShift="",factCrew="",factSearch="",factPage=0,factBlocked=false,factWithout=false;
+  let factData=null,factDate=today(),factShift="",factCrew="",factSearch="",factPage=0,preparationPage=0,factBlocked=false,factWithout=false;
   const factEdits=new Map(),factNotes=new Map(),factDirty=()=>factEdits.size>0||factNotes.size>0;
   const path = () => `/objects/${getObjectId()}/snz`;
   const canWrite = () => !!data?.can_write;
@@ -71,9 +71,10 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     dialog.addEventListener("change", change);
     dialog.addEventListener("input", e => {
       if(adminEditor.input(e.target))return;
-      if(e.target.matches('[data-fact-search]')){factSearch=e.target.value;factPage=0;dialog.querySelector('[data-fact-rows]').innerHTML=factRowsHtml();}
+      if(e.target.matches('[data-fact-search]')){factSearch=e.target.value;factPage=0;preparationPage=0;dialog.querySelector('[data-fact-rows]').innerHTML=factRowsHtml();}
       if(e.target.dataset.factNote){factNotes.set(e.target.dataset.factNote,e.target.value);}
       if(e.target.dataset.montageTime){const id=Number(e.target.dataset.montageTime),initial=factData?.items.find(r=>r.id===id)?.completed_at||'';if(e.target.value===(initial.slice(0,19)))factEdits.delete(id);else factEdits.set(id,e.target.value);}
+      if(e.target.dataset.preparationTime){const key=e.target.dataset.preparationTime;if(e.target.value)factEdits.set(key,e.target.value);else factEdits.delete(key);}
       if (e.target.matches("[data-filter=search]")) { filter = e.target.value; page = 0; renderItems(); }
       if(e.target.matches("[data-edit-search]")&&orderEdit){orderEdit.filter=e.target.value;orderEdit.page=0;render();}
       if (e.target.matches("[data-edit-reason]") && orderEdit) {
@@ -189,24 +190,33 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     if(object!==getObjectId())return;
     factData=result;factBlocked=false;
   }
+  function preparationRowsHtml(){
+    const q=factSearch.trim().toLocaleLowerCase('ru'),rows=(factData?.preparation_items||[]).filter(r=>!q||[r.mark,r.address,r.element_type,r.id,...r.tasks.map(t=>t.operation)].join(' ').toLocaleLowerCase('ru').includes(q));
+    const pages=Math.max(1,Math.ceil(rows.length/60));preparationPage=Math.min(preparationPage,pages-1);
+    return `<h3>Факт подготовительной бригады</h3><div class="snz-controls"><span>Позиций: ${rows.length} · подготовлено: ${rows.filter(r=>r.completed).length}</span><span class="snz-spacer"></span><button data-action="preparation-prev" ${!preparationPage?'disabled':''}>Назад</button><span>${preparationPage+1} / ${pages}</span><button data-action="preparation-next" ${preparationPage+1>=pages?'disabled':''}>Далее</button></div>
+    <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>Изделие</th><th>Этаж / оси</th><th>СНЗ / дата / смена / бригада</th><th>Факт подготовки</th><th>Операции и время факта (МСК)</th><th>Примечание / причина невыполнения</th></tr></thead><tbody>${rows.slice(preparationPage*60,(preparationPage+1)*60).map(r=>{const ref=r.orders[0];return `<tr data-preparation-row="${esc(r.row_key)}"><td><strong>${esc(r.mark||r.id)}</strong><small>${esc(r.element_type)} · ID ${r.id}</small><button data-action="show-on-model" data-id="${r.id}">На схеме</button></td><td>${esc(r.floor??'—')}<small>${esc(r.address||'—')}</small></td><td>№ ${ref.id} · ${dayText(ref.date)} · ${shiftText(ref.shift)}<small>${esc(ref.crew)}${r.closed?' · СНЗ закрыт':''}</small></td><td>${r.completed?'100 % · Подготовлено':'0 % · Не завершено'}</td><td>${r.tasks.map((t,i)=>{const key=r.row_key+':'+i;return `<div><label>${esc(t.operation)}<input type="datetime-local" step="1" data-preparation-time="${esc(key)}" aria-label="Время подготовки ${r.id} ${esc(t.operation)}" value="${esc(factEdits.get(key)??t.completed_at?.slice(0,19)??'')}" ${r.closed||t.completed||t.attributed_order_id||!factData.can_fact?'disabled':''}></label><button data-action="preparation-complete" data-row-key="${esc(r.row_key)}" data-step="${i}" ${r.closed||t.completed||t.attributed_order_id||!factData.can_fact||factBlocked?'disabled':''}>${r.closed?'СНЗ закрыт':t.attributed_order_id?`Учтено в СНЗ № ${t.attributed_order_id}`:t.completed?'Подтверждено':'Отметить подготовку'}</button></div>`;}).join('')||'В СНЗ нет подготовительных операций.'}</td><td class="snz-fact-notes"><textarea maxlength="4000" data-fact-note="${esc(ref.note_key)}" aria-label="Примечание подготовки ${r.id}" ${r.closed||!factData.can_fact?'disabled':''}>${esc(factNotes.get(ref.note_key)??ref.note)}</textarea><button data-action="save-fact-note" data-id="${r.id}" data-note-key="${esc(ref.note_key)}" ${r.closed||!factData.can_fact||factBlocked?'disabled':''}>Сохранить примечание</button></td></tr>`;}).join('')||'<tr><td colspan="6">Нет подготовительных работ по выбранным условиям.</td></tr>'}</tbody></table></div>`;
+  }
   function factRowsHtml(){
     if(!factData)return '<p>Загрузка факта монтажа…</p>';
+    if(draft.crews.find(c=>c.id===factCrew)?.kind==='preparation')return preparationRowsHtml();
     const q=factSearch.trim().toLocaleLowerCase('ru'),rows=factData.items.filter(r=>!q||[r.mark,r.address,r.element_type,r.id].join(' ').toLocaleLowerCase('ru').includes(q));
     const pages=Math.max(1,Math.ceil(rows.length/60));factPage=Math.min(factPage,pages-1);
     return `<div class="snz-controls"><span>Изделий: ${rows.length} · смонтировано: ${rows.filter(r=>r.status_confirmed).length}</span><span class="snz-spacer"></span><button data-action="fact-prev" ${!factPage?'disabled':''}>Назад</button><span>${factPage+1} / ${pages}</span><button data-action="fact-next" ${factPage+1>=pages?'disabled':''}>Далее</button></div>
       <div class="snz-table-wrap"><table class="snz-table"><thead><tr><th>Изделие</th><th>Этаж / оси</th><th>СНЗ / дата / смена / бригада</th><th>Статус / факт монтажа</th><th>Дата и время монтажа (МСК)</th><th>Примечание / причина невыполнения</th><th></th></tr></thead><tbody>${rows.slice(factPage*60,(factPage+1)*60).map(r=>`<tr data-montage-row="${r.id}">
       <td><strong>${esc(r.mark||r.id)}</strong><small>${esc(r.element_type)} · ID ${r.id}</small></td><td>${esc(r.floor??'—')}<small>${esc(r.address||'—')}</small></td>
       <td>${r.orders.map(o=>`№ ${o.id} · ${dayText(o.date)} · ${shiftText(o.shift)}<small>${esc(o.crew)}${o.closed_at?' · СНЗ закрыт':''}</small>`).join('<br>')}${r.extra?.length?`<strong>Вне СНЗ</strong>${r.extra.map(o=>`<small>${dayText(o.date)} · ${shiftText(o.shift)} · ${esc(o.crew)}</small>`).join('')}`:''}</td>
-      <td>${esc(ELEMENT_STATUS_LABELS[r.current_status]||r.current_status)}<small>${r.completed?'100 %':r.status_confirmed?'Время статуса отсутствует':'0 %'}</small></td>
-      <td><input type="datetime-local" step="1" data-montage-time="${r.id}" aria-label="Дата и время монтажа ${r.id}" value="${esc(factEdits.get(r.id)??r.completed_at?.slice(0,19)??'')}" ${r.closed||r.status_confirmed||!factData.can_fact?'disabled':''}></td>
+      <td>${esc(ELEMENT_STATUS_LABELS[r.current_status]||r.current_status)}<small>${r.montage_elsewhere?`Учтено в другой смене: ${dayText(r.montage_elsewhere.date)} · ${shiftText(r.montage_elsewhere.shift)}`:r.completed?'100 %':r.status_confirmed?'Время статуса отсутствует':'0 %'}</small></td>
+      <td><input type="datetime-local" step="1" data-montage-time="${r.id}" aria-label="Дата и время монтажа ${r.id}" value="${esc(factEdits.get(r.id)??r.completed_at?.slice(0,19)??'')}" ${r.closed||r.status_confirmed||r.montage_elsewhere||!factData.can_fact?'disabled':''}></td>
       <td class="snz-fact-notes">${[...r.orders,...(r.extra||[])].map(ref=>`<label>${r.orders.length>1?`СНЗ № ${ref.id}`:''}<textarea maxlength="4000" data-fact-note="${esc(ref.note_key)}" aria-label="Примечание ${r.id} ${esc(ref.note_key)}" ${!factData.can_fact||ref.closed_at?'disabled':''}>${esc(factNotes.get(ref.note_key)??ref.note??'')}</textarea></label><button data-action="save-fact-note" data-id="${r.id}" data-note-key="${esc(ref.note_key)}" ${!factData.can_fact||factBlocked||ref.closed_at?'disabled':''}>Сохранить примечание</button>`).join('')}</td>
-      <td><button data-action="show-on-model" data-id="${r.id}">На схеме</button><button data-action="montage-complete" data-id="${r.id}" ${!r.task_key||r.closed||r.status_confirmed||!factData.can_fact||factBlocked?'disabled':''}>${r.closed?'СНЗ закрыт':r.status_confirmed?'Подтверждено':r.completed?'Подтвердить статус':'Отметить монтаж'}</button></td></tr>`).join('')||'<tr><td colspan="7">Нет изделий по выбранным условиям.</td></tr>'}</tbody></table></div>`;
+      <td><button data-action="show-on-model" data-id="${r.id}">На схеме</button><button data-action="montage-complete" data-id="${r.id}" ${!r.task_key||r.closed||r.status_confirmed||!factData.can_fact||factBlocked?'disabled':''}>${r.closed?'СНЗ закрыт':r.status_confirmed?'Подтверждено':r.completed?'Подтвердить статус':'Отметить монтаж'}</button></td></tr>`).join('')||'<tr><td colspan="7">Нет изделий по выбранным условиям.</td></tr>'}</tbody></table></div>${factData.preparation_items?.length?preparationRowsHtml():''}`;
   }
   function factsHtml(){
-    const openOrders=(data.orders||[]).filter(o=>!o.closed_at&&o.crew_kind!=="preparation"&&(!factDate||o.work_date===factDate)&&(!factShift||o.shift===factShift)&&(!factCrew||o.crew_id===factCrew));
-    return `<div class="snz-controls"><label>Дата<input type="date" data-fact-filter="date" value="${factDate}"></label><label>Смена<select data-fact-filter="shift">${options([{id:'',name:'Все смены'},{id:'day',name:'День'},{id:'night',name:'Ночь'}],factShift)}</select></label><label>Бригада<select data-fact-filter="crew">${options([{id:'',name:'Все бригады'},...draft.crews.filter(c=>c.kind==='installation')],factCrew)}</select></label><label>Поиск<input type="search" data-fact-search value="${esc(factSearch)}" placeholder="Марка, оси или ID"></label><label class="snz-check"><input type="checkbox" data-fact-filter="without" ${factWithout?'checked':''}>Без факта</label><button data-action="facts-refresh">Обновить факт</button><button data-action="facts-all">Все даты</button></div>
-      <div class="snz-controls"><button data-action="fact-xlsx" ${!factDate?'disabled':''}>Отчёт за дату в Excel</button><button data-action="fact-pdf" ${!factDate?'disabled':''}>Поэтажные планы PDF</button><button data-action="close-orders" ${!openOrders.length||!factData?.can_fact||factBlocked?'disabled':''}>Закрыть СНЗ</button><span>Незакрытых СНЗ по отбору: ${openOrders.length}</span><button data-action="extra-fact" class="snz-primary" ${!factDate||!factData?.can_fact||factBlocked?'disabled':''}>Доп. факт</button></div>
+    const openOrders=(data.orders||[]).filter(o=>!o.closed_at&&(!factDate||o.work_date===factDate)&&(!factShift||o.shift===factShift)&&(!factCrew||o.crew_id===factCrew));
+    const preparationOnly=draft.crews.find(c=>c.id===factCrew)?.kind==='preparation';
+    return `<div class="snz-controls"><label>Дата<input type="date" data-fact-filter="date" value="${factDate}"></label><label>Смена<select data-fact-filter="shift">${options([{id:'',name:'Все смены'},{id:'day',name:'День'},{id:'night',name:'Ночь'}],factShift)}</select></label><label>Бригада<select data-fact-filter="crew">${options([{id:'',name:'Все бригады'},...draft.crews],factCrew)}</select></label><label>Поиск<input type="search" data-fact-search value="${esc(factSearch)}" placeholder="Марка, оси или ID"></label><label class="snz-check"><input type="checkbox" data-fact-filter="without" ${factWithout?'checked':''}>Без факта</label><button data-action="facts-refresh">Обновить факт</button><button data-action="facts-all">Все даты</button></div>
+      <div class="snz-controls"><button data-action="fact-xlsx" ${!factDate?'disabled':''}>Отчёт за дату в Excel</button><button data-action="fact-pdf" ${!factDate?'disabled':''}>Поэтажные планы PDF</button><button data-action="close-orders" ${!openOrders.length||!factData?.can_fact||factBlocked?'disabled':''}>Закрыть СНЗ</button><span>Незакрытых СНЗ по отбору: ${openOrders.length}</span>${preparationOnly?'':`<button data-action="extra-fact" class="snz-primary" ${!factDate||!factData?.can_fact||factBlocked?'disabled':''}>Доп. факт</button>`}</div>
       <p class="snz-muted">Дата относится к началу СНЗ: день и ночь, включая утро следующего дня. Отчёт начинается с реестра СНЗ: номер, дата, смена, бригада, прораб, количество по плану и факту с итогами. Далее — изделия и итоги по бригадам с учётом выбранной даты, бригады и смены; флажок «Без факта» ограничивает только таблицу на экране. Примечания сохраняются отдельно для каждого СНЗ. Монтаж связан со статусом «Смонтирован»; время исправляется через историю статусов. Для дополнительных изделий выберите «Доп. факт» и отметьте их на модели со стандартными фильтрами.</p>
+      <p class="snz-muted">Для подготовительной бригады отмечается выполнение операций. Подготовка и закрытие её СНЗ не меняют статус монтажа, монтажные назначения и плановые даты изделий.</p>
       ${factBlocked?'<p class="snz-error">Обновите факт перед повторной записью.</p>':''}<div data-fact-rows>${factRowsHtml()}</div>`;
   }
   function floorsHtml(){
@@ -316,7 +326,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       if(assignment)renderItems();
     } else if(target.dataset.factFilter){
       if(factDirty()&&!window.confirm('Сбросить несохранённое время и примечания и изменить отбор?')){render();return;}
-      factEdits.clear();factNotes.clear();const k=target.dataset.factFilter;if(k==='date')factDate=target.value;if(k==='shift')factShift=target.value;if(k==='crew')factCrew=target.value;if(k==='without')factWithout=target.checked;factPage=0;run(loadFacts);
+      factEdits.clear();factNotes.clear();const k=target.dataset.factFilter;if(k==='date')factDate=target.value;if(k==='shift')factShift=target.value;if(k==='crew')factCrew=target.value;if(k==='without')factWithout=target.checked;factPage=0;preparationPage=0;run(loadFacts);
     } else if (target.dataset.editExclude && orderEdit) {
       const id=Number(target.dataset.editExclude),group=orderEdit.order.tasks.find(t=>t.group_id&&t.element_ids.includes(id));
       for(const member of group?.element_ids||[id])target.checked?orderEdit.exclude.add(member):orderEdit.exclude.delete(member);
@@ -359,6 +369,17 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       factEdits.clear();factNotes.clear();if(action==='facts-all')factDate='';await run(load);return;
     }
     if(action==='fact-prev'||action==='fact-next'){factPage+=action==='fact-prev'?-1:1;render();return;}
+    if(action==='preparation-prev'||action==='preparation-next'){preparationPage+=action==='preparation-prev'?-1:1;render();return;}
+    if(action==='preparation-complete'){
+      const row=factData?.preparation_items?.find(r=>r.row_key===button.dataset.rowKey),index=Number(button.dataset.step),task=row?.tasks[index],key=row?.row_key+':'+index;
+      const input=dialog.querySelector(`[data-preparation-time="${CSS.escape(key)}"]`);
+      if(!row||row.closed||!task||task.completed||task.attributed_order_id||!factData.can_fact||factBlocked||!input?.reportValidity())return;
+      await run(async()=>{factBlocked=true;let confirmed=false;
+        try{const result=await api.post(path()+'/facts',{revision:factData.revision,task_key:task.key,order_id:row.orders[0].id,completed_at:input.value||null});
+          confirmed=true;factEdits.delete(key);await load();send('poll');onChanged?.();message=result.warnings?.join(' ')||'Факт подготовки сохранён.';
+        }catch(e){factBlocked=confirmed||!e.status||e.status===409||e.status>=500;throw e;}
+      });return;
+    }
     if(action==='close-orders'){
       if(factDirty()){error='Перед закрытием сохраните введённые время и примечания.';render();return;}
       await run(async()=>{
@@ -518,7 +539,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     bind: host => host.querySelector("[data-snz-open]")?.addEventListener("click",()=>open()),
     isDirty: () => dirty || busy || editDirty() || factDirty(),
     guardLeave: () => !dialog || close(),
-    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;factData=null;factEdits.clear();factNotes.clear();factBlocked=false;factDate=today();factShift='';factCrew='';factSearch='';factPage=0;factWithout=false;selection.clear();},
+    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;factData=null;factEdits.clear();factNotes.clear();factBlocked=false;factDate=today();factShift='';factCrew='';factSearch='';factPage=0;preparationPage=0;factWithout=false;selection.clear();},
     destroy: () => close(true),
     hideLabels: () => send("snzLabels", { items: [] }),
   };

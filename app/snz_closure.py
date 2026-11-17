@@ -1,4 +1,4 @@
-"""Close issued montage orders without rewriting their snapshots or later historical facts."""
+"""Close issued orders without rewriting their snapshots or later historical facts."""
 import hashlib
 import json
 from copy import deepcopy
@@ -35,12 +35,12 @@ def close_scope(conn, object_id, state, day=None, shift=None, crew_id=None):
         if shift and row['shift']!=shift:continue
         if crew_id and row['crew_id']!=crew_id:continue
         order=json.loads(row['snapshot_json'])
-        if order['crew'].get('kind')=='preparation':continue
         orders.append({**order,'id':row['id']})
     statuses=status_montage(conn,object_id)
-    ids={eid for order in orders for eid in order_items(order)}
+    ids={eid for order in orders if order['crew'].get('kind')!='preparation' for eid in order_items(order)}
     pending=sorted(eid for eid in ids if eid in statuses and statuses[eid]['current_status'] not in ('installed','accepted'))
-    digest={'orders':orders,'status_revisions':{str(eid):statuses.get(eid,{}).get('expected_rev') for eid in sorted(ids)}}
+    digest={'orders':orders,'status_revisions':{str(eid):statuses.get(eid,{}).get('expected_rev') for eid in sorted(ids)},
+            'facts':{t['key']:state['facts'].get(t['key'],{}) for order in orders for t in order['tasks']}}
     fingerprint=hashlib.sha256(json.dumps(digest,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {'orders':orders,'order_ids':[o['id'] for o in orders],'order_count':len(orders),
             'pending_element_ids':pending,'fingerprint':fingerprint,'statuses':statuses}

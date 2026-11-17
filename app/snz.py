@@ -241,7 +241,7 @@ def _history(conn, object_id):
 
 
 def _schedule_history(conn,object_id):
-    # Closing releases unmounted products; real unfinished post-montage work still carries.
+    # Unfinished preparation and post-montage work still carry after closure.
     from app.snz_closure import closed_orders
     from copy import deepcopy
     result=_history(conn,object_id);closed=closed_orders(conn,object_id)
@@ -250,10 +250,12 @@ def _schedule_history(conn,object_id):
     for row in conn.execute('SELECT id,snapshot_json FROM snz_orders WHERE object_id=?',(object_id,)):
         closure=closed.get(str(row['id']))
         if not closure:continue
-        mounted={int(eid) for eid,item in closure['rows'].items() if item['status_confirmed']
+        snapshot=json.loads(row['snapshot_json'])
+        mounted=set(order_items(snapshot)) if snapshot['crew'].get('kind')=='preparation' else {
+                 int(eid) for eid,item in closure['rows'].items() if (item['status_confirmed'] or item.get('montage_elsewhere'))
                  and statuses.get(int(eid),{}).get('current_status') in ('installed','accepted')}
         if not mounted:continue
-        order=deepcopy(json.loads(row['snapshot_json']))
+        order=deepcopy(snapshot)
         order['tasks']=[t for t in order['tasks'] if set(t['element_ids'])<=mounted]
         order['items']=[e for e in order.get('items',[]) if e['id'] in mounted]
         order['assignment_steps']={k:v for k,v in order.get('assignment_steps',{}).items() if int(k) in mounted}
@@ -636,7 +638,10 @@ def montage_facts(object_id: int, date: date | None = None, shift: Literal["day"
         items=fact_rows(conn,object_id,state,status_montage(conn,object_id),
                     date.isoformat() if date else None,shift,crew_id)
         if without_fact:items=[r for r in items if not r["status_confirmed"]]
-        return {"revision":revision,"items":items,
+        from app.snz_preparation import fact_rows as preparation_rows
+        preparation=preparation_rows(conn,object_id,state,date.isoformat() if date else None,shift,crew_id)
+        if without_fact:preparation=[r for r in preparation if not r['completed']]
+        return {"revision":revision,"items":items,"preparation_items":preparation,
                 "can_fact":has_feature(conn,user,"status","write",object_id)}
     finally:conn.close()
 
@@ -656,6 +661,8 @@ def preview_close_orders(object_id: int, date: date | None = None, shift: Litera
 @router.post("/facts/close")
 def close_issued_orders(object_id: int, body: CloseScopeIn, user=Depends(get_current_user)):
     from app.snz_closure import close_scope
+    from app.snz_montage import cross_shift_attributions,order_montage
+    from app.snz_preparation import item_fact as preparation_fact,order_facts as preparation_order_facts
     from app.snz_fact_store import records
     from app.contracts import apply_status_change
     conn=get_connection();events=activity.defer_begin()
@@ -675,17 +682,19 @@ def close_issued_orders(object_id: int, body: CloseScopeIn, user=Depends(get_cur
         conflicts=[]
         for row in conn.execute('SELECT id,snapshot_json FROM snz_orders WHERE object_id=?',(object_id,)):
             if row['id'] in selected or str(row['id']) in store.get('closed',{}):continue
-            if pending & set(order_items(json.loads(row['snapshot_json']))):conflicts.append(row['id'])
+            other=json.loads(row['snapshot_json'])
+            if other['crew'].get('kind')!='preparation' and pending & set(order_items(other)):conflicts.append(row['id'])
         if conflicts:raise HTTPException(409,'Невыполненные изделия включены также в незакрытые СНЗ № '+', '.join(map(str,conflicts))+'. Расширьте отбор для совместного закрытия.')
         now=datetime.now(ZoneInfo('Europe/Moscow')).replace(tzinfo=None,microsecond=0)
+        attributions=cross_shift_attributions(state,scope['statuses'])
         for order in scope['orders']:
             items=order_items(order);rows={}
+            order_facts=preparation_order_facts(state,order['id']) if order['crew'].get('kind')=='preparation' else state['facts']
             for eid in items:
                 status=scope['statuses'].get(eid,{})
-                rows[str(eid)]={'current_status':status.get('current_status',items[eid].get('current_status')),
-                    'status_confirmed':status.get('current_status') in ('installed','accepted'),
-                    'completed':bool(status.get('completed_at')),'completed_at':status.get('completed_at')}
-            frozen={t['key']:state['facts'].get(t['key'],{}).copy() for t in order['tasks']}
+                rows[str(eid)]=preparation_fact(order,eid,order_facts,status) if order['crew'].get('kind')=='preparation' else order_montage(status,order['id'],attributions.get(eid))
+                rows[str(eid)]['current_status']=status.get('current_status',items[eid].get('current_status'))
+            frozen={t['key']:order_facts.get(t['key'],{}).copy() for t in order['tasks']}
             for task in order['tasks']:
                 if task['operation_id']=='install' and not all(rows[str(eid)]['status_confirmed'] for eid in task['element_ids']):
                     frozen[task['key']]={'completed':False}
@@ -699,7 +708,7 @@ def close_issued_orders(object_id: int, body: CloseScopeIn, user=Depends(get_cur
                 if conn.execute('SELECT current_status FROM elements WHERE id=?',(eid,)).fetchone()[0]!='ready_for_installation':
                     raise HTTPException(409,'У изделия есть более поздний статус. Проверьте историю перед закрытием СНЗ.')
             conn.execute('UPDATE elements SET planned_installation_date=NULL WHERE id=? AND object_id=?',(eid,object_id))
-            source=max((o for o in scope['orders'] if eid in order_items(o)),key=lambda o:(o['date'],o['shift']=='night',o['id']))
+            source=max((o for o in scope['orders'] if o['crew'].get('kind')!='preparation' and eid in order_items(o)),key=lambda o:(o['date'],o['shift']=='night',o['id']))
             store.setdefault('transfers',{})[str(eid)]={'from_date':source['date'],'from_shift':source['shift'],'order_id':source['id'],'closed_at':now.isoformat(timespec='seconds')}
         state['assignments']=[a for a in state['assignments'] if a['element_id'] not in pending]
         result={'closed_order_ids':scope['order_ids'],'released_element_ids':sorted(pending),'revision':revision+1}
@@ -719,6 +728,8 @@ def save_fact_note(object_id: int, body: FactNoteIn, user=Depends(get_current_us
         begin_write(conn);assert_object_feature(conn,user,object_id,"status","write")
         state,revision=_load(conn,object_id);_version(revision,body.revision)
         rows=fact_rows(conn,object_id,state,status_montage(conn,object_id))
+        from app.snz_preparation import fact_rows as preparation_rows
+        rows+=preparation_rows(conn,object_id,state)
         allowed=next((r for r in rows if r['id']==body.element_id and any(
             ref['note_key']==body.note_key for ref in r['orders']+r.get('extra',[]))),None)
         if not allowed:raise HTTPException(409,'Позиция больше не входит в текущий реестр факта. Обновите данные.')
@@ -841,6 +852,11 @@ def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
             raise HTTPException(409,'Изделие из СНЗ больше не принадлежит этому объекту. Обновите данные.')
         prior=state["facts"].get(body.task_key,{})
         montage=task['operation_id']=='install'
+        preparation=next(o for o in reversed(history) if any(t['key']==body.task_key for t in o['tasks']))['crew'].get('kind')=='preparation'
+        if preparation and body.order_id:
+            from app.snz_preparation import order_facts as preparation_order_facts
+            attributed=preparation_order_facts(state,body.order_id).get(body.task_key,{}).get('attributed_order_id')
+            if attributed:raise HTTPException(409,f'Подготовка уже учтена в СНЗ № {attributed}. Повторная отметка запрещена.')
         status_done=all(statuses.get(eid,{}).get('current_status') in ('installed','accepted') for eid in task['element_ids'])
         supplied=body.completed_at
         if supplied and supplied.tzinfo:supplied=supplied.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
@@ -876,6 +892,9 @@ def complete(object_id: int, body: FactIn, user=Depends(get_current_user)):
                     raise HTTPException(409,"После указанного времени есть другой статус. Проверьте историю изделия и время монтажа.")
                 installed.append(eid)
         state['facts'][body.task_key]={'completed':True,'completed_at':now.isoformat(timespec='seconds'),'completed_by':audit_display_name(user)}
+        if preparation and body.order_id:
+            from app.snz_fact_store import records
+            records(state,True).setdefault('preparation',{})[body.task_key]={'order_id':body.order_id,'completed_at':now.isoformat(timespec='seconds')}
         project_montage(state,status_montage(conn,object_id))
         _write(conn,object_id,state,revision)
         touch_elements(conn,installed)

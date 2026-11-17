@@ -30,19 +30,26 @@ try{
  await field('shift').selectOption('day');await settle();await field('crew').selectOption('install1');await settle();
  await field('time').fill('11:10:00');await field('time').press('Tab');
  assert.equal(await page.locator('[data-snzi="date"]').inputValue(),new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()));
- await pick([3]);assert.ok(await action('save').isDisabled());assert.match(await page.locator('[data-snzf-result]').innerText(),/другой смены/);
- await action('clear').click();const scene=page.frameLocator('iframe.ws-frame');await scene.locator('.element-shape[data-id="1"]').click();await scene.locator('.element-shape[data-id="5"]').click({modifiers:['Meta']});await page.waitForFunction(()=>!document.querySelector('[data-snzf-action="save"]').disabled);
- console.log('PASS independent scope, current time, night date, wrong-shift protection, mixed selection');
+ await pick([3]);assert.ok(await action('save').isEnabled());assert.match(await page.locator('[data-snzf-result]').innerText(),/Из плана другой смены: 1 шт/);
+ await field('crew').selectOption('install2');await settle();assert.ok(await action('save').isDisabled());assert.match(await page.locator('[data-snzf-result]').innerText(),/другой бригады/);
+ await field('crew').selectOption('install1');await settle();
+ await action('clear').click();const scene=page.frameLocator('iframe.ws-frame');await scene.locator('.element-shape[data-id="1"]').click();await scene.locator('.element-shape[data-id="5"]').click({modifiers:['Meta']});
+ await page.waitForFunction(()=>document.querySelector('[data-snzi-check="1"]').checked&&document.querySelector('[data-snzi-check="5"]').checked);
+ await page.locator('[data-snzi-check="3"]').check();await page.waitForFunction(()=>document.querySelector('[data-snzf-count]').textContent==='Выбрано: 3.');
+ await page.waitForFunction(()=>!document.querySelector('[data-snzf-action="save"]').disabled);
+ console.log('PASS independent scope, current time, night date, cross-shift allowance, wrong-crew protection, mixed selection');
  for(const [width,height] of [[1440,900],[2560,1440]]){
   await page.setViewportSize({width,height});await page.evaluate(await readFile(new URL('./ui_align_audit.js',import.meta.url),'utf8'));
   assert.deepEqual(await page.evaluate(()=>({a:alignAudit(document.querySelector('.snzi-panel')),s:sizeAudit(document.querySelector('.snzi-panel'))})),{a:[],s:[]});
   await field('time').scrollIntoViewIfNeeded();await page.screenshot({path:new URL(`fact-${width}.png`,out).pathname});
  }
  let posts=0;page.on('request',r=>{if(r.method()==='POST'&&r.url().endsWith('/snz/facts/model'))posts++;});
- await action('save').click();await page.getByText('Факт отмечен: 2 шт. Доп. факт вне СНЗ: 1 шт.',{exact:true}).waitFor();await settle();
+ await action('save').click();await page.getByText('Факт отмечен: 3 шт. Доп. факт вне СНЗ: 2 шт.',{exact:true}).waitFor();await settle();
  assert.equal(posts,1);assert.deepEqual((await api('state')).state.orders,initial.state.orders);
  let rows=(await api('facts?date=2026-11-10&shift=day&crew_id=install1')).items;
- for(const id of [1,5]){const row=rows.find(r=>r.id===id);assert.ok(row.status_confirmed);assert.equal(row.completed_at,'2026-11-10T11:10:00');}
+ for(const id of [1,3,5]){const row=rows.find(r=>r.id===id);assert.ok(row.status_confirmed);assert.equal(row.completed_at,'2026-11-10T11:10:00');}
+ const night=(await api('facts?date=2026-11-10&shift=night&crew_id=install1')).items.find(r=>r.id===3);
+ assert.equal(night.status_confirmed,false);assert.equal(night.montage_elsewhere.shift,'day');
  assert.ok(rows.find(r=>r.id===5).extra.length);
  console.log('PASS one atomic request, montage and extra, timestamps and immutable issued composition');
  // Existing montage may be attributed again in the same scope without rewriting its time.

@@ -49,12 +49,15 @@ class RegisterTests(unittest.TestCase):
         statuses[extra['id']]['completed_at']=None
         self.assertEqual(summarize(orders,items,statuses)['orders'][2]['completed'],12)
 
-    def test_orphan_extra_is_separate_and_preparation_excluded(self):
+    def test_orphan_extra_is_separate_and_preparation_uses_operation_facts(self):
         orders,items,statuses=fixture()
         result=summarize([r for r in orders if r['shift']=='day'],items,statuses)
         self.assertEqual(result['unassigned_extra'],2)
         orders[0]['crew_kind']='preparation'
-        self.assertNotIn(17,[r['id'] for r in summarize(orders,items,statuses)['orders']])
+        prep=next(r for r in summarize(orders,items,statuses)['orders'] if r['id']==17)
+        self.assertEqual((prep['planned'],prep['completed']),(4,0))
+        result=summarize(orders,items,statuses,[{'id':items[0]['id'],'completed':True,'orders':[{'id':17}]}])
+        self.assertEqual(next(r for r in result['orders'] if r['id']==17)['completed'],1)
 
     def data(self):
         orders,items,statuses=fixture();register=summarize(orders,items,statuses)

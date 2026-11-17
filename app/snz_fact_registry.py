@@ -2,11 +2,9 @@
 from datetime import datetime
 
 
-def summarize(orders, items, statuses):
+def summarize(orders, items, statuses, preparation_items=()):
     rows=[];by_id={};by_scope={};unassigned=set()
     for order in orders:
-        if order.get('crew_kind')=='preparation':
-            continue
         row={**order,'planned':order['quantity'],'completed_ids':set()}
         rows.append(row);by_id[row['id']]=row
         by_scope[(row['work_date'],row['shift'],row['crew_id'])]=row
@@ -14,10 +12,10 @@ def summarize(orders, items, statuses):
         eid=item['id'];live=statuses.get(eid,{})
         for ref in item['orders']:
             row=by_id.get(ref['id'])
-            if row is None:
+            if row is None or row.get('crew_kind')=='preparation':
                 continue
             source=ref.get('frozen') if ref.get('closed_at') and ref.get('frozen') is not None else live
-            confirmed=source.get('status_confirmed',source.get('current_status') in ('installed','accepted'))
+            confirmed=source.get('status_confirmed',source.get('current_status') in ('installed','accepted')) and not ref.get('montage_elsewhere')
             if confirmed:
                 row['completed_ids'].add(eid)
         for ref in item.get('extra',[]):
@@ -28,6 +26,9 @@ def summarize(orders, items, statuses):
                 unassigned.add(eid)
             else:
                 row['completed_ids'].add(eid)
+    for item in preparation_items:
+        if item['completed'] and item['orders'][0]['id'] in by_id:
+            by_id[item['orders'][0]['id']]['completed_ids'].add(item['id'])
     for row in rows:
         row['completed']=len(row.pop('completed_ids'))
     return {'orders':rows,'planned':sum(r['planned'] for r in rows),
@@ -67,7 +68,7 @@ def add_sheet(wb, data):
     if register['unassigned_extra']:
         where='Подробности — во вкладке «Факт».' if data.get('daily_mode') else 'Показан на листе «План и факт».'
         ws.append([f"Доп. факт без выданного СНЗ: {register['unassigned_extra']} шт. {where} В итог по документам не включён."]);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
-    explanation='Открытые СНЗ — только план; факт показан по закрытым СНЗ и включает доп. монтаж соответствующей даты, смены и бригады. Пустая ячейка факта означает: СНЗ не закрыт.' if data.get('daily_mode') else 'Факт включает выполненный план и доп. монтаж этой бригады и смены. Выполненный план закрытых СНЗ зафиксирован при закрытии; доп. факт учитывается по отдельным записям.'
+    explanation='Открытые СНЗ — только план; факт показан по закрытым СНЗ и включает доп. монтаж соответствующей даты, смены и бригады. Пустая ячейка факта означает: СНЗ не закрыт.' if data.get('daily_mode') else 'Факт монтажа включает выполненный план и доп. монтаж этой бригады и смены. Факт подготовки — изделия со всеми выполненными подготовительными операциями. Факт закрытых СНЗ зафиксирован при закрытии; доп. монтаж учитывается по отдельным записям.'
     ws.append([explanation]);ws.merge_cells(start_row=ws.max_row,start_column=1,end_row=ws.max_row,end_column=7)
     for row in ws:
         rn=row[0].row;ws.row_dimensions[rn].height=24 if rn>=5 else 32

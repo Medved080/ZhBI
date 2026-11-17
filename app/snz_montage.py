@@ -54,9 +54,31 @@ def project_montage(state, statuses):
             except (ValueError,KeyError):pass
 
 
+def cross_shift_attributions(state, statuses):
+    """Only the matching installation event can replace a source order's fact."""
+    result={}
+    for batch in records(state)['extra'].values():
+        for item in batch['items']:
+            eid=item['element']['id'];status=statuses.get(eid,{})
+            if item.get('source_order_ids') and status.get('completed_at') and item['history_id']==status.get('history_id'):
+                result[eid]={'date':batch['date'],'shift':item['shift'],'crew_id':batch['crew_id'],
+                             'source_order_ids':item['source_order_ids']}
+    return result
+
+
+def order_montage(status, order_id, attribution=None):
+    result={'current_status':status.get('current_status'),
+            'status_confirmed':status.get('current_status') in ('installed','accepted'),
+            'completed':bool(status.get('completed_at')),'completed_at':status.get('completed_at')}
+    if attribution and order_id in attribution['source_order_ids']:
+        result.update(status_confirmed=False,completed=False,completed_at=None,montage_elsewhere=attribution)
+    return result
+
+
 def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=None):
     grouped={}
     store=records(state)
+    attributions=cross_shift_attributions(state,statuses)
     closed=store.get("closed",{})
     for row in conn.execute('SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=? ORDER BY work_date,shift,id',(object_id,)):
         if day and row['work_date']!=day:continue
@@ -84,6 +106,7 @@ def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=No
                  'crew':batch['crew']['name'],'foreman':batch['crew'].get('foreman',''),
                  'shift':record['shift'],'history_id':record['history_id'],
                  'note_key':f'x:{request_id}:e:{eid}'}
+            if record.get('source_order_ids'):ref['source_order_ids']=record['source_order_ids']
             ref['note']=store['notes'].get(ref['note_key'],{}).get('text','')
             item.setdefault('extra',[]).append(ref)
     for eid,item in grouped.items():
@@ -106,4 +129,20 @@ def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=No
             item['status_confirmed']=bool(matching and status.get('completed_at'))
             item['completed']=item['status_confirmed']
             item['completed_at']=status.get('completed_at') if item['completed'] else None
+        # Preserve the issued plan, but count the event in its actual shift.
+        sources=[]
+        for ref in item['orders']:
+            source=ref.get('frozen') if ref.get('closed_at') else order_montage(status,ref['id'],attributions.get(eid))
+            if source and source.get('montage_elsewhere'):
+                ref['montage_elsewhere']=source['montage_elsewhere']
+                ref['status_confirmed']=False
+            sources.append(source or {})
+        if any(ref.get('montage_elsewhere') for ref in item['orders']):
+            matching_extra=any(ref['history_id']==status.get('history_id') and status.get('completed_at') for ref in item.get('extra',[]))
+            confirmed=matching_extra or any(s.get('status_confirmed') for s in sources)
+            if not confirmed:
+                item.update(completed=False,status_confirmed=False,completed_at=None,
+                            montage_elsewhere=next(ref['montage_elsewhere'] for ref in item['orders'] if ref.get('montage_elsewhere')))
+            if not any(not ref.get('closed_at') and not ref.get('montage_elsewhere') for ref in item['orders']):
+                item['task_key']=None
     return list(grouped.values())

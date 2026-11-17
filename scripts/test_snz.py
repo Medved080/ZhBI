@@ -224,11 +224,31 @@ class IntegrationTests(unittest.TestCase):
         xlsx=self.snz.export_xlsx(self.object_id,issued["id"],self.admin).body
         (out/"СНЗ.xlsx").write_bytes(xlsx)
         wb=load_workbook(BytesIO(xlsx))
-        self.assertEqual(wb["СНЗ"]["L4"].value,20)
-        self.assertEqual(len(wb["Изделия"].tables),1)
+        self.assertEqual(wb.sheetnames,["Изделия","Загрузка звеньев"])
+        items=wb["Изделия"]
+        self.assertEqual([c.value for c in items[1]],["Тип элемента","Марка","Отметка, мм","Этаж","Адрес по осям","Бригада","Очередность","Время монтажа","Перенос с"])
+        self.assertEqual(set(items.tables),{"SNZElements"})
+        self.assertEqual(items.tables["SNZElements"].ref,f"A1:I{len(self.ids)+1}")
+        self.assertEqual({r[1] for r in items.iter_rows(min_row=2,values_only=True)},
+                         {e['mark'] for e in original['items']})
+        install_tasks=[t for t in original['tasks'] if t['operation_id']=='install']
+        expected_times={e['mark']:datetime.fromisoformat(t['segments'][0]['start']) for t in install_tasks for e in t['elements']}
+        self.assertEqual({r[1]:r[7] for r in items.iter_rows(min_row=2,values_only=True)},expected_times)
+        # Operation norms belong to the detailed daily export. The issued norm
+        # must remain 20 even after the live card was changed to 99 above.
+        daily=self.snz.export_registry(self.object_id,datetime.fromisoformat(original['date']).date(),self.admin).body
+        (out/"СНЗ-за-день.xlsx").write_bytes(daily)
+        details=load_workbook(BytesIO(daily))["СНЗ"]
+        headers=[c.value for c in details[1]]
+        operation_col=headers.index("Операция");norm_col=headers.index("Норматив, мин")
+        installation=[r for r in details.iter_rows(min_row=2,values_only=True)
+                      if r[0]==issued['id'] and r[operation_col]==install_tasks[0]['operation']]
+        self.assertTrue(installation)
+        self.assertTrue(all(r[norm_col]==20 for r in installation))
         gate=Path("/Users/max/.codex/scripts/validate_xlsx.py")
         self.assertTrue(gate.exists(),"Required native XLSX package gate is unavailable")
-        subprocess.run([sys.executable,str(gate),str((out/"СНЗ.xlsx").resolve())],check=True,capture_output=True)
+        for filename in ("СНЗ.xlsx","СНЗ-за-день.xlsx"):
+            subprocess.run([sys.executable,str(gate),str((out/filename).resolve())],check=True,capture_output=True)
         pdf=self.snz.export_pdf(self.object_id,issued["id"],self.admin).body
         self.assertTrue(pdf.startswith(b"%PDF"));(out/"СНЗ.pdf").write_bytes(pdf)
 

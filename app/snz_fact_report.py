@@ -11,6 +11,8 @@ def report(conn, object_id, state, day, shift=None, crew_id=None):
     from app.snz_fact_registry import summarize
     statuses=status_montage(conn,object_id)
     rows=fact_rows(conn,object_id,state,statuses,day,shift,crew_id)
+    from app.snz_preparation import fact_rows as preparation_rows
+    preparation=preparation_rows(conn,object_id,state,day,shift,crew_id)
     orders=[r for r in registry(conn,object_id,day)['orders'] if (not shift or r['shift']==shift) and (not crew_id or r['crew_id']==crew_id)]
     planned={r['id'] for r in rows if r['orders']}
     done={r['id'] for r in rows if r['status_confirmed']}
@@ -18,7 +20,7 @@ def report(conn, object_id, state, day, shift=None, crew_id=None):
     return {'date':day,'shift':shift,'crew_id':crew_id,
             'object_name':conn.execute('SELECT name FROM objects WHERE id=?',(object_id,)).fetchone()[0],
             'generated_at':datetime.now(ZoneInfo('Europe/Moscow')).replace(tzinfo=None).isoformat(timespec='seconds'),
-            'registry':summarize(orders,rows,statuses),'items':rows,'totals':{'planned':len(planned),'completed_plan':len(planned&done),
+            'registry':summarize(orders,rows,statuses,preparation),'items':rows,'preparation_items':preparation,'totals':{'planned':len(planned),'completed_plan':len(planned&done),
                                   'uncompleted':len(planned-done),'extra':len(extra&done),
                                   'completed_total':len(done),'unique_items':len(rows)}}
 
@@ -29,7 +31,7 @@ def build_xlsx(data):
     from openpyxl.worksheet.table import Table, TableStyleInfo
     from openpyxl.utils import get_column_letter
     wb=Workbook();ws=wb.active;ws.title='План и факт'
-    title=f"Монтаж - план и факт за {data['date']} | {data['object_name']}"
+    title=f"СНЗ - план и факт за {data['date']} | {data['object_name']}"
     ws.append([title]);ws.merge_cells('A1:O1')
     ws.append(['Дата начала СНЗ. День и ночь: с 08:00 выбранной даты до 08:00 следующего дня. Факт открытых СНЗ - на момент выгрузки; закрытых - зафиксирован при закрытии.']);ws.merge_cells('A2:O2')
     t=data['totals']
@@ -42,6 +44,9 @@ def build_xlsx(data):
         refs=row['orders']+row.get('extra',[])
         notes=[]
         for ref in refs:
+            if ref.get('montage_elsewhere'):
+                actual=ref['montage_elsewhere']
+                notes.append(f"СНЗ № {ref['id']}: монтаж учтён в другой смене — {actual['date']}, {'День' if actual['shift']=='day' else 'Ночь'}.")
             if ref.get('note'):
                 prefix=f"СНЗ № {ref['id']}: " if len(refs)>1 and ref.get('id') else ''
                 notes.append(prefix+ref['note'])
@@ -81,15 +86,20 @@ def build_xlsx(data):
         for i,width in enumerate(widths,1):sheet.column_dimensions[get_column_letter(i)].width=width
     ws['A1'].font=Font(name='Calibri',size=16,bold=True)
     from app.snz_fact_registry import add_sheet
+    if data.get('preparation_items'):
+        from app.snz_preparation import add_sheet as add_preparation_sheet
+        add_preparation_sheet(wb,data['preparation_items'])
     add_sheet(wb,data)
     output=BytesIO();wb.save(output);return output.getvalue()
 
 
 def drawing_order(data):
-    crews=list(dict.fromkeys(ref['crew'] for row in data['items'] for ref in (row['orders']+row.get('extra',[]))))
+    items={r['id']:r for r in data.get('preparation_items',[])}
+    items.update({r['id']:r for r in data['items']})
+    crews=list(dict.fromkeys(ref['crew'] for row in items.values() for ref in (row['orders']+row.get('extra',[]))))
     names=', '.join(crews[:3])+(f' и ещё {len(crews)-3}' if len(crews)>3 else '')
     return {'date':data['date'],'shift':data['shift'] or 'day','object_name':data['object_name'],
             'report_title':'План и факт - '+({'day':'День','night':'Ночь'}.get(data['shift'],'обе смены')),
             'crew':{'name':names or 'Нет работ','foreman':''},
-            'tasks':[],'items':[{**row,'outside_snz':not bool(row['orders'])} for row in data['items']],
+            'tasks':[],'items':[{**row,'outside_snz':not bool(row['orders'])} for row in items.values()],
             'item_priorities':{str(row['id']):i for i,row in enumerate(data['items'],1) if row['orders']}}

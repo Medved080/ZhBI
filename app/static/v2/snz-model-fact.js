@@ -23,8 +23,10 @@ export function createModelFact({api,getObjectId,getPicked,getSelectionCount,get
   for(const[k,v]of Object.entries({date,shift,crew,time})){const el=root.querySelector(`[data-snzf="${k}"]`);if(document.activeElement!==el)el.value=v;el.disabled=saving||isParentBusy();}
   const ids=getPicked(),byId=new Map((data?.items||[]).map(r=>[r.id,r])),invalid=ids.find(id=>!byId.has(id)||byId.get(id).kind==='blocked');
   const reason=invalid?(byId.get(invalid)?.reason||'Данные выбранных изделий обновляются.'):'';
+  const crossShift=ids.filter(id=>byId.get(id)?.source_order_ids?.length).length;
+  const hint=crossShift?`Из плана другой смены: ${crossShift} шт. Будут учтены как доп. факт выбранной смены без повторного учёта в исходной.`:'';
   root.querySelector('[data-snzf-count]').textContent=`Выбрано: ${ids.length}.`;
-  const result=root.querySelector('[data-snzf-result]'),text=error||message||reason||(loading?'Загрузка факта…':'');
+  const result=root.querySelector('[data-snzf-result]'),text=error||message||reason||(loading?'Загрузка факта…':hint);
   result.hidden=!text;result.textContent=text;result.setAttribute('role',error||reason?'alert':'status');
   root.querySelector('[data-snzf-action="save"]').disabled=saving||isParentBusy()||loading||blocked||!data?.can_fact||!getState()?.can_fact||key!==currentKey()||!ids.length||ids.length>500||getSelectionCount()>ids.length||!!invalid||!factTimestamp(date,shift,time);
   root.querySelector('[data-snzf-action="save"]').textContent=saving?'Сохранение…':'Отметить факт';
@@ -64,7 +66,7 @@ export function createModelFact({api,getObjectId,getPicked,getSelectionCount,get
    <label>Бригада<select data-snzf="crew" aria-label="Бригада факта"></select></label>
    <label class="snzi-wide">Время (МСК)<input type="time" step="1" data-snzf="time" aria-label="Время монтажа (МСК)"></label></div>
    <button type="button" class="snzi-button snzi-primary" data-snzf-action="save">Отметить факт</button><div class="snzi-inline-actions"><button type="button" class="snzi-button" data-snzf-action="clear">Снять выбор</button><button type="button" class="snzi-button" data-snzf-action="refresh">Обновить</button></div>
-   <div class="snzi-result" data-snzf-result hidden></div><p data-snzf-rights hidden>Нет права изменять статусы на этом объекте.</p><p class="snzi-subtle">Дата — начало смены. Ночь: 20:00–08:00 следующего дня. Уже смонтированным изделиям сохраняется время истории. Для изделий вне СНЗ записывается доп. факт. Максимум 500 изделий за раз.</p></details>`;
+   <div class="snzi-result" data-snzf-result hidden></div><p data-snzf-rights hidden>Нет права изменять статусы на этом объекте.</p><p class="snzi-subtle">Дата — начало смены. Ночь: 20:00–08:00 следующего дня. Уже смонтированным изделиям сохраняется время истории. Изделия из плана другой смены этой даты для той же бригады учитываются как доп. факт выбранной смены. Для изделий вне СНЗ записывается доп. факт. Максимум 500 изделий за раз.</p></details>`;
    root.querySelector('[data-snzf-fold]').addEventListener('toggle',e=>{open=e.target.open;});
    root.addEventListener('change',e=>{const k=e.target.dataset.snzf;if(!k)return;if(k==='date')date=e.target.value;if(k==='shift')shift=e.target.value;if(k==='crew')crew=e.target.value;if(k==='time')time=e.target.value;message='';if(!blocked)error='';if(k!=='time'){key='';if(!blocked)reload();}render();});
    root.addEventListener('click',e=>{const action=e.target.closest('[data-snzf-action]')?.dataset.snzfAction;if(action==='save')save();if(action==='clear')clearSelection();if(action==='refresh'){message='';refreshState().then(()=>reload());}});

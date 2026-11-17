@@ -15,7 +15,9 @@ def collect(conn,object_id,state,day):
     metadata=registry(conn,object_id,day,include_snapshots=True)
     statuses=status_montage(conn,object_id)
     facts=fact_rows(conn,object_id,state,statuses,day)
-    totals=summarize(metadata['orders'],facts,statuses)
+    from app.snz_preparation import fact_rows as preparation_rows
+    preparation=preparation_rows(conn,object_id,state,day)
+    totals=summarize(metadata['orders'],facts,statuses,preparation)
     montage={r['id']:r for r in totals['orders']}
     rows=[]
     for meta in metadata['orders']:
@@ -52,7 +54,7 @@ def collect(conn,object_id,state,day):
     unallocated.sort(key=lambda e:(e['completed_at'],e['id']))
     closed_count=sum(r['completed'] is not None for r in rows)
     return {'date':day,'daily_mode':True,'object_name':conn.execute('SELECT name FROM objects WHERE id=?',(object_id,)).fetchone()[0],
-            'snapshots':snapshots,'unallocated':unallocated,'attributed_extra':attributed_rows,
+            'snapshots':snapshots,'unallocated':unallocated,'attributed_extra':attributed_rows,'preparation_items':preparation,
             'registry':{'orders':rows,'planned':sum(r['planned'] for r in rows),
                         'completed':sum(r['completed'] or 0 for r in rows),'has_closed':bool(closed_count),
                         'unassigned_extra':totals['unassigned_extra']},
@@ -105,6 +107,9 @@ def build_xlsx(data):
     ws=add_sheet(wb,data)
     add_unallocated_sheet_block(ws,data)
     add_daily_details(wb,data['snapshots'],datetime.fromisoformat(data['date']).date())
+    if data.get('preparation_items'):
+        from app.snz_preparation import add_sheet as add_preparation_sheet
+        add_preparation_sheet(wb,data['preparation_items'])
     output=BytesIO();wb.save(output);return output.getvalue()
 
 

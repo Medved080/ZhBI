@@ -41,7 +41,7 @@ class ModelFactTests(reporting.ReportingTests):
 
     def test_wrong_scope_does_not_partially_install(self):
         before=self.state()['revision']
-        with self.assertRaises(HTTPException):self.snz.complete_model_fact(self.object_id,self.body([self.extra,self.base.ids[2]]),self.admin)
+        with self.assertRaises(HTTPException):self.snz.complete_model_fact(self.object_id,self.body([self.extra,self.base.ids[2]],crew_id='install2'),self.admin)
         self.assertEqual(self.state()['revision'],before)
         c=self.db.get_connection();self.assertEqual(c.execute('SELECT COUNT(*) FROM status_history').fetchone()[0],0);c.close()
 

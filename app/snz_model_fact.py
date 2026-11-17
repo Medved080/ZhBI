@@ -20,8 +20,15 @@ def candidates(conn,object_id,state,day,shift,crew_id,statuses=None):
         item={'id':eid,'expected_rev':status['expected_rev'],'kind':'extra','reason':''}
         match=[r for r in orders if r['shift']==shift and r['crew_id']==crew_id]
         attributed=[r for r in extra if r['shift']==shift and r['crew_id']==crew_id and r['history_id']==status.get('history_id') and status.get('completed_at')]
-        if orders:
-            if not match:item.update(kind='blocked',reason='Изделие выдано в СНЗ другой смены или бригады этой даты.')
+        transferred=[r for r in extra if r.get('source_order_ids') and r['history_id']==status.get('history_id') and status.get('completed_at')]
+        if transferred:
+            item.update(kind='done' if attributed else 'blocked',reason='' if attributed else 'Факт изделия уже учтён в другой смене. Время исправляется в истории изделия.')
+        elif orders:
+            if not match:
+                if any(r['crew_id']!=crew_id for r in orders):item.update(kind='blocked',reason='Изделие выдано в СНЗ другой бригады этой даты.')
+                elif any(r.get('closed_at') for r in orders):item.update(kind='blocked',reason='СНЗ закрыт. Изменение факта запрещено.')
+                elif not row.get('task_key'):item.update(kind='blocked',reason='В СНЗ нет операции монтажа изделия.')
+                else:item.update(source_order_ids=[r['id'] for r in orders],reason='Монтаж из плана другой смены будет учтён как доп. факт выбранной смены.')
             elif any(r.get('closed_at') for r in match):item.update(kind='blocked',reason='СНЗ закрыт. Изменение факта запрещено.')
             elif not row.get('task_key'):item.update(kind='blocked',reason='В СНЗ нет операции монтажа изделия.')
             else:item.update(kind='order',order_id=match[0]['id'],task_key=row['task_key'])
@@ -30,6 +37,10 @@ def candidates(conn,object_id,state,day,shift,crew_id,statuses=None):
         if status['current_status'] in ('installed','accepted') and not status.get('completed_at'):
             item.update(kind='blocked',reason='В истории отсутствует время монтажа.')
         result.append(item)
+    closed_target=any(r['closed_at'] for row in rows.values() for r in row['orders'] if r['shift']==shift and r['crew_id']==crew_id)
+    if closed_target:
+        for item in result:
+            if item.get('source_order_ids'):item.update(kind='blocked',reason='СНЗ выбранной смены закрыт. Изменение факта запрещено.')
     return result
 
 
@@ -80,7 +91,8 @@ def apply(conn,object_id,state,revision,body,user):
         crew=next(c for c in state['crews'] if c['id']==body.crew_id)
         store['extra']['model_'+body.request_id]={'date':body.date.isoformat(),'crew_id':crew['id'],'crew':crew,
             'payload_hash':payload,'created_by':audit_display_name(user),'created_at':now.isoformat(timespec='seconds'),
-            'items':[{'element':elements[eid],'history_id':statuses[eid]['history_id'],'shift':body.shift} for eid in extras]}
+            'items':[{'element':elements[eid],'history_id':statuses[eid]['history_id'],'shift':body.shift,
+                      **({'source_order_ids':eligible[eid]['source_order_ids']} if eligible[eid].get('source_order_ids') else {})} for eid in extras]}
     project_montage(state,statuses)
     result={'revision':revision+1,'installed':installed,'confirmed':[r.element_id for r in body.items],
             'extra':extras,'order_ids':sorted(set(orders)),
