@@ -22,9 +22,10 @@ def item_fact(order, eid, facts, status=None):
             'completed':done,'status_confirmed':done,'completed_at':max(times) if done and times else None}
 
 
-def fact_rows(conn, object_id, state, day=None, shift=None, crew_id=None):
+def fact_rows(conn, object_id, state, day=None, shift=None, crew_id=None, open_only=False):
     store=records(state);result=[]
     for row in conn.execute('SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=? ORDER BY work_date,shift,id',(object_id,)):
+        if open_only and str(row['id']) in store.get('closed',{}):continue
         if day and row['work_date']!=day:continue
         if shift and row['shift']!=shift:continue
         if crew_id and row['crew_id']!=crew_id:continue

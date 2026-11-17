@@ -75,12 +75,13 @@ def order_montage(status, order_id, attribution=None):
     return result
 
 
-def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=None):
+def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=None, open_only=False):
     grouped={}
     store=records(state)
     attributions=cross_shift_attributions(state,statuses)
     closed=store.get("closed",{})
     for row in conn.execute('SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=? ORDER BY work_date,shift,id',(object_id,)):
+        if open_only and str(row['id']) in closed:continue
         if day and row['work_date']!=day:continue
         if shift and row['shift']!=shift:continue
         if crew_id and row['crew_id']!=crew_id:continue
@@ -95,7 +96,7 @@ def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=No
                     'note':store['notes'].get(f"o:{row['id']}:e:{eid}",{}).get('text',''),
                     'closed_at':closed.get(str(row['id']),{}).get('closed_at'),
                     'frozen':closed.get(str(row['id']),{}).get('rows',{}).get(str(eid))})
-    for request_id,batch in store['extra'].items():
+    for request_id,batch in ({} if open_only else store['extra']).items():
         if day and batch['date']!=day:continue
         if crew_id and batch['crew_id']!=crew_id:continue
         for record in batch['items']:

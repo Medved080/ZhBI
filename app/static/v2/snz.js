@@ -21,7 +21,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   let tab = "plan", selection = new Set(), plan = null, cardId = "base", assignmentCard = "auto", date = today(), shift = "day", crewId = "install1";
   let filter = "", status = "ready_for_installation", dateFilter = "", crewFilter = "", shiftFilter = "", noPriority = false, noDate = false, page = 0, generation = 0;
   let ordersDate = "", ignoreFact = false;
-  let factData=null,factDate=today(),factShift="",factCrew="",factSearch="",factPage=0,preparationPage=0,factBlocked=false,factWithout=false;
+  let factData=null,factDate=today(),factShift="",factCrew="",factSearch="",factPage=0,preparationPage=0,factBlocked=false,factWithout=false,factOpenOnly=false;
   const factEdits=new Map(),factNotes=new Map(),factDirty=()=>factEdits.size>0||factNotes.size>0;
   const path = () => `/objects/${getObjectId()}/snz`;
   const canWrite = () => !!data?.can_write;
@@ -185,7 +185,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   }
   async function loadFacts(){
     const object=getObjectId(),params=new URLSearchParams();
-    if(factDate)params.set('date',factDate);if(factShift)params.set('shift',factShift);if(factCrew)params.set('crew_id',factCrew);if(factWithout)params.set('without_fact','true');
+    if(factDate)params.set('date',factDate);if(factShift)params.set('shift',factShift);if(factCrew)params.set('crew_id',factCrew);if(factWithout)params.set('without_fact','true');if(factOpenOnly)params.set('open_only','true');
     const result=await api.get(path()+'/facts?'+params);
     if(object!==getObjectId())return;
     factData=result;factBlocked=false;
@@ -213,9 +213,9 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
   function factsHtml(){
     const openOrders=(data.orders||[]).filter(o=>!o.closed_at&&(!factDate||o.work_date===factDate)&&(!factShift||o.shift===factShift)&&(!factCrew||o.crew_id===factCrew));
     const preparationOnly=draft.crews.find(c=>c.id===factCrew)?.kind==='preparation';
-    return `<div class="snz-controls"><label>Дата<input type="date" data-fact-filter="date" value="${factDate}"></label><label>Смена<select data-fact-filter="shift">${options([{id:'',name:'Все смены'},{id:'day',name:'День'},{id:'night',name:'Ночь'}],factShift)}</select></label><label>Бригада<select data-fact-filter="crew">${options([{id:'',name:'Все бригады'},...draft.crews],factCrew)}</select></label><label>Поиск<input type="search" data-fact-search value="${esc(factSearch)}" placeholder="Марка, оси или ID"></label><label class="snz-check"><input type="checkbox" data-fact-filter="without" ${factWithout?'checked':''}>Без факта</label><button data-action="facts-refresh">Обновить факт</button><button data-action="facts-all">Все даты</button></div>
+    return `<div class="snz-controls"><label>Дата<input type="date" data-fact-filter="date" value="${factDate}"></label><label>Смена<select data-fact-filter="shift">${options([{id:'',name:'Все смены'},{id:'day',name:'День'},{id:'night',name:'Ночь'}],factShift)}</select></label><label>Бригада<select data-fact-filter="crew">${options([{id:'',name:'Все бригады'},...draft.crews],factCrew)}</select></label><label>Поиск<input type="search" data-fact-search value="${esc(factSearch)}" placeholder="Марка, оси или ID"></label><label class="snz-check"><input type="checkbox" data-fact-filter="without" ${factWithout?'checked':''}>Без факта</label><button data-action="facts-refresh">Обновить факт</button><button data-action="facts-all">Все даты</button><label class="snz-check"><input type="checkbox" data-fact-filter="open" ${factOpenOnly?'checked':''}>Незакрытое СНЗ</label></div>
       <div class="snz-controls"><button data-action="fact-xlsx" ${!factDate?'disabled':''}>Отчёт за дату в Excel</button><button data-action="fact-pdf" ${!factDate?'disabled':''}>Поэтажные планы PDF</button><button data-action="close-orders" ${!openOrders.length||!factData?.can_fact||factBlocked?'disabled':''}>Закрыть СНЗ</button><span>Незакрытых СНЗ по отбору: ${openOrders.length}</span>${preparationOnly?'':`<button data-action="extra-fact" class="snz-primary" ${!factDate||!factData?.can_fact||factBlocked?'disabled':''}>Доп. факт</button>`}</div>
-      <p class="snz-muted">Дата относится к началу СНЗ: день и ночь, включая утро следующего дня. Отчёт начинается с реестра СНЗ: номер, дата, смена, бригада, прораб, количество по плану и факту с итогами. Далее — изделия и итоги по бригадам с учётом выбранной даты, бригады и смены; флажок «Без факта» ограничивает только таблицу на экране. Примечания сохраняются отдельно для каждого СНЗ. Монтаж связан со статусом «Смонтирован»; время исправляется через историю статусов. Для дополнительных изделий выберите «Доп. факт» и отметьте их на модели со стандартными фильтрами.</p>
+      <p class="snz-muted">Дата относится к началу СНЗ: день и ночь, включая утро следующего дня. Отчёт начинается с реестра СНЗ: номер, дата, смена, бригада, прораб, количество по плану и факту с итогами. Далее — изделия и итоги по бригадам с учётом выбранной даты, бригады и смены; флажки «Без факта» и «Незакрытое СНЗ» ограничивают только таблицу на экране. «Незакрытое СНЗ» показывает позиции открытых заданий выбранной даты; с пустой датой — всех дат, с сохранением отбора смены и бригады. Примечания сохраняются отдельно для каждого СНЗ. Монтаж связан со статусом «Смонтирован»; время исправляется через историю статусов. Для дополнительных изделий выберите «Доп. факт» и отметьте их на модели со стандартными фильтрами.</p>
       <p class="snz-muted">Для подготовительной бригады отмечается выполнение операций. Подготовка и закрытие её СНЗ не меняют статус монтажа, монтажные назначения и плановые даты изделий.</p>
       ${factBlocked?'<p class="snz-error">Обновите факт перед повторной записью.</p>':''}<div data-fact-rows>${factRowsHtml()}</div>`;
   }
@@ -326,7 +326,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
       if(assignment)renderItems();
     } else if(target.dataset.factFilter){
       if(factDirty()&&!window.confirm('Сбросить несохранённое время и примечания и изменить отбор?')){render();return;}
-      factEdits.clear();factNotes.clear();const k=target.dataset.factFilter;if(k==='date')factDate=target.value;if(k==='shift')factShift=target.value;if(k==='crew')factCrew=target.value;if(k==='without')factWithout=target.checked;factPage=0;preparationPage=0;run(loadFacts);
+      factEdits.clear();factNotes.clear();const k=target.dataset.factFilter;if(k==='date')factDate=target.value;if(k==='shift')factShift=target.value;if(k==='crew')factCrew=target.value;if(k==='without')factWithout=target.checked;if(k==='open')factOpenOnly=target.checked;factPage=0;preparationPage=0;run(loadFacts);
     } else if (target.dataset.editExclude && orderEdit) {
       const id=Number(target.dataset.editExclude),group=orderEdit.order.tasks.find(t=>t.group_id&&t.element_ids.includes(id));
       for(const member of group?.element_ids||[id])target.checked?orderEdit.exclude.add(member):orderEdit.exclude.delete(member);
@@ -539,7 +539,7 @@ export function createSnz({ api, getObjectId, getSelectedIds, send, onChanged, o
     bind: host => host.querySelector("[data-snz-open]")?.addEventListener("click",()=>open()),
     isDirty: () => dirty || busy || editDirty() || factDirty(),
     guardLeave: () => !dialog || close(),
-    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;factData=null;factEdits.clear();factNotes.clear();factBlocked=false;factDate=today();factShift='';factCrew='';factSearch='';factPage=0;preparationPage=0;factWithout=false;selection.clear();},
+    reset: () => {close(true);data=null;draft=null;plan=null;ignoreFact=false;factData=null;factEdits.clear();factNotes.clear();factBlocked=false;factDate=today();factShift='';factCrew='';factSearch='';factPage=0;preparationPage=0;factWithout=false;factOpenOnly=false;selection.clear();},
     destroy: () => close(true),
     hideLabels: () => send("snzLabels", { items: [] }),
   };

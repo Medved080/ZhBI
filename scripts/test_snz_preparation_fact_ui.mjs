@@ -40,7 +40,9 @@ try{
  for(const row of await page.locator('[data-preparation-row]').all()){
   assert.ok(await row.locator('[data-action="preparation-complete"]').isDisabled());assert.ok(await row.locator('textarea').isDisabled());
  }
+ await filter('open').check();await settle();assert.equal(await page.locator('[data-preparation-row]').count(),0);
  await filter('shift').selectOption('night');await settle();assert.ok(await action('close-orders').isEnabled());
+ assert.ok(await filter('open').isChecked());
  assert.ok(await page.locator('[data-preparation-row]').count());
  assert.match(await page.locator('[data-action="preparation-complete"]').first().innerText(),/Учтено в СНЗ №/);
  assert.ok(await page.locator('[data-action="preparation-complete"]').first().isDisabled());

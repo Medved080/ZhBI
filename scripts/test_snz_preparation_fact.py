@@ -109,5 +109,13 @@ class PreparationFactTests(unittest.TestCase):
         self.assertIn(pending['tasks'][0]['key'],{t['key'] for t in plan['tasks']})
         self.assertNotIn(row['tasks'][0]['key'],{t['key'] for t in plan['tasks']})
 
+    def test_open_only_filters_closed_preparation_by_date_and_shift(self):
+        self.close()
+        self.assertEqual(self.rows(open_only=True)['preparation_items'],[])
+        rows=self.snz.montage_facts(self.object_id,user=self.admin,crew_id='preparation',open_only=True)['preparation_items']
+        self.assertTrue(rows)
+        self.assertTrue(all(not r['closed'] and r['orders'][0]['id']==self.orders['night','preparation'] for r in rows))
+        self.assertTrue(self.rows()['preparation_items'])
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

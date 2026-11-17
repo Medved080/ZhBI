@@ -2,6 +2,9 @@
 import sys
 from test_snz_fact_reporting import ReportingTests
 ReportingTests.setUpClass();test=ReportingTests();test.setUp()
+if '--open-filter' in sys.argv:
+ from test_snz_open_fact_filter import seed_mixed_orders
+ seed_mixed_orders(test)
 c=test.db.get_connection()
 pid=c.execute("INSERT INTO projects(name) VALUES ('Учебный проект')").lastrowid
 c.execute('UPDATE objects SET project_id=? WHERE id=?',(pid,test.object_id))

@@ -630,16 +630,16 @@ def read_order_revision(object_id: int, order_id: int, revision: int, user=Depen
 
 @router.get("/facts")
 def montage_facts(object_id: int, date: date | None = None, shift: Literal["day","night"] | None = None,
-                  crew_id: str | None = None, without_fact: bool = False, user=Depends(get_current_user)):
+                  crew_id: str | None = None, without_fact: bool = False, user=Depends(get_current_user), open_only: bool = False):
     conn=get_connection()
     try:
         assert_object_feature(conn,user,object_id,"plan","read")
         state,revision=_load(conn,object_id)
         items=fact_rows(conn,object_id,state,status_montage(conn,object_id),
-                    date.isoformat() if date else None,shift,crew_id)
+                    date.isoformat() if date else None,shift,crew_id,open_only=open_only)
         if without_fact:items=[r for r in items if not r["status_confirmed"]]
         from app.snz_preparation import fact_rows as preparation_rows
-        preparation=preparation_rows(conn,object_id,state,date.isoformat() if date else None,shift,crew_id)
+        preparation=preparation_rows(conn,object_id,state,date.isoformat() if date else None,shift,crew_id,open_only=open_only)
         if without_fact:preparation=[r for r in preparation if not r['completed']]
         return {"revision":revision,"items":items,"preparation_items":preparation,
                 "can_fact":has_feature(conn,user,"status","write",object_id)}
