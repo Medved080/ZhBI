@@ -51,7 +51,10 @@ class HelpCoverageTests(unittest.TestCase):
         fact=[p for p in by_key['status'].paragraphs if 'Факт СНЗ ставят' in p.text]
         self.assertEqual(len(fact),1);self.assertEqual(fact[0].level,WRITE)
         self.assertFalse(any('Факт СНЗ ставят' in p.text for _,ps,_ in content.blocks_for({'status':READ}) for p in ps))
-        self.assertEqual(content.CONTENT_VERSION,'2026-11-12.7')
+        self.assertIn('другой смены той же даты',plan)
+        paragraphs=' '.join(p.text for b in content.BLOCKS for p in b.paragraphs)
+        self.assertIn('Закрытие только подготовки сохраняет монтажные назначения, даты и статусы',paragraphs)
+        self.assertEqual(content.CONTENT_VERSION,'2026-11-17.1')
 
     def test_a_future_section_without_help_fails_the_gate(self):
         new=FEATURES[0]._replace(key='future_help_regression',title='Тестовый новый раздел')
