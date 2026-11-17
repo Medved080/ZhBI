@@ -4,14 +4,13 @@ from app.snz_policy import order_items
 
 
 def crane_load(snapshot):
-    """Match the reference workbook: SUM of exported norm rows / 620.
+    """Normative load per issued task / 620 productive shift minutes.
 
-    Each interval is a row in DailySNZOperations, with the full task norm.
-    Unscheduled tasks still export one row. Split tasks therefore repeat
-    their norm deliberately; this is not a measured crane utilization.
+    Lunch may split one task into multiple exported interval rows, but its
+    full norm contributes only once. Unscheduled tasks also contribute once.
     """
     return sum(
-        task['norm_minutes'] * max(1, len(task.get('segments') or []))
+        task['norm_minutes']
         for task in snapshot.get('tasks', [])
         if isinstance(task.get('norm_minutes'), (int, float))
         and not isinstance(task['norm_minutes'], bool)

@@ -123,6 +123,29 @@ class PackageTests(daily.DailyDetailsTests):
             self.assertEqual(set(bundle.namelist()), {'Реестр-СНЗ-2026-11-10.xlsx','Планы-за-день-2026-11-10.pdf'})
             self.validate(bundle.read('Реестр-СНЗ-2026-11-10.xlsx'), 'empty-package.xlsx')
 
+    def test_lunch_split_load_is_once_in_daily_package_and_fact_registry(self):
+        from openpyxl import load_workbook
+        self.state_for_day()
+        saved=self.snz.get_state(self.object_id,self.admin)
+        state={k:v for k,v in saved['state'].items() if k!='facts'}
+        state['cards'][0]['steps'][0]['minutes']=300
+        self.snz.save_state(self.object_id,self.snz.StateIn(revision=saved['revision'],**state),self.admin)
+        oid=self.issue('2026-11-10','day','lunch-load')
+        issued=self.snz.read_order(self.object_id,oid,self.admin)
+        self.assertEqual(len(issued['tasks']),2)
+        self.assertGreater(sum(len(t['segments']) for t in issued['tasks']),2)
+        with ZipFile(BytesIO(self.package())) as bundle:
+            packaged=bundle.read('Реестр-СНЗ-2026-11-10.xlsx')
+        for name,payload in [
+            ('lunch-daily',self.snz.export_registry(self.object_id,date(2026,11,10),self.admin).body),
+            ('lunch-package',packaged),
+            ('lunch-fact',self.snz.export_fact_xlsx(self.object_id,date(2026,11,10),user=self.admin).body),
+        ]:
+            self.validate(payload,name+'.xlsx')
+            wb=load_workbook(BytesIO(payload))
+            self.assertAlmostEqual(wb['Реестр СНЗ']['F5'].value,600/620)
+            self.assertEqual(wb['Реестр СНЗ']['F5'].number_format,'0%')
+
     def test_permissions_are_checked_before_export(self):
         from fastapi import HTTPException
         with patch('app.snz.assert_object_feature', side_effect=HTTPException(403,'Нет доступа')), patch('app.snz_package.build_package') as build:

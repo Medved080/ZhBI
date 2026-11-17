@@ -19,9 +19,10 @@ class DailyDetailsTests(unittest.TestCase):
     def assert_registry_load(self, workbook):
         details=workbook['СНЗ']
         norm=[c.value for c in details[1]].index('Норматив, мин')
-        totals={}
+        operations={}
         for row in details.iter_rows(min_row=2):
-            totals[row[0].value]=totals.get(row[0].value,0)+(row[norm].value or 0)
+            operations.setdefault(row[0].value,{})[row[6].value]=row[norm].value or 0
+        totals={oid:sum(tasks.values()) for oid,tasks in operations.items()}
         register=workbook['Реестр СНЗ']
         self.assertEqual(register['F4'].value,'Загрузка крана')
         for row in register.iter_rows(min_row=5,max_row=4+len(totals)):
