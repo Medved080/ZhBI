@@ -3,6 +3,21 @@ import json
 from app.snz_policy import order_items
 
 
+def crane_load(snapshot):
+    """Match the reference workbook: SUM of exported norm rows / 620.
+
+    Each interval is a row in DailySNZOperations, with the full task norm.
+    Unscheduled tasks still export one row. Split tasks therefore repeat
+    their norm deliberately; this is not a measured crane utilization.
+    """
+    return sum(
+        task['norm_minutes'] * max(1, len(task.get('segments') or []))
+        for task in snapshot.get('tasks', [])
+        if isinstance(task.get('norm_minutes'), (int, float))
+        and not isinstance(task['norm_minutes'], bool)
+    ) / 620
+
+
 def registry(conn, object_id, work_date=None, include_snapshots=False):
     sql = "SELECT id,work_date,shift,crew_id,created_at,created_by,snapshot_json FROM snz_orders WHERE object_id=?"
     args = [object_id]
@@ -20,7 +35,7 @@ def registry(conn, object_id, work_date=None, include_snapshots=False):
         ids = set(order_items(snapshot))
         record.update(crew_kind=snapshot["crew"].get("kind","installation"),order_revision=snapshot.get("order_revision", 1),
                       crew_name=snapshot["crew"]["name"], foreman=snapshot["crew"].get("foreman", ""),
-                      quantity=len(ids), start=snapshot["start"], end=snapshot["end"])
+                      quantity=len(ids), crane_load=crane_load(snapshot), start=snapshot["start"], end=snapshot["end"])
         closure=closed.get(str(record["id"]))
         record.update(closed_at=closure["closed_at"] if closure else None,closed_by=closure["closed_by"] if closure else None)
         records.append(record)

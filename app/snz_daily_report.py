@@ -65,14 +65,14 @@ def add_unallocated_sheet_block(ws,data):
     """A separate registry below document totals; never counts attributed extra twice."""
     from openpyxl.styles import Font,PatternFill,Alignment
     from openpyxl.worksheet.table import Table,TableStyleInfo
-    ws.append(['Уникальных изделий плана, шт',None,None,None,None,data['unique_planned']])
-    unique=ws.max_row;ws.merge_cells(start_row=unique,start_column=1,end_row=unique,end_column=5)
-    ws.cell(unique,1).font=Font(name='Calibri',size=11);ws.cell(unique,6).font=Font(name='Calibri',size=11)
+    ws.append(['Уникальных изделий плана, шт',None,None,None,None,None,data['unique_planned']])
+    unique=ws.max_row;ws.merge_cells(start_row=unique,start_column=1,end_row=unique,end_column=6)
+    ws.cell(unique,1).font=Font(name='Calibri',size=11);ws.cell(unique,7).font=Font(name='Calibri',size=11)
     ws.row_dimensions[unique].height=28
     ws.append([])
     row=ws.max_row+1
     ws.cell(row,1,f"Без СНЗ — монтаж, не отнесённый через «Доп. факт»: {len(data['unallocated'])} шт.")
-    ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=7)
+    ws.merge_cells(start_row=row,start_column=1,end_row=row,end_column=8 if data['registry'].get('has_closed') else 7)
     ws.cell(row,1).font=Font(name='Calibri',size=13,bold=True,color='17365D');ws.row_dimensions[row].height=30
     ws.append(['№','Марка','Тип изделия','Этаж','Оси','Дата и время монтажа (МСК)','Количество, шт'])
     header=ws.max_row
@@ -96,7 +96,7 @@ def add_unallocated_sheet_block(ws,data):
     for cells in ws.iter_rows(min_row=header+1,max_row=end):
         cells[5].number_format='dd.mm.yyyy hh:mm:ss';cells[6].number_format='#,##0'
         ws.row_dimensions[cells[0].row].height=max(32,15*max((len(str(cells[1].value or ''))+12)//13,(len(str(cells[2].value or ''))+9)//10,1))
-    ws.print_area=f'A1:G{ws.max_row}'
+    ws.print_area=f"A1:{'H' if data['registry'].get('has_closed') else 'G'}{ws.max_row}"
 
 
 def build_xlsx(data):

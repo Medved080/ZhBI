@@ -78,10 +78,11 @@ class ReportingTests(unittest.TestCase):
         from openpyxl import load_workbook
         data=self.snz.export_fact_xlsx(self.object_id,date(2026,11,10),user=self.admin).body
         wb=load_workbook(BytesIO(data));self.assertEqual(wb.sheetnames,['Реестр СНЗ','План и факт','Итоги по бригадам'])
-        summary=wb['Реестр СНЗ'];self.assertEqual(summary['F7'].value,4);self.assertEqual(summary['G7'].value,2)
+        summary=wb['Реестр СНЗ'];self.assertEqual(summary['G7'].value,4);self.assertEqual(summary['H7'].value,2)
+        for row in (5,6):self.assertAlmostEqual(summary.cell(row,6).value,40/620)
         self.assertEqual({summary.cell(i,3).value for i in (5,6)},{'День','Ночь'})
         filtered=self.snz.export_fact_xlsx(self.object_id,date(2026,11,10),shift='night',crew_id='install1',user=self.admin).body
-        only=load_workbook(BytesIO(filtered))['Реестр СНЗ'];self.assertEqual((only['F6'].value,only['G6'].value),(2,1))
+        only=load_workbook(BytesIO(filtered))['Реестр СНЗ'];self.assertEqual((only['G6'].value,only['H6'].value),(2,1))
         table=wb['План и факт'];self.assertIn('Вне СНЗ',[table.cell(i,7).value for i in range(6,11)])
         self.assertEqual({table.cell(i,9).value for i in range(6,11)},{'День','Ночь'})
         out=Path(__file__).resolve().parents[1]/'outputs/snz-fact-report';out.mkdir(parents=True,exist_ok=True);(out/'facts.xlsx').write_bytes(data)

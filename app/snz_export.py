@@ -73,6 +73,14 @@ def build_registry_xlsx(report, day):
     return output.getvalue()
 
 
+def item_priority(order, eid):
+    value=(order.get('item_priorities') or {}).get(str(eid))
+    if value is None:
+        related=next((t for t in order['tasks'] if eid in t['element_ids']),{})
+        value=related.get('priorities',{}).get(str(eid))
+    return value
+
+
 def build_xlsx(order, *, daily_details=False):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
@@ -118,17 +126,22 @@ def build_xlsx(order, *, daily_details=False):
     columns = list(range(17)) if daily_details else [1, 3, 4, 5, 6, 11, 12, 15, 16]
     items.append([item_headers[i] for i in columns])
     elements = order_items(order)
-    for eid, e in sorted(elements.items()):
+    def sequence(item):
+        priority=item_priority(order,item[0])
+        return (priority is None,priority if priority is not None else 0,item[0])
+    for eid, e in sorted(elements.items(),key=sequence):
         install = next((t for t in order["tasks"] if t["operation_id"] == "install" and eid in t["element_ids"]), None)
-        related = next((t for t in order["tasks"] if eid in t["element_ids"]), {})
         values = [eid, e["element_type"], e.get("subtype"), e.get("mark"), e.get("elevation_mm"), e.get("floor"), e.get("address"),
-                      e.get("counterparty"), e.get("zakhvatka"), e.get("crane"), e.get("stance"), crew["name"], order.get("item_priorities", related.get("priorities", {})).get(str(eid)),
+                      e.get("counterparty"), e.get("zakhvatka"), e.get("crane"), e.get("stance"), crew["name"], item_priority(order,eid),
                       "День" if order["shift"] == "day" else "Ночь", datetime.fromisoformat(order["date"]),
                       datetime.fromisoformat(install["segments"][0]["start"]) if install and install["segments"] else None, e.get("transfer_from")]
         items.append([values[i] for i in columns])
     if elements:
+        from openpyxl.worksheet.filters import AutoFilter
         table = Table(displayName="SNZElements", ref=f"A1:{get_column_letter(len(columns))}{items.max_row}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        table.autoFilter=AutoFilter(ref=table.ref)
+        table.autoFilter.add_sort_condition(f'{get_column_letter(columns.index(12)+1)}2:{get_column_letter(columns.index(12)+1)}{items.max_row}')
         items.add_table(table)
     items.freeze_panes = "E2" if daily_details else "C2"
     for i, original in enumerate(columns, 1):

@@ -16,6 +16,19 @@ class DailyDetailsTests(unittest.TestCase):
 
     def setUp(self):self.h.setUp()
 
+    def assert_registry_load(self, workbook):
+        details=workbook['СНЗ']
+        norm=[c.value for c in details[1]].index('Норматив, мин')
+        totals={}
+        for row in details.iter_rows(min_row=2):
+            totals[row[0].value]=totals.get(row[0].value,0)+(row[norm].value or 0)
+        register=workbook['Реестр СНЗ']
+        self.assertEqual(register['F4'].value,'Загрузка крана')
+        for row in register.iter_rows(min_row=5,max_row=4+len(totals)):
+            self.assertAlmostEqual(row[5].value,totals[row[0].value]/620)
+            self.assertEqual(row[5].number_format,'0%')
+        self.assertIsNone(register.cell(5+len(totals),6).value)
+
     def issue(self,day,shift,request):
         d=self.snz.get_state(self.object_id,self.admin)
         body=self.snz.PlanIn(revision=d['revision'],date=day,shift=shift,crew_id='install1')
@@ -38,6 +51,7 @@ class DailyDetailsTests(unittest.TestCase):
         path=out/'daily.xlsx';path.write_bytes(result.body)
         subprocess.run([sys.executable,'/Users/max/.codex/scripts/validate_xlsx.py',str(path)],check=True,capture_output=True)
         wb=load_workbook(BytesIO(result.body))
+        self.assert_registry_load(wb)
         self.assertEqual(wb.sheetnames,['Реестр СНЗ','СНЗ','Изделия','Загрузка звеньев','Предупреждения'])
         for name in ['СНЗ','Изделия','Предупреждения']:
             ws=wb[name];self.assertEqual({row[0].value for row in ws.iter_rows(min_row=2)},{first,second})
@@ -78,7 +92,13 @@ class DailyDetailsTests(unittest.TestCase):
         self.snz.edit_order(self.object_id,oid,self.snz.EditOrderIn(**proposal.model_dump(),request_id='edit',expected_hash=preview['fingerprint']),self.admin)
         conn=self.db.get_connection()
         conn.execute("UPDATE elements SET mark='Новая марка модели' WHERE id=?",(self.ids[0],));conn.commit();conn.close()
+        current=self.snz.get_state(self.object_id,self.admin)
+        changed={k:v for k,v in current['state'].items() if k!='facts'}
+        changed['cards'][0]['steps'][0]['minutes']=99
+        self.snz.save_state(self.object_id,self.snz.StateIn(revision=current['revision'],**changed),self.admin)
         wb=load_workbook(BytesIO(self.snz.export_registry(self.object_id,date(2026,11,10),self.admin).body))
+        self.assert_registry_load(wb)
+        self.assertAlmostEqual(wb['Реестр СНЗ']['F5'].value,20*len(self.ids[:-1])/620)
         self.assertEqual({r[6].value for r in wb['Изделия'].iter_rows(min_row=2)},set(self.ids[:-1]))
         self.assertEqual({r[5].value for r in wb['СНЗ'].iter_rows(min_row=2)},{2})
         self.assertNotIn('Новая марка модели',{r[9].value for r in wb['Изделия'].iter_rows(min_row=2)})

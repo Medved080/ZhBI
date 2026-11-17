@@ -34,8 +34,8 @@ class DailyReportTests(reporting.ReportingTests):
         self.assertTrue(all(row['completed'] is None for row in data['registry']['orders']))
         sheet=self.workbook()['Реестр СНЗ']
         self.assertIn('план за',sheet['A1'].value)
-        self.assertEqual(sheet.tables['SNZDailyPlanFactRegister'].ref,'A4:F6')
-        self.assertIsNone(sheet['G4'].value)
+        self.assertEqual(sheet.tables['SNZDailyPlanFactRegister'].ref,'A4:G6')
+        self.assertIsNone(sheet['H4'].value)
 
     def test_mixed_closure_is_per_row_and_closed_result_stays_frozen(self):
         self.install(self.base.ids[0],'2026-11-10 12:00:00');self.close_day()
@@ -45,8 +45,8 @@ class DailyReportTests(reporting.ReportingTests):
         self.install(self.base.ids[1],'2026-11-11 12:00:00')
         data=self.data();self.assertEqual(next(r for r in data['registry']['orders'] if r['shift']=='day')['completed'],1)
         sheet=self.workbook()['Реестр СНЗ']
-        self.assertEqual(sheet.tables['SNZDailyPlanFactRegister'].ref,'A4:G6')
-        values={sheet.cell(i,3).value:sheet.cell(i,7).value for i in (5,6)}
+        self.assertEqual(sheet.tables['SNZDailyPlanFactRegister'].ref,'A4:H6')
+        values={sheet.cell(i,3).value:sheet.cell(i,8).value for i in (5,6)}
         self.assertEqual(values,{'День':1,'Ночь':None})
         selected={e['id']:e for e in drawing_order(data)['items']}
         self.assertTrue(selected[self.base.ids[1]]['closed'])

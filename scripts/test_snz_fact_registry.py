@@ -67,13 +67,16 @@ class RegisterTests(unittest.TestCase):
     def test_xlsx_first_sheet_headers_totals_typed_dates_and_literal_names(self):
         from openpyxl import load_workbook
         data=self.data();data['registry']['orders'][0]['foreman']='=FORMULA()'
+        for i,row in enumerate(data['registry']['orders']):row['crane_load']=(660-i*60)/620
         payload=build_xlsx(data);wb=load_workbook(BytesIO(payload));ws=wb['Реестр СНЗ']
         self.assertEqual(wb.sheetnames,['Реестр СНЗ','План и факт','Итоги по бригадам'])
-        self.assertEqual([c.value for c in ws[4]],['№ СНЗ','Дата','Смена','Бригада','Прораб','Количество план, шт','Количество факт, шт'])
-        self.assertEqual((ws['F10'].value,ws['G10'].value),(43,43))
+        self.assertEqual([c.value for c in ws[4]],['№ СНЗ','Дата','Смена','Бригада','Прораб','Загрузка крана','Количество план, шт','Количество факт, шт'])
+        self.assertEqual((ws['G10'].value,ws['H10'].value),(43,43))
+        self.assertAlmostEqual(ws['F5'].value,660/620);self.assertEqual(ws['F5'].number_format,'0%')
+        self.assertIsNone(ws['F10'].value)
         self.assertEqual(ws['B5'].number_format,'dd.mm.yyyy');self.assertEqual(ws['B5'].data_type,'d')
         self.assertEqual(ws['E5'].data_type,'s');self.assertEqual(ws['E5'].value,'=FORMULA()')
-        self.assertEqual(ws.tables['SNZDailyPlanFactRegister'].ref,'A4:G9')
+        self.assertEqual(ws.tables['SNZDailyPlanFactRegister'].ref,'A4:H9')
         out=Path(__file__).resolve().parents[1]/'outputs/snz-fact-register';out.mkdir(parents=True,exist_ok=True)
         # Render a readable example with synthetic data and the user's totals.
         data['registry']['orders'][0]['foreman']='Прораб проверки';(out/'register.xlsx').write_bytes(build_xlsx(data))
@@ -82,7 +85,7 @@ class RegisterTests(unittest.TestCase):
         from openpyxl import load_workbook
         data=self.data();data['items']=[];data['registry']=summarize([],[],{})
         wb=load_workbook(BytesIO(build_xlsx(data)));ws=wb['Реестр СНЗ']
-        self.assertEqual((ws['F5'].value,ws['G5'].value),(0,0));self.assertFalse(ws.tables)
+        self.assertEqual((ws['G5'].value,ws['H5'].value),(0,0));self.assertFalse(ws.tables)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

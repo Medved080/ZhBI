@@ -85,6 +85,7 @@ class PackageTests(daily.DailyDetailsTests):
                         self.assertNotIn('СНЗ', wb.sheetnames)
                         self.assertEqual(wb['Изделия'].max_column,9)
                     else:
+                        self.assert_registry_load(wb)
                         self.assertEqual(wb.sheetnames,['Реестр СНЗ','СНЗ','Изделия','Загрузка звеньев','Предупреждения'])
                         self.assertEqual(wb['Изделия'].max_column,23)
                         self.assertEqual({r[0].value for r in wb['Изделия'].iter_rows(min_row=2)}, {first,second})
@@ -93,6 +94,29 @@ class PackageTests(daily.DailyDetailsTests):
                     with fitz.open(stream=payload,filetype='pdf') as doc:
                         self.assertGreaterEqual(len(doc),1)
                         self.assertTrue(any(page.get_text().strip() for page in doc))
+
+    def test_individual_and_packaged_workbooks_use_issued_sequence(self):
+        from openpyxl import load_workbook
+        self.state_for_day()
+        saved=self.snz.get_state(self.object_id,self.admin)
+        state={k:v for k,v in saved['state'].items() if k!='facts'}
+        state['assignments'][0]['priority']=2;state['assignments'][1]['priority']=1
+        self.snz.save_state(self.object_id,self.snz.StateIn(revision=saved['revision'],**state),self.admin)
+        oid=self.issue('2026-11-10','day','sorted-export')
+        original=self.snz.read_order(self.object_id,oid,self.admin)
+        members=order_items(original)
+        expected=[members[self.ids[1]]['mark'],members[self.ids[0]]['mark']]
+        payload=self.snz.export_xlsx(self.object_id,oid,self.admin).body
+        with ZipFile(BytesIO(self.package())) as bundle:
+            name=next(n for n in bundle.namelist() if '/' in n and n.endswith('.xlsx'))
+            packaged=bundle.read(name)
+        for name,data in [('sorted-individual.xlsx',payload),('sorted-package.xlsx',packaged)]:
+            self.validate(data,name)
+            ws=load_workbook(BytesIO(data))['Изделия']
+            self.assertEqual([r[1].value for r in ws.iter_rows(min_row=2)],expected)
+            self.assertEqual([r[6].value for r in ws.iter_rows(min_row=2)],[1,2])
+            self.assertFalse(ws.tables['SNZElements'].autoFilter.sortState.sortCondition[0].descending)
+        self.assertEqual(self.snz.read_order(self.object_id,oid,self.admin)['item_priorities'],original['item_priorities'])
 
     def test_empty_day_still_has_both_daily_documents(self):
         with ZipFile(BytesIO(self.package())) as bundle:
