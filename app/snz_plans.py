@@ -216,7 +216,13 @@ def build_floor_plans(order, context, axes, zones=(), status_colors=None, floor_
     _fonts()
     palette = status_colors or {}
 
+    from app.beam_column_joints import ABSENT, REBAR, CONCRETE
+
     def color(status):
+        if status == REBAR:
+            return HexColor('#ffd000')
+        if status == CONCRETE:
+            status = 'installed'
         try:
             return HexColor(palette.get(status) or '#9aa0a6')
         except (ValueError, TypeError):
@@ -289,7 +295,7 @@ def build_floor_plans(order, context, axes, zones=(), status_colors=None, floor_
             path = pdf.beginPath()
             for i, p in enumerate(points(item)):
                 (path.moveTo if i == 0 else path.lineTo)(*xy(*p))
-            path.close(); pdf.drawPath(path, fill=1, stroke=1); pdf.restoreState()
+            path.close(); pdf.drawPath(path, fill=int(item.get('current_status') != ABSENT), stroke=1); pdf.restoreState()
         labels = place_labels(page, (left, bottom, width, height), xy, priorities, reserved)
         pdf.setStrokeColor(HexColor('#64748B')); pdf.setLineWidth(.35)
         for label in labels:

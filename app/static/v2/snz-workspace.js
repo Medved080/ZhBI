@@ -1,7 +1,7 @@
 import {createModelFact} from './snz-model-fact.js';
 import {snzErrorIssue} from './snz-validation.js';
 import {esc} from './screen-view.js';
-import {scopeFor, makeAssignmentState, editAssignmentState, isDay, READY} from './snz-workspace-core.js';
+import {scopeFor, makeAssignmentState, editAssignmentState, isDay, canPlanItem} from './snz-workspace-core.js';
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const day=v=>v?String(v).slice(0,10).split('-').reverse().join('.'):'—';
 const options=(rows,key)=>rows.map(x=>`<option value="${esc(x.id)}" ${x.id===key?'selected':''}>${esc(x.name)}</option>`).join('');
@@ -66,7 +66,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
       const el=root.querySelector(`[data-snzi="${key}"]`);if(el&&document.activeElement!==el)el.value=value;
     }
     root.querySelector('[data-snzi-filter-date]').hidden=mode!=='date';
-    const byId=allById(),lockedIds=new Set(data?.locked_element_ids||[]),count=getSelectionCount(),blocked=picked.some(id=>lockedIds.has(id)||byId.get(id)?.current_status!==READY),extra=holdSelection&&picked.length?' Выбор сохранён при смене отбора.':'';
+    const byId=allById(),lockedIds=new Set(data?.locked_element_ids||[]),count=getSelectionCount(),blocked=picked.some(id=>lockedIds.has(id)||!canPlanItem(byId.get(id))),extra=holdSelection&&picked.length?' Выбор сохранён при смене отбора.':'';
     root.querySelector('[data-snzi-count]').textContent=`Выбрано: ${picked.length}.${extra}${visible?` Показано в реестре: ${visible.size}.`:''}`;
     root.querySelector('[data-snzi-hint]').textContent='Отбор дополняет фильтры слева. Бригада и смена отбирают существующие назначения. Пустая дата снимает только отбор по дате СНЗ.';
     root.querySelectorAll('[data-snzi]').forEach(el=>el.disabled=saving||modelFact.isBusy());
@@ -79,10 +79,13 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
     root.querySelector('[data-snzi-action="clear"]').disabled=!picked.length||saving||modelFact.isBusy();
     root.querySelector('[data-snzi-action="plan"]').textContent=saving?'Сохранение…':'Запланировать';
     root.querySelector('[data-snzi-rights]').hidden=!data||data.can_write;
+    const hasJoint = picked.some(id => id < 0);
+    root.querySelector('[data-snzi-fact-host]').hidden = hasJoint;
+    root.querySelector('[data-snzi-joint-fact]').hidden = !hasJoint;
     renderStatus();renderRegister();modelFact.render();
   }
   function rowHtml(e,assignments,selected,locked){
-    const a=assignments.get(e.id),disabled=!data.can_write||loading||saving||modelFact.isBusy()||writeBlocked||locked.has(e.id)||e.current_status!==READY?'disabled':'';
+    const a=assignments.get(e.id),disabled=!data.can_write||loading||saving||modelFact.isBusy()||writeBlocked||locked.has(e.id)||!canPlanItem(e)?'disabled':'';
     const rowInput=(field,value,attrs)=>`<input data-snzi-row="${field}" data-id="${e.id}" value="${esc(value??'')}" aria-label="${field==='date'?'Дата':field==='priority'?'Очередность':field} ${esc(e.mark||e.id)}" ${attrs} ${disabled}>`;
     const rowSelect=(field,rows,value,label)=>`<select data-snzi-row="${field}" data-id="${e.id}" aria-label="${label} ${esc(e.mark||e.id)}" ${disabled}>${options(rows,value)}</select>`;
     return `<tr aria-selected="${selected.has(e.id)}">
@@ -180,7 +183,7 @@ export function createSnzWorkspace({api,getObjectId,getSelectedIds,getSelectionC
         <div class="snzi-inline-actions"><button type="button" class="snzi-button" data-snzi-action="clear">Снять выбор</button><button type="button" class="snzi-button" data-snzi-action="refresh">Обновить</button></div>
         <div class="snzi-result" data-snzi-result hidden></div><p data-snzi-rights hidden>Нет права изменять плановые даты на этом объекте.</p>
         <p class="snzi-subtle">Дата, смена, бригада и очередность в строках реестра сохраняются при изменении. Для нового назначения сначала укажите дату. Неоднозначную карту уточните в расширенном планировании.</p>
-        </details><div data-snzi-fact-host></div></section>`;
+        </details><p class="snzi-subtle" data-snzi-joint-fact hidden>Факт по узлу отмечается в выданном СНЗ: сначала армирование, затем бетонирование.</p><div data-snzi-fact-host></div></section>`;
       root=host.querySelector('[data-snzi-root]');statusKey='';modelFact.mount(root.querySelector('[data-snzi-fact-host]'));
       root.querySelector('[data-snzi-fold]').addEventListener('toggle',e=>{statusOpen=e.target.open;});
       root.querySelector('[data-snzi-filter-fold]').addEventListener('toggle',e=>{filterOpen=e.target.open;});

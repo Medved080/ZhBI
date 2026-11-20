@@ -1,6 +1,7 @@
 import {validateSteps} from './snz-validation.js';
 // Pure rules shared by the model filter and the inline SNZ register.
 export const READY = 'ready_for_installation';
+export const canPlanItem = e => [READY, 'joint_absent', 'joint_rebar'].includes(e?.current_status);
 export const DATE_MODES = ['', 'date', 'unplanned', 'all'];
 export const isDay = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
   && Number(v.slice(0,4))>0 && !Number.isNaN(Date.parse(v+'T12:00:00Z')) && new Date(v+'T12:00:00Z').toISOString().slice(0,10)===v;
@@ -34,14 +35,14 @@ export function normalizeMontageAssignments(assignments, lockedIds=[], move=null
 export function makeAssignmentState(state, ids, {date, shift, crewId, cardId='auto'}) {
   const chosen=[...new Set(ids)], elements=new Map(state.elements.map(e=>[e.id,e]));
   if (!chosen.length) throw new Error('Выберите изделия на модели или в реестре.');
-  if (chosen.length>20000 || chosen.some(id=>!Number.isSafeInteger(id)||id<=0)) throw new Error('Недопустимый выбор изделий.');
+  if (chosen.length>20000 || chosen.some(id=>!Number.isSafeInteger(id)||id===0)) throw new Error('Недопустимый выбор изделий.');
   if (!isDay(date) || !['day','night'].includes(shift)) throw new Error('Укажите дату и дневную или ночную смену.');
   if (!state.state.crews.some(c=>c.id===crewId&&c.kind==='installation')) throw new Error('Выберите монтажную бригаду.');
   const locked=new Set(state.locked_element_ids), cards=new Set(state.state.cards.map(c=>c.id));
   for (const id of chosen) {
     const e=elements.get(id);
     if (!e || e.is_current===0) throw new Error('Одно из выбранных изделий отсутствует в актуальной модели. Обновите данные.');
-    if (e.current_status!==READY) throw new Error('Запланировать можно только изделия «Готов к монтажу». Измените статус или снимите лишний выбор.');
+    if (!canPlanItem(e)) throw new Error('Выберите изделия «Готов к монтажу» или узлы без завершённого бетонирования.');
     if (locked.has(id)) throw new Error('Выбраны изделия из выданного СНЗ. Их назначения защищены; снимите их с выбора.');
   }
   const body=structuredClone(state.state);delete body.facts;

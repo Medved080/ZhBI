@@ -5,6 +5,7 @@ from copy import deepcopy
 from app.snz_fact_store import records
 from app.snz_policy import order_items
 from app.snz_montage import status_montage
+from app.beam_column_joints import CONCRETE, joint_status
 from fastapi import HTTPException
 
 
@@ -38,7 +39,8 @@ def close_scope(conn, object_id, state, day=None, shift=None, crew_id=None):
         orders.append({**order,'id':row['id']})
     statuses=status_montage(conn,object_id)
     ids={eid for order in orders if order['crew'].get('kind')!='preparation' for eid in order_items(order)}
-    pending=sorted(eid for eid in ids if eid in statuses and statuses[eid]['current_status'] not in ('installed','accepted'))
+    pending=sorted(eid for eid in ids if (eid < 0 and joint_status(state['facts'], eid) != CONCRETE)
+                   or (eid in statuses and statuses[eid]['current_status'] not in ('installed','accepted')))
     digest={'orders':orders,'status_revisions':{str(eid):statuses.get(eid,{}).get('expected_rev') for eid in sorted(ids)},
             'facts':{t['key']:state['facts'].get(t['key'],{}) for order in orders for t in order['tasks']}}
     fingerprint=hashlib.sha256(json.dumps(digest,sort_keys=True,ensure_ascii=False).encode()).hexdigest()

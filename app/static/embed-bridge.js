@@ -394,7 +394,8 @@
   // An extra, temporary foreground scope. The underlying left-hand filters
   // remain intact, including their date, GUID and hierarchical controls.
   if (SNZ_FOREMAN) wrap("passesPlacementFilters", (orig) => function (element) {
-    return orig.apply(this, arguments) && (!snzScope.mode || element.current_status === "ready_for_installation")
+    return orig.apply(this, arguments) && (!snzScope.mode ||
+      ["ready_for_installation", "joint_absent", "joint_rebar"].includes(element.current_status))
       && (!snzScope.ids || snzScope.ids.has(element.id));
   });
 
@@ -402,7 +403,7 @@
   if (!MFR) {
     let contextOpen=false;
     wrap("openCtxMenu", () => function (element, x, y) {
-      if (objectBusy || loading || !element || !state.byId.has(element.id) || !passesPlacementFilters(element)) return;
+      if (objectBusy || loading || !element || element.id < 0 || !state.byId.has(element.id) || !passesPlacementFilters(element)) return;
       if(state.view3d.active && typeof threeDragging!=="undefined" && threeDragging)return;
       closeCtxMenu();
       const current=snapshot();
@@ -444,6 +445,15 @@
     wrap("applyMfrMode", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); return r; });
   }
   wrap("applyPlacementFilters", (orig) => function () { const r = orig.apply(this, arguments); scheduleState(); sendPicker(); return r; });
+  wrap("pollChanges", (orig) => async function () {
+    const revision = state.jointRevision;
+    const changed = await orig.apply(this, arguments);
+    if (changed && state.jointRevision !== revision) {
+      sendFilters();
+      post({ evt: "refreshed", changed });
+    }
+    return changed;
+  });
   wrap("setViewMode", (orig) => async function () { try { return await orig.apply(this, arguments); } finally { scheduleState(); } });
   wrap("showToast", (orig) => function (message, kind) {
     try { post({ evt: "notice", message: String(message), kind: String(kind || "warning") }); } catch (e) { /* не критично */ }
@@ -470,7 +480,7 @@
   function countsFor(key) {
     const def = PLACEMENT_FILTER_DEFS.find((d) => d.key === key);
     const m = new Map();
-    for (const e of state.elements) { const v = def.valueFn(e); m.set(v, (m.get(v) || 0) + 1); }
+    for (const e of schemeElements()) { const v = def.valueFn(e); m.set(v, (m.get(v) || 0) + 1); }
     return m;
   }
   const mkItem = (key, v, label, counts) => ({
@@ -509,7 +519,7 @@
   function typeGroup() {
     const typeValues = allValuesFor("elementType");
     const subs = new Map(), marks = new Map();
-    for (const e of state.elements) {
+    for (const e of schemeElements()) {
       if (!subs.has(e.element_type)) subs.set(e.element_type, new Set());
       subs.get(e.element_type).add(subtypeFilterValue(e));
       if (!marks.has(e.element_type)) marks.set(e.element_type, new Set());
@@ -606,6 +616,8 @@
 
   // ---------------- команды (белый список; параметры проверяются) ----------------
   const isInt = (x) => Number.isInteger(x) && x > 0 && x < 2 ** 31;
+  const isElementId = (x) => isInt(x) || (Number.isSafeInteger(x) && x < 0 && state.byId.has(x));
+  const isSnzId = (x) => isInt(x) || (Number.isSafeInteger(x) && x < 0);
   const isVal = (x) => typeof x === "string" || (typeof x === "number" && Number.isFinite(x));
 
   async function setObject(id) {
@@ -626,7 +638,7 @@
       refresh3DStatusColors();scheduleState();
     },
     snzReveal(a) {
-      if(!SNZ_FOREMAN||!isInt(a.id)||!state.byId.has(a.id))throw new Error("изделие СНЗ");
+      if(!SNZ_FOREMAN||!isElementId(a.id)||!state.byId.has(a.id))throw new Error("изделие СНЗ");
       snzScope={mode:"",ids:null,ticket:0};
       if(!passesPlacementFilters(state.byId.get(a.id)))COMMANDS.resetFilters();
       applyPlacementFilters();COMMANDS.clearSelection();COMMANDS.select(a);COMMANDS.locate(a);
@@ -635,21 +647,21 @@
       if (!SNZ_FOREMAN || !isInt(a.objectId) || a.objectId !== state.objectId
         || !["", "date", "unplanned", "all"].includes(a.mode)
         || !Number.isSafeInteger(a.ticket) || a.ticket < 0
-        || !(a.ids === null || (Array.isArray(a.ids) && a.ids.length <= 20000 && a.ids.every(isInt)))) throw new Error("отбор СНЗ");
+        || !(a.ids === null || (Array.isArray(a.ids) && a.ids.length <= 20000 && a.ids.every(isSnzId)))) throw new Error("отбор СНЗ");
       snzScope = { mode: a.mode, ids: a.ids === null ? null : new Set(a.ids), ticket: a.ticket };
       applyPlacementFilters(); scheduleState(); sendFilters();
       COMMANDS.getFilteredIds();
     },
     snzSelect(a) {
       if (!SNZ_FOREMAN || a.objectId !== state.objectId || !Array.isArray(a.ids)
-        || a.ids.length > 20000 || !a.ids.every(isInt)) throw new Error("выбор СНЗ");
+        || a.ids.length > 20000 || !a.ids.every(isSnzId)) throw new Error("выбор СНЗ");
       clearSelection();
       setMultiSelection(new Set(a.ids.filter(id => state.byId.has(id) && passesPlacementFilters(state.byId.get(id)))));
       scheduleState();
     },
     snzLabels(a) {
       if ((EMBED_QUERY.get("scope_ws") || EMBED_QUERY.get("ws")) !== "foreman" || !Array.isArray(a.items) || a.items.length > 20000
-        || a.items.some(r => !isInt(r.id) || !(r.priority === null || (Number.isInteger(r.priority) && r.priority > 0)))) throw new Error("подписи СНЗ");
+        || a.items.some(r => !isSnzId(r.id) || !(r.priority === null || (Number.isInteger(r.priority) && r.priority > 0)))) throw new Error("подписи СНЗ");
       snzLabels = a.items; drawSnzLabels();
     },
     setObject(a) {
@@ -687,14 +699,14 @@
     },
     select(a) {
       if (a.id === null) { clearSelection(); return; }
-      if (!isInt(a.id)) throw new Error("id");
+      if (!isElementId(a.id)) throw new Error("id");
       const el = state.byId.get(a.id);
       if (!el) throw new Error("элемента нет на схеме");
       selectElement(el);
       scheduleState();
     },
     locate(a) {
-      if (!isInt(a.id)) throw new Error("id");
+      if (!isElementId(a.id)) throw new Error("id");
       const el = state.byId.get(a.id);
       if (!el) throw new Error("элемента нет на схеме");
       // как locateElementOnPlan в V1: жёлтая обводка поверх выделения и предупреждение, если изделие скрыто фильтром
@@ -704,7 +716,7 @@
     },
     clearSelection() { clearSelection(); clearMultiSelection(); scheduleState(); },
     removeFromSelection(a) {
-      if (MFR || !isInt(a.id)) throw new Error("id");
+      if (MFR || !isElementId(a.id)) throw new Error("id");
       const ids = new Set(state.multiSelectedIds);
       ids.delete(a.id); setMultiSelection(ids); scheduleState();
     },
@@ -821,7 +833,7 @@
       const qGuid = guidNormalize(q);   // GUID можно искать в той же строке, что марку и адрес
       const items = []; let total = 0;
       if (q) {
-        for (const e of state.elements) {
+        for (const e of schemeElements()) {
           if (!passesPlacementFilters(e)) continue;
           if (!(String(e.mark || "").toLowerCase().includes(q) || String(e.address || "").toLowerCase().includes(q)
             || (qGuid.length >= 4 && guidNormalize(e.element_uid).includes(qGuid)))) continue;
@@ -839,7 +851,9 @@
     // числа элементов на любом объекте этого сервиса, только защита от неожиданно огромного ответа.
     getFilteredIds() {
       const ids = [];
-      for (const e of state.elements) { if (passesPlacementFilters(e)) { ids.push(e.id); if (ids.length >= 20000) break; } }
+      for (const e of SNZ_FOREMAN ? schemeElements() : state.elements) {
+        if (passesPlacementFilters(e)) { ids.push(e.id); if (ids.length >= 20000) break; }
+      }
       post({ evt: "filtered-ids", ids, objectId: state.objectId, snzTicket: snzScope.ticket });
     },
     // Мини-отчёты вкладки «Статус» считают только изделия, показанные в
@@ -968,7 +982,7 @@
       if (!Array.isArray(a.items) || a.items.length > 3000) throw new Error("items");
       let changed = 0;
       for (const it of a.items) {
-        if (!it || !isInt(it.id)) throw new Error("item");
+        if (!it || !isSnzId(it.id)) throw new Error("item");
         const fresh = { id: it.id };
         for (const f of DELTA_FIELDS) {
           if (!(f in it)) continue;

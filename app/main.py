@@ -536,6 +536,7 @@ app.include_router(attachments_router)
 app.include_router(external_models_router)
 app.include_router(headcount_router)
 from app.snz import router as snz_router
+from app import beam_column_joints
 app.include_router(snz_router)
 app.include_router(headcount_global_router)
 app.include_router(headcount_import_router)
@@ -3169,6 +3170,7 @@ def cleanup_activity(
 def get_changes(
     source_file: str = Query(...),
     since: Optional[str] = Query(None, description="UTC 'ГГГГ-ММ-ДД ЧЧ:ММ:СС'; пусто — только метка времени"),
+    joint_revision: Optional[int] = Query(None),
     user: sqlite3.Row = Depends(get_current_user),
 ):
     """Что изменилось у элементов чертежа после момента `since` — для
@@ -3204,8 +3206,15 @@ def get_changes(
         _guard_source_file(conn, user, source_file, "plan", "read")
         server_time = conn.execute("SELECT datetime('now') AS t").fetchone()["t"]
         capture_revision = conn.execute('SELECT COALESCE(MAX(id),0) FROM work_group_history WHERE object_id=(SELECT object_id FROM elements WHERE source_file=? LIMIT 1)', (source_file,)).fetchone()[0]
+        joint_delta = {}
+        if joint_revision is not None:
+            object_id = _object_for_source_file(conn, source_file)
+            revision = conn.execute("SELECT revision FROM snz_state WHERE object_id=?", (object_id,)).fetchone()
+            if joint_revision != (revision[0] if revision else 0):
+                revision, state = beam_column_joints.joint_state(conn, object_id)
+                joint_delta = {"joint_revision": revision, "joint_changes": beam_column_joints.joint_changes(state)}
         if not since:
-            return {"server_time": server_time, "elements": [], "capture_revision":capture_revision}
+            return {"server_time": server_time, "elements": [], "capture_revision":capture_revision, **joint_delta}
         # Сравнение НЕСТРОГОЕ (>=), и это не описка. `updated_at` и
         # `server_time` — оба `datetime('now')`, то есть с точностью до
         # СЕКУНДЫ. При строгом `>` правка, попавшая в ту же секунду, что и
@@ -3228,6 +3237,7 @@ def get_changes(
             "server_time": server_time,
             "capture_revision": capture_revision,
             "elements": [enrich_element_row(conn, dict(r)) for r in rows],
+            **joint_delta,
         }
     finally:
         conn.close()
@@ -6107,6 +6117,11 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
         perf_core.mark("контракты, подписи, формы: выборка и сборка")
         plan_work_groups = [dict(r) for r in conn.execute('SELECT id,name,group_key FROM work_groups WHERE object_id=?', (plan_object_id,))]
         plan_zone_labels = [dict(r) for r in conn.execute('SELECT id,category,number,name,work_group_id FROM zones WHERE object_id=? AND is_current=1', (plan_object_id,))]
+        joints = []
+        joint_revision = 0
+        if plan_object_id is not None and any(e["element_type"] == "Ригель" and e["is_current"] for e in elements):
+            joint_revision, joint_state = beam_column_joints.joint_state(conn, plan_object_id)
+            joints = beam_column_joints.build_joints(conn, plan_object_id, elements, joint_state)
     finally:
         conn.close()
 
@@ -6150,6 +6165,8 @@ def plan_data(body: PlanSelectionIn, user: sqlite3.Row = Depends(get_current_use
 
     return _plain_json_response({
         "elements": elements,
+        "joints": joints,
+        "joint_revision": joint_revision,
         "axis_grid": {"numeric": numeric_axes, "letter": letter_axes},
         "bbox": bbox,
         "marker_radius": marker_radius,

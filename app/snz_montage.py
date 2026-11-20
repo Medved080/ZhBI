@@ -75,23 +75,35 @@ def order_montage(status, order_id, attribution=None):
     return result
 
 
-def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=None, open_only=False):
+def fact_rows(conn, object_id, state, statuses, day=None, shift=None, crew_id=None, open_only=False, *, orders_from=None):
     grouped={}
     store=records(state)
     attributions=cross_shift_attributions(state,statuses)
     closed=store.get("closed",{})
-    for row in conn.execute('SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=? ORDER BY work_date,shift,id',(object_id,)):
+    query='SELECT id,work_date,shift,crew_id,snapshot_json FROM snz_orders WHERE object_id=?'
+    params=[object_id]
+    if day:
+        query+=' AND work_date=?'
+        params.append(day)
+    elif orders_from:
+        query+=' AND work_date>=?'
+        params.append(orders_from)
+    for row in conn.execute(query+' ORDER BY work_date,shift,id',params):
         if open_only and str(row['id']) in closed:continue
-        if day and row['work_date']!=day:continue
         if shift and row['shift']!=shift:continue
         if crew_id and row['crew_id']!=crew_id:continue
         order=json.loads(row['snapshot_json']);members=order_items(order)
         if order['crew'].get('kind')=='preparation':continue
+        montage_keys={t['element_ids'][0]:t['key'] for t in order['tasks']
+                      if t['operation_id']=='install' and len(t['element_ids'])==1}
         for eid,member in members.items():
-            task=next((t for t in order['tasks'] if t['operation_id']=='install' and t['element_ids']==[eid]),None)
-            item=grouped.setdefault(eid,{**member,'orders':[],'task_key':task['key'] if task else None})
-            if task:item['task_key']=task['key']
+            if eid < 0:
+                continue
+            task_key=montage_keys.get(eid)
+            item=grouped.setdefault(eid,{**member,'orders':[],'task_key':task_key})
+            if task_key:item['task_key']=task_key
             item['orders'].append({'id':row['id'],'date':row['work_date'],'shift':row['shift'],'crew_id':row['crew_id'],'crew':order['crew']['name'],
+                    'task_key':task_key,
                     'foreman':order['crew'].get('foreman',''),'note_key':f"o:{row['id']}:e:{eid}",
                     'note':store['notes'].get(f"o:{row['id']}:e:{eid}",{}).get('text',''),
                     'closed_at':closed.get(str(row['id']),{}).get('closed_at'),

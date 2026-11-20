@@ -57,6 +57,29 @@ class AdminTests(unittest.TestCase):
         changed=body.model_copy(update={'reason':'Different'})
         with self.assertRaises(HTTPException):self.api.save_editor(self.object_id,self.oid,changed,self.admin)
 
+    def test_removing_last_montage_operation_recalculates_roster_registry_and_export(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+        original=self.snz.read_order(self.object_id,self.oid,self.admin)
+        eid=original['tasks'][0]['element_ids'][0]
+        mark=next(item['mark'] for item in original['items'] if item['id']==eid)
+        proposal=self.proposal(lambda rows:next(p for p in rows if p['element_id']==eid)['steps'].clear())
+        self.save(proposal)
+        current=self.snz.read_order(self.object_id,self.oid,self.admin)
+        self.assertNotIn(eid,{e['id'] for e in current['items']})
+        self.assertEqual(current['tasks'][0]['segments'][0]['start'],original['tasks'][0]['segments'][0]['start'])
+        state=self.snz.get_state(self.object_id,self.admin)
+        self.assertEqual(state['orders'][0]['quantity'],len(original['items'])-1)
+        self.assertNotIn(eid,{a['element_id'] for a in state['state']['assignments']})
+        daily=self.snz.export_registry(self.object_id,date(2026,11,10),self.admin).body
+        wb=load_workbook(BytesIO(daily))
+        self.assertEqual(wb['Реестр СНЗ']['G5'].value,len(current['items']))
+        items=self.snz.export_xlsx(self.object_id,self.oid,self.admin).body
+        wb=load_workbook(BytesIO(items))
+        self.assertNotIn(mark,{row[1] for row in wb['Изделия'].values})
+        prior=self.snz.read_order_revision(self.object_id,self.oid,1,self.admin)
+        self.assertEqual(prior['items'],original['items'])
+
     def test_closed_fact_correction_status_time_and_frozen_versions(self):
         self.close();proposal=self.proposal(lambda rows:rows[0]['steps'][0].update(completed=True,completed_at='2026-11-10T10:15:00'))
         self.save(proposal);current=self.snz.read_order(self.object_id,self.oid,self.admin)

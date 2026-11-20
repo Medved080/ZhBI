@@ -8,6 +8,8 @@ from fastapi import HTTPException
 
 
 class CrossShiftFactTests(unittest.TestCase):
+    future_day='2026-11-10'
+
     @classmethod
     def setUpClass(cls):
         reporting.ReportingTests.setUpClass()
@@ -26,11 +28,12 @@ class CrossShiftFactTests(unittest.TestCase):
             c.execute('UPDATE elements SET element_type=?,mark=? WHERE id=?',('Колонна' if i<3 else 'Плита перекрытия',f'К-{i+1}' if i<3 else f'П-{i-2}',eid))
         c.commit();c.close()
         state,_=fixtures.fixture(self.ids,getattr(self,'steps',(('install',20,0),)))
-        for a in state['assignments'][3:]:a['shift']='night'
+        for a in state['assignments'][3:]:a.update(shift='night',date=self.future_day)
         self.snz.save_state(self.object_id,self.snz.StateIn(revision=0,**{k:v for k,v in state.items() if k!='facts'}),self.admin)
         self.orders=[]
         for shift in ('day','night'):
-            params=dict(revision=self.fixture.state()['revision'],date='2026-11-10',shift=shift,crew_id='install1',ignore_fact=True)
+            params=dict(revision=self.fixture.state()['revision'],date=self.future_day if shift=='night' else '2026-11-10',
+                        shift=shift,crew_id='install1',ignore_fact=True)
             plan=self.snz.preview(self.object_id,self.snz.PlanIn(**params),self.admin)
             self.orders.append(self.snz.issue(self.object_id,self.snz.IssueIn(**params,request_id='cross-'+shift,expected_hash=plan['fingerprint']),self.admin)['id'])
 
@@ -45,12 +48,12 @@ class CrossShiftFactTests(unittest.TestCase):
         p=self.snz.preview_close_orders(self.object_id,date(2026,11,10),shift,'install1',self.admin)
         return self.snz.close_issued_orders(self.object_id,self.snz.CloseScopeIn(revision=p['revision'],date='2026-11-10',shift=shift,crew_id='install1',expected_hash=p['fingerprint'],request_id='cross-close-'+shift),self.admin)
 
-    def report(self,shift=None):
+    def report(self,shift=None,day='2026-11-10'):
         from app.snz_fact_report import report
         c=self.db.get_connection()
         try:
             state,_=self.snz._load(c,self.object_id)
-            return report(c,self.object_id,state,'2026-11-10',shift,'install1')
+            return report(c,self.object_id,state,day,shift,'install1')
         finally:c.close()
 
     def snapshots(self):
@@ -84,6 +87,53 @@ class CrossShiftFactTests(unittest.TestCase):
         self.assertEqual(result['extra'],self.ids[:3]);self.assertEqual(self.report('night')['registry']['completed'],6)
         self.assertEqual(self.report('day')['registry']['completed'],0)
         self.assertTrue(all(r['completed_at']=='2026-11-11T01:10:00' for r in self.report('night')['items']))
+
+    def test_extra_picker_moves_future_plan_fact_and_colors_actual_shift(self):
+        for future_day in ('2026-11-10','2026-11-12'):
+            with self.subTest(future_day=future_day):
+                self.future_day=future_day
+                self.setUp()
+                eid=self.ids[3]
+                planned=self.ids[0]
+                self.snz.complete_model_fact(self.object_id,self.body([planned]),self.admin)
+
+                def picker(shift='day'):
+                    return self.snz.extra_fact_candidates(self.object_id,date(2026,11,10),self.admin,shift,'install1')
+
+                data=picker()
+                item=next(r for r in data['items'] if r['id']==eid)
+                self.assertEqual(item['source_order_ids'],[self.orders[1]])
+                self.assertNotIn(planned,{r['id'] for r in data['items']})
+                body=self.snz.ExtraFactIn(revision=data['revision'],date='2026-11-10',shift='day',crew_id='install1',
+                    completed_at='2026-11-10T11:15:00',request_id='picker-early',
+                    items=[{'element_id':eid,'expected_rev':item['expected_rev']}])
+                before=self.snapshots()
+                self.snz.complete_extra_fact(self.object_id,body,self.admin)
+                self.assertTrue(self.snz.complete_extra_fact(self.object_id,body,self.admin)['already_completed'])
+                self.assertEqual(self.snapshots(),before)
+                self.assertEqual({r['id'] for r in picker()['planned'] if r['completed']},{planned,eid})
+                future=self.snz.extra_fact_candidates(self.object_id,date.fromisoformat(future_day),self.admin,'night','install1')
+                self.assertFalse(next(r for r in future['planned'] if r['id']==eid)['completed'])
+                self.assertEqual(self.report('day')['registry']['completed'],2)
+                self.assertEqual(self.report('night',future_day)['registry']['completed'],0)
+                source=self.snz.read_order(self.object_id,self.orders[1],self.admin)
+                self.assertTrue(source['facts'][f'e:{eid}:install']['montage_elsewhere'])
+                self.close('day')
+                self.assertEqual(self.report('day')['registry']['completed'],2)
+
+                from app import snz_admin
+                oid=self.orders[1]
+                editor=snz_admin.read_editor(self.object_id,oid,self.admin)
+                proposal=snz_admin.AdminPreviewIn(revision=editor['revision'],order_revision=editor['order_revision'],
+                    positions=[r for r in editor['positions'] if r['element_id']!=eid],reason='Монтаж в предыдущую смену')
+                preview=snz_admin.preview_editor(self.object_id,oid,proposal,self.admin)
+                snz_admin.save_editor(self.object_id,oid,snz_admin.AdminSaveIn(**proposal.model_dump(),
+                    request_id='remove-early-montage',expected_hash=preview['fingerprint']),self.admin)
+                revised=self.snz.read_order(self.object_id,oid,self.admin)
+                self.assertEqual(len(revised['items']),2)
+                self.assertEqual(revised['tasks'][0]['segments'][0]['start'],source['tasks'][0]['segments'][0]['start'])
+                self.assertEqual(self.report('day')['registry']['completed'],2)
+                self.assertEqual(self.report('night',future_day)['registry']['planned'],2)
 
     def test_other_crew_and_closed_source_or_target_are_atomic(self):
         wrong=self.body().model_copy(update={'crew_id':'install2'})

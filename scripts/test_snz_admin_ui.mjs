@@ -17,7 +17,7 @@ try{
  await page.addInitScript(()=>localStorage.setItem('snz-issued-height','.15'));
  await page.goto(base+'/v2?object_id=1#/ws-foreman');await page.locator('.ws-tabs [data-tab="snz"]').click();await page.locator('[data-snz-open]').click();await settled();await page.locator('.snz-tabs [data-tab="orders"]').click();
  await open(oid);await fill(1,'minutes','35');await fill(1,'planned_start','2026-11-10T09:00');
- await page.locator('[data-action="admin-remove"][data-id="2"]').click();await page.locator('[data-admin-candidate]').selectOption('5');await action('admin-add').click();
+ const remove=page.locator('[data-action="admin-step-remove"][data-id="2"]');assert.equal(await remove.innerText(),'Удалить позицию');await remove.click();await page.locator('[data-admin-candidate]').selectOption('5');await action('admin-add').click();
  await field(1,'completed').check();await fill(1,'completed_at','2026-11-10T09:45');
  await page.locator('[data-admin-reason]').fill('Уточнение состава, норматива и факта');await check();
  assert.match(await page.locator('.snz-admin-editor').innerText(),/Норматив, мин/);

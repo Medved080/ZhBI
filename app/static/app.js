@@ -156,6 +156,10 @@ let state = {
   statusColors: {},
   statusOrder: [],
   statusLabels: {},
+  joints: [],
+  elementsWithJoints: [],
+  jointRevision: 0,
+  columnJointIntervals: new Map(),
   labelVisibility: {},
   labelDatesVisibility: {},
   changelog: null, // кэш GET /changelog на время сеанса, см. btn-changelog
@@ -2706,7 +2710,7 @@ function allValuesFor(key) {
   // пользователя). Легенда статусов рядом всегда показывала все семь.
   if (key === "status") { for (const s of state.statusOrder) set.add(s); }
   if (key === "workGroup") for (const g of state.workGroups || []) set.add(g.id);
-  for (const e of state.elements) {
+  for (const e of schemeElements()) {
     if (key === "zakhvatka" && state.placementFilters.workGroup.has(e.work_group_id)) continue;
     set.add(def.valueFn(e));
   }
@@ -2721,7 +2725,7 @@ function allValuesFor(key) {
 function isValueEnabled(key, value) {
   const def = PLACEMENT_FILTER_DEFS.find(d => d.key === key);
   const exceptKeys = cascadeGroupFor(key);
-  for (const e of state.elements) {
+  for (const e of schemeElements()) {
     if (def.valueFn(e) !== value) continue;
     if (elementPassesExceptKeys(e, exceptKeys)) return true;
   }
@@ -2847,10 +2851,10 @@ function applyPlacementFiltersImpl(rebuild3D = true) {
   const pending = state.pendingLinkIds;
   const topVisible = topVisibleLabelIds(); // только 2D, см. комментарий там же
   let visibleCount = 0;
-  for (const element of state.elements) {
+  for (const element of schemeElements()) {
     const подсвечен = pending.has(element.id);
     const passes = passesPlacementFilters(element) || подсвечен;
-    if (passes) visibleCount++;
+    if (passes && element.id > 0) visibleCount++;
     const shape = state.shapeById.get(element.id);
     if (shape) {
       shape.style.display = passes ? "" : "none";
@@ -4030,7 +4034,7 @@ function renderPlacementFilters() {
   // Docs/backlog.md).
   const subtypesByType = new Map();
   const marksByType = new Map();
-  for (const e of state.elements) {
+  for (const e of schemeElements()) {
     if (!subtypesByType.has(e.element_type)) subtypesByType.set(e.element_type, new Set());
     subtypesByType.get(e.element_type).add(subtypeFilterValue(e));
     if (!marksByType.has(e.element_type)) marksByType.set(e.element_type, new Set());
@@ -4814,6 +4818,10 @@ function нормМарки(selection) {
 // появлялись бы только в одном из режимов.
 function elementVisibleNow(element) {
   return passesPlacementFilters(element) || state.pendingLinkIds.has(element.id);
+}
+
+function schemeElements() {
+  return state.joints.length && !state.picker.active ? state.elementsWithJoints : state.elements;
 }
 
 // Марки, привязанные к контракту МИМО его спецификации (2026-08-14, живой
@@ -5882,6 +5890,9 @@ function renderAxisGrid(data) {
 }
 
 function colorFor(status) {
+  if (status === "joint_absent") return "transparent";
+  if (status === "joint_rebar") return "#ffd000";
+  if (status === "joint_concrete") status = "installed";
   return state.statusColors[status] || "#999999";
 }
 
@@ -5907,6 +5918,7 @@ function shapeNameFor(element) { return state.elementShapes[shapeKeyFor(element.
 // INSERT-блока), молча откатываемся на круг — не оставляем элемент без
 // маркера вообще.
 function effectiveShapeNameFor(element) {
+  if (element.id < 0) return "outline";
   const assigned = shapeNameFor(element);
   if (assigned === "outline" && (!element.outline || element.outline.length < 3)) return "circle";
   return assigned;
@@ -5941,6 +5953,15 @@ function updateShapeGeometry(node, shapeName, cx, cy, r, outline) {
 
 function styleShape(shape, element) {
   const selected = state.selectedId === element.id;
+  if (element.id < 0) {
+    const absent = element.current_status === "joint_absent";
+    shape.setAttribute("fill", colorFor(element.current_status));
+    shape.setAttribute("stroke", absent ? "transparent" : themeValue("--shape-stroke", IN_PROJECT_STROKE));
+    shape.classList.toggle("selected", selected);
+    shape.classList.toggle("multi-selected", state.multiSelectedIds.has(element.id));
+    update3DElementAppearance(element, selected);
+    return;
+  }
   // срез состояния: изделие, отстающее от графика, рисуется косой штриховкой (app/static/timeline.js)
   shape.setAttribute("fill", window.snzFactColorById?.get(element.id) || (window.zhbiTimeline && zhbiTimeline.hatchFill(element)) || colorFor(element.current_status));
   // хронология: изделия «без статуса» полупрозрачны, сквозь них видны остальные
@@ -5969,6 +5990,11 @@ function styleShape(shape, element) {
 function update3DElementAppearance(element, selected) {
   const v3 = state.view3d;
   if (!v3.merged) return;
+  if (element.id < 0 && element.current_status === "joint_absent") {
+    if (selected) set3DHighlight(element.id, element.current_status);
+    else if (v3.highlightElementId === element.id) set3DHighlight(null);
+    return;
+  }
   // Своего меша (и своего материала) у элемента больше нет — вся геометрия
   // слита в один буфер, см. build3DMergedGeometry. Цвет статуса живёт в
   // вершинах, поэтому меняется переписыванием диапазона; подсветка выбора
@@ -6578,7 +6604,7 @@ function renderElementsImpl(data) {
   // ярус, прошедший фильтр") могли бы относиться к РАЗНЫМ ярусам, не
   // совпадая — заказчик подтвердил, что подпись должна принадлежать
   // именно видимой фигуре (см. Docs/backlog.md).
-  const sortedElements = [...data.elements].sort(
+  const sortedElements = [...schemeElements()].sort(
     (a, b) => (a.elevation_mm ?? -Infinity) - (b.elevation_mm ?? -Infinity)
   );
 
@@ -6594,6 +6620,12 @@ function renderElementsImpl(data) {
     styleShape(shape, element);
     layer.appendChild(shape);
     state.shapeById.set(element.id, shape);
+    if (element.id < 0) {
+      // An absent joint can be selected from the SNZ register without making
+      // an invisible hit target over the column on the regular plan.
+      if (element.current_status === "joint_absent") shape.style.pointerEvents = "none";
+      continue;
+    }
 
     // Подпись(+допстрока) — в СВОЕЙ маленькой группе внутри labelsLayer, а
     // не сама по себе — applyPlacementFilters скрывает элемент целиком
@@ -7344,6 +7376,10 @@ function clearWorkspace() {
   document.getElementById("elements-layer").innerHTML = "";
   document.getElementById("labels-layer").innerHTML = "";
   state.elements = [];
+  state.joints = [];
+  state.elementsWithJoints = [];
+  state.jointRevision = 0;
+  state.columnJointIntervals.clear();
   state.sourceFile = null;
   state.zones = [];
   state.zoneLabels = [];
@@ -7561,7 +7597,7 @@ const DELTA_FIELDS = [
 function applyElementDelta(fresh) {
   const element = state.byId.get(fresh.id);
   if (!element) return false; // элемента нет в текущей выборке слоёв — не наше дело
-  if (window.zhbiTimeline) zhbiTimeline.onDelta(fresh);   // открыт срез состояния: исходный статус изделия обновился
+  if (element.id > 0 && window.zhbiTimeline) zhbiTimeline.onDelta(fresh);   // открыт срез состояния: исходный статус изделия обновился
   let changed = false;
   for (const field of DELTA_FIELDS) {
     if (field in fresh && element[field] !== fresh[field]) {
@@ -7574,6 +7610,10 @@ function applyElementDelta(fresh) {
   // датами. Полная перерисовка схемы (renderElements) здесь была бы
   // расточительна — на реальном файле это тысячи узлов SVG.
   styleShape(state.shapeById.get(element.id), element);
+  if (element.id < 0) {
+    state.shapeById.get(element.id).style.pointerEvents = element.current_status === "joint_absent" ? "none" : "";
+    return true;
+  }
   updateElementSubLabel(element);
   return true;
 }
@@ -7585,19 +7625,28 @@ async function pollChanges(manual = false) {
   try {
     const params = new URLSearchParams({ source_file: state.sourceFile });
     if (lastServerTime) params.set("since", lastServerTime);
+    if (state.joints.length) params.set("joint_revision", state.jointRevision);
     const data = await api(`/changes?${params.toString()}`);
     const revisionChanged = lastCaptureRevision != null && data.capture_revision !== lastCaptureRevision;
     lastCaptureRevision = data.capture_revision;
     if (revisionChanged) { await loadPlan(true); return 0; }
     const previousMark = lastServerTime;
     lastServerTime = data.server_time;
+    let applied = 0;
+    if (data.joint_changes) {
+      state.jointRevision = data.joint_revision;
+      const byId = new Map(data.joint_changes.map(e => [e.id, e]));
+      for (const joint of state.joints) {
+        const changes = byId.get(joint.id);
+        if (applyElementDelta({id: joint.id, current_status: changes?.current_status || "joint_absent",
+          planned_installation_date: changes?.planned_installation_date ?? null})) applied++;
+      }
+      if (applied) renderPlacementFilters();
+    }
     // Самый первый запрос только запоминает метку: без неё сервер вернул
     // бы всю историю изменений с начала времён, а показывать «изменилось
     // 9422 элемента» сразу после открытия страницы бессмысленно.
-    if (!previousMark) return 0;
-
-    let applied = 0;
-    for (const fresh of data.elements) if (applyElementDelta(fresh)) applied++;
+    if (previousMark) for (const fresh of data.elements) if (applyElementDelta(fresh)) applied++;
     if (applied) {
       renderLegend();          // счётчики по статусам в сайдбаре
       applyPlacementFilters(); // элемент мог перестать проходить фильтр по статусу
@@ -7886,13 +7935,24 @@ async function loadPlanInner(preserveView = true) {
   // опроса просто возьмёт новую метку у сервера (см. pollChanges).
   lastServerTime = null;
   state.elements = data.elements;
+  state.joints = data.joints || [];
+  state.elementsWithJoints = state.joints.length ? state.elements.concat(state.joints) : [];
+  state.jointRevision = data.joint_revision || 0;
+  state.columnJointIntervals.clear();
+  for (const joint of state.joints) {
+    for (const id of joint.column_ids) {
+      if (!state.columnJointIntervals.has(id)) state.columnJointIntervals.set(id, []);
+      state.columnJointIntervals.get(id).push([joint.elevation_mm, joint.elevation_mm + joint.height_mm]);
+    }
+  }
+  for (const intervals of state.columnJointIntervals.values()) intervals.sort((a, b) => a[0] - b[0]);
   // Файл выводится ИЗ ДАННЫХ, а не выбирается: экспорт, импорт истории и
   // опрос /changes по-прежнему работают по чертежу, и им нужно имя того,
   // что реально показано.
   state.sourceFile = data.elements.length ? data.elements[0].source_file : state.sourceFile;
   state.statusColors = data.status_colors;
   state.statusOrder = data.status_order;
-  state.statusLabels = data.status_labels;
+  state.statusLabels = { ...data.status_labels, joint_absent: "Отсутствует", joint_rebar: "Армирование", joint_concrete: "Бетонирование" };
   state.labelVisibility = data.label_visibility;
   state.labelDatesVisibility = data.label_dates_visibility || {};
   uiState.labelBase = { vis: { ...state.labelVisibility }, dates: { ...state.labelDatesVisibility } };   // умолчания объекта
@@ -8738,6 +8798,15 @@ function renderCalcLink(element) {
 
 async function showCard(element) {
   const card = document.getElementById("card");
+  if (element.id < 0) {
+    card.dataset.skeleton = "joint";
+    cardElement = null;
+    card.innerHTML = `<h3>${escapeHtml(element.element_type)}</h3>
+      <p>${escapeHtml(element.mark)} · ${escapeHtml(state.statusLabels[element.current_status])}</p>
+      <p>${escapeHtml([element.crane, element.stance, element.zakhvatka].filter(Boolean).join(" · "))}</p>
+      <p>Армирование и бетонирование отмечаются в выданном СНЗ.</p>`;
+    return;
+  }
   const canEdit = can("status", "write");
   const каркас = canEdit ? "edit" : "read";
   if (card.dataset.skeleton !== каркас) {
@@ -8945,6 +9014,7 @@ function clearSelection() {
 const ctxMenu = document.getElementById("ctx-menu");
 
 function openCtxMenu(element, clientX, clientY) {
+  if (element.id < 0) return;
   if (!can("status", "write")) return;   // смена статуса — порог раздела, не системная роль
   ctxMenu.innerHTML = "";
   const title = document.createElement("div");
@@ -9758,6 +9828,7 @@ const bulkStatusBackdrop = document.getElementById("bulk-status-backdrop");
 let bulkStatusRequestId = null;
 
 function openBulkStatusModal() {
+  if ([...state.multiSelectedIds].some(id => id < 0)) return;
   if (state.multiSelectedIds.size === 0) return;
   bulkStatusRequestId = newRequestId();
   const opened = startTiming("bulk_status_form_open", {
@@ -10506,7 +10577,7 @@ async function openWorkGroupEditor(ids = []) {
 }
 const groupAssignButton = document.createElement('button');
 groupAssignButton.type = 'button'; groupAssignButton.className = 'btn btn-sm'; groupAssignButton.textContent = 'Назначить захватку';
-groupAssignButton.addEventListener('click', () => openWorkGroupEditor([...state.multiSelectedIds]));
+groupAssignButton.addEventListener('click', () => openWorkGroupEditor([...state.multiSelectedIds].filter(id => id > 0)));
 document.getElementById('multi-select-panel').append(groupAssignButton);
 
 document.getElementById("multi-select-clear").addEventListener("click", clearMultiSelection);
@@ -26184,6 +26255,7 @@ function computeTopColumnCeiling(levels) {
 //   ниже дало бы толщину в 60-150 мм вместо метра с лишним.
 // - Ригель/Плита/Панель — квадратное сечение, высота = ширина контура.
 function elementExtrusionHeight(element, levels, columnTops) {
+  if (element.id < 0) return element.height_mm;
   if (element.element_type === "Панель" && Number.isFinite(element.height_mm) && element.height_mm > 0) return element.height_mm;
   if (element.element_type === "Панель облицовки шахты") {
     if (!Number.isFinite(element.height_mm) || element.height_mm <= 0) {
@@ -26512,13 +26584,39 @@ function build3DElementGeometry(element, levels, columnTops) {
   // до elevation_mm+height, без запасов.
   const points = element.outline.map(([x, y]) => new THREE.Vector2(x, y));
   const shape = new THREE.Shape(points);
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
-  geometry.rotateX(-Math.PI / 2);
-  // Отметка запекается прямо в вершины. Раньше это была mesh.position.y
-  // собственного меша элемента — у слитой геометрии собственного меша нет,
-  // сдвиг обязан быть в самих координатах.
-  geometry.translate(0, element.elevation_mm || 0, 0);
-  return geometry;
+  const bottom = element.elevation_mm || 0;
+  const top = bottom + height;
+  const extrude = (from, to) => {
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: to - from, bevelEnabled: false, steps: 1 });
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, from, 0);
+    return geometry;
+  };
+  const cuts = !state.picker.active && state.columnJointIntervals.get(element.id);
+  if (!cuts) return extrude(bottom, top);
+  let from = bottom;
+  const parts = [];
+  for (const [lower, upper] of cuts) {
+    if (upper <= from || lower >= top) continue;
+    if (lower > from) parts.push(extrude(from, lower));
+    from = upper;
+  }
+  if (from < top) parts.push(extrude(from, top));
+  if (parts.length <= 1) return parts[0] || null;
+
+  const result = new THREE.BufferGeometry();
+  for (const name of ["position", "normal"]) {
+    const arrays = parts.map(part => part.attributes[name].array);
+    const merged = new Float32Array(arrays.reduce((size, array) => size + array.length, 0));
+    let offset = 0;
+    for (const array of arrays) {
+      merged.set(array, offset);
+      offset += array.length;
+    }
+    result.setAttribute(name, new THREE.BufferAttribute(merged, 3));
+  }
+  for (const part of parts) part.dispose();
+  return result;
 }
 
 // ВСЯ геометрия элементов сцены — в ОДНОМ буфере граней и ОДНОМ буфере
@@ -26727,14 +26825,20 @@ function set3DHighlight(elementId, status) {
     v3.highlightMesh = null;
   }
   v3.highlightElementId = null;
-  if (elementId === null || elementId === undefined || !v3.merged) return;
-  const range = v3.merged.rangeById.get(elementId);
-  if (!range) return;
-  const source = v3.merged.mesh.geometry.attributes;
-  const from = range.start * 3, to = (range.start + range.count) * 3;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(source.position.array.slice(from, to), 3));
-  geometry.setAttribute("normal", new THREE.BufferAttribute(source.normal.array.slice(from, to), 3));
+  if (elementId === null || elementId === undefined) return;
+  const range = v3.merged?.rangeById.get(elementId);
+  let geometry;
+  if (range) {
+    const source = v3.merged.mesh.geometry.attributes;
+    const from = range.start * 3, to = (range.start + range.count) * 3;
+    geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(source.position.array.slice(from, to), 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(source.normal.array.slice(from, to), 3));
+  } else {
+    const joint = elementId < 0 && state.byId.get(elementId);
+    if (!joint || !elementVisibleNow(joint)) return;
+    geometry = build3DElementGeometry(joint);
+  }
   const перешли = elementId === locatedElementId;
   v3.highlightMesh = new THREE.Mesh(geometry, getHighlightMeshMaterial(status, перешли));
   // Рисуется последним — иначе меш без проверки глубины перекрывался бы
@@ -28673,21 +28777,21 @@ function build3DSceneImpl(preserveCamera = false) {
   // elementVisibleNow, а не passesPlacementFilters: изделия «предстоит
   // связать» (АРМ) показываются сверх среза и обязаны быть построены, иначе
   // мерцать в 3D было бы нечему.
-  const shown = state.elements.filter(elementVisibleNow);
+  const shown = schemeElements().filter(e => e.current_status !== "joint_absent" && elementVisibleNow(e));
   v3.merged = build3DMergedGeometry(shown, levels, columnTops);
   if (v3.merged) {
     v3.scene.add(v3.merged.mesh);
     v3.scene.add(v3.merged.ghostMesh);
     if (v3.merged.edges) v3.scene.add(v3.merged.edges);
-    const selected = state.byId.get(state.selectedId);
-    if (selected) set3DHighlight(selected.id, selected.current_status);
   }
+  const selected = state.byId.get(state.selectedId);
+  if (selected) set3DHighlight(selected.id, selected.current_status);
   update3DPendingMesh();
 
   // Элемент без контура в слитую геометрию не попал (нечего экструдировать)
   // — подписи ему тоже не полагается, как и раньше, когда у него просто не
   // получалось меша. rangeById — точный список того, что реально построено.
-  const withGeometry = v3.merged ? shown.filter(e => v3.merged.rangeById.has(e.id)) : [];
+  const withGeometry = v3.merged ? shown.filter(e => e.id > 0 && v3.merged.rangeById.has(e.id)) : [];
 
   // Наклейки на гранях — ОДИН буфер на пару (тип элемента, страница
   // атласа), см. buildMergedDecals. Элементы, которым наклейка не

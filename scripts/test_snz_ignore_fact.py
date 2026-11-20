@@ -33,6 +33,16 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual((state,elements),before)
         self.assertEqual(result['completed'],[])
 
+    def test_early_montage_leaves_only_remaining_work_in_future_plan(self):
+        for steps,expected in [((('install',20,0),),[]),((('install',20,0),('rebar1',15,0)),['rebar1'])]:
+            with self.subTest(steps=steps):
+                state,elements=fixtures.fixture((1,),steps,shift='night')
+                state['facts']['e:1:install']={'completed':True,'completed_at':'2026-11-10T11:15'}
+                elements[0]['current_status']='installed'
+                result=build_schedule(state,elements,[],'2026-11-10','night','install1')
+                self.assertEqual([t['operation_id'] for t in result['tasks']],expected)
+                self.assertEqual([e['id'] for e in result['items']],[1] if expected else [])
+
 
 class IssueTests(unittest.TestCase):
     @classmethod

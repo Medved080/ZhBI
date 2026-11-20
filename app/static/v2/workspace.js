@@ -217,8 +217,9 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
       inlineSnz?.onVisible(m.ids, m.objectId, m.snzTicket);
       // sc.loaded — сцена ДЕЙСТВИТЕЛЬНО показывает данные (не «идёт загрузка»): тот же счётчик total, что видит
       // человек на панели, а не промежуточный ноль.
-      if (sc?.loaded) assistantIds = m.ids;
-      if (sc?.loaded) writeFilterSnapshot({ objectId: curObject, ws, elementIds: m.ids, shown: sc.shown, total: sc.total, excluded: sc.excluded, capturedAt: Date.now() });
+      const productIds = m.ids.filter(id => id > 0);
+      if (sc?.loaded) assistantIds = productIds;
+      if (sc?.loaded) writeFilterSnapshot({ objectId: curObject, ws, elementIds: productIds, shown: sc.shown, total: sc.total, excluded: sc.excluded, capturedAt: Date.now() });
     } else if (m.evt === "picker" && m.model && Array.isArray(m.model.slicers)) {
       pk = m.model;
       if (al.loaded && contractIdsKey() !== al.idsKey) al.loaded = false;   // сцена догрузилась и состав контрактов объекта изменился — перечитать, а не показывать «нет контрактов»
@@ -336,7 +337,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   async function loadDetail(id) {
     detail.id = id; detail.data = null; detail.error = "";
     const seq = ++detail.seq;
-    if (id === null) return;
+    if (id === null || (!mfr && id < 0)) return;
     try {
       const d = await api.get(detailUrl(id));
       if (dead || seq !== detail.seq || detail.id !== id) return; // запоздавший ответ прежнего выбора не подменяет текущий
@@ -448,7 +449,7 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   function paintMultiBar() {
     const bar = $("#ws-multibar");
     if (!bar) return;
-    const html = mfr ? "" : ops.multiBarHtml({ withBanner: panelHidden || tab !== "props" });
+    const html = mfr || sc?.multiIds?.some(id => id < 0) ? "" : ops.multiBarHtml({ withBanner: panelHidden || tab !== "props" });
     if (html === multiBarHtml) return;
     multiBarHtml = html;
     bar.hidden = !html;
@@ -477,13 +478,20 @@ export function mountWorkspace(el, { screen, objectId, api, groupTitle, go, ws =
   function propsHtml() { return ops.bannerHtml() + propsInner(); }
   function propsInner() {
     if (!sc || !sc.loaded) return `<p class="v2-muted ws-pad">Схема загружается…</p>`;
-    if (sc.multi && sc.multi.count > 1) return ops.groupHtml();   // групповое выделение: сводка и групповые операции
+    if (sc.multi && sc.multi.count > 1) {
+      if (sc.multiIds.some(id => id < 0)) return `<p class="v2-muted ws-pad">Выбрано элементов: ${sc.multi.count}. Узлы можно запланировать на вкладке «СНЗ».</p>`;
+      return ops.groupHtml();
+    }
     const e = sc.selected;
     if (!e) {
       return `<div class="ws-pad ws-empty"><h3 class="ws-h">Ничего не выбрано</h3>
         <p class="v2-muted">Нажмите на элемент схемы, чтобы увидеть его свойства. Shift + перетаскивание — выбор рамкой.</p>
         <dl class="ws-dl">${row("Показано на схеме", `${sc.shown} из ${sc.total}`)}${row("Активных фильтров", sc.excluded ? String(sc.excluded) : "нет")}</dl></div>`;
     }
+    if (e.id < 0) return `<div class="ws-pad"><h3 class="ws-h">${esc(e.element_type)}</h3><dl class="ws-dl">
+      ${row("Положение",e.mark)}${row("Статус",sc.statusLabels[e.current_status])}${row("Кран",e.zones?.crane)}${row("Захватка",e.zones?.zakhvatka)}
+      ${row("Стоянка",e.zones?.stance)}${row("Плановая дата",e.planned_installation_date)}</dl>
+      <p class="v2-muted">Армирование и бетонирование отмечаются в выданном СНЗ.</p></div>`;
     return ops.cardHtml(e, { detail: detail.id === e.id ? detail.data : null, detailError: detail.id === e.id ? detail.error : "", topExtra: calcLinkHtml(e) });
   }
 

@@ -182,7 +182,10 @@ class EditTests(unittest.TestCase):
         from io import BytesIO
         for rev in [1,2]:
             xlsx=self.snz.export_xlsx(self.object_id,oid,self.admin,revision=rev).body
-            wb=load_workbook(BytesIO(xlsx));self.assertGreater(wb['СНЗ'].max_row,5)
+            wb=load_workbook(BytesIO(xlsx))
+            expected=self.ids if rev==1 else self.ids[1:]
+            self.assertEqual({r[1].value for r in wb['Изделия'].iter_rows(min_row=2)}, {f'Р-{eid}' for eid in expected})
+            self.assertGreater(wb['Загрузка звеньев'].max_row,3)
             pdf=self.snz.export_pdf(self.object_id,oid,self.admin,revision=rev).body;self.assertTrue(pdf.startswith(b'%PDF'))
             path=Path(__file__).resolve().parents[1]/'outputs/snz-order-edit'/f'revision-{rev}.xlsx';path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(xlsx);path.with_suffix('.pdf').write_bytes(pdf)
             import subprocess
@@ -218,8 +221,8 @@ class EditTests(unittest.TestCase):
             ws=load_workbook(BytesIO(response.body)).active
             if day.day==10:
                 self.assertEqual(ws['B5'].value.isoformat(),'2026-11-10T00:00:00')
-                self.assertEqual(ws['F5'].value,4)
-                totals={r[0].value:r[5].value for r in ws if r[0].value in ('Итого по документам, шт','Уникальных изделий плана, шт')}
+                self.assertEqual(ws['G5'].value,4)
+                totals={r[0].value:r[6].value for r in ws if r[0].value in ('Итого по документам, шт','Уникальных изделий плана, шт')}
                 self.assertEqual(totals,{'Итого по документам, шт':8,'Уникальных изделий плана, шт':4})
             else:self.assertEqual(len(ws.tables),0)
 

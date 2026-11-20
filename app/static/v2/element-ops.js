@@ -1271,6 +1271,9 @@ export function createElementOps(ctx) {
   function selectionStatusHtml() {
     const s = sc();
     if (!s?.loaded) return '<p class="v2-muted">Схема загружается…</p>';
+    if (s.selected?.id < 0 || s.multiIds?.some(id => id < 0)) {
+      return '<p class="v2-muted">Статус узла обновляется после отметки работ в выданном СНЗ.</p>';
+    }
     if (!R.loaded) return '<p class="v2-muted">Проверка прав на смену статуса…</p>';
     if (!R.status) return '<p class="v2-muted">Нет права изменять статусы на этом объекте.</p>';
     if (s.multi?.count) {

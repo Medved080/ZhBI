@@ -7,40 +7,56 @@ from app.snz_montage import fact_rows,status_montage,project_montage
 from app.snz_fact_store import records
 
 
-def candidates(conn,object_id,state,day,shift,crew_id,statuses=None):
+def candidates(conn,object_id,state,day,shift,crew_id,statuses=None,*,extra_only=False):
     statuses=statuses if statuses is not None else status_montage(conn,object_id)
-    if not any(c['id']==crew_id and c['kind']=='installation' for c in state['crews']):
+    if (crew_id or not extra_only) and not any(c['id']==crew_id and c['kind']=='installation' for c in state['crews']):
         raise HTTPException(422,'Выберите монтажную бригаду.')
-    rows={r['id']:r for r in fact_rows(conn,object_id,state,statuses,day)}
+    rows={r['id']:r for r in fact_rows(conn,object_id,state,statuses,orders_from=day)}
+    closed=records(state).get('closed',{})
+    target_closed=shift and crew_id and any(str(r['id']) in closed for r in conn.execute(
+        'SELECT id FROM snz_orders WHERE object_id=? AND work_date=? AND shift=? AND crew_id=?',
+        (object_id,day,shift,crew_id)))
     active={r['id'] for r in conn.execute('SELECT id FROM elements WHERE object_id=? AND is_current=1',(object_id,))}
     result=[]
     for eid,status in statuses.items():
         if eid not in active:continue
-        row=rows.get(eid,{});orders=row.get('orders',[]);extra=row.get('extra',[])
+        row=rows.get(eid,{})
+        orders=row.get('orders',[])
+        same_day=[r for r in orders if r['date']==day]
+        extra=[r for r in row.get('extra',[]) if r['date']==day]
         item={'id':eid,'expected_rev':status['expected_rev'],'kind':'extra','reason':''}
-        match=[r for r in orders if r['shift']==shift and r['crew_id']==crew_id]
+        match=[r for r in same_day if r['shift']==shift and r['crew_id']==crew_id]
+        sources=[r for r in orders if r['date']>day]
+        sources.extend(r for r in same_day if shift and r['shift']!=shift and (shift=='day' or not extra_only))
         attributed=[r for r in extra if r['shift']==shift and r['crew_id']==crew_id and r['history_id']==status.get('history_id') and status.get('completed_at')]
-        transferred=[r for r in extra if r.get('source_order_ids') and r['history_id']==status.get('history_id') and status.get('completed_at')]
+        transferred=any(r.get('source_order_ids') and r['history_id']==status.get('history_id') and status.get('completed_at')
+                        for r in row.get('extra',[]))
         if transferred:
             item.update(kind='done' if attributed else 'blocked',reason='' if attributed else 'Факт изделия уже учтён в другой смене. Время исправляется в истории изделия.')
-        elif orders:
-            if not match:
-                if any(r['crew_id']!=crew_id for r in orders):item.update(kind='blocked',reason='Изделие выдано в СНЗ другой бригады этой даты.')
-                elif any(r.get('closed_at') for r in orders):item.update(kind='blocked',reason='СНЗ закрыт. Изменение факта запрещено.')
-                elif not row.get('task_key'):item.update(kind='blocked',reason='В СНЗ нет операции монтажа изделия.')
-                else:item.update(source_order_ids=[r['id'] for r in orders],reason='Монтаж из плана другой смены будет учтён как доп. факт выбранной смены.')
-            elif any(r.get('closed_at') for r in match):item.update(kind='blocked',reason='СНЗ закрыт. Изменение факта запрещено.')
-            elif not row.get('task_key'):item.update(kind='blocked',reason='В СНЗ нет операции монтажа изделия.')
-            else:item.update(kind='order',order_id=match[0]['id'],task_key=row['task_key'])
+        elif match and not extra_only:
+            ref=match[0]
+            if ref.get('closed_at'):item.update(kind='blocked',reason='СНЗ закрыт. Изменение факта запрещено.')
+            elif not ref.get('task_key'):item.update(kind='blocked',reason='В СНЗ нет операции монтажа изделия.')
+            else:item.update(kind='order',order_id=ref['id'],task_key=ref['task_key'])
         elif extra:
             item.update(kind='done' if attributed else 'blocked',reason='' if attributed else 'Изделие уже отнесено через «Доп. факт» этой даты.')
+        elif extra_only and any(r not in sources for r in same_day):
+            item.update(kind='blocked',reason='Изделие уже включено в план выбранной даты. Проверьте его смену на вкладке «Факт».')
+        elif not extra_only and any(r['crew_id']!=crew_id for r in same_day):
+            item.update(kind='blocked',reason='Изделие выдано в СНЗ другой бригады.')
+        elif sources and shift:
+            if crew_id and any(r['crew_id']!=crew_id for r in sources):
+                item.update(kind='blocked',reason='Изделие выдано в СНЗ другой бригады.')
+            elif any(r.get('closed_at') for r in sources):
+                item.update(kind='blocked',reason='Исходный СНЗ закрыт.')
+            else:
+                item.update(source_order_ids=[r['id'] for r in sources],
+                            reason='Монтаж из плана другой смены будет учтён как доп. факт выбранной смены.')
+        if target_closed and item['kind']=='extra' and item.get('source_order_ids'):
+            item.update(kind='blocked',reason='СНЗ выбранной смены закрыт. Изменение факта запрещено.')
         if status['current_status'] in ('installed','accepted') and not status.get('completed_at'):
             item.update(kind='blocked',reason='В истории отсутствует время монтажа.')
         result.append(item)
-    closed_target=any(r['closed_at'] for row in rows.values() for r in row['orders'] if r['shift']==shift and r['crew_id']==crew_id)
-    if closed_target:
-        for item in result:
-            if item.get('source_order_ids'):item.update(kind='blocked',reason='СНЗ выбранной смены закрыт. Изменение факта запрещено.')
     return result
 
 

@@ -9,10 +9,11 @@ export function createExtraFactPicker({api,host,getObjectId,getSelectedIds,send,
   function returnToFacts(){const back=scope?.onReturn;close();onDone?.();back?.();}
   function update(){
     if(!panel)return;
-    const ids=getSelectedIds(),allowed=new Set((data?.items||[]).map(r=>r.id)),valid=ids.filter(id=>allowed.has(id));
-    panel.querySelector('[data-extra-count]').textContent=`Выбрано: ${ids.length} · доступно для записи: ${valid.length}`;
+    const ids=getSelectedIds(),allowed=new Map((data?.items||[]).map(r=>[r.id,r])),valid=ids.filter(id=>allowed.has(id));
+    const early=valid.filter(id=>allowed.get(id).source_order_ids?.length).length;
+    panel.querySelector('[data-extra-count]').textContent=`Выбрано: ${ids.length} · доступно для записи: ${valid.length}${early?' · из будущих СНЗ: '+early:''}`;
     panel.querySelector('[data-extra-save]').disabled=busy||blocked||!data?.can_fact||!ids.length||ids.length>500||valid.length!==ids.length||!panel.querySelector('[data-extra-crew]').value||!panel.querySelector('[data-extra-shift]').value;
-    panel.querySelector('[data-extra-alert]').textContent=error||(ids.length&&valid.length!==ids.length?'В выборе есть позиции СНЗ этой даты или уже зарегистрированный доп. факт. Снимите их выбор.':'');
+    panel.querySelector('[data-extra-alert]').textContent=error||(ids.length&&valid.length!==ids.length?'В выборе есть изделия, недоступные для доп. факта этой смены. Снимите их выбор.':'');
   }
   async function refresh(){
     if(!scope||busy)return;
@@ -44,10 +45,10 @@ export function createExtraFactPicker({api,host,getObjectId,getSelectedIds,send,
     open(next){
       close();scope={...next,object:getObjectId()};requestId=uid();
       panel=document.createElement('section');panel.className='snz-extra-panel';panel.setAttribute('aria-label','Дополнительный факт на модели');
-      panel.innerHTML=`<h3>Доп. факт вне СНЗ</h3><p>Выберите изделия на схеме. Стандартные фильтры доступны в панели отбора.</p><p>Дата начала смен: <strong>${esc(scope.date)}</strong></p>
+      panel.innerHTML=`<h3>Доп. факт монтажа</h3><p>Выберите на схеме изделия, смонтированные сверх плана смены, включая досрочный монтаж из будущих СНЗ.</p><p>Дата начала смен: <strong>${esc(scope.date)}</strong></p>
         <label>Смена<select data-extra-shift required><option value="">Выберите смену</option><option value="day" ${scope.shift==='day'?'selected':''}>День · 08:00–20:00</option><option value="night" ${scope.shift==='night'?'selected':''}>Ночь · 20:00–08:00</option></select></label><label>Бригада<select data-extra-crew required><option value="">Загрузка…</option></select></label>
         <label>Дата и время монтажа (МСК)<input type="datetime-local" step="1" data-extra-time></label><small>Пусто - сейчас. Время должно попадать с 08:00 выбранной даты до 08:00 следующего дня.</small>
-        <p>Тёмно-зелёный — монтаж по СНЗ; серый — без монтажа по СНЗ; цвет статуса «Смонтирован» — прочий монтаж. Уже смонтированным изделиям сохраняется время из истории.</p><p data-extra-count role="status"></p><p class="ws-err" data-extra-alert role="alert"></p>
+        <p>Тёмно-зелёный — подтверждённый монтаж смены, включая доп. факт. Серый — изделия из плана смены без подтверждённого монтажа. Уже смонтированным изделиям сохраняется время из истории.</p><p data-extra-count role="status"></p><p class="ws-err" data-extra-alert role="alert"></p>
         <div class="ws-actions"><button type="button" class="v2-btn v2-primary" data-extra-save disabled>Записать доп. факт</button><button type="button" class="v2-btn" data-extra-refresh>Обновить</button><button type="button" class="v2-btn" data-extra-cancel>Вернуться к факту</button></div>`;
       host.replaceChildren(panel);panel.querySelector('[data-extra-save]').addEventListener('click',save);
       panel.querySelector('[data-extra-refresh]').addEventListener('click',refresh);

@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta
 
 from app.snz_catalogs import OPERATIONS, TEAMS, seed_catalogs
 from app.snz_policy import POLICY, planning_state, planning_steps, step_fact, order_items, montage_warnings
+from app.beam_column_joints import ABSENT, CONCRETE, JOINT_TYPE, plannable
 
 
 def default_state():
@@ -85,6 +86,8 @@ def suggest_card(state, element):
         return re.sub(r"(?<!\d)15[.,](?:000|800)(?!\d)", "15.800", value) if key == "subtype" else value
     matches = []
     for card in state["cards"]:
+        if element.get("element_type") == JOINT_TYPE and card.get("element_type") != JOINT_TYPE:
+            continue
         if any(card.get(k) and norm_text(k, card[k]) != norm_text(k, element.get(k)) for k in ("element_type", "subtype")):
             continue
         if card.get("elevation_mm") is not None and elevation(card["elevation_mm"]) != elevation(element.get("elevation_mm")):
@@ -108,7 +111,8 @@ def build_schedule(state, elements, history, day, shift, crew_id, *, ignore_fact
         # A planning projection only. Never clear real facts, statuses or orders.
         state['facts'] = {}
         history = []
-        elements = [dict(e, current_status='ready_for_installation')
+        elements = [dict(e, current_status=ABSENT) if e['element_type'] == JOINT_TYPE else
+                    dict(e, current_status='ready_for_installation')
                     if e['current_status'] in ('installed', 'accepted') else e for e in elements]
     preparation = next((c['id'] for c in state['crews'] if c['kind'] == 'preparation'), None)
     if crew_id == preparation:
@@ -160,20 +164,25 @@ def _build_schedule(state, elements, history, day, shift, crew_id, montage_times
             frozen.setdefault(key, task)
             used[key] = used.get(key, 0) + sum(s["minutes"] for s in task["segments"])
     started_elements = issued_elements | {int(key.split(":")[1]) for key, fact in facts.items()
-                                           if key.startswith("e:") and len(key.split(":")) >= 3 and key.split(":")[1].isdigit() and fact.get("completed")}
+                                           if key.startswith("e:") and len(key.split(":")) >= 3 and key.split(":")[1].lstrip("-").isdigit() and fact.get("completed")}
     started_groups = {key.split(":")[1] for key, fact in facts.items() if key.startswith("g:") and len(key.split(":")) >= 3 and fact.get("completed")}
     started_elements.update(eid for g in state["groups"] if g["id"] in started_groups for eid in g["element_ids"])
     warnings = []
+    if any(a['element_id'] < 0 and a['element_id'] not in by_id and
+           (a['date'], a['shift'], a['crew_id']) == (day, shift, crew_id) for a in state['assignments']):
+        warnings.append("Некоторые назначенные узлы ригель-колонна отсутствуют в актуальной модели.")
     nodes, chains, steps_by_id = {}, {}, {}
     preparation = next((c["id"] for c in state["crews"] if c["kind"] == "preparation"), None)
     for eid, a in assignments.items():
         e = by_id[eid]
+        if e['current_status'] == CONCRETE:
+            continue
         if e["current_status"] in ("installed", "accepted") and not facts.get(f"e:{eid}:install", {}).get("completed"):
             continue
         if not e.get("is_current", 1):
             warnings.append(f"{e.get('mark') or eid}: изделие отсутствует в актуальном чертеже; работы не назначены.")
             continue
-        if e["current_status"] not in ("ready_for_installation", "installed", "accepted"):
+        if not plannable(e) and e["current_status"] not in ("installed", "accepted"):
             warnings.append(f"{e.get('mark') or eid}: статус не «Готов к монтажу»; работы не назначены.")
             continue
         release = shift_start(a["date"], a["shift"])
@@ -335,6 +344,11 @@ def _build_schedule(state, elements, history, day, shift, crew_id, montage_times
             selected = shift_start(prep_day, prep_shift) == start and any(step['scope'] == 'preparation' for step in operation_steps(state, assignment))
         else:
             selected = assignment['crew_id'] == crew_id and due == start
+            mount_key = f'e:{eid}:install'
+            mounted_at = montage_finish.get(mount_key)
+            if selected and mounted_at and mounted_at < start:
+                shift_ops = [key for key in chains[eid] if key not in nodes or nodes[key]['crew_id'] == crew_id]
+                selected = any(key not in completed_ready for key in shift_ops)
         if selected:
             item_ids.add(eid)
     items = [deepcopy(by_id[eid]) for eid in sorted(item_ids)]

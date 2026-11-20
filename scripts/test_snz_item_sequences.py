@@ -118,7 +118,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_overloaded_order_issues_counts_exports_and_deletes_all_members(self):
         from openpyxl import load_workbook
-        from app.snz_export import build_pdf
+        from app.snz_export import build_xlsx
         state,_=fixtures.fixture(tuple(self.ids),(("install",800,0),))
         self.snz.save_state(self.object_id,self.snz.StateIn(revision=0,**{k:v for k,v in state.items() if k!='facts'}),self.admin)
         issued=self.h.issue();oid=issued['id'];order=self.snz.read_order(self.object_id,oid,self.admin)
@@ -129,11 +129,14 @@ class IntegrationTests(unittest.TestCase):
         path=output/'all-items.xlsx';path.write_bytes(self.snz.export_xlsx(self.object_id,oid,self.admin).body)
         wb=load_workbook(path)
         self.assertEqual(wb['Изделия'].max_row,5)
-        self.assertEqual({r[0].value for r in wb['Изделия'].iter_rows(min_row=2)},set(self.ids))
-        self.assertEqual(wb['СНЗ'].max_row,8) # one split task + three zero-time rows
-        self.assertTrue(all(wb['СНЗ'].cell(r,9).value is None for r in [6,7,8]))
+        self.assertEqual({r[1].value for r in wb['Изделия'].iter_rows(min_row=2)}, {f'Р-{eid}' for eid in self.ids})
+        details_path=output/'all-items-details.xlsx';details_path.write_bytes(build_xlsx(order,daily_details=True))
+        tasks=load_workbook(details_path)['СНЗ']
+        self.assertEqual(tasks.max_row,8) # one split task + three zero-time rows
+        self.assertTrue(all(tasks.cell(r,9).value is None for r in [6,7,8]))
         import subprocess
-        subprocess.run([sys.executable,'/Users/max/.codex/scripts/validate_xlsx.py',str(path)],check=True,capture_output=True)
+        for exported in (path,details_path):
+            subprocess.run([sys.executable,'/Users/max/.codex/scripts/validate_xlsx.py',str(exported)],check=True,capture_output=True)
         pdf=self.snz.export_pdf(self.object_id,oid,self.admin).body;(output/'all-items.pdf').write_bytes(pdf)
         text=subprocess.check_output(['/Users/max/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3','-c',"from pypdf import PdfReader;import sys;print('\\n'.join(p.extract_text() for p in PdfReader(sys.argv[1]).pages))",str(output/'all-items.pdf')],text=True)
         for eid in self.ids:self.assertIn('Р-'+str(eid),text)

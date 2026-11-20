@@ -9,4 +9,24 @@ try{
  assert.equal(await page.locator('[data-extra-shift]').inputValue(),'day');assert.equal(await scene.locator('.element-shape[data-id="1"]').getAttribute('fill'),'#166534');assert.equal(await scene.locator('.element-shape[data-id="2"]').getAttribute('fill'),'#9ca3af');assert.notEqual(await scene.locator('.element-shape[data-id="5"]').getAttribute('fill'),'#166534');console.log('PASS scoped planned colours and inherited shift');
  for(const [width,height] of [[1440,900],[2560,1440]]){await page.setViewportSize({width,height});await page.evaluate(audit);const issues=await page.evaluate(()=>({a:alignAudit(document.querySelector('.snz-extra-panel')),s:sizeAudit(document.querySelector('.snz-extra-panel'))}));assert.deepEqual(issues,{a:[],s:[]});await page.screenshot({path:new URL(`picker-${width}.png`,out).pathname});}
  await scene.locator('.element-shape[data-id="5"]').click();await page.waitForFunction(()=>!document.querySelector('[data-extra-save]').disabled);await page.locator('[data-extra-save]').click();await page.waitForSelector('.snz-dialog');await settled();const row=page.locator('[data-montage-row="5"]');assert.match(await row.innerText(),/Вне СНЗ/);assert.equal(await row.locator('[data-montage-time]').inputValue(),'2026-11-10T11:15');console.log('PASS already installed product attributed with original timestamp');assert.equal(await scene.evaluate(()=>window.snzFactColorById.size),0);assert.deepEqual(errors,[]);console.log('PASS colours restored, no browser errors');
+ await page.locator('[data-action="extra-fact"]').click();await page.waitForFunction(()=>document.querySelector('[data-extra-refresh]')?.disabled===false);
+ assert.equal(await scene.locator('.element-shape[data-id="5"]').getAttribute('fill'),'#166534');
+ await scene.locator('.element-shape[data-id="3"]').click();
+ await page.waitForFunction(()=>document.querySelector('[data-extra-count]').textContent.includes('из будущих СНЗ: 1'));
+ await page.locator('[data-extra-time]').fill('2026-11-10T11:30');
+ await page.locator('[data-extra-save]').click();await page.waitForSelector('.snz-dialog');await settled();
+ assert.match(await page.locator('[data-montage-row="3"]').innerText(),/Вне СНЗ/);
+ await page.locator('[data-action="extra-fact"]').click();await page.waitForFunction(()=>document.querySelector('[data-extra-refresh]')?.disabled===false);
+ for(const id of [1,3,5])assert.equal(await scene.locator(`.element-shape[data-id="${id}"]`).getAttribute('fill'),'#166534');
+ assert.equal(await scene.locator('.element-shape[data-id="2"]').getAttribute('fill'),'#9ca3af');
+ await page.locator('#ws-modes [data-view="3d"]').click();
+ await scene.waitForFunction(()=>[1,3,5].every(id=>state.view3d.merged?.rangeById?.has(id)));
+ const colors=await scene.evaluate(()=>{
+   const merged=state.view3d.merged,buffer=merged.mesh.geometry.attributes.color.array;
+   return [1,3,5].map(id=>Array.from(buffer.slice(merged.rangeById.get(id).start*3,merged.rangeById.get(id).start*3+3)));
+ });
+ assert.ok(colors[0][1]>colors[0][0]*2);
+ assert.deepEqual(colors,[colors[0],colors[0],colors[0]]);
+ assert.deepEqual(errors,[]);
+ console.log('PASS early night product can be recorded and confirmed extras share the planned color in 2D and 3D');
 }finally{await browser.close();}

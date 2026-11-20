@@ -6,13 +6,14 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,ConfigDict,Field
 from app import activity
+from app import beam_column_joints as joints
 from app.access import assert_object_feature,is_system_admin
 from app.auth import get_current_user,audit_display_name
 from app.db import get_connection,begin_write,touch_elements
 from app.snz_core import fragments
 from app.snz_policy import order_items,montage_warnings
 from app.snz_fact_store import records
-from app.snz_montage import status_montage,project_montage
+from app.snz_montage import status_montage,project_montage,cross_shift_attributions
 from app.snz_order_history import positions,changes,freeze
 
 router=APIRouter()
@@ -34,7 +35,7 @@ class AdminStep(Strict):
 
 
 class AdminPosition(Strict):
-    element_id:int=Field(gt=0)
+    element_id:int
     card_id:str|None=Field(default=None,pattern=KEY)
     priority:int=Field(ge=1,le=1000000)
     steps:list[AdminStep]=Field(max_length=100)
@@ -72,7 +73,7 @@ def context(conn,object_id,order_id):
     from app import snz
     state,revision=snz._load(conn,object_id);order={**snz._order(conn,object_id,order_id),'id':order_id}
     closure=records(state).get('closed',{}).get(str(order_id))
-    facts=closure['facts'] if closure else snz._public_facts(state)
+    facts=snz.issued_facts(state,order_id)
     ops={o['id']:deepcopy(o) for o in state['operations']};teams={t['id']:t['name'] for t in state['teams']}
     for task in order['tasks']:
         ops[task['operation_id']]={'id':task['operation_id'],'name':task['operation'],'team':task['team_id'],'scope':task['scope']}
@@ -103,22 +104,38 @@ def build_order(data,rows):
     old=data['order'];result=deepcopy(old);members=order_items(old)
     current={e['id']:e for e in data['elements']};ops={o['id']:o for o in data['operations']};teams={t['id']:t['name'] for t in data['teams']}
     old_tasks={(eid,t['operation_id']):t for t in old['tasks'] for eid in t['element_ids']}
-    cards={c['id'] for c in data['cards']};tasks=[];facts={};items=[]
+    cards={c['id']:c for c in data['cards']};tasks=[];facts={};items=[]
     if len({p['element_id'] for p in rows})!=len(rows):raise HTTPException(422,'В составе повторяется изделие.')
     priorities=[p['priority'] for p in rows]
     if len(set(priorities))!=len(priorities):raise HTTPException(422,'Очередность изделий не должна повторяться.')
+    mount_only={p['element_id'] for p in data['positions'] if [s['operation_id'] for s in p['steps']]==['install']}
+    rows=[p for p in rows if p['steps'] or p['element_id'] not in mount_only]
     for index,row in enumerate(sorted(rows,key=lambda p:p['priority']),1):
         eid=row['element_id'];member=members.get(eid) or current.get(eid)
         if not member or (eid not in members and not member.get('is_current',1)):
             raise HTTPException(422,'Добавлять можно только изделия актуальной модели этого объекта.')
         if row['card_id'] is not None and row['card_id'] not in cards and row['card_id']!=next((p['card_id'] for p in data['positions'] if p['element_id']==eid),None):
             raise HTTPException(422,'Карта отсутствует в справочнике.')
+        card = cards.get(row['card_id'])
+        joint_ops = (joints.REBAR_OP, joints.CONCRETE_OP)
+        if card and (card['element_type'] == joints.JOINT_TYPE) != (eid < 0):
+            raise HTTPException(422, 'Выберите карту соответствующего типа изделия.')
+        if eid < 0:
+            steps = {s['operation_id']: s for s in row['steps']}
+            if eid not in members and (not card or list(steps) != list(joint_ops)):
+                raise HTTPException(422, 'Для нового узла нужна карта с армированием и бетонированием.')
+            if joints.CONCRETE_OP in steps and steps[joints.CONCRETE_OP]['completed']:
+                rebar = steps.get(joints.REBAR_OP, data['state']['facts'].get(f'e:{eid}:{joints.REBAR_OP}', {}))
+                if not rebar.get('completed') or rebar['completed_at'] > steps[joints.CONCRETE_OP]['completed_at']:
+                    raise HTTPException(422, 'Факт бетонирования должен следовать за армированием.')
         items.append(deepcopy(member));row['priority']=index
         if len({s['operation_id'] for s in row['steps']})!=len(row['steps']):raise HTTPException(422,'Операция изделия повторяется.')
         chain=[]
         for si,step in enumerate(row['steps']):
             op=ops.get(step['operation_id']);team=teams.get(step['team_id'])
             if not op or team is None:raise HTTPException(422,'Операция или звено отсутствует в справочнике.')
+            if (op['id'] in joint_ops) != (eid < 0):
+                raise HTTPException(422, 'Армирование и бетонирование узла относятся к позиции «Узел ригель-колонна».')
             if (op['scope']=='preparation')!=(old['crew']['kind']=='preparation'):
                 raise HTTPException(422,'Подготовительные и монтажные операции относятся к разным бригадам.')
             key=f'e:{eid}:{op["id"]}';source=old_tasks.get((eid,op['id']),{})
@@ -201,6 +218,7 @@ def preview(conn,object_id,order_id,body):
     rows=[p.model_dump(mode='json') for p in body.positions];oldsteps={(p['element_id'],s['operation_id']):s for p in data['positions'] for s in p['steps']}
     if sum(len(p['steps']) for p in rows)>20000:raise HTTPException(422,'В одной редакции допускается не более 20 000 операций.')
     live=status_montage(conn,object_id)
+    attributed=cross_shift_attributions(data['state'],live)
     for row in rows:
         for step in row['steps']:
             step['planned_start']=local(step['planned_start']);step['completed_at']=local(step['completed_at']) if step['completed'] else None
@@ -209,6 +227,8 @@ def preview(conn,object_id,order_id,body):
             prior=oldsteps.get((row['element_id'],step['operation_id']),{})
             if not prior and step['operation_id']=='install':prior={'completed':bool(live.get(row['element_id'],{}).get('completed_at')),'completed_at':live.get(row['element_id'],{}).get('completed_at')}
             if step['completed'] and not step['completed_at']:raise HTTPException(422,'Для выполненной операции укажите время факта (МСК).')
+            if step['operation_id']=='install' and step['completed'] and order_id in attributed.get(row['element_id'],{}).get('source_order_ids',()):
+                raise HTTPException(409,'Монтаж уже учтён в другой смене.')
             if step['completed'] and (not prior.get('completed') or prior.get('completed_at')!=step['completed_at']):
                 if not data['order']['start']<=step['completed_at']<data['order']['end']:raise HTTPException(422,'Исправленное время факта должно попадать в смену СНЗ.')
     added={p['element_id'] for p in rows}-set(order_items(data['order']))
@@ -271,8 +291,15 @@ def apply_facts(conn,object_id,order_id,data,snapshot,user):
     if closure:
         updated=deepcopy(closure);updated['facts']=deepcopy(snapshot['version_facts']);updated['rows']={}
         for p in snapshot['editor_positions']:
+            if p['element_id'] < 0:
+                current = joints.joint_status({**state['facts'], **updated['facts']}, p['element_id'])
+                updated['rows'][str(p['element_id'])] = {'current_status': current, 'status_confirmed': current == joints.CONCRETE}
+                continue
             install=next((s for s in p['steps'] if s['operation_id']=='install'),None)
             old=closure['rows'].get(str(p['element_id']),{})
+            if old.get('montage_elsewhere') and (not install or not install['completed']):
+                updated['rows'][str(p['element_id'])]=old
+                continue
             confirmed=bool(install['completed']) if install else bool(old.get('status_confirmed',statuses.get(p['element_id'],{}).get('completed_at')))
             updated['rows'][str(p['element_id'])]={'current_status':('accepted' if old.get('current_status')=='accepted' else 'installed') if confirmed else 'ready_for_installation',
                 'status_confirmed':confirmed,'completed':confirmed,'completed_at':(install['completed_at'] if install else old.get('completed_at',statuses.get(p['element_id'],{}).get('completed_at'))) if confirmed else None}
